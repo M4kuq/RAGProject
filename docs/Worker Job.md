@@ -1,6 +1,6 @@
 # AI/LLMエンジニア向けポートフォリオ提出用 RAGシステム
 
-## Worker / Job 詳細設計書 v1.3
+## Worker / Job 詳細設計書 v1.4 最終版
 
 ---
 
@@ -54,9 +54,9 @@
 * 状態遷移仕様書 v1.1
 * 機能仕様補完書 v1.7
 
-### 1.4 v1.3 の重点修正
+### 1.4 v1.4 の重点修正
 
-v1.3 では、v1.2 レビューを踏まえて以下を反映する。
+v1.4 では、v1.3 レビュー結果を踏まえて以下の軽微修正を反映する。
 
 * `document_ingest` の Qdrant cleanup を DB transaction 内で実行しないと明記する
 * `document_ingest` の cleanup transaction boundary を、DB row lock / cleanup 対象取得、external cleanup、RDB cleanup に分離する
@@ -1332,6 +1332,8 @@ validate payload
 #### external cleanup
 
 * transaction 1 で取得した point id をもとに Qdrant points を cleanup する
+* external cleanup 実行直前に lease ownership を再確認する
+* ownership を失っている場合、Qdrant cleanup / 後続 RDB cleanup を実行せず `LeaseLostError` とする
 * Qdrant cleanup は DB transaction 外で実行する
 * 対象 point が存在しない場合は cleanup success とする
 * Qdrant cleanup failure は `qdrant_cleanup_failed` とする
@@ -1415,8 +1417,10 @@ Qdrant cleanup 方針:
 ```text
 document_versions.status = 'failed'
 document_versions.error_code = 'qdrant_cleanup_failed'
+(handler は例外送出)
 jobs.status = 'failed'
 jobs.error_code = 'qdrant_cleanup_failed'
+(Worker runner が ownership 条件付き terminal update で更新)
 ```
 
 ### 12.10 chunk insert 後の partial failure cleanup
@@ -1428,7 +1432,7 @@ jobs.error_code = 'qdrant_cleanup_failed'
 3. 対応する Qdrant point cleanup を DB transaction 外で試みる
 4. Qdrant cleanup 成功後、RDB `document_chunks` を削除する
 5. `document_versions.status = failed`, `error_code = mapped_error_code` に更新する
-6. job を failed に更新する
+6. handler は例外を送出し、Worker runner が ownership 条件付きで job を failed に更新する
 
 Qdrant cleanup で対象 point が存在しない場合は cleanup 成功扱いとする。
 
@@ -1436,7 +1440,9 @@ Qdrant cleanup 自体が失敗した場合:
 
 * job は failed とする
 * `document_versions.status = failed` とする
-* `document_versions.error_code` は original error を優先し、必要に応じて cleanup failure を log に残す
+* `document_versions.error_code` は original error を優先し、cleanup failure は補助情報として log に残す
+* 開始時 cleanup failure は処理開始前の復旧失敗として `qdrant_cleanup_failed` を正とする
+* 処理途中 failure 後の cleanup failure は主因追跡のため original error_code を正とする
 * RDB final check により failed version は retrieval 対象外となる
 
 ### 12.11 success criteria
@@ -1638,6 +1644,8 @@ Phase1 では attempt 付き ID は採用しない。
 handler 開始時に、同一 `job_trace_id` を持つ retrieval_run を確認する。
 
 同一 `job_trace_id` に複数 retrieval_run がある場合、判定優先順位は以下とする。
+
+同一 `job_trace_id` に複数の `succeeded retrieval_run + assistant_message` が存在する場合、代表 run は `started_at DESC, retrieval_run_id DESC` の 1 件とする。
 
 1. `succeeded` retrieval_run + assistant_message が存在する
 2. `running` retrieval_run が存在する
