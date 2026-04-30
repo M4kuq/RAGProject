@@ -1,0 +1,184 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# =========================================================
+# Global Codex CLI config
+# =========================================================
+
+model_provider = "openai"
+model = "gpt-5.5"
+review_model = "gpt-5.5"
+
+# 普段使いは medium 推奨。xhigh は deep profile 側に寄せる。
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+
+# 安全寄りの標準設定
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# 通常は cached。最新仕様・料金・求人・脆弱性調査では research/deep profile を使う。
+web_search = "cached"
+
+# PowerShell / shell 実行
+allow_login_shell = true
+
+# =========================================================
+# Sandbox
+# =========================================================
+
+[sandbox_workspace_write]
+# npm install / pip install などネットワークが必要なときだけ一時的に許可する運用にする
+network_access = false
+exclude_tmpdir_env_var = true
+
+# =========================================================
+# Windows
+# =========================================================
+
+[windows]
+# Windowsネイティブ利用なら elevated 推奨
+sandbox = "elevated"
+sandbox_private_desktop = true
+
+# =========================================================
+# Features
+# =========================================================
+
+[features]
+multi_agent = true
+memories = true
+undo = true
+prevent_idle_sleep = true
+skill_mcp_dependency_install = true
+
+# =========================================================
+# Tools
+# =========================================================
+
+[tools]
+view_image = true
+
+# =========================================================
+# Plugins
+# =========================================================
+
+[plugins."hugging-face@openai-curated"]
+enabled = true
+
+[plugins."github@openai-curated"]
+enabled = true
+
+[plugins."build-web-apps@openai-curated"]
+enabled = true
+
+[plugins."browser-use@openai-bundled"]
+enabled = true
+
+# Google Drive / Docs / Sheets / Slides 系をよく使うなら true。
+# 使わないなら false にして、必要時だけ /plugins から有効化する。
+[plugins."documents@openai-primary-runtime"]
+enabled = false
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = false
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = false
+
+# =========================================================
+# Profiles
+# =========================================================
+
+# 軽い修正・軽い調査
+[profiles.fast]
+model = "gpt-5.4-mini"
+model_reasoning_effort = "low"
+plan_mode_reasoning_effort = "medium"
+model_reasoning_summary = "concise"
+model_verbosity = "low"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+
+# 通常の実装作業
+[profiles.dev]
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+
+# 設計レビュー・難しいバグ調査・セキュリティ確認
+[profiles.deep]
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "xhigh"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "live"
+
+# 読み取り専用レビュー
+[profiles.review]
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+web_search = "cached"
+
+# 最新情報調査用
+[profiles.research]
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+web_search = "live"
+
+# どうしても最大推論したい時だけ使う
+[profiles.max]
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "xhigh"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "live"
+
+# =========================================================
+# Projects
+# =========================================================
+
+# 信頼するのは「自分が管理している実プロジェクト」だけにする。
+# C:\Users\student 全体を trusted にするのは非推奨。
+
+[projects.'C:\Users\student\original']
+trust_level = "trusted"
+
+[projects.'c:\users\student\downloads\ocr_transcriber_app\ocr_transcriber_app']
+trust_level = "trusted"
+
+# これは削除推奨
+# [projects.'c:\users\student']
+# trust_level = "trusted"
+
+# =========================================================
+# Agents
+# =========================================================
+
+[agents]
+max_threads = 6
+max_depth = 1
+job_max_runtime_seconds = 1800
