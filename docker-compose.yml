@@ -1,0 +1,153 @@
+name: ragproject
+
+x-backend-env: &backend-env
+  ENVIRONMENT: local
+  DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/rag
+  CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+  SESSION_SECRET: ${SESSION_SECRET:-change-me-in-local-env}
+  SESSION_COOKIE_SECURE: "false"
+  SESSION_COOKIE_SAMESITE: lax
+  SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
+  STORAGE_ROOT: /app/storage/uploads
+  QDRANT_URL: http://qdrant:6333
+  OLLAMA_URL: http://ollama:11434
+  USE_FAKE_LLM: ${USE_FAKE_LLM:-false}
+  MODEL_NAME: ${MODEL_NAME:-llama3.1}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+  RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - qdrant_data:/qdrant/storage
+    expose:
+      - "6333"
+      - "6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:0.5.7
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    volumes:
+      - upload_storage:/app/storage/uploads
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.scripts.healthcheck", "http://127.0.0.1:8000/ready", "database"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: worker
+    environment: *backend-env
+    volumes:
+      - upload_storage:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    command: ["python", "-m", "app.scripts.seed"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: dev
+    environment:
+      VITE_API_BASE_URL: ""
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: ragproject_postgres_data
+  qdrant_data:
+    name: ragproject_qdrant_data
+  ollama_data:
+    name: ragproject_ollama_data
+  upload_storage:
+    name: ragproject_upload_storage

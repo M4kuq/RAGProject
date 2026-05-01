@@ -319,7 +319,7 @@ CREATE TABLE jobs (
     retry_of_job_id BIGINT REFERENCES jobs(job_id) ON DELETE RESTRICT,
     retry_count INTEGER NOT NULL DEFAULT 0,
     created_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -394,7 +394,7 @@ CREATE TABLE retrieval_runs (
     request_message_id BIGINT,
     status VARCHAR(30) NOT NULL DEFAULT 'running',
     error_code VARCHAR(100),
-    started_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at TIMESTAMPTZ,
     top_k INTEGER,
     query_hash CHAR(64),
@@ -421,9 +421,19 @@ CREATE TABLE retrieval_runs (
     CONSTRAINT ck_retrieval_runs_status
         CHECK (status IN ('running', 'succeeded', 'failed')),
     CONSTRAINT ck_retrieval_runs_running_times
-        CHECK (status <> 'running' OR (finished_at IS NULL AND error_code IS NULL)),
+        CHECK (
+            status <> 'running'
+            OR (
+                started_at IS NOT NULL
+                AND finished_at IS NULL
+                AND error_code IS NULL
+            )
+        ),
     CONSTRAINT ck_retrieval_runs_terminal_times
-        CHECK (status NOT IN ('succeeded', 'failed') OR finished_at IS NOT NULL),
+        CHECK (
+            status NOT IN ('succeeded', 'failed')
+            OR (started_at IS NOT NULL AND finished_at IS NOT NULL)
+        ),
     CONSTRAINT ck_retrieval_runs_failed_error
         CHECK (status <> 'failed' OR error_code IS NOT NULL),
     CONSTRAINT ck_retrieval_runs_succeeded_error_null
@@ -456,7 +466,7 @@ CREATE TABLE retrieval_runs (
 COMMENT ON TABLE retrieval_runs IS 'chat 起源 run と /rag/search 起源 standalone run の両方を表す。standalone は chat_session_id/request_message_id が両方 NULL。';
 COMMENT ON COLUMN retrieval_runs.retrieval_score_summary IS 'RAG v1.4 に合わせ JSONB。top1/top3/count/excluded/selected など複合 summary を保存する。';
 COMMENT ON COLUMN retrieval_runs.answer_confidence IS '成功 run のみ保存。failed run では NULL。正解確率ではなく補助指標。';
-COMMENT ON COLUMN retrieval_runs.started_at IS 'retrieval_run 作成時刻。status は running/succeeded/failed のみであり、常に NOT NULL DEFAULT now()。';
+COMMENT ON COLUMN retrieval_runs.started_at IS 'retrieval_run 作成時刻。status は running/succeeded/failed のみであり、DDL上も NOT NULL DEFAULT now() とする。';
 COMMENT ON COLUMN retrieval_runs.error_code IS 'running/succeeded では NULL、failed では NOT NULL。';
 
 CREATE TABLE retrieval_run_items (

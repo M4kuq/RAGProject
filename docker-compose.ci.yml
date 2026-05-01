@@ -1,0 +1,168 @@
+name: ragproject-ci
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ci
+  DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/rag
+  CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+  SESSION_SECRET: ci-only-change-me
+  SESSION_COOKIE_SECURE: "false"
+  SESSION_COOKIE_SAMESITE: lax
+  SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
+  STORAGE_ROOT: /app/storage/uploads
+  QDRANT_URL: http://qdrant:6333
+  OLLAMA_URL: http://ollama:11434
+  USE_FAKE_LLM: "true"
+  MODEL_NAME: fake-ci-model
+  EMBEDDING_MODEL: fake-ci-embedding
+  RERANKER_MODEL: fake-ci-reranker
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    volumes:
+      - postgres_ci_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - qdrant_ci_data:/qdrant/storage
+    expose:
+      - "6333"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:6333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    command: ["python", "-m", "app.scripts.seed"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    volumes:
+      - upload_ci_storage:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.scripts.healthcheck", "http://127.0.0.1:8000/ready", "database"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: worker
+    environment: *backend-env
+    volumes:
+      - upload_ci_storage:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: build
+    command: ["sh", "-c", "test -f dist/index.html"]
+
+  backend-test:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: test
+    environment: *backend-env
+    command: ["sh", "-c", "ruff format --check . && ruff check . && mypy . && pytest"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+
+  frontend-test:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: dev
+    command: ["sh", "-c", "npm run typecheck && npm test && npm run build"]
+
+  smoke:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: backend
+    environment: *backend-env
+    command:
+      [
+        "sh",
+        "-c",
+        "python -m app.scripts.healthcheck http://backend:8000/ready database && python -m app.scripts.healthcheck http://qdrant:6333/healthz"
+      ]
+    depends_on:
+      backend:
+        condition: service_healthy
+      worker:
+        condition: service_started
+      frontend:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_ci_data:
+    name: ragproject_ci_postgres_data
+  qdrant_ci_data:
+    name: ragproject_ci_qdrant_data
+  upload_ci_storage:
+    name: ragproject_ci_upload_storage
