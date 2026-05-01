@@ -1,0 +1,37 @@
+services:
+  backend:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./backend:/app
+      - upload_storage:/app/storage/uploads
+
+  worker:
+    volumes:
+      - ./backend:/app
+      - upload_storage:/app/storage/uploads
+
+  migrate:
+    volumes:
+      - ./backend:/app
+
+  seed:
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+
+  qdrant:
+    ports:
+      - "127.0.0.1:6333:6333"
+
+  ollama:
+    ports:
+      - "127.0.0.1:11434:11434"
+
+volumes:
+  frontend_node_modules:
+    name: ragproject_frontend_node_modules
+

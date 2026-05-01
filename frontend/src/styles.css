@@ -1,0 +1,72 @@
+:root {
+  color: #172026;
+  background: #f7f8fa;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.topnav {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #d8dee4;
+  display: flex;
+  gap: 16px;
+  height: 52px;
+  padding: 0 24px;
+}
+
+.topnav a {
+  color: #172026;
+  text-decoration: none;
+}
+
+.panel,
+.workspace {
+  margin: 32px auto;
+  max-width: 920px;
+  padding: 0 24px;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+  max-width: 360px;
+}
+
+.messages {
+  min-height: 320px;
+}
+
+.message {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  margin: 16px 0;
+  padding: 16px;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+}
+
+.composer textarea {
+  min-height: 120px;
+}
+
+.error {
+  color: #a4001d;
+}
