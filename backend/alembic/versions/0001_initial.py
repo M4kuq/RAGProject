@@ -7,8 +7,9 @@ Create Date: 2026-05-01
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0001_initial"
 down_revision = None
@@ -22,7 +23,12 @@ def upgrade() -> None:
         sa.Column("role_id", sa.BigInteger(), primary_key=True),
         sa.Column("role_name", sa.String(50), nullable=False, unique=True),
         sa.Column("description", sa.Text()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "users",
@@ -32,26 +38,61 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(100), nullable=False),
         sa.Column("password_hash", sa.Text()),
         sa.Column("status", sa.String(30), server_default="active", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("last_login_at", sa.DateTime(timezone=True)),
         sa.CheckConstraint("status IN ('active', 'disabled')", name="ck_users_status"),
     )
     op.create_table(
         "user_settings",
-        sa.Column("user_id", sa.BigInteger(), sa.ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True),
+        sa.Column(
+            "user_id",
+            sa.BigInteger(),
+            sa.ForeignKey("users.user_id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
         sa.Column("ui_theme", sa.String(30), server_default="system", nullable=False),
         sa.Column("memory_message_limit", sa.Integer(), server_default="8", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "user_sessions",
         sa.Column("session_id", sa.String(64), primary_key=True),
-        sa.Column("user_id", sa.BigInteger(), sa.ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "user_id",
+            sa.BigInteger(),
+            sa.ForeignKey("users.user_id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("session_token_hash", sa.Text(), nullable=False, unique=True),
         sa.Column("csrf_state_hash", sa.Text()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True)),
     )
@@ -64,27 +105,62 @@ def upgrade() -> None:
         sa.Column("temporary_flag", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("ttl_expires_at", sa.DateTime(timezone=True)),
         sa.Column("archived_at", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "chat_messages",
         sa.Column("chat_message_id", sa.BigInteger(), primary_key=True),
-        sa.Column("chat_session_id", sa.BigInteger(), sa.ForeignKey("chat_sessions.chat_session_id"), nullable=False),
+        sa.Column(
+            "chat_session_id",
+            sa.BigInteger(),
+            sa.ForeignKey("chat_sessions.chat_session_id"),
+            nullable=False,
+        ),
         sa.Column("role", sa.String(30), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("client_message_id", sa.String(255)),
         sa.Column("linked_retrieval_run_id", sa.BigInteger()),
         sa.Column("edited_flag", sa.Boolean(), server_default=sa.false(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "chat_tags",
         sa.Column("chat_tag_id", sa.BigInteger(), primary_key=True),
-        sa.Column("chat_session_id", sa.BigInteger(), sa.ForeignKey("chat_sessions.chat_session_id"), nullable=False),
+        sa.Column(
+            "chat_session_id",
+            sa.BigInteger(),
+            sa.ForeignKey("chat_sessions.chat_session_id"),
+            nullable=False,
+        ),
         sa.Column("tag_name", sa.String(50), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.UniqueConstraint("chat_session_id", "tag_name", name="uq_chat_tags_session_name"),
     )
     op.create_table(
@@ -94,13 +170,28 @@ def upgrade() -> None:
         sa.Column("title", sa.String(255), nullable=False),
         sa.Column("status", sa.String(30), server_default="active", nullable=False),
         sa.Column("archived_at", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "document_versions",
         sa.Column("document_version_id", sa.BigInteger(), primary_key=True),
-        sa.Column("logical_document_id", sa.BigInteger(), sa.ForeignKey("logical_documents.logical_document_id"), nullable=False),
+        sa.Column(
+            "logical_document_id",
+            sa.BigInteger(),
+            sa.ForeignKey("logical_documents.logical_document_id"),
+            nullable=False,
+        ),
         sa.Column("version_no", sa.Integer(), nullable=False),
         sa.Column("content_hash", sa.String(64), nullable=False),
         sa.Column("status", sa.String(30), server_default="processing", nullable=False),
@@ -111,40 +202,83 @@ def upgrade() -> None:
         sa.Column("file_size_bytes", sa.BigInteger(), nullable=False),
         sa.Column("storage_key", sa.Text()),
         sa.Column("created_by", sa.BigInteger(), sa.ForeignKey("users.user_id"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.UniqueConstraint("logical_document_id", "version_no", name="uq_document_versions_version_no"),
-        sa.UniqueConstraint("logical_document_id", "content_hash", name="uq_document_versions_content_hash"),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "logical_document_id", "version_no", name="uq_document_versions_version_no"
+        ),
+        sa.UniqueConstraint(
+            "logical_document_id", "content_hash", name="uq_document_versions_content_hash"
+        ),
     )
     op.create_table(
         "document_chunks",
         sa.Column("document_chunk_id", sa.BigInteger(), primary_key=True),
-        sa.Column("document_version_id", sa.BigInteger(), sa.ForeignKey("document_versions.document_version_id"), nullable=False),
+        sa.Column(
+            "document_version_id",
+            sa.BigInteger(),
+            sa.ForeignKey("document_versions.document_version_id"),
+            nullable=False,
+        ),
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("page_from", sa.Integer()),
         sa.Column("page_to", sa.Integer()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "retrieval_runs",
         sa.Column("retrieval_run_id", sa.BigInteger(), primary_key=True),
-        sa.Column("chat_session_id", sa.BigInteger(), sa.ForeignKey("chat_sessions.chat_session_id")),
-        sa.Column("request_message_id", sa.BigInteger(), sa.ForeignKey("chat_messages.chat_message_id")),
+        sa.Column(
+            "chat_session_id", sa.BigInteger(), sa.ForeignKey("chat_sessions.chat_session_id")
+        ),
+        sa.Column(
+            "request_message_id", sa.BigInteger(), sa.ForeignKey("chat_messages.chat_message_id")
+        ),
         sa.Column("request_id", sa.String(100)),
         sa.Column("origin_type", sa.String(30), nullable=False),
         sa.Column("query_text", sa.Text(), nullable=False),
         sa.Column("status", sa.String(30), server_default="running", nullable=False),
         sa.Column("retrieval_score_summary", sa.JSON()),
         sa.Column("error_code", sa.String(100)),
-        sa.Column("started_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "started_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
     )
     op.create_table(
         "retrieval_run_items",
         sa.Column("retrieval_run_item_id", sa.BigInteger(), primary_key=True),
-        sa.Column("retrieval_run_id", sa.BigInteger(), sa.ForeignKey("retrieval_runs.retrieval_run_id"), nullable=False),
-        sa.Column("document_chunk_id", sa.BigInteger(), sa.ForeignKey("document_chunks.document_chunk_id"), nullable=False),
+        sa.Column(
+            "retrieval_run_id",
+            sa.BigInteger(),
+            sa.ForeignKey("retrieval_runs.retrieval_run_id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "document_chunk_id",
+            sa.BigInteger(),
+            sa.ForeignKey("document_chunks.document_chunk_id"),
+            nullable=False,
+        ),
         sa.Column("retrieval_score", sa.Float(), nullable=False),
         sa.Column("rerank_score", sa.Float()),
         sa.Column("rerank_order", sa.Integer()),
@@ -153,8 +287,18 @@ def upgrade() -> None:
     op.create_table(
         "citations",
         sa.Column("citation_id", sa.BigInteger(), primary_key=True),
-        sa.Column("retrieval_run_id", sa.BigInteger(), sa.ForeignKey("retrieval_runs.retrieval_run_id"), nullable=False),
-        sa.Column("document_chunk_id", sa.BigInteger(), sa.ForeignKey("document_chunks.document_chunk_id"), nullable=False),
+        sa.Column(
+            "retrieval_run_id",
+            sa.BigInteger(),
+            sa.ForeignKey("retrieval_runs.retrieval_run_id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "document_chunk_id",
+            sa.BigInteger(),
+            sa.ForeignKey("document_chunks.document_chunk_id"),
+            nullable=False,
+        ),
         sa.Column("marker", sa.String(30), nullable=False),
         sa.Column("snippet", sa.Text(), nullable=False),
         sa.Column("source_label", sa.String(255), nullable=False),
@@ -172,7 +316,12 @@ def upgrade() -> None:
         sa.Column("error_code", sa.String(100)),
         sa.Column("error_message", sa.Text()),
         sa.Column("created_by", sa.BigInteger(), sa.ForeignKey("users.user_id")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("started_at", sa.DateTime(timezone=True)),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
     )
@@ -183,7 +332,12 @@ def upgrade() -> None:
         sa.Column("status", sa.String(30), server_default="queued", nullable=False),
         sa.Column("summary", sa.JSON()),
         sa.Column("created_by", sa.BigInteger(), sa.ForeignKey("users.user_id"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
     )
     op.create_table(
@@ -195,14 +349,24 @@ def upgrade() -> None:
         sa.Column("target_id", sa.String(100)),
         sa.Column("request_id", sa.String(100)),
         sa.Column("metadata", sa.JSON(), server_default="{}", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
     op.create_table(
         "system_settings",
         sa.Column("setting_key", sa.String(100), primary_key=True),
         sa.Column("setting_value", sa.JSON(), nullable=False),
         sa.Column("updated_by", sa.BigInteger(), sa.ForeignKey("users.user_id")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
 
 

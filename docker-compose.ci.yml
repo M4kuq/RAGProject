@@ -40,7 +40,7 @@ services:
     expose:
       - "6333"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -109,8 +109,13 @@ services:
         condition: service_completed_successfully
       seed:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.db.session import check_database; raise SystemExit(0 if check_database() else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
-  frontend:
+  frontend-build:
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -137,7 +142,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       target: dev
-    command: ["sh", "-c", "npm run typecheck && npm test && npm run build"]
+    command: ["sh", "-c", "npm run lint && npm run typecheck && npm test && npm run build"]
 
   smoke:
     build:
@@ -155,8 +160,8 @@ services:
       backend:
         condition: service_healthy
       worker:
-        condition: service_started
-      frontend:
+        condition: service_healthy
+      frontend-build:
         condition: service_completed_successfully
 
 volumes:

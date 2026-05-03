@@ -39,11 +39,16 @@ def create_session(
     db.add(session)
     db.commit()
     db.refresh(session)
-    return {"data": {"chat_session_id": session.chat_session_id, "title": session.title}, "meta": {}}
+    return {
+        "data": {"chat_session_id": session.chat_session_id, "title": session.title},
+        "meta": {},
+    }
 
 
 @router.get("/sessions")
-def list_sessions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, object]:
+def list_sessions(
+    user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict[str, object]:
     rows = db.scalars(select(ChatSession).where(ChatSession.user_id == user.user_id)).all()
     return {
         "data": [
@@ -78,4 +83,7 @@ def add_message(
     db.add(message)
     db.commit()
     db.refresh(message)
-    return {"data": {"chat_message_id": message.chat_message_id, "content": message.content}, "meta": {}}
+    return {
+        "data": {"chat_message_id": message.chat_message_id, "content": message.content},
+        "meta": {},
+    }
