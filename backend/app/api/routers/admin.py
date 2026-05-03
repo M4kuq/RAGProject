@@ -20,7 +20,7 @@ def jobs(
     db: Session = Depends(get_db),
     pagination: PaginationParams = Depends(pagination_params),
 ) -> dict[str, object]:
-    rows = db.scalars(select(Job).order_by(Job.job_id.desc()).limit(50)).all()
+    rows = db.scalars(select(Job).order_by(Job.job_id.desc())).all()
     page_rows, page_meta = paginate(rows, pagination)
     return success_response(
         [{"job_id": j.job_id, "job_type": j.job_type, "status": j.status} for j in page_rows],
@@ -63,7 +63,7 @@ def audit_logs(
     db: Session = Depends(get_db),
     pagination: PaginationParams = Depends(pagination_params),
 ) -> dict[str, object]:
-    rows = db.scalars(select(AuditLog).order_by(AuditLog.audit_log_id.desc()).limit(50)).all()
+    rows = db.scalars(select(AuditLog).order_by(AuditLog.audit_log_id.desc())).all()
     page_rows, page_meta = paginate(rows, pagination)
     return success_response(
         [

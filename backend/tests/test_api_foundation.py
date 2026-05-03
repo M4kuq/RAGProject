@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.api.deps import pagination_params
+from app.api.deps import pagination_params, require_admin, require_csrf
 from app.api.error_handlers import register_error_handlers
 from app.api.middleware import RequestIdMiddleware, resolve_request_id
 from app.api.responses import paginate, success_response
 from app.core.config import Settings, get_settings
+from app.db.base import Base
+from app.db.models import Job, User
+from app.db.session import get_db
 from app.main import create_app
 from app.schemas.common import PaginationParams
 
@@ -98,6 +105,81 @@ def test_pagination_dependency_returns_validation_error() -> None:
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "validation_error"
     assert invalid.json()["meta"]["request_id"] == "page-2"
+
+
+def test_admin_jobs_pagination_is_not_pre_limited_to_first_50_rows() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with session_factory() as db:
+        db.add_all(
+            Job(job_id=index, job_type="test", status="queued", payload={})
+            for index in range(1, 56)
+        )
+        db.commit()
+
+    def override_db():
+        with session_factory() as db:
+            yield db
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_csrf] = lambda: None
+    app.dependency_overrides[require_admin] = lambda: User(user_id=1, email="admin@example.com")
+    try:
+        response = TestClient(app).get(
+            "/api/v1/jobs?page=3&page_size=20",
+            headers={"X-Request-ID": "jobs-page-3"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["data"]) == 15
+    assert body["meta"]["pagination"] == {
+        "page": 3,
+        "page_size": 20,
+        "total": 55,
+        "has_next": False,
+    }
+
+
+def test_unhandled_exception_is_logged_with_generic_error_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
+    register_error_handlers(app)
+
+    @app.get("/boom")
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with caplog.at_level("ERROR", logger="app.api.error_handlers"):
+        response = client.get("/boom", headers={"X-Request-ID": "explode-1"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "internal_server_error",
+            "message": "Internal server error.",
+            "details": {},
+        },
+        "meta": {"request_id": "explode-1"},
+    }
+    assert any(
+        record.message == "Unhandled API exception"
+        and record.__dict__.get("request_id") == "explode-1"
+        and record.__dict__.get("exception_type") == "RuntimeError"
+        for record in caplog.records
+    )
 
 
 def test_settings_accepts_canonical_and_legacy_env_names(monkeypatch) -> None:

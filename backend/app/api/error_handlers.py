@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from fastapi import FastAPI, Request
@@ -9,6 +10,8 @@ from starlette.responses import JSONResponse
 
 from app.core.errors import normalize_error
 from app.schemas.common import ErrorBody, ErrorEnvelope, Meta
+
+logger = logging.getLogger(__name__)
 
 
 def _request_id(request: Request) -> str | None:
@@ -73,7 +76,11 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(request: Request, _: Exception) -> JSONResponse:
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception(
+            "Unhandled API exception",
+            extra={"request_id": _request_id(request), "exception_type": type(exc).__name__},
+        )
         return _error_response(
             request,
             status_code=500,
