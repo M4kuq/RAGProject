@@ -52,7 +52,9 @@ def csrf(response: Response) -> dict[str, object]:
 
 
 @router.post("/login")
-def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, object]:
+def login(
+    payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, object]:
     settings = get_settings()
     email = payload.email.lower().strip()
     user = db.scalar(select(User).where(User.email == email))
@@ -69,9 +71,16 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     )
     db.add(session)
     user.last_login_at = datetime.now(UTC)
-    audit(db, action="auth.login", actor_user_id=user.user_id, request_id=getattr(request.state, "request_id", None))
+    audit(
+        db,
+        action="auth.login",
+        actor_user_id=user.user_id,
+        request_id=getattr(request.state, "request_id", None),
+    )
     db.commit()
-    response.set_cookie(settings.session_cookie_name, raw_session, httponly=True, **_cookie_settings())
+    response.set_cookie(
+        settings.session_cookie_name, raw_session, httponly=True, **_cookie_settings()
+    )
     response.set_cookie(settings.csrf_cookie_name, csrf_token, httponly=False, **_cookie_settings())
     return {"data": {"user": _user_payload(db, user), "csrf_token": csrf_token}, "meta": {}}
 
@@ -96,7 +105,12 @@ def logout(
     )
     for session in db.scalars(select(UserSession).where(UserSession.user_id == user.user_id)).all():
         session.revoked_at = datetime.now(UTC)
-    audit(db, action="auth.logout", actor_user_id=user.user_id, request_id=getattr(request.state, "request_id", None))
+    audit(
+        db,
+        action="auth.logout",
+        actor_user_id=user.user_id,
+        request_id=getattr(request.state, "request_id", None),
+    )
     db.commit()
     return {"data": {"result_code": "logged_out"}, "meta": {}}
 

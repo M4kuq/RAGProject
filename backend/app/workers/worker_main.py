@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import DocumentChunk, DocumentVersion, Job
@@ -11,30 +12,36 @@ from app.db.session import SessionLocal
 from app.storage.extractors import chunk_text, extract_text
 
 
-def handle_document_ingest(job: Job) -> None:
+def handle_document_ingest(db: Session, job: Job) -> None:
     settings = get_settings()
-    with SessionLocal() as db:
-        version_id = int(job.payload["document_version_id"])
-        version = db.get(DocumentVersion, version_id)
-        if not version or not version.storage_key:
-            job.status = "failed"
-            job.error_code = "document_version_not_found"
-            return
-        text = extract_text(settings.storage_root / version.storage_key)
-        chunks = chunk_text(text)
-        if not chunks:
-            version.status = "failed"
-            version.error_code = "text_extraction_empty"
-            job.status = "failed"
-            job.error_code = "text_extraction_empty"
-            return
-        for index, chunk in enumerate(chunks):
-            db.add(DocumentChunk(document_version_id=version.document_version_id, chunk_index=index, content=chunk))
-        version.status = "ready"
-        version.is_active = True
-        job.status = "succeeded"
+    version_id = int(job.payload["document_version_id"])
+    version = db.get(DocumentVersion, version_id)
+    if not version or not version.storage_key:
+        job.status = "failed"
+        job.error_code = "document_version_not_found"
         job.finished_at = datetime.now(UTC)
-        db.commit()
+        return
+    text = extract_text(settings.storage_root / version.storage_key)
+    chunks = chunk_text(text)
+    if not chunks:
+        version.status = "failed"
+        version.error_code = "text_extraction_empty"
+        job.status = "failed"
+        job.error_code = "text_extraction_empty"
+        job.finished_at = datetime.now(UTC)
+        return
+    for index, chunk in enumerate(chunks):
+        db.add(
+            DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=index,
+                content=chunk,
+            )
+        )
+    version.status = "ready"
+    version.is_active = True
+    job.status = "succeeded"
+    job.finished_at = datetime.now(UTC)
 
 
 def run_once() -> bool:
@@ -46,11 +53,11 @@ def run_once() -> bool:
         job.started_at = datetime.now(UTC)
         db.commit()
         if job.job_type == "document_ingest":
-            handle_document_ingest(job)
+            handle_document_ingest(db, job)
         else:
             job.status = "succeeded"
             job.finished_at = datetime.now(UTC)
-            db.commit()
+        db.commit()
         return True
 
 

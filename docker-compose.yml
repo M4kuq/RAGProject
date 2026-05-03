@@ -41,7 +41,7 @@ services:
       - "6333"
       - "6334"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
       interval: 10s
       timeout: 5s
       retries: 10

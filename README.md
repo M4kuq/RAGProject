@@ -81,19 +81,90 @@ Compose smoke まで実行する場合は次を使います。
 sh scripts/test.sh --smoke
 ```
 
-## CI/CD の現在地
+## GitHub Actions CI/CD
 
-PR-02 時点では GitHub Actions workflow は未追加です。代わりに、次のローカル再現コマンドで後続 PR の CI/CD job と同等の入口を先に固定しています。
+PR-03 時点で、Phase1 の CI/CD 導線として GitHub Actions workflow を追加しています。
+
+| workflow | 主な対象 | pull_request | main push | 手動実行 |
+| --- | --- | --- | --- | --- |
+| `Backend CI` | Ruff format check / Ruff lint / mypy / pytest | backend / scripts / workflow 変更時 | backend / scripts / workflow 変更時 | 可 |
+| `Frontend CI` | npm install / lint / typecheck / Vitest / production build | frontend / workflow 変更時 | frontend / workflow 変更時 | 可 |
+| `Docker CI` | CI compose config / backend・worker・frontend image build | Dockerfile / compose / dependency manifest・lockfile / `.dockerignore` / workflow 変更時 | 常時 | 可 |
+| `Compose Smoke` | CI compose build / backend-test / frontend-test / backend readiness / worker health / qdrant / postgres / frontend build artifact | backend / frontend / `docker-compose.ci.yml` / Dockerfile / workflow 変更時 | 常時 | 可 |
+
+PR では軽量な backend / frontend check を優先し、Docker build と compose smoke は関連ファイル変更時に限定しています。`main` push では Docker build と compose smoke まで実行します。
+
+`Backend CI` は host runner 上の unit-level check とし、DB 統合確認は `Compose Smoke` に寄せます。`Compose Smoke` は `USE_FAKE_LLM=true`、fake model 名、PostgreSQL、Qdrant、backend、worker、frontend build artifact 確認を前提にしています。外部 LLM / embedding / reranker の本番 API 利用や、Ollama model pull、`BAAI/bge-m3`、`BAAI/bge-reranker-v2-m3` の重い model download は必須にしません。通常CIは GitHub Actions secrets や `.env` を必要としません。
+
+`Docker CI` は `main` push と手動実行時に、安全な範囲の rendered compose config を短期 artifact として保存します。`.env`、secret、DB dump、prompt全文、chunk本文、PII は artifact 対象にしません。
+
+### ローカルでCI相当を再現する
+
+Docker / Compose 系は Windows PowerShell と Ubuntu shell のどちらでも次の scripts を入口にします。
+
+```powershell
+.\scripts\test.ps1
+.\scripts\test.ps1 -Smoke
+```
+
+```bash
+sh scripts/test.sh
+sh scripts/test.sh --smoke
+```
+
+個別に確認する場合は次を実行します。
 
 ```bash
 docker compose -f docker-compose.ci.yml config
-docker compose -f docker-compose.ci.yml build backend worker frontend backend-test frontend-test smoke
+docker compose -f docker-compose.ci.yml build backend worker frontend-build backend-test frontend-test smoke
 docker compose -f docker-compose.ci.yml run --rm backend-test
 docker compose -f docker-compose.ci.yml run --rm frontend-test
-docker compose -f docker-compose.ci.yml up --abort-on-container-exit --exit-code-from smoke smoke
+docker compose -f docker-compose.ci.yml run --rm frontend-build
+docker compose -f docker-compose.ci.yml up -d backend worker
+docker compose -f docker-compose.ci.yml run --rm --no-deps smoke
 ```
 
-CI 用 compose は `USE_FAKE_LLM=true`、fake model 名、PostgreSQL、Qdrant、backend、worker、frontend build artifact 確認を前提にしています。外部 LLM / embedding / reranker の本番 API 利用や重いモデル download は必須にしません。
+繰り返し実行で状態が残った場合は、対象 volume を削除する操作であることを理解したうえで次を実行します。
+
+```bash
+docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+```
+
+backend CI の個別コマンドは次です。
+
+```bash
+cd backend
+uv run --extra dev ruff format --check .
+uv run --extra dev ruff check .
+uv run --extra dev mypy .
+uv run --extra dev pytest
+```
+
+frontend CI の個別コマンドは次です。
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+Windows Docker Desktop では Linux container engine が起動していることを確認してください。Ubuntu 24.04.4 LTS では Docker Engine と Docker Compose plugin を利用します。
+
+### CI troubleshooting
+
+- cache が壊れた場合: GitHub Actions の該当 workflow を再実行し、それでも再現する場合は Actions cache を削除して再実行します。uv / npm / Docker layer cache は lockfile または `pyproject.toml` を key に含めます。
+- compose smoke が race する場合: `/health` ではなく `/ready` と compose healthcheck を確認します。PR-03 時点の `/ready` は DB-only readiness で、Qdrant / RAG model readiness は後続PRで拡張します。
+- Docker daemon が起動していない場合: Windows では Docker Desktop、Ubuntu では Docker service を起動してから `docker compose -f docker-compose.ci.yml config` を実行します。
+- `/health` と readiness の違い: `/health` は process liveness です。DB 接続を含む起動判定は `/ready` を使います。
+- secrets や `.env`: 通常CIに secrets や `.env` を入れません。外部API key、cookie、private key、DB dump、prompt全文、chunk本文、PII を log / artifact / cache に含めない方針です。
+
+### CI 既知課題
+
+- `backend/uv.lock` は未作成です。PR-03 の backend CI は `pyproject.toml` の version range から解決するため、完全固定の dependency reproducibility は後続PRで `uv.lock` と Dockerfile の frozen install 化により対応します。なお、`passlib[bcrypt]` と新しい `bcrypt` の既知互換性問題で seed が失敗するため、PR-03 では `bcrypt>=4.0.1,<4.1.0` の制約だけ先に明示しています。
+- 2026-05-01 時点の `npm audit` では frontend 依存に moderate 5件が報告されています。PR-03 では CI 基盤差分に限定し、破壊的更新を伴う `npm audit fix --force` は実行していません。
 
 ## 開発基盤の現在地
 
@@ -108,8 +179,17 @@ CI 用 compose は `USE_FAKE_LLM=true`、fake model 名、PostgreSQL、Qdrant、
 - backend / worker / frontend の Dockerfile
 - `docker-compose.yml` / `docker-compose.dev.yml` / `docker-compose.ci.yml`
 - Docker build context から `.env` や local storage を除外する `.dockerignore`
+- GitHub Actions workflow: backend CI / frontend CI / Docker build / compose smoke
 
-GitHub Actions、詳細な DB 制約・各 API の完成実装は次の大単位で進めます。
+詳細な DB 制約・各 API の完成実装は次の大単位で進めます。
+
+PR-04以降で CI に追加する予定の確認です。
+
+- `/ready` の Qdrant / RAG model readiness 拡張
+- worker 実ジョブ投入から完了までの smoke
+- migration / seed の正式データモデル反映後の integration test
+- RAG ask / citation / evaluation / audit log を含む final smoke
+- backend dependency lockfile の正式化と Dockerfile の frozen install 化
 
 ## 破壊的操作
 

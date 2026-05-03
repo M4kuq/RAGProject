@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,7 +45,9 @@ class User(Base, TimestampMixin):
 
 class UserSetting(Base, TimestampMixin):
     __tablename__ = "user_settings"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True
+    )
     ui_theme: Mapped[str] = mapped_column(String(30), default="system")
     memory_message_limit: Mapped[int] = mapped_column(Integer, default=8)
 
@@ -93,7 +105,9 @@ class LogicalDocument(Base, TimestampMixin):
 class DocumentVersion(Base, TimestampMixin):
     __tablename__ = "document_versions"
     document_version_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    logical_document_id: Mapped[int] = mapped_column(ForeignKey("logical_documents.logical_document_id"))
+    logical_document_id: Mapped[int] = mapped_column(
+        ForeignKey("logical_documents.logical_document_id")
+    )
     version_no: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(30), default="processing")
@@ -109,7 +123,9 @@ class DocumentVersion(Base, TimestampMixin):
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     document_chunk_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_versions.document_version_id"))
+    document_version_id: Mapped[int] = mapped_column(
+        ForeignKey("document_versions.document_version_id")
+    )
     chunk_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     page_from: Mapped[int | None] = mapped_column(Integer)
@@ -121,7 +137,9 @@ class RetrievalRun(Base):
     __tablename__ = "retrieval_runs"
     retrieval_run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     chat_session_id: Mapped[int | None] = mapped_column(ForeignKey("chat_sessions.chat_session_id"))
-    request_message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.chat_message_id"))
+    request_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.chat_message_id")
+    )
     request_id: Mapped[str | None] = mapped_column(String(100))
     origin_type: Mapped[str] = mapped_column(String(30))
     query_text: Mapped[str] = mapped_column(Text)
@@ -130,6 +148,16 @@ class RetrievalRun(Base):
     error_code: Mapped[str | None] = mapped_column(String(100))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Citation(Base):
+    __tablename__ = "citations"
+    citation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    retrieval_run_id: Mapped[int] = mapped_column(ForeignKey("retrieval_runs.retrieval_run_id"))
+    document_chunk_id: Mapped[int] = mapped_column(ForeignKey("document_chunks.document_chunk_id"))
+    marker: Mapped[str] = mapped_column(String(30))
+    snippet: Mapped[str] = mapped_column(Text)
+    source_label: Mapped[str] = mapped_column(String(255))
 
 
 class Job(Base):

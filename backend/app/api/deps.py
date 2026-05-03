@@ -38,7 +38,9 @@ def require_csrf(
         return
     if not session_token or not x_csrf_token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="csrf_required")
-    session = db.scalar(select(UserSession).where(UserSession.session_token_hash == hash_token(session_token)))
+    session = db.scalar(
+        select(UserSession).where(UserSession.session_token_hash == hash_token(session_token))
+    )
     if not session or session.csrf_state_hash != hash_token(x_csrf_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="csrf_invalid")
 

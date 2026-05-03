@@ -1,0 +1,73 @@
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "scripts/**"
+      - ".github/workflows/backend-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "scripts/**"
+      - ".github/workflows/backend-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Ruff / mypy / pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: ci
+      DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag
+      CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+      SESSION_SECRET: ci-only-change-me
+      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SAMESITE: lax
+      SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
+      STORAGE_ROOT: /tmp/ragproject/uploads
+      QDRANT_URL: http://localhost:6333
+      OLLAMA_URL: http://localhost:11434
+      USE_FAKE_LLM: "true"
+      MODEL_NAME: fake-ci-model
+      EMBEDDING_MODEL: fake-ci-embedding
+      RERANKER_MODEL: fake-ci-reranker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/pyproject.toml
+
+      - name: Ruff format check
+        run: uv run --extra dev ruff format --check .
+
+      - name: Ruff lint
+        run: uv run --extra dev ruff check .
+
+      - name: Type check
+        run: uv run --extra dev mypy .
+
+      - name: Unit tests
+        run: uv run --extra dev pytest

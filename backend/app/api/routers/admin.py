@@ -14,11 +14,16 @@ router = APIRouter(dependencies=[Depends(require_csrf)])
 @router.get("/jobs")
 def jobs(_: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict[str, object]:
     rows = db.scalars(select(Job).order_by(Job.job_id.desc()).limit(50)).all()
-    return {"data": [{"job_id": j.job_id, "job_type": j.job_type, "status": j.status} for j in rows], "meta": {}}
+    return {
+        "data": [{"job_id": j.job_id, "job_type": j.job_type, "status": j.status} for j in rows],
+        "meta": {},
+    }
 
 
 @router.post("/evaluations/runs")
-def create_evaluation(user: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict[str, object]:
+def create_evaluation(
+    user: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict[str, object]:
     run = EvaluationRun(
         trigger_type="manual",
         status="succeeded",
@@ -34,16 +39,29 @@ def create_evaluation(user: User = Depends(require_admin), db: Session = Depends
     db.add(run)
     db.commit()
     db.refresh(run)
-    return {"data": {"evaluation_run_id": run.evaluation_run_id, "summary": run.summary}, "meta": {}}
+    return {
+        "data": {"evaluation_run_id": run.evaluation_run_id, "summary": run.summary},
+        "meta": {},
+    }
 
 
 @router.get("/audit-logs")
-def audit_logs(_: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict[str, object]:
+def audit_logs(
+    _: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict[str, object]:
     rows = db.scalars(select(AuditLog).order_by(AuditLog.audit_log_id.desc()).limit(50)).all()
-    return {"data": [{"audit_log_id": r.audit_log_id, "action": r.action, "target_id": r.target_id} for r in rows], "meta": {}}
+    return {
+        "data": [
+            {"audit_log_id": r.audit_log_id, "action": r.action, "target_id": r.target_id}
+            for r in rows
+        ],
+        "meta": {},
+    }
 
 
 @router.get("/system/settings")
-def system_settings(_: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict[str, object]:
+def system_settings(
+    _: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict[str, object]:
     rows = db.scalars(select(SystemSetting)).all()
     return {"data": [{"key": r.setting_key, "value": r.setting_value} for r in rows], "meta": {}}

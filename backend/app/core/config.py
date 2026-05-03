@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "rag_csrf"
     session_secret: str = "dev-only-change-me"
     session_cookie_secure: bool = False
-    session_cookie_samesite: str = "lax"
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     session_cookie_max_age_seconds: int = 28800
     storage_root: Path = Path("storage/uploads")
     qdrant_url: str = "http://qdrant:6333"

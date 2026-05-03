@@ -32,7 +32,9 @@ async def upload_document(
     settings.storage_root.mkdir(parents=True, exist_ok=True)
     storage_key = f"{content_hash}_{Path(file.filename or 'upload').name}"
     (settings.storage_root / storage_key).write_bytes(content)
-    logical = LogicalDocument(owner_user_id=user.user_id, title=file.filename or "Uploaded document")
+    logical = LogicalDocument(
+        owner_user_id=user.user_id, title=file.filename or "Uploaded document"
+    )
     db.add(logical)
     db.flush()
     version = DocumentVersion(
@@ -49,7 +51,13 @@ async def upload_document(
     )
     db.add(version)
     db.flush()
-    db.add(Job(job_type="document_ingest", payload={"document_version_id": version.document_version_id}, created_by=user.user_id))
+    db.add(
+        Job(
+            job_type="document_ingest",
+            payload={"document_version_id": version.document_version_id},
+            created_by=user.user_id,
+        )
+    )
     db.commit()
     return {
         "data": {
@@ -62,7 +70,9 @@ async def upload_document(
 
 
 @router.get("")
-def list_documents(_: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, object]:
+def list_documents(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict[str, object]:
     docs = db.scalars(select(LogicalDocument)).all()
     return {
         "data": [

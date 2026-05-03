@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user, require_admin, require_csrf
-from app.db.models import Citation, ChatMessage, RetrievalRun, User
+from app.db.models import ChatMessage, Citation, RetrievalRun, User
 from app.db.session import get_db
 from app.rag.fake_pipeline import build_answer, search_chunks
 
@@ -21,7 +21,9 @@ class AskRequest(BaseModel):
 
 
 @router.post("/ask")
-def ask(payload: AskRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, object]:
+def ask(
+    payload: AskRequest, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict[str, object]:
     hits = search_chunks(db, payload.question)
     if not hits:
         raise HTTPException(status_code=422, detail="no_context_found")
@@ -70,7 +72,10 @@ def ask(payload: AskRequest, user: User = Depends(current_user), db: Session = D
             "answer": answer,
             "assistant_message_id": assistant.chat_message_id if assistant else None,
             "retrieval_run_id": run.retrieval_run_id,
-            "citations": [{"marker": c.marker, "snippet": c.snippet, "source_label": c.source_label} for c in citations],
+            "citations": [
+                {"marker": c.marker, "snippet": c.snippet, "source_label": c.source_label}
+                for c in citations
+            ],
             "confidence": {"label": "medium", "reason": "fake deterministic Phase1 adapter"},
         },
         "meta": {},
@@ -78,11 +83,17 @@ def ask(payload: AskRequest, user: User = Depends(current_user), db: Session = D
 
 
 @router.post("/search")
-def search(payload: AskRequest, _: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict[str, object]:
+def search(
+    payload: AskRequest, _: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict[str, object]:
     hits = search_chunks(db, payload.question)
     return {
         "data": [
-            {"document_chunk_id": chunk.document_chunk_id, "snippet": chunk.content[:240], "score": score}
+            {
+                "document_chunk_id": chunk.document_chunk_id,
+                "snippet": chunk.content[:240],
+                "score": score,
+            }
             for chunk, score in hits
         ],
         "meta": {"pagination": {"page": 1, "page_size": 20, "total": len(hits)}},

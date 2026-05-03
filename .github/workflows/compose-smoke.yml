@@ -1,0 +1,98 @@
+name: Compose Smoke
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docker-compose.ci.yml"
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/compose-smoke.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENVIRONMENT: ci
+  USE_FAKE_LLM: "true"
+  MODEL_NAME: fake-ci-model
+  EMBEDDING_MODEL: fake-ci-embedding
+  RERANKER_MODEL: fake-ci-reranker
+
+jobs:
+  smoke:
+    name: docker compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate CI compose config
+        run: docker compose -f docker-compose.ci.yml config
+
+      - name: Build CI compose services
+        run: docker compose -f docker-compose.ci.yml build
+
+      - name: Run backend test service
+        run: docker compose -f docker-compose.ci.yml run --rm backend-test
+
+      - name: Run frontend test service
+        run: docker compose -f docker-compose.ci.yml run --rm frontend-test
+
+      - name: Verify frontend build artifact service
+        run: docker compose -f docker-compose.ci.yml run --rm frontend-build
+
+      - name: Start backend and worker
+        run: docker compose -f docker-compose.ci.yml up -d backend worker
+
+      - name: Assert worker is healthy
+        run: |
+          for attempt in $(seq 1 24); do
+            worker_id="$(docker compose -f docker-compose.ci.yml ps -q worker)"
+            if [ -n "$worker_id" ] \
+              && [ "$(docker inspect -f '{{.State.Running}}' "$worker_id")" = "true" ] \
+              && [ "$(docker inspect -f '{{.State.Health.Status}}' "$worker_id")" = "healthy" ]; then
+              exit 0
+            fi
+            echo "worker not healthy yet; retry ${attempt}/24"
+            sleep 5
+          done
+          exit 1
+
+      - name: Run compose smoke
+        run: |
+          for attempt in $(seq 1 24); do
+            if docker compose -f docker-compose.ci.yml run --rm --no-deps smoke; then
+              exit 0
+            fi
+            echo "compose smoke not ready yet; retry ${attempt}/24"
+            sleep 5
+          done
+          exit 1
+
+      - name: Show compose state
+        if: always()
+        run: docker compose -f docker-compose.ci.yml ps
+
+      - name: Show compose logs
+        if: failure()
+        run: docker compose -f docker-compose.ci.yml logs --no-color --tail=120 backend worker smoke postgres qdrant
+
+      - name: Cleanup compose resources
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
