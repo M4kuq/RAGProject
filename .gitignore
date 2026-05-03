@@ -15,7 +15,7 @@ dist/
 coverage/
 *.tsbuildinfo
 
-storage/
+/storage/
 data/postgres/
 data/qdrant/
 data/ollama/
