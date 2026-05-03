@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import current_user, require_admin, require_csrf
+from app.api.deps import current_user, pagination_params, require_admin, require_csrf
+from app.api.responses import paginate, success_response
 from app.db.models import ChatMessage, Citation, RetrievalRun, User
 from app.db.session import get_db
 from app.rag.fake_pipeline import build_answer, search_chunks
+from app.schemas.common import PaginationParams
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -22,7 +24,10 @@ class AskRequest(BaseModel):
 
 @router.post("/ask")
 def ask(
-    payload: AskRequest, user: User = Depends(current_user), db: Session = Depends(get_db)
+    payload: AskRequest,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
 ) -> dict[str, object]:
     hits = search_chunks(db, payload.question)
     if not hits:
@@ -67,8 +72,8 @@ def ask(
         db.add(citation)
         citations.append(citation)
     db.commit()
-    return {
-        "data": {
+    return success_response(
+        {
             "answer": answer,
             "assistant_message_id": assistant.chat_message_id if assistant else None,
             "retrieval_run_id": run.retrieval_run_id,
@@ -78,23 +83,29 @@ def ask(
             ],
             "confidence": {"label": "medium", "reason": "fake deterministic Phase1 adapter"},
         },
-        "meta": {},
-    }
+        request,
+    )
 
 
 @router.post("/search")
 def search(
-    payload: AskRequest, _: User = Depends(require_admin), db: Session = Depends(get_db)
+    payload: AskRequest,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
 ) -> dict[str, object]:
     hits = search_chunks(db, payload.question)
-    return {
-        "data": [
+    page_hits, page_meta = paginate(hits, pagination)
+    return success_response(
+        [
             {
                 "document_chunk_id": chunk.document_chunk_id,
                 "snippet": chunk.content[:240],
                 "score": score,
             }
-            for chunk, score in hits
+            for chunk, score in page_hits
         ],
-        "meta": {"pagination": {"page": 1, "page_size": 20, "total": len(hits)}},
-    }
+        request,
+        pagination=page_meta,
+    )

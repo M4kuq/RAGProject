@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import current_user, require_admin, require_csrf
+from app.api.deps import current_user, pagination_params, require_admin, require_csrf
+from app.api.responses import paginate, success_response
 from app.core.config import get_settings
 from app.db.models import DocumentVersion, Job, LogicalDocument, User
 from app.db.session import get_db
+from app.schemas.common import PaginationParams
 from app.storage.extractors import validate_extension
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -18,6 +20,7 @@ router = APIRouter(dependencies=[Depends(require_csrf)])
 
 @router.post("")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -59,25 +62,30 @@ async def upload_document(
         )
     )
     db.commit()
-    return {
-        "data": {
+    return success_response(
+        {
             "logical_document_id": logical.logical_document_id,
             "document_version_id": version.document_version_id,
             "status": version.status,
         },
-        "meta": {},
-    }
+        request,
+    )
 
 
 @router.get("")
 def list_documents(
-    _: User = Depends(current_user), db: Session = Depends(get_db)
+    request: Request,
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
 ) -> dict[str, object]:
     docs = db.scalars(select(LogicalDocument)).all()
-    return {
-        "data": [
+    page_docs, page_meta = paginate(docs, pagination)
+    return success_response(
+        [
             {"logical_document_id": d.logical_document_id, "title": d.title, "status": d.status}
-            for d in docs
+            for d in page_docs
         ],
-        "meta": {"pagination": {"page": 1, "page_size": 20, "total": len(docs)}},
-    }
+        request,
+        pagination=page_meta,
+    )
