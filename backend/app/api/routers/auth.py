@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
+from app.api.responses import success_response
 from app.core.config import get_settings
 from app.core.security import hash_token, new_token, verify_password
 from app.db.models import Role, User, UserSession
@@ -43,12 +44,12 @@ def _cookie_settings() -> dict[str, Any]:
 
 
 @router.get("/csrf")
-def csrf(response: Response) -> dict[str, object]:
+def csrf(request: Request, response: Response) -> dict[str, object]:
     settings = get_settings()
     token = new_token()
     response.set_cookie(settings.csrf_cookie_name, token, httponly=False, **_cookie_settings())
     response.headers["Cache-Control"] = "no-store"
-    return {"data": {"csrf_token": token}, "meta": {}}
+    return success_response({"csrf_token": token}, request)
 
 
 @router.post("/login")
@@ -82,7 +83,7 @@ def login(
         settings.session_cookie_name, raw_session, httponly=True, **_cookie_settings()
     )
     response.set_cookie(settings.csrf_cookie_name, csrf_token, httponly=False, **_cookie_settings())
-    return {"data": {"user": _user_payload(db, user), "csrf_token": csrf_token}, "meta": {}}
+    return success_response({"user": _user_payload(db, user), "csrf_token": csrf_token}, request)
 
 
 @router.post("/logout")
@@ -112,9 +113,13 @@ def logout(
         request_id=getattr(request.state, "request_id", None),
     )
     db.commit()
-    return {"data": {"result_code": "logged_out"}, "meta": {}}
+    return success_response({"result_code": "logged_out"}, request)
 
 
 @router.get("/me")
-def me(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, object]:
-    return {"data": {"user": _user_payload(db, user)}, "meta": {}}
+def me(
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    return success_response({"user": _user_payload(db, user)}, request)
