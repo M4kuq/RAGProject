@@ -3,6 +3,17 @@
 -- Target: PostgreSQL 15+
 -- Migration policy: Alembic 管理を前提とするため CREATE TABLE IF NOT EXISTS は使用しない。
 
+-- ============================================================
+-- v1.8 変更反映サマリ（v1.7 からの追随）
+-- ============================================================
+-- * retrieval_runs: status/error_code/started_at/finished_at の整合制約を明確化
+-- * retrieval_runs.retrieval_score_summary を JSONB 前提で固定
+-- * retrieval_run_items: retrieval_score 正式化、rerank_order/payload_snapshot を保持
+-- * citations: (retrieval_run_id, document_chunk_id) -> retrieval_run_items 複合FKを採用
+-- * jobs: running/terminal 時刻整合、retry lineage、message_edit active 制約を明確化
+-- * chat_messages.linked_retrieval_run_id は循環参照回避のため ALTER TABLE 後付け
+-- * document_versions: content_hash format / failed時error_code必須 / active-ready制約を明確化
+
 BEGIN;
 
 -- ============================================================
