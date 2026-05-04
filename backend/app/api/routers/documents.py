@@ -57,7 +57,9 @@ async def upload_document(
     db.add(
         Job(
             job_type="document_ingest",
-            payload={"document_version_id": version.document_version_id},
+            target_type="document_version",
+            target_id=version.document_version_id,
+            payload_json={"document_version_id": version.document_version_id},
             created_by=user.user_id,
         )
     )

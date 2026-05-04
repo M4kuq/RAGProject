@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
@@ -64,7 +65,7 @@ def login(
     raw_session = new_token()
     csrf_token = new_token()
     session = UserSession(
-        session_id=new_token(),
+        session_id=uuid4(),
         user_id=user.user_id,
         session_token_hash=hash_token(raw_session),
         csrf_state_hash=hash_token(csrf_token),

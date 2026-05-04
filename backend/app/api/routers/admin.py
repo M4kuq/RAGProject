@@ -36,9 +36,9 @@ def create_evaluation(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     run = EvaluationRun(
-        trigger_type="manual",
-        status="succeeded",
-        summary={
+        status="queued",
+        metrics_config={
+            "trigger_type": "manual",
             "retrieval": 1.0,
             "generation": 1.0,
             "hallucination_basic": 0.0,
@@ -51,7 +51,7 @@ def create_evaluation(
     db.commit()
     db.refresh(run)
     return success_response(
-        {"evaluation_run_id": run.evaluation_run_id, "summary": run.summary},
+        {"evaluation_run_id": run.evaluation_run_id, "status": run.status},
         request,
     )
 
@@ -67,7 +67,7 @@ def audit_logs(
     page_rows, page_meta = paginate(rows, pagination)
     return success_response(
         [
-            {"audit_log_id": r.audit_log_id, "action": r.action, "target_id": r.target_id}
+            {"audit_log_id": r.audit_log_id, "action": r.action_type, "target_id": r.target_id}
             for r in page_rows
         ],
         request,
