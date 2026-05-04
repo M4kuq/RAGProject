@@ -25,7 +25,7 @@ def test_document_ingest_failure_updates_job_in_owner_session(monkeypatch) -> No
                 job_id=1,
                 job_type="document_ingest",
                 status="queued",
-                payload={"document_version_id": 999},
+                payload_json={"document_version_id": 999},
             )
         )
         db.commit()

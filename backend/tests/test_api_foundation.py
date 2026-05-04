@@ -117,7 +117,7 @@ def test_admin_jobs_pagination_is_not_pre_limited_to_first_50_rows() -> None:
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with session_factory() as db:
         db.add_all(
-            Job(job_id=index, job_type="test", status="queued", payload={})
+            Job(job_id=index, job_type="test", status="queued", payload_json={})
             for index in range(1, 56)
         )
         db.commit()
