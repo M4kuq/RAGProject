@@ -15,7 +15,7 @@ from app.api.middleware import RequestIdMiddleware, resolve_request_id
 from app.api.responses import paginate, success_response
 from app.core.config import Settings, get_settings
 from app.db.base import Base
-from app.db.models import Job, User
+from app.db.models import EvaluationRun, Job, User
 from app.db.session import get_db
 from app.main import create_app
 from app.schemas.common import PaginationParams
@@ -147,6 +147,42 @@ def test_admin_jobs_pagination_is_not_pre_limited_to_first_50_rows() -> None:
         "total": 55,
         "has_next": False,
     }
+
+
+def test_admin_create_evaluation_keeps_stub_terminal() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    def override_db():
+        with session_factory() as db:
+            yield db
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_csrf] = lambda: None
+    app.dependency_overrides[require_admin] = lambda: User(user_id=1, email="admin@example.com")
+    try:
+        response = TestClient(app).post(
+            "/api/v1/evaluations/runs",
+            headers={"X-Request-ID": "evaluation-create-1"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["status"] == "succeeded"
+
+    with session_factory() as db:
+        run = db.query(EvaluationRun).one()
+        assert run.status == "succeeded"
+        assert run.started_at is not None
+        assert run.finished_at is not None
 
 
 def test_unhandled_exception_is_logged_with_generic_error_response(

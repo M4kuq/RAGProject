@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,8 +37,9 @@ def create_evaluation(
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
+    now = datetime.now(UTC)
     run = EvaluationRun(
-        status="queued",
+        status="succeeded",
         metrics_config={
             "trigger_type": "manual",
             "retrieval": 1.0,
@@ -46,6 +49,8 @@ def create_evaluation(
             "citation_coverage": 1.0,
         },
         created_by=user.user_id,
+        started_at=now,
+        finished_at=now,
     )
     db.add(run)
     db.commit()
