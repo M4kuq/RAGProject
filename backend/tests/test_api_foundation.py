@@ -36,11 +36,16 @@ def test_csrf_success_response_includes_meta_request_id() -> None:
 
 def test_error_response_uses_common_envelope_and_safe_details() -> None:
     client = TestClient(create_app())
+    csrf_token = client.get("/api/v1/auth/csrf").json()["data"]["csrf_token"]
 
     response = client.post(
         "/api/v1/auth/login",
         json={"email": "not-an-email", "password": "secret"},
-        headers={"X-Request-ID": "validation-1"},
+        headers={
+            "X-Request-ID": "validation-1",
+            "X-CSRF-Token": csrf_token,
+            "Origin": "http://localhost:5173",
+        },
     )
 
     assert response.status_code == 422
@@ -204,7 +209,7 @@ def test_unhandled_exception_is_logged_with_generic_error_response(
     assert response.status_code == 500
     assert response.json() == {
         "error": {
-            "code": "internal_server_error",
+            "code": "internal_error",
             "message": "Internal server error.",
             "details": {},
         },
@@ -235,6 +240,8 @@ def test_settings_accepts_canonical_and_legacy_env_names(monkeypatch) -> None:
     monkeypatch.delenv("CORS_ALLOWED_ORIGINS")
     monkeypatch.setenv("ENVIRONMENT", "legacy")
     monkeypatch.setenv("CORS_ORIGINS", '["http://legacy.local"]')
+    monkeypatch.setenv("SESSION_SECRET", "x" * 32)
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
 
     legacy_settings = Settings()
     assert legacy_settings.app_env == "legacy"

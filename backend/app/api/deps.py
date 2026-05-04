@@ -1,57 +1,93 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable
 
-from fastapi import Depends, Header, HTTPException, Query, Request, status
-from sqlalchemy import select
+from fastapi import Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
-from app.core.security import hash_token
-from app.db.models import Role, User, UserSession
+from app.core.errors import AuthenticationRequired
+from app.core.permissions import ensure_admin, ensure_role, ensure_viewer_or_admin
+from app.core.sessions import SessionContext, session_cookie_value, session_is_active
+from app.db.models import User
 from app.db.session import get_db
+from app.repositories import session_repository, user_repository
 from app.schemas.common import PaginationParams
+from app.services.csrf_service import validate_pre_auth_csrf, validate_session_csrf
 
 
-def current_user(
+def require_authenticated_session(
     request: Request,
     db: Session = Depends(get_db),
-) -> User:
-    session_token = request.cookies.get(get_settings().session_cookie_name)
-    if not session_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
-    token_hash = hash_token(session_token)
-    session = db.scalar(select(UserSession).where(UserSession.session_token_hash == token_hash))
-    if not session or session.revoked_at or session.expires_at <= datetime.now(UTC):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
-    user = db.get(User, session.user_id)
+) -> SessionContext:
+    raw_session_token = session_cookie_value(request)
+    if not raw_session_token:
+        raise AuthenticationRequired()
+    session = session_repository.get_session_by_raw_token(db, raw_session_token)
+    if not session or not session_is_active(session):
+        raise AuthenticationRequired()
+    user = user_repository.get_user_by_id(db, session.user_id)
     if not user or user.status != "active":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
-    return user
+        raise AuthenticationRequired()
+    role_name = user_repository.get_role_name(db, user)
+    if role_name not in {"admin", "viewer"}:
+        raise AuthenticationRequired()
+    context = SessionContext(
+        user=user,
+        session=session,
+        role_name=role_name,
+        raw_session_token=raw_session_token,
+    )
+    request.state.current_session = context
+    return context
+
+
+def get_current_user(context: SessionContext = Depends(require_authenticated_session)) -> User:
+    return context.user
+
+
+def current_user(context: SessionContext = Depends(require_authenticated_session)) -> User:
+    return context.user
+
+
+def require_authenticated_user(
+    context: SessionContext = Depends(require_authenticated_session),
+) -> User:
+    return context.user
 
 
 def require_csrf(
     request: Request,
-    x_csrf_token: str | None = Header(default=None),
+    context: SessionContext = Depends(require_authenticated_session),
     db: Session = Depends(get_db),
 ) -> None:
-    if request.method in {"GET", "HEAD", "OPTIONS"}:
-        return
-    session_token = request.cookies.get(get_settings().session_cookie_name)
-    if not session_token or not x_csrf_token:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="csrf_required")
-    session = db.scalar(
-        select(UserSession).where(UserSession.session_token_hash == hash_token(session_token))
-    )
-    if not session or session.csrf_state_hash != hash_token(x_csrf_token):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="csrf_invalid")
+    validate_session_csrf(request, db, context.session)
 
 
-def require_admin(user: User = Depends(current_user), db: Session = Depends(get_db)) -> User:
-    role = db.get(Role, user.role_id)
-    if not role or role.role_name != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
-    return user
+def require_pre_auth_csrf(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> None:
+    validate_pre_auth_csrf(request, db)
+
+
+def require_role(*allowed_roles: str) -> Callable[[SessionContext], User]:
+    def dependency(context: SessionContext = Depends(require_authenticated_session)) -> User:
+        ensure_role(context.role_name, allowed_roles)
+        return context.user
+
+    return dependency
+
+
+def require_admin(context: SessionContext = Depends(require_authenticated_session)) -> User:
+    ensure_admin(context.role_name)
+    return context.user
+
+
+def require_viewer_or_admin(
+    context: SessionContext = Depends(require_authenticated_session),
+) -> User:
+    ensure_viewer_or_admin(context.role_name)
+    return context.user
 
 
 def pagination_params(

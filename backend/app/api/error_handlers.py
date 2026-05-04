@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
-from app.core.errors import normalize_error
+from app.core.errors import AppError, normalize_error
 from app.schemas.common import ErrorBody, ErrorEnvelope, Meta
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,16 @@ def _validation_details(exc: RequestValidationError) -> list[dict[str, str]]:
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AppError)
+    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+        return _error_response(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         code, message, details = normalize_error(exc.status_code, exc.detail)
@@ -84,6 +94,6 @@ def register_error_handlers(app: FastAPI) -> None:
         return _error_response(
             request,
             status_code=500,
-            code="internal_server_error",
+            code="internal_error",
             message="Internal server error.",
         )

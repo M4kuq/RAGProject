@@ -9,11 +9,13 @@ ERROR_MESSAGES: dict[str, str] = {
     "permission_denied": "Permission denied.",
     "csrf_missing": "CSRF token is required.",
     "csrf_invalid": "CSRF token is invalid.",
+    "rate_limit_exceeded": "Rate limit exceeded.",
     "resource_not_found": "Resource not found.",
     "validation_error": "Invalid request.",
     "business_validation_error": "Request cannot be processed.",
     "conflict": "Resource conflict.",
     "no_context_found": "No context found.",
+    "internal_error": "Internal server error.",
     "internal_server_error": "Internal server error.",
 }
 
@@ -32,6 +34,51 @@ STATUS_DEFAULT_CODES: dict[int, str] = {
     409: "conflict",
     422: "validation_error",
 }
+
+
+class AppError(Exception):
+    def __init__(
+        self,
+        code: str,
+        status_code: int,
+        message: str | None = None,
+        details: object | None = None,
+    ) -> None:
+        super().__init__(message or ERROR_MESSAGES.get(code) or _status_message(status_code))
+        self.code = code
+        self.status_code = status_code
+        self.message = message or ERROR_MESSAGES.get(code) or _status_message(status_code)
+        self.details = details or {}
+
+
+class AuthenticationRequired(AppError):
+    def __init__(self) -> None:
+        super().__init__("auth_required", 401)
+
+
+class AuthenticationFailed(AppError):
+    def __init__(self) -> None:
+        super().__init__("authentication_failed", 401)
+
+
+class PermissionDenied(AppError):
+    def __init__(self) -> None:
+        super().__init__("permission_denied", 403)
+
+
+class CsrfMissing(AppError):
+    def __init__(self) -> None:
+        super().__init__("csrf_missing", 403)
+
+
+class CsrfInvalid(AppError):
+    def __init__(self) -> None:
+        super().__init__("csrf_invalid", 403)
+
+
+class RateLimitExceeded(AppError):
+    def __init__(self) -> None:
+        super().__init__("rate_limit_exceeded", 429)
 
 
 def normalize_error(status_code: int, detail: Any) -> tuple[str, str, object]:
