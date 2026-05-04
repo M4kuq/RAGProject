@@ -15,6 +15,7 @@ dist/
 coverage/
 *.tsbuildinfo
 reports/
+.codex/*.rules
 
 /storage/
 data/postgres/

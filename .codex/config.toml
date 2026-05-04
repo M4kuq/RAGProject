@@ -1,35 +1,68 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
 # =========================================================
-# Global Codex CLI config
+# RAGProject Codex config
+# PR / test automation friendly config
+# This file MAY be committed
 # =========================================================
 
 model_provider = "openai"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
 
-# 普段使いは medium 推奨。xhigh は deep profile 側に寄せる。
-model_reasoning_effort = "medium"
+model_reasoning_effort = "high"
 plan_mode_reasoning_effort = "high"
 model_reasoning_summary = "concise"
 model_verbosity = "medium"
 
-# 安全寄りの標準設定
+# 通常のPR対応・テスト実行では on-request を維持する。
+# テスト / docker / gh / git の面倒な許可は rules で allow する。
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
-# 通常は cached。最新仕様・料金・求人・脆弱性調査では research/deep profile を使う。
+# 通常は cached。
+# 最新仕様・脆弱性・求人調査などは必要時だけ live にする。
 web_search = "cached"
 
-# PowerShell / shell 実行
 allow_login_shell = true
+
+# .env / secret / credential を読ませない
+default_permissions = "rag_project_workspace"
+
+# =========================================================
+# Permissions
+# =========================================================
+
+[permissions.rag_project_workspace.filesystem]
+glob_scan_max_depth = 5
+
+[permissions.rag_project_workspace.filesystem.":project_roots"]
+"." = "write"
+
+# env / secret / credential / private key 系は読み取りも書き込みも不可
+"**/.env" = "none"
+"**/.env.*" = "none"
+"**/*.pem" = "none"
+"**/*.key" = "none"
+"**/id_rsa" = "none"
+"**/id_ed25519" = "none"
+"**/secrets/**" = "none"
+"**/*secret*.json" = "none"
+"**/*secrets*.json" = "none"
+"**/*credential*.json" = "none"
+"**/*credentials*.json" = "none"
+"**/*token*.json" = "none"
+
+[permissions.rag_project_workspace.network]
+enabled = false
 
 # =========================================================
 # Sandbox
 # =========================================================
 
 [sandbox_workspace_write]
-# npm install / pip install などネットワークが必要なときだけ一時的に許可する運用にする
+# Docker / GitHub CLI 自体は rules で許可する。
+# npm install / pip install / docker pull など、直接ネットワークが必要な作業は原則手動。
 network_access = false
 exclude_tmpdir_env_var = true
 
@@ -38,7 +71,6 @@ exclude_tmpdir_env_var = true
 # =========================================================
 
 [windows]
-# Windowsネイティブ利用なら elevated 推奨
 sandbox = "elevated"
 sandbox_private_desktop = true
 
@@ -76,8 +108,6 @@ enabled = true
 [plugins."browser-use@openai-bundled"]
 enabled = true
 
-# Google Drive / Docs / Sheets / Slides 系をよく使うなら true。
-# 使わないなら false にして、必要時だけ /plugins から有効化する。
 [plugins."documents@openai-primary-runtime"]
 enabled = false
 
@@ -91,18 +121,6 @@ enabled = false
 # Profiles
 # =========================================================
 
-# 軽い修正・軽い調査
-[profiles.fast]
-model = "gpt-5.4-mini"
-model_reasoning_effort = "low"
-plan_mode_reasoning_effort = "medium"
-model_reasoning_summary = "concise"
-model_verbosity = "low"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-web_search = "cached"
-
-# 通常の実装作業
 [profiles.dev]
 model = "gpt-5.5"
 model_reasoning_effort = "medium"
@@ -112,19 +130,8 @@ model_verbosity = "medium"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 web_search = "cached"
+default_permissions = "rag_project_workspace"
 
-# 設計レビュー・難しいバグ調査・セキュリティ確認
-[profiles.deep]
-model = "gpt-5.5"
-model_reasoning_effort = "high"
-plan_mode_reasoning_effort = "xhigh"
-model_reasoning_summary = "concise"
-model_verbosity = "medium"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-web_search = "live"
-
-# 読み取り専用レビュー
 [profiles.review]
 model = "gpt-5.5"
 model_reasoning_effort = "high"
@@ -135,48 +142,36 @@ approval_policy = "on-request"
 sandbox_mode = "read-only"
 web_search = "cached"
 
-# 最新情報調査用
-[profiles.research]
+[profiles.deep]
 model = "gpt-5.5"
-model_reasoning_effort = "medium"
-plan_mode_reasoning_effort = "high"
-model_reasoning_summary = "concise"
-model_verbosity = "medium"
-approval_policy = "on-request"
-sandbox_mode = "read-only"
-web_search = "live"
-
-# どうしても最大推論したい時だけ使う
-[profiles.max]
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 plan_mode_reasoning_effort = "xhigh"
 model_reasoning_summary = "concise"
 model_verbosity = "medium"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 web_search = "live"
+default_permissions = "rag_project_workspace"
 
-# =========================================================
-# Projects
-# =========================================================
-
-# 信頼するのは「自分が管理している実プロジェクト」だけにする。
-# C:\Users\student 全体を trusted にするのは非推奨。
-
-[projects.'C:\Users\student\original']
-trust_level = "trusted"
-
-[projects.'c:\users\student\downloads\ocr_transcriber_app\ocr_transcriber_app']
-trust_level = "trusted"
-
-# これは削除推奨
-# [projects.'c:\users\student']
-# trust_level = "trusted"
+# 寝ている間など、承認で止めたくない時だけ CLI で使用。
+# Codex app では root 設定を切り替える運用を推奨。
+[profiles.overnight]
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+default_permissions = "rag_project_workspace"
 
 # =========================================================
 # Agents
 # =========================================================
+# 注意:
+# default_permissions などは [agents] 配下に置かない。
+# ここには agents のグローバル設定だけを書く。
 
 [agents]
 max_threads = 6
