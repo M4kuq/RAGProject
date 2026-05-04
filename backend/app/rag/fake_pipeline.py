@@ -11,7 +11,7 @@ def search_chunks(db: Session, query: str, limit: int = 5) -> list[tuple[Documen
     chunks = db.scalars(select(DocumentChunk).limit(200)).all()
     scored: list[tuple[DocumentChunk, float]] = []
     for chunk in chunks:
-        haystack = chunk.content.lower()
+        haystack = chunk.content_text.lower()
         score = sum(1 for term in terms if term in haystack) / max(1, len(terms))
         if score > 0 or not terms:
             scored.append((chunk, max(score, 0.15)))
@@ -21,5 +21,5 @@ def search_chunks(db: Session, query: str, limit: int = 5) -> list[tuple[Documen
 def build_answer(query: str, hits: list[tuple[DocumentChunk, float]]) -> str:
     if not hits:
         return "根拠が見つからないため、この質問には回答できません。"
-    snippets = " ".join(chunk.content[:180] for chunk, _ in hits[:2])
+    snippets = " ".join(chunk.content_text[:180] for chunk, _ in hits[:2])
     return f"質問「{query}」に対する回答です。根拠文書では次の内容が確認できます: {snippets} [1]"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,10 +37,11 @@ def create_evaluation(
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
+    now = datetime.now(UTC)
     run = EvaluationRun(
-        trigger_type="manual",
         status="succeeded",
-        summary={
+        metrics_config={
+            "trigger_type": "manual",
             "retrieval": 1.0,
             "generation": 1.0,
             "hallucination_basic": 0.0,
@@ -46,12 +49,14 @@ def create_evaluation(
             "citation_coverage": 1.0,
         },
         created_by=user.user_id,
+        started_at=now,
+        finished_at=now,
     )
     db.add(run)
     db.commit()
     db.refresh(run)
     return success_response(
-        {"evaluation_run_id": run.evaluation_run_id, "summary": run.summary},
+        {"evaluation_run_id": run.evaluation_run_id, "status": run.status},
         request,
     )
 
@@ -67,7 +72,7 @@ def audit_logs(
     page_rows, page_meta = paginate(rows, pagination)
     return success_response(
         [
-            {"audit_log_id": r.audit_log_id, "action": r.action, "target_id": r.target_id}
+            {"audit_log_id": r.audit_log_id, "action": r.action_type, "target_id": r.target_id}
             for r in page_rows
         ],
         request,
