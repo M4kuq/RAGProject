@@ -5,6 +5,7 @@ import hashlib
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.models import (
     DocumentChunk,
@@ -25,6 +26,9 @@ DEMO_DOCUMENT_TEXT = (
 
 
 def seed(db: Session) -> None:
+    if get_settings().app_env.lower() not in {"local", "ci", "test"}:
+        raise RuntimeError("Seed is only allowed in local, ci, or test environments.")
+
     roles: dict[str, Role] = {}
     role_descriptions = {
         "admin": "Administrator role for Phase1 local validation.",

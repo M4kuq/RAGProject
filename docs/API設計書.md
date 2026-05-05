@@ -617,7 +617,8 @@ email / password によりログインする。
       "email": "user@example.com",
       "display_name": "User",
       "role": "admin"
-    }
+    },
+    "csrf_token": "csrf_xxx"
   },
   "meta": {
     "request_id": "req_xxx"
@@ -634,7 +635,7 @@ email / password によりログインする。
 
 - login 成功時に session identifier を再生成する
 - pre-auth CSRF state / cookie を失効する
-- login 成功後に session-bound CSRF state を発行する
+- login 成功後に session-bound CSRF state を発行し、response body の `csrf_token` で返す
 - last_login_at を更新する
 
 ### 監査
