@@ -43,7 +43,10 @@ def login(
         path="/",
     )
     csrf_service.expire_pre_auth_cookie(response)
-    return success_response({"user": result.user.model_dump(mode="json")}, request)
+    return success_response(
+        {"user": result.user.model_dump(mode="json"), "csrf_token": result.csrf_token},
+        request,
+    )
 
 
 @router.post("/logout")

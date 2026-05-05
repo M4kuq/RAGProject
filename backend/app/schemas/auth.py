@@ -20,6 +20,7 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     user: UserPublic
+    csrf_token: str
 
 
 class MeResponse(UserPublic):

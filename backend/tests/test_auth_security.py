@@ -227,6 +227,7 @@ def test_login_sets_http_only_cookie_and_stores_only_hash(
         "display_name": "Admin",
         "role": "admin",
     }
+    assert body["data"]["csrf_token"].startswith("csrf_")
     assert "password" not in str(body).lower()
     session_cookie = client.cookies.get("rag_session")
     assert session_cookie is not None
@@ -243,6 +244,8 @@ def test_login_sets_http_only_cookie_and_stores_only_hash(
         assert session.session_token_hash != session_cookie
         assert verify_token_hash(session_cookie, session.session_token_hash)
         assert session.csrf_state_hash != session_cookie
+        assert verify_token_hash(body["data"]["csrf_token"], session.csrf_state_hash)
+        assert session.csrf_state_hash != body["data"]["csrf_token"]
         admin = db.scalar(select(User).where(User.email == "admin@example.com"))
         assert admin is not None
         assert admin.last_login_at is not None
@@ -343,6 +346,8 @@ def test_pre_auth_csrf_cannot_be_reused_after_login(
         headers={"X-CSRF-Token": pre_auth_token, "Origin": ALLOWED_ORIGIN},
     )
     assert login.status_code == 200
+    session_token = login.json()["data"]["csrf_token"]
+    assert session_token != pre_auth_token
 
     rejected = client.post(
         "/api/v1/auth/logout",
@@ -351,7 +356,6 @@ def test_pre_auth_csrf_cannot_be_reused_after_login(
     assert rejected.status_code == 403
     assert rejected.json()["error"]["code"] == "csrf_invalid"
 
-    session_token = issue_session_csrf(client)
     ok = client.post(
         "/api/v1/auth/logout",
         headers={"X-CSRF-Token": session_token, "Origin": ALLOWED_ORIGIN},

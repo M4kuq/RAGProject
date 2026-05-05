@@ -32,6 +32,7 @@ from app.services.audit_service import audit_from_request
 class LoginResult:
     user: UserPublic
     raw_session_token: str
+    csrf_token: str
 
 
 def login(db: Session, request: Request, *, email: str, password: str) -> LoginResult:
@@ -58,10 +59,11 @@ def login(db: Session, request: Request, *, email: str, password: str) -> LoginR
     assert role_name is not None
     login_rate_limiter.reset(normalized_email, ip_address)
     raw_session_token = new_session_token()
+    raw_csrf_token = new_csrf_token()
     session = new_session(
         user_id=user.user_id,
         raw_session_token=raw_session_token,
-        csrf_state_hash=hash_token(new_csrf_token()),
+        csrf_state_hash=hash_token(raw_csrf_token),
         user_agent=request.headers.get("User-Agent"),
         ip_address=ip_address,
     )
@@ -78,7 +80,11 @@ def login(db: Session, request: Request, *, email: str, password: str) -> LoginR
     )
     db.commit()
     db.refresh(user)
-    return LoginResult(user=user_to_public(user, role_name), raw_session_token=raw_session_token)
+    return LoginResult(
+        user=user_to_public(user, role_name),
+        raw_session_token=raw_session_token,
+        csrf_token=raw_csrf_token,
+    )
 
 
 def logout(db: Session, request: Request, context: SessionContext) -> None:
