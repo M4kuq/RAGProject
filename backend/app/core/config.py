@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     upload_allowed_extensions: list[str] = Field(
         default_factory=lambda: [".pdf", ".docx", ".txt", ".md", ".csv"]
     )
-    temp_chat_ttl_minutes: int = 24 * 60
+    temp_chat_ttl_minutes: int = 120
     job_lease_seconds: int = 300
     log_level: str = "INFO"
     pii_masking_enabled: bool = True

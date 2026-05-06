@@ -832,8 +832,13 @@ email / password によりログインする。
     "chat_session_id": 10,
     "title": "新しい会話",
     "status": "active",
+    "display_status": "active",
+    "mode": "active",
     "temporary_flag": false,
-    "created_at": "2026-04-30T00:00:00Z"
+    "ttl_expires_at": null,
+    "created_at": "2026-04-30T00:00:00Z",
+    "updated_at": "2026-04-30T00:00:00Z",
+    "tags": []
   },
   "meta": {
     "request_id": "req_xxx"
@@ -871,7 +876,11 @@ email / password によりログインする。
       "chat_session_id": 10,
       "title": "新しい会話",
       "status": "active",
+      "display_status": "active",
+      "mode": "active",
       "temporary_flag": false,
+      "ttl_expires_at": null,
+      "created_at": "2026-04-30T00:00:00Z",
       "updated_at": "2026-04-30T00:00:00Z"
     }
   ],
@@ -909,7 +918,7 @@ email / password によりログインする。
 - owner のみ取得可能
 - owner 不一致は 404
 - archived session も参照可能
-- temporary session は TTL 切れなら 404
+- temporary session は TTL 切れでも参照可能とし、`display_status = temporary_expired` を返す
 
 ### レスポンス
 
@@ -919,9 +928,13 @@ email / password によりログインする。
     "chat_session_id": 10,
     "title": "新しい会話",
     "status": "active",
+    "display_status": "active",
+    "mode": "active",
     "temporary_flag": false,
+    "ttl_expires_at": null,
     "created_at": "2026-04-30T00:00:00Z",
-    "updated_at": "2026-04-30T00:00:00Z"
+    "updated_at": "2026-04-30T00:00:00Z",
+    "tags": []
   },
   "meta": {
     "request_id": "req_xxx"
@@ -946,7 +959,7 @@ email / password によりログインする。
 - owner の session のみ取得可能
 - owner 不一致は 404
 - archived session も参照可能
-- temporary session は TTL 切れなら 404
+- temporary session は TTL 切れでも参照可能。ただし更新系 API は `409 temporary_session_expired`
 
 ### クエリ
 
@@ -954,6 +967,7 @@ email / password によりログインする。
 |---|---:|---|
 | `page` | no | 既定 1 |
 | `page_size` | no | 既定 20、最大 100 |
+| `include_internal_lineage` | no | 既定 false。true は admin debug 用 |
 
 ### レスポンス
 
@@ -965,7 +979,6 @@ email / password によりログインする。
       "role": "user",
       "content": "RAGの評価方針を教えてください",
       "client_message_id": "msg_cli_001",
-      "linked_retrieval_run_id": null,
       "edited_flag": false,
       "created_at": "2026-04-30T00:00:00Z"
     },
@@ -974,7 +987,6 @@ email / password によりログインする。
       "role": "assistant",
       "content": "評価方針は...",
       "client_message_id": null,
-      "linked_retrieval_run_id": 500,
       "edited_flag": false,
       "created_at": "2026-04-30T00:00:05Z"
     }
@@ -994,7 +1006,9 @@ email / password によりログインする。
 ### 補足
 
 - user message のみ `client_message_id` を持つ
-- assistant message の `linked_retrieval_run_id` は回答生成に採用した retrieval run を指す
+- 通常レスポンスでは `linked_retrieval_run_id` などの internal lineage は返さない
+- `include_internal_lineage=true` は admin debug 用とし、通常 UI では利用しない
+- viewer が `include_internal_lineage=true` を指定した場合は `403 permission_denied`
 - failure 時の assistant placeholder は Phase1 では保存しない
 
 ---
@@ -1089,6 +1103,7 @@ email / password によりログインする。
 ### ルール
 
 - `tag_name` は trim 後に空文字不可
+- `tag_name` は `/` と `\` を含めない。削除 API が path parameter であるため、path separator は禁止する
 - 重複 tag 追加は `409` にしない
 - archived session への tag 追加は `409 archived_session_readonly`
 

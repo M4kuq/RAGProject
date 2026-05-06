@@ -14,6 +14,9 @@ ERROR_MESSAGES: dict[str, str] = {
     "validation_error": "Invalid request.",
     "business_validation_error": "Request cannot be processed.",
     "conflict": "Resource conflict.",
+    "archived_session_readonly": "Archived session is read-only.",
+    "temporary_session_expired": "Temporary session has expired.",
+    "temporary_session_not_archivable": "Temporary session cannot be archived.",
     "no_context_found": "No context found.",
     "internal_error": "Internal server error.",
     "internal_server_error": "Internal server error.",
@@ -64,6 +67,36 @@ class AuthenticationFailed(AppError):
 class PermissionDenied(AppError):
     def __init__(self) -> None:
         super().__init__("permission_denied", 403)
+
+
+class ResourceNotFound(AppError):
+    def __init__(self) -> None:
+        super().__init__("resource_not_found", 404)
+
+
+class ValidationFailed(AppError):
+    def __init__(self, details: object | None = None) -> None:
+        super().__init__("validation_error", 422, details=details)
+
+
+class ConflictError(AppError):
+    def __init__(self, code: str = "conflict", details: object | None = None) -> None:
+        super().__init__(code, 409, details=details)
+
+
+class ArchivedSessionReadonly(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("archived_session_readonly")
+
+
+class TemporarySessionExpired(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("temporary_session_expired")
+
+
+class TemporarySessionNotArchivable(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("temporary_session_not_archivable")
 
 
 class CsrfMissing(AppError):

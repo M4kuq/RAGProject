@@ -12,6 +12,7 @@ from app.db.models import ChatMessage, Citation, RetrievalRun, RetrievalRunItem,
 from app.db.session import get_db
 from app.rag.fake_pipeline import build_answer, search_chunks
 from app.schemas.common import PaginationParams
+from app.services.chat_service import ChatService
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -22,13 +23,24 @@ class AskRequest(BaseModel):
     client_message_id: str | None = None
 
 
+def chat_service() -> ChatService:
+    return ChatService()
+
+
 @router.post("/ask")
 def ask(
     payload: AskRequest,
     request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
 ) -> dict[str, object]:
+    if payload.chat_session_id:
+        service.ensure_session_can_append_messages(
+            db,
+            user=user,
+            chat_session_id=payload.chat_session_id,
+        )
     hits = search_chunks(db, payload.question)
     if not hits:
         raise HTTPException(status_code=422, detail="no_context_found")
