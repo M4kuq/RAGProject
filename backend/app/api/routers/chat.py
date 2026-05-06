@@ -1,98 +1,183 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
+from starlette import status as http_status
 
-from app.api.deps import current_user, pagination_params, require_csrf
-from app.api.responses import paginate, success_response
-from app.db.models import ChatMessage, ChatSession, User
+from app.api.deps import pagination_params, require_authenticated_session, require_csrf
+from app.api.responses import get_request_id, success_response
+from app.core.sessions import SessionContext
 from app.db.session import get_db
+from app.schemas.chat import (
+    ChatSessionCreateRequest,
+    ChatSessionUpdateRequest,
+    ChatTagCreateRequest,
+)
 from app.schemas.common import PaginationParams
+from app.services.chat_service import ChatService
 
-router = APIRouter(dependencies=[Depends(require_csrf)])
-
-
-class ChatSessionCreate(BaseModel):
-    title: str | None = None
-    temporary: bool = False
+router = APIRouter()
 
 
-class MessageCreate(BaseModel):
-    content: str = Field(min_length=1)
-    client_message_id: str | None = None
+def chat_service() -> ChatService:
+    return ChatService()
 
 
-@router.post("/sessions")
+@router.post("/sessions", status_code=http_status.HTTP_201_CREATED)
 def create_session(
-    payload: ChatSessionCreate,
+    payload: ChatSessionCreateRequest,
     request: Request,
-    user: User = Depends(current_user),
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
     db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
 ) -> dict[str, object]:
-    session = ChatSession(
-        user_id=user.user_id,
-        title=payload.title or "New chat",
-        temporary_flag=payload.temporary,
-        ttl_expires_at=datetime.now(UTC) + timedelta(hours=24) if payload.temporary else None,
+    result = service.create_session(
+        db,
+        user=context.user,
+        title=payload.title,
+        temporary_flag=payload.temporary_flag,
+        request_id=get_request_id(request),
     )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return success_response(
-        {"chat_session_id": session.chat_session_id, "title": session.title},
-        request,
-    )
+    return success_response(result.model_dump(mode="json"), request)
 
 
 @router.get("/sessions")
 def list_sessions(
     request: Request,
-    user: User = Depends(current_user),
-    db: Session = Depends(get_db),
+    status: str | None = None,
+    q: str | None = None,
+    context: SessionContext = Depends(require_authenticated_session),
     pagination: PaginationParams = Depends(pagination_params),
-) -> dict[str, object]:
-    rows = db.scalars(select(ChatSession).where(ChatSession.user_id == user.user_id)).all()
-    page_rows, page_meta = paginate(rows, pagination)
-    return success_response(
-        [
-            {
-                "chat_session_id": row.chat_session_id,
-                "title": row.title,
-                "status": row.status,
-                "temporary_flag": row.temporary_flag,
-            }
-            for row in page_rows
-        ],
-        request,
-        pagination=page_meta,
-    )
-
-
-@router.post("/sessions/{chat_session_id}/messages")
-def add_message(
-    chat_session_id: int,
-    payload: MessageCreate,
-    request: Request,
-    user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
 ) -> dict[str, object]:
-    session = db.get(ChatSession, chat_session_id)
-    if not session or session.user_id != user.user_id:
-        raise HTTPException(status_code=404, detail="not_found")
-    message = ChatMessage(
+    items, page_meta = service.list_sessions(
+        db,
+        user=context.user,
+        status=status,
+        query=q,
+        pagination=pagination,
+    )
+    return success_response([item.model_dump(mode="json") for item in items], request, page_meta)
+
+
+@router.get("/sessions/{chat_session_id}")
+def get_session_detail(
+    chat_session_id: int,
+    request: Request,
+    context: SessionContext = Depends(require_authenticated_session),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result = service.get_session_detail(
+        db,
+        user=context.user,
         chat_session_id=chat_session_id,
-        role="user",
-        content=payload.content,
-        client_message_id=payload.client_message_id,
     )
-    db.add(message)
-    db.commit()
-    db.refresh(message)
-    return success_response(
-        {"chat_message_id": message.chat_message_id, "content": message.content},
-        request,
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.patch("/sessions/{chat_session_id}")
+def update_session_title(
+    chat_session_id: int,
+    payload: ChatSessionUpdateRequest,
+    request: Request,
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result = service.update_session_title(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        title=payload.title,
+        request_id=get_request_id(request),
     )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/sessions/{chat_session_id}/archive")
+def archive_session(
+    chat_session_id: int,
+    request: Request,
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result = service.archive_session(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/sessions/{chat_session_id}/messages")
+def list_messages(
+    chat_session_id: int,
+    request: Request,
+    include_internal_lineage: bool = False,
+    context: SessionContext = Depends(require_authenticated_session),
+    pagination: PaginationParams = Depends(pagination_params),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    items, page_meta = service.list_messages(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        pagination=pagination,
+        include_internal_lineage=include_internal_lineage,
+        role_name=context.role_name,
+    )
+    if include_internal_lineage:
+        data = [item.model_dump(mode="json") for item in items]
+    else:
+        data = [item.model_dump(mode="json", exclude={"linked_retrieval_run_id"}) for item in items]
+    return success_response(data, request, page_meta)
+
+
+@router.post("/sessions/{chat_session_id}/tags")
+def add_tag(
+    chat_session_id: int,
+    payload: ChatTagCreateRequest,
+    request: Request,
+    response: Response,
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result, created = service.add_tag(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        tag_name=payload.tag_name,
+        request_id=get_request_id(request),
+    )
+    response.status_code = http_status.HTTP_201_CREATED if created else http_status.HTTP_200_OK
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.delete("/sessions/{chat_session_id}/tags/{tag_name}")
+def delete_tag(
+    chat_session_id: int,
+    request: Request,
+    tag_name: str,
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result = service.delete_tag(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        tag_name=tag_name,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
