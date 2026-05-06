@@ -10,18 +10,14 @@ model_provider = "openai"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
 
-model_reasoning_effort = "high"
-plan_mode_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "xhigh"
 model_reasoning_summary = "concise"
 model_verbosity = "medium"
 
-# 通常のPR対応・テスト実行では on-request を維持する。
-# テスト / docker / gh / git の面倒な許可は rules で allow する。
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
-# 通常は cached。
-# 最新仕様・脆弱性・求人調査などは必要時だけ live にする。
 web_search = "cached"
 
 allow_login_shell = true
@@ -39,7 +35,6 @@ glob_scan_max_depth = 5
 [permissions.rag_project_workspace.filesystem.":project_roots"]
 "." = "write"
 
-# env / secret / credential / private key 系は読み取りも書き込みも不可
 "**/.env" = "none"
 "**/.env.*" = "none"
 "**/*.pem" = "none"
@@ -61,8 +56,6 @@ enabled = false
 # =========================================================
 
 [sandbox_workspace_write]
-# Docker / GitHub CLI 自体は rules で許可する。
-# npm install / pip install / docker pull など、直接ネットワークが必要な作業は原則手動。
 network_access = false
 exclude_tmpdir_env_var = true
 
@@ -153,8 +146,6 @@ sandbox_mode = "workspace-write"
 web_search = "live"
 default_permissions = "rag_project_workspace"
 
-# 寝ている間など、承認で止めたくない時だけ CLI で使用。
-# Codex app では root 設定を切り替える運用を推奨。
 [profiles.overnight]
 model = "gpt-5.5"
 model_reasoning_effort = "high"
@@ -169,9 +160,6 @@ default_permissions = "rag_project_workspace"
 # =========================================================
 # Agents
 # =========================================================
-# 注意:
-# default_permissions などは [agents] 配下に置かない。
-# ここには agents のグローバル設定だけを書く。
 
 [agents]
 max_threads = 6
