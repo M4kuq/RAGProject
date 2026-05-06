@@ -198,6 +198,19 @@ class ChatService:
         )
         return [self._message_item(row) for row in rows], pagination_meta(pagination, total)
 
+    def ensure_session_can_append_messages(
+        self,
+        db: Session,
+        *,
+        user: User,
+        chat_session_id: int,
+    ) -> ChatSession:
+        session = self._get_owned_session(
+            db, user=user, chat_session_id=chat_session_id, for_update=True
+        )
+        self._ensure_session_writable(session)
+        return session
+
     def add_tag(
         self,
         db: Session,

@@ -498,6 +498,71 @@ def test_chat_api_temporary_expired_readonly_and_admin_lineage(
     assert "linked_retrieval_run_id" in admin_lineage.json()["data"][0]
 
 
+def test_rag_ask_cannot_append_to_foreign_archived_or_expired_sessions(
+    chat_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = chat_client
+    csrf_token = login(client, email="viewer@example.com")
+    active = client.post(
+        "/api/v1/chat/sessions",
+        json={"title": "rag target"},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert active.status_code == 201
+    active_id = int(active.json()["data"]["chat_session_id"])
+
+    archived = client.post(
+        f"/api/v1/chat/sessions/{active_id}/archive",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert archived.status_code == 200
+    archived_ask = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": active_id, "question": "should not append"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert archived_ask.status_code == 409
+    assert archived_ask.json()["error"]["code"] == "archived_session_readonly"
+
+    with session_factory() as db:
+        viewer = db.scalar(select(User).where(User.email == "viewer@example.com"))
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert viewer is not None
+        assert admin is not None
+        expired = ChatSession(
+            user_id=viewer.user_id,
+            title="expired rag target",
+            temporary_flag=True,
+            ttl_expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+        other = ChatSession(user_id=admin.user_id, title="other rag target")
+        db.add_all([expired, other])
+        db.commit()
+        expired_id = expired.chat_session_id
+        other_id = other.chat_session_id
+
+    expired_ask = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": expired_id, "question": "should not append"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert expired_ask.status_code == 409
+    assert expired_ask.json()["error"]["code"] == "temporary_session_expired"
+
+    other_ask = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": other_id, "question": "should not append"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert other_ask.status_code == 404
+    assert other_ask.json()["error"]["code"] == "resource_not_found"
+
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=active_id).count() == 0
+        assert db.query(ChatMessage).filter_by(chat_session_id=expired_id).count() == 0
+        assert db.query(ChatMessage).filter_by(chat_session_id=other_id).count() == 0
+
+
 def test_chat_api_validation_errors_for_title_tag_filters_and_pagination(
     chat_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
