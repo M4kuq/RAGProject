@@ -1,0 +1,316 @@
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.config import get_settings
+from app.core.security import hash_password
+from app.db.base import Base
+from app.db.models import AuditLog, DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
+from app.db.session import get_db
+from app.main import create_app
+
+ALLOWED_ORIGIN = "http://localhost:5173"
+TEST_PASSWORD = "password"
+
+
+@pytest.fixture
+def document_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[tuple[TestClient, sessionmaker[Session], Path]]:
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("UPLOAD_MAX_BYTES", "64")
+    monkeypatch.setenv("UPLOAD_ALLOWED_EXTENSIONS", '[".pdf",".docx",".txt",".md",".csv"]')
+    get_settings.cache_clear()
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with session_factory() as db:
+        admin_role = Role(role_name="admin", description="Admin")
+        viewer_role = Role(role_name="viewer", description="Viewer")
+        db.add_all([admin_role, viewer_role])
+        db.flush()
+        password_hash = hash_password(TEST_PASSWORD)
+        db.add_all(
+            [
+                User(
+                    role_id=admin_role.role_id,
+                    email="admin@example.com",
+                    display_name="Admin",
+                    password_hash=password_hash,
+                    status="active",
+                ),
+                User(
+                    role_id=viewer_role.role_id,
+                    email="viewer@example.com",
+                    display_name="Viewer",
+                    password_hash=password_hash,
+                    status="active",
+                ),
+            ]
+        )
+        db.commit()
+
+    def override_db() -> Iterator[Session]:
+        with session_factory() as db:
+            yield db
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_db
+    try:
+        yield TestClient(app), session_factory, tmp_path
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+        engine.dispose()
+
+
+def login(client: TestClient, email: str = "admin@example.com") -> str:
+    csrf_response = client.get("/api/v1/auth/csrf", headers={"Origin": ALLOWED_ORIGIN})
+    assert csrf_response.status_code == 200
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": TEST_PASSWORD},
+        headers={
+            "X-CSRF-Token": csrf_response.json()["data"]["csrf_token"],
+            "Origin": ALLOWED_ORIGIN,
+        },
+    )
+    assert response.status_code == 200
+    return str(response.json()["data"]["csrf_token"])
+
+
+def unsafe_headers(csrf_token: str) -> dict[str, str]:
+    return {"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN}
+
+
+def issue_csrf(client: TestClient) -> str:
+    response = client.get("/api/v1/auth/csrf", headers={"Origin": ALLOWED_ORIGIN})
+    assert response.status_code == 200
+    return str(response.json()["data"]["csrf_token"])
+
+
+def storage_path(storage_root: Path, storage_key: str) -> Path:
+    return storage_root.joinpath(*PurePosixPath(storage_key).parts)
+
+
+def assert_no_sensitive_document_fields(payload: Any) -> None:
+    serialized = str(payload).lower()
+    assert "storage_key" not in serialized
+    assert "storage/" not in serialized
+    assert "password" not in serialized
+    assert "session_token" not in serialized
+    assert "csrf_token" not in serialized
+
+
+def test_document_api_upload_duplicate_approve_archive_and_chunks(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, storage_root = document_client
+
+    unauthenticated = client.get("/api/v1/documents")
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "auth_required"
+
+    login(client, email="viewer@example.com")
+    forbidden = client.get("/api/v1/documents")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "permission_denied"
+    client.cookies.clear()
+
+    csrf_token = login(client, email="admin@example.com")
+    content = b"# Guide\nsmall body\n"
+    upload = client.post(
+        "/api/v1/documents",
+        data={"title": " Guide "},
+        files={"file": ("guide.md", content, "text/markdown")},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert upload.status_code == 201
+    upload_body = upload.json()
+    assert upload_body["data"]["version_status"] == "processing"
+    assert upload_body["data"]["display_status"] == "processing"
+    assert upload_body["data"]["document"]["active_version"] is None
+    assert_no_sensitive_document_fields(upload_body)
+    logical_document_id = int(upload_body["data"]["logical_document_id"])
+    document_version_id = int(upload_body["data"]["document_version_id"])
+
+    with session_factory() as db:
+        document = db.get(LogicalDocument, logical_document_id)
+        version = db.get(DocumentVersion, document_version_id)
+        assert document is not None
+        assert version is not None
+        assert document.title == "Guide"
+        assert version.version_no == 1
+        assert version.status == "processing"
+        assert version.is_active is False
+        assert version.content_hash == hashlib.sha256(content).hexdigest()
+        assert version.storage_key is not None
+        assert storage_path(storage_root, version.storage_key).read_bytes() == content
+        ingest_job = db.get(Job, upload_body["data"]["job_id"])
+        assert ingest_job is not None
+        assert ingest_job.job_type == "document_ingest"
+        assert ingest_job.target_type == "document_version"
+        assert ingest_job.target_id == document_version_id
+        assert ingest_job.payload_json == {
+            "logical_document_id": logical_document_id,
+            "document_version_id": document_version_id,
+            "requested_by_user_id": document.owner_user_id,
+        }
+
+    duplicate = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions",
+        files={"file": ("guide.md", content, "text/markdown")},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["status"] == "duplicate_content_skipped"
+    assert duplicate.json()["data"]["matched_document_version_id"] == document_version_id
+    with session_factory() as db:
+        assert (
+            db.query(DocumentVersion).filter_by(logical_document_id=logical_document_id).count()
+            == 1
+        )
+        assert db.query(Job).filter_by(job_type="document_ingest").count() == 1
+        version = db.get(DocumentVersion, document_version_id)
+        assert version is not None
+        version.status = "ready"
+        db.add(
+            DocumentChunk(
+                document_version_id=document_version_id,
+                chunk_index=0,
+                chunk_hash="a" * 64,
+                content_text="x" * 240,
+                token_count=10,
+                char_count=240,
+                page_from=1,
+                page_to=1,
+                section_title="Intro",
+                modality="text",
+            )
+        )
+        db.commit()
+
+    pending = client.get("/api/v1/documents?display_status=pending_review")
+    assert pending.status_code == 200
+    assert pending.json()["meta"]["pagination"]["total"] == 1
+    assert pending.json()["data"][0]["latest_version"]["display_status"] == "pending_review"
+    assert pending.json()["data"][0]["active_version"] is None
+    contradictory = client.get("/api/v1/documents?status=archived&display_status=pending_review")
+    assert contradictory.status_code == 200
+    assert contradictory.json()["data"] == []
+    assert contradictory.json()["meta"]["pagination"]["total"] == 0
+
+    approve = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert approve.status_code == 200
+    assert approve.json()["data"]["result_code"] == "approved"
+    assert approve.json()["data"]["active_version"]["display_status"] == "active"
+    assert approve.json()["data"]["qdrant_mirror_job_id"] is not None
+
+    approve_again = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert approve_again.status_code == 200
+    assert approve_again.json()["data"]["result_code"] == "already_active"
+
+    chunks = client.get(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/chunks"
+    )
+    assert chunks.status_code == 200
+    chunk = chunks.json()["data"][0]
+    assert chunk["preview"] == "x" * 200
+    assert chunk["preview_truncated"] is True
+    assert "content_text" not in chunk
+
+    archive = client.post(
+        f"/api/v1/documents/{logical_document_id}/archive",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert archive.status_code == 200
+    assert archive.json()["data"]["result_code"] == "archived"
+    assert archive.json()["data"]["retrieval_eligible"] is False
+    with session_factory() as db:
+        archived_document = db.get(LogicalDocument, logical_document_id)
+        archived_version = db.get(DocumentVersion, document_version_id)
+        assert archived_document is not None
+        assert archived_version is not None
+        assert archived_document.status == "archived"
+        assert archived_version.is_active is False
+        assert db.query(AuditLog).filter_by(action_type="document.archived").count() == 1
+
+    archive_again = client.post(
+        f"/api/v1/documents/{logical_document_id}/archive",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert archive_again.status_code == 200
+    assert archive_again.json()["data"]["result_code"] == "already_archived"
+
+    archived_version_add = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions",
+        files={"file": ("new.md", b"# new\n", "text/markdown")},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert archived_version_add.status_code == 409
+    assert archived_version_add.json()["error"]["code"] == "document_archived"
+
+
+def test_document_api_upload_validation_errors(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, _, _ = document_client
+    csrf_token = login(client, email="admin@example.com")
+
+    missing_csrf = client.post(
+        "/api/v1/documents",
+        files={"file": ("guide.md", b"# ok\n", "text/markdown")},
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_missing"
+
+    too_large = client.post(
+        "/api/v1/documents",
+        files={"file": ("large.txt", b"x" * 65, "text/plain")},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert too_large.status_code == 413
+    assert too_large.json()["error"]["code"] == "payload_too_large"
+
+    unsupported = client.post(
+        "/api/v1/documents",
+        files={"file": ("script.exe", b"MZ", "application/octet-stream")},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert unsupported.status_code == 415
+    assert unsupported.json()["error"]["code"] == "unsupported_media_type"
+
+    unsafe_pdf = client.post(
+        "/api/v1/documents",
+        files={"file": ("fake.pdf", b"not a pdf", "application/pdf")},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert unsafe_pdf.status_code == 415
+    assert unsafe_pdf.json()["error"]["code"] == "unsafe_file_rejected"
+
+    empty_file = client.post(
+        "/api/v1/documents",
+        files={"file": ("empty.txt", b"", "text/plain")},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert empty_file.status_code == 422
+    assert empty_file.json()["error"]["code"] == "validation_error"
