@@ -18,6 +18,12 @@ ERROR_MESSAGES: dict[str, str] = {
     "document_archived": "Document is archived.",
     "document_version_not_approvable": "Document version is not approvable.",
     "active_version_conflict": "Active version conflict.",
+    "job_not_ready": "Job is not ready for this operation.",
+    "job_active_retry_exists": "An active retry already exists for this job.",
+    "unknown_job_type": "Unknown job type.",
+    "lease_lost": "Job lease was lost.",
+    "worker_startup_failed": "Worker startup check failed.",
+    "job_handler_not_implemented": "Job handler is not implemented.",
     "payload_too_large": "Payload too large.",
     "unsupported_media_type": "Unsupported media type.",
     "unsafe_file_rejected": "Unsafe file rejected.",
@@ -110,6 +116,16 @@ class DocumentVersionNotApprovable(ConflictError):
 class ActiveVersionConflict(ConflictError):
     def __init__(self) -> None:
         super().__init__("active_version_conflict")
+
+
+class JobNotReady(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("job_not_ready")
+
+
+class JobActiveRetryExists(ConflictError):
+    def __init__(self, details: object | None = None) -> None:
+        super().__init__("job_active_retry_exists", details=details)
 
 
 class TemporarySessionExpired(ConflictError):

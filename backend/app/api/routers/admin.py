@@ -8,27 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import pagination_params, require_admin, require_csrf
 from app.api.responses import paginate, success_response
-from app.db.models import AuditLog, EvaluationRun, Job, SystemSetting, User
+from app.db.models import AuditLog, EvaluationRun, SystemSetting, User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
-
-
-@router.get("/jobs")
-def jobs(
-    request: Request,
-    _: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-    pagination: PaginationParams = Depends(pagination_params),
-) -> dict[str, object]:
-    rows = db.scalars(select(Job).order_by(Job.job_id.desc())).all()
-    page_rows, page_meta = paginate(rows, pagination)
-    return success_response(
-        [{"job_id": j.job_id, "job_type": j.job_type, "status": j.status} for j in page_rows],
-        request,
-        pagination=page_meta,
-    )
 
 
 @router.post("/evaluations/runs")
