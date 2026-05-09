@@ -62,7 +62,14 @@ def parse_enabled_job_types(value: Iterable[str] | str | None) -> frozenset[str]
     else:
         items = [str(item).strip() for item in value if str(item).strip()]
 
-    if not items or any(item.lower() == "all" for item in items):
+    lowered_items = [item.lower() for item in items]
+    if not items:
+        return None
+    if "all" in lowered_items:
+        if len(items) > 1:
+            raise WorkerConfigError(
+                "WORKER_ENABLED_JOB_TYPES cannot combine 'all' with explicit job types."
+            )
         return None
 
     enabled = frozenset(items)

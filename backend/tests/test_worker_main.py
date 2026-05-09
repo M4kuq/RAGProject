@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.job_utils import LeaseLostError, redact_error_message, redact_payload
 from app.db.base import Base
-from app.db.models import Job
+from app.db.models import DocumentVersion, Job, LogicalDocument, Role, User
 from app.repositories.job_repository import JobRepository
 from app.workers import worker_main
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
@@ -48,6 +48,8 @@ def test_worker_settings_parse_and_instance_id_generation() -> None:
     )
     with pytest.raises(WorkerConfigError):
         parse_enabled_job_types("document_ingest,unknown")
+    with pytest.raises(WorkerConfigError):
+        parse_enabled_job_types("all,unknown")
 
     worker_id = build_worker_instance_id(
         hostname="host name",
@@ -305,6 +307,120 @@ def test_lease_lost_errors_do_not_mark_failed(session_factory: sessionmaker[Sess
         assert job.error_code is None
 
 
+def test_document_ingest_stub_failure_updates_version_in_terminal_transaction(
+    session_factory: sessionmaker[Session],
+) -> None:
+    config = _worker_config()
+    with session_factory() as db:
+        role = Role(role_name="admin", description="Admin")
+        db.add(role)
+        db.flush()
+        user = User(
+            role_id=role.role_id,
+            email="admin@example.com",
+            display_name="Admin",
+            status="active",
+        )
+        db.add(user)
+        db.flush()
+        document = LogicalDocument(owner_user_id=user.user_id, title="Guide")
+        db.add(document)
+        db.flush()
+        version = DocumentVersion(
+            document_version_id=1,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="0" * 64,
+            status="processing",
+            file_name="guide.txt",
+            mime_type="text/plain",
+            file_size_bytes=10,
+            created_by=user.user_id,
+        )
+        job = Job(
+            job_id=1,
+            job_type="document_ingest",
+            status="queued",
+            target_type="document_version",
+            target_id=1,
+            payload_json={"document_version_id": 1},
+        )
+        db.add_all([version, job])
+        db.commit()
+
+    runner = WorkerRunner(config=config, session_factory=session_factory)
+    assert runner.run_once() == 1
+
+    with session_factory() as db:
+        stored_version = db.get(DocumentVersion, 1)
+        stored_job = db.get(Job, 1)
+        assert stored_version is not None
+        assert stored_job is not None
+        assert stored_version.status == "failed"
+        assert stored_version.error_code == "job_handler_not_implemented"
+        assert stored_job.status == "failed"
+        assert stored_job.error_code == "job_handler_not_implemented"
+
+
+def test_document_ingest_stub_treats_already_ready_version_as_success(
+    session_factory: sessionmaker[Session],
+) -> None:
+    config = _worker_config()
+    with session_factory() as db:
+        role = Role(role_name="admin", description="Admin")
+        db.add(role)
+        db.flush()
+        user = User(
+            role_id=role.role_id,
+            email="admin-ready@example.com",
+            display_name="Admin",
+            status="active",
+        )
+        db.add(user)
+        db.flush()
+        document = LogicalDocument(owner_user_id=user.user_id, title="Ready Guide")
+        db.add(document)
+        db.flush()
+        version = DocumentVersion(
+            document_version_id=1,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="1" * 64,
+            status="ready",
+            file_name="ready.txt",
+            mime_type="text/plain",
+            file_size_bytes=10,
+            created_by=user.user_id,
+        )
+        job = Job(
+            job_id=1,
+            job_type="document_ingest",
+            status="queued",
+            target_type="document_version",
+            target_id=1,
+            payload_json={"document_version_id": 1},
+        )
+        db.add_all([version, job])
+        db.commit()
+
+    runner = WorkerRunner(config=config, session_factory=session_factory)
+    assert runner.run_once() == 1
+
+    with session_factory() as db:
+        stored_version = db.get(DocumentVersion, 1)
+        stored_job = db.get(Job, 1)
+        assert stored_version is not None
+        assert stored_job is not None
+        assert stored_version.status == "ready"
+        assert stored_version.error_code is None
+        assert stored_job.status == "succeeded"
+        assert stored_job.error_code is None
+        assert stored_job.result_json == {
+            "handler_status": "already_ready",
+            "document_version_id": 1,
+        }
+
+
 def test_default_dispatcher_returns_stub_results() -> None:
     dispatcher = JobDispatcher()
     base_context = JobExecutionContext(
@@ -362,6 +478,21 @@ def test_startup_checks_reject_invalid_lease_interval() -> None:
                 lease_renew_interval_seconds=10,
                 shutdown_grace_seconds=30,
                 enabled_job_types=None,
+                worker_instance_id="worker-1",
+            )
+        )
+
+
+def test_startup_checks_reject_unknown_enabled_type() -> None:
+    with pytest.raises(WorkerStartupError):
+        run_startup_checks(
+            WorkerConfig(
+                poll_interval_seconds=0,
+                batch_size=1,
+                lease_duration=timedelta(seconds=10),
+                lease_renew_interval_seconds=1,
+                shutdown_grace_seconds=30,
+                enabled_job_types=frozenset({"unknown"}),
                 worker_instance_id="worker-1",
             )
         )

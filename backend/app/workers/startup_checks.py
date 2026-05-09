@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Job
-from app.db.session import SessionLocal, check_database
-from app.workers.worker_config import WorkerConfig
+from app.db.session import SessionLocal
+from app.workers.worker_config import SUPPORTED_JOB_TYPES, WorkerConfig
 
 
 class WorkerStartupError(RuntimeError):
@@ -25,10 +25,14 @@ def run_startup_checks(
         raise WorkerStartupError(
             "WORKER_LEASE_RENEW_INTERVAL_SECONDS must be shorter than WORKER_LEASE_SECONDS."
         )
+    if config.enabled_job_types is not None:
+        unknown = config.enabled_job_types - SUPPORTED_JOB_TYPES
+        if unknown:
+            raise WorkerStartupError(f"Unknown worker job_type: {', '.join(sorted(unknown))}")
     try:
-        check_database()
         db = session_factory()
         try:
+            db.execute(select(1))
             db.execute(select(Job.job_id).limit(1))
         finally:
             db.close()
