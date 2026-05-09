@@ -15,6 +15,12 @@ ERROR_MESSAGES: dict[str, str] = {
     "business_validation_error": "Request cannot be processed.",
     "conflict": "Resource conflict.",
     "archived_session_readonly": "Archived session is read-only.",
+    "document_archived": "Document is archived.",
+    "document_version_not_approvable": "Document version is not approvable.",
+    "active_version_conflict": "Active version conflict.",
+    "payload_too_large": "Payload too large.",
+    "unsupported_media_type": "Unsupported media type.",
+    "unsafe_file_rejected": "Unsafe file rejected.",
     "temporary_session_expired": "Temporary session has expired.",
     "temporary_session_not_archivable": "Temporary session cannot be archived.",
     "no_context_found": "No context found.",
@@ -35,6 +41,8 @@ STATUS_DEFAULT_CODES: dict[int, str] = {
     403: "permission_denied",
     404: "resource_not_found",
     409: "conflict",
+    413: "payload_too_large",
+    415: "unsupported_media_type",
     422: "validation_error",
 }
 
@@ -89,6 +97,21 @@ class ArchivedSessionReadonly(ConflictError):
         super().__init__("archived_session_readonly")
 
 
+class DocumentArchived(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("document_archived")
+
+
+class DocumentVersionNotApprovable(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("document_version_not_approvable")
+
+
+class ActiveVersionConflict(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("active_version_conflict")
+
+
 class TemporarySessionExpired(ConflictError):
     def __init__(self) -> None:
         super().__init__("temporary_session_expired")
@@ -112,6 +135,21 @@ class CsrfInvalid(AppError):
 class RateLimitExceeded(AppError):
     def __init__(self) -> None:
         super().__init__("rate_limit_exceeded", 429)
+
+
+class PayloadTooLarge(AppError):
+    def __init__(self) -> None:
+        super().__init__("payload_too_large", 413)
+
+
+class UnsupportedMediaType(AppError):
+    def __init__(self) -> None:
+        super().__init__("unsupported_media_type", 415)
+
+
+class UnsafeFileRejected(AppError):
+    def __init__(self) -> None:
+        super().__init__("unsafe_file_rejected", 415)
 
 
 def normalize_error(status_code: int, detail: Any) -> tuple[str, str, object]:

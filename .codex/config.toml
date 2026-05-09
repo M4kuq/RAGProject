@@ -3,7 +3,16 @@
 # =========================================================
 # RAGProject Codex config
 # PR / test automation friendly config
-# This file MAY be committed
+#
+# Path:
+#   C:\Users\student\RAGProject\.codex\config.toml
+#
+# Usage:
+#   cd C:\Users\student\RAGProject
+#   codex --profile auto
+#
+# This file MAY be committed if it does not contain secrets.
+# Never write API keys / tokens directly in this file.
 # =========================================================
 
 model_provider = "openai"
@@ -15,8 +24,12 @@ plan_mode_reasoning_effort = "xhigh"
 model_reasoning_summary = "concise"
 model_verbosity = "medium"
 
+# Default mode:
+# - Safe interactive development mode
+# - Use `codex --profile auto` when you want auto-like execution
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
+approvals_reviewer = "user"
 
 web_search = "cached"
 
@@ -26,7 +39,7 @@ allow_login_shell = true
 default_permissions = "rag_project_workspace"
 
 # =========================================================
-# Permissions
+# Permissions: normal workspace
 # =========================================================
 
 [permissions.rag_project_workspace.filesystem]
@@ -52,12 +65,45 @@ glob_scan_max_depth = 5
 enabled = false
 
 # =========================================================
+# Permissions: auto profile
+#
+# Use only with:
+#   codex --profile auto
+#
+# This keeps the default mode safe while allowing auto mode
+# to run package installs, docker builds, gh commands, etc.
+# =========================================================
+
+[permissions.rag_project_auto.filesystem]
+glob_scan_max_depth = 5
+
+[permissions.rag_project_auto.filesystem.":project_roots"]
+"." = "write"
+
+"**/.env" = "none"
+"**/.env.*" = "none"
+"**/*.pem" = "none"
+"**/*.key" = "none"
+"**/id_rsa" = "none"
+"**/id_ed25519" = "none"
+"**/secrets/**" = "none"
+"**/*secret*.json" = "none"
+"**/*secrets*.json" = "none"
+"**/*credential*.json" = "none"
+"**/*credentials*.json" = "none"
+"**/*token*.json" = "none"
+
+[permissions.rag_project_auto.network]
+enabled = true
+
+# =========================================================
 # Sandbox
 # =========================================================
 
 [sandbox_workspace_write]
 network_access = false
 exclude_tmpdir_env_var = true
+exclude_slash_tmp = false
 
 # =========================================================
 # Windows
@@ -84,6 +130,26 @@ skill_mcp_dependency_install = true
 
 [tools]
 view_image = true
+
+# =========================================================
+# MCP servers
+# =========================================================
+
+[mcp_servers.context7]
+enabled = true
+url = "https://mcp.context7.com/mcp"
+env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+required = false
+
+[mcp_servers.github]
+enabled = true
+url = "https://api.githubcopilot.com/mcp/"
+env_http_headers = { "Authorization" = "GITHUB_MCP_AUTHORIZATION" }
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+required = false
 
 # =========================================================
 # Plugins
@@ -145,6 +211,42 @@ approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 web_search = "live"
 default_permissions = "rag_project_workspace"
+
+# =========================================================
+# Auto profile
+#
+# Goal:
+# - Basic work should proceed automatically.
+# - Dangerous commands should still be controlled by default.rules.
+#
+# Usage:
+#   cd C:\Users\student\RAGProject
+#   codex --profile auto
+#
+# Important:
+# - `rules = true` allows execpolicy prompt rules to surface.
+# - `request_permissions = false` and `skill_approval = false`
+#   reduce unnecessary prompts.
+# - `sandbox_approval = false` avoids broad sandbox escalation prompts.
+# =========================================================
+
+[profiles.auto]
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "xhigh"
+model_reasoning_summary = "concise"
+model_verbosity = "medium"
+
+approval_policy = { granular = { sandbox_approval = false, rules = true, mcp_elicitations = true, request_permissions = false, skill_approval = false } }
+
+sandbox_mode = "workspace-write"
+web_search = "cached"
+default_permissions = "rag_project_auto"
+
+[profiles.auto.sandbox_workspace_write]
+network_access = true
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = false
 
 [profiles.overnight]
 model = "gpt-5.5"
