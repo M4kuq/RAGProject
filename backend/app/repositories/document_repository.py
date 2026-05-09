@@ -187,9 +187,9 @@ class DocumentRepository:
     def count_chunks(self, db: Session, *, document_version_id: int) -> int:
         return (
             db.scalar(
-                select(func.count()).select_from(DocumentChunk).where(
-                    DocumentChunk.document_version_id == document_version_id
-                )
+                select(func.count())
+                .select_from(DocumentChunk)
+                .where(DocumentChunk.document_version_id == document_version_id)
             )
             or 0
         )

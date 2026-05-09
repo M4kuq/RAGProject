@@ -20,6 +20,7 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
 from app.schemas.documents import (
+    MAX_CHUNK_PREVIEW_LENGTH,
     DocumentApproveResponse,
     DocumentArchiveResponse,
     DocumentChunkItem,
@@ -30,7 +31,6 @@ from app.schemas.documents import (
     DocumentVersionCreateResponse,
     DocumentVersionDetail,
     DocumentVersionSummary,
-    MAX_CHUNK_PREVIEW_LENGTH,
     normalize_document_title,
 )
 from app.services.audit_service import audit
@@ -238,9 +238,9 @@ class DocumentService:
                     False,
                 )
 
-            next_version_no = self.repository.max_version_no(
-                db, logical_document_id=logical_document_id
-            ) + 1
+            next_version_no = (
+                self.repository.max_version_no(db, logical_document_id=logical_document_id) + 1
+            )
             storage_key = self.storage.build_storage_key(file_name=upload.file_name)
             now = self._now()
             version = self.repository.create_version(
@@ -704,9 +704,7 @@ class DocumentService:
                 details=[{"field": "display_status", "reason": "Invalid display_status."}]
             )
 
-    def _display_status_filter(
-        self, display_status: str | None
-    ) -> tuple[str | None, bool | None]:
+    def _display_status_filter(self, display_status: str | None) -> tuple[str | None, bool | None]:
         if display_status in {None, "archived"}:
             return None, None
         if display_status == "active":
