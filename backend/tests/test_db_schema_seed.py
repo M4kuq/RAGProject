@@ -357,6 +357,7 @@ def test_jobs_message_edit_active_partial_unique_index(pg_engine: Engine) -> Non
                         """
                     )
                 )
+        finally:
             transaction.rollback()
 
         transaction = conn.begin()

@@ -227,6 +227,7 @@ def test_retry_requires_csrf_and_creates_queued_retry(
     assert "hidden" not in response.text
 
     with session_factory() as db:
+        admin = db.query(User).filter(User.email == "admin@example.com").one()
         retry_job = db.get(Job, body["data"]["job_id"])
         assert retry_job is not None
         assert retry_job.status == "queued"
@@ -235,7 +236,7 @@ def test_retry_requires_csrf_and_creates_queued_retry(
         assert retry_job.payload_json == {
             "document_version_id": 1,
             "secret": "[REDACTED]",
-            "requested_by_user_id": 1,
+            "requested_by_user_id": admin.user_id,
         }
 
 
