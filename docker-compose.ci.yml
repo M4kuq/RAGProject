@@ -24,6 +24,12 @@ x-backend-env: &backend-env
   UPLOAD_ALLOWED_EXTENSIONS: '[".pdf",".docx",".txt",".md",".csv"]'
   TEMP_CHAT_TTL_MINUTES: "120"
   JOB_LEASE_SECONDS: "300"
+  WORKER_POLL_INTERVAL_MS: "1000"
+  WORKER_BATCH_SIZE: "1"
+  WORKER_LEASE_SECONDS: "300"
+  WORKER_LEASE_RENEW_INTERVAL_SECONDS: "60"
+  WORKER_SHUTDOWN_GRACE_SECONDS: "30"
+  WORKER_ENABLED_JOB_TYPES: none
   LOG_LEVEL: INFO
   PII_MASKING_ENABLED: "true"
   QDRANT_URL: http://qdrant:6333
@@ -120,8 +126,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       seed:
@@ -175,6 +179,8 @@ services:
       ]
     depends_on:
       backend:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
       worker:
         condition: service_healthy

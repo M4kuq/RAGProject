@@ -334,3 +334,54 @@ def test_jobs_active_retry_partial_unique_index(pg_engine: Engine) -> None:
                 )
         finally:
             transaction.rollback()
+
+
+def test_jobs_message_edit_active_partial_unique_index(pg_engine: Engine) -> None:
+    with pg_engine.connect() as conn:
+        transaction = conn.begin()
+        try:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO jobs (job_type, status, target_type, target_id)
+                    VALUES ('message_edit_regeneration', 'queued', 'chat_message', 100)
+                    """
+                )
+            )
+            with pytest.raises(IntegrityError):
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO jobs (job_type, status, target_type, target_id)
+                        VALUES ('message_edit_regeneration', 'queued', 'chat_message', 100)
+                        """
+                    )
+                )
+        finally:
+            transaction.rollback()
+
+        transaction = conn.begin()
+        try:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO jobs (
+                        job_type, status, target_type, target_id, started_at, finished_at
+                    )
+                    VALUES (
+                        'message_edit_regeneration', 'succeeded', 'chat_message', 100,
+                        now(), now()
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO jobs (job_type, status, target_type, target_id)
+                    VALUES ('message_edit_regeneration', 'queued', 'chat_message', 100)
+                    """
+                )
+            )
+        finally:
+            transaction.rollback()

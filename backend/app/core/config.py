@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     )
     temp_chat_ttl_minutes: int = 120
     job_lease_seconds: int = 300
+    worker_poll_interval_ms: int = Field(default=1000, ge=100)
+    worker_batch_size: int = Field(default=1, ge=1, le=100)
+    worker_lease_seconds: int = Field(default=300, ge=1)
+    worker_lease_renew_interval_seconds: int = Field(default=60, ge=1)
+    worker_shutdown_grace_seconds: int = Field(default=30, ge=1)
+    worker_enabled_job_types: str = "all"
+    worker_instance_name: str | None = None
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"

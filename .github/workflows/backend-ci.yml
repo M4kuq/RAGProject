@@ -26,6 +26,20 @@ jobs:
   backend:
     name: Ruff / mypy / pytest
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: rag
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     defaults:
       run:
         working-directory: backend
@@ -68,6 +82,9 @@ jobs:
 
       - name: Type check
         run: uv run --extra dev mypy .
+
+      - name: Migrate test database
+        run: uv run alembic upgrade head
 
       - name: Unit tests
         run: uv run --extra dev pytest
