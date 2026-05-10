@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.models import Job, Role, User
+from app.db.models import DocumentVersion, Job, LogicalDocument, Role, User
 from app.db.session import get_db
 from app.main import create_app
 
@@ -130,6 +130,7 @@ def test_jobs_list_and_detail_return_redacted_payload(
     }
     assert body["data"]["error_message"] == "Job failed with a redacted error."
     assert body["data"]["payload_view"]["payload_redacted"] is True
+    assert body["data"]["source_job_id"] is None
     assert "locked_by" not in body["data"]
 
 
@@ -222,16 +223,106 @@ def test_retry_requires_csrf_and_creates_queued_retry(
     body = response.json()
     assert body["data"]["result_code"] == "retry_created"
     assert body["data"]["source_job_id"] == 1
-    retry_payload = body["data"]["job"]["payload_view"]["payload"]
-    assert retry_payload["secret"] == "[REDACTED]"
+    assert body["data"]["status"] == "queued"
     assert "hidden" not in response.text
 
     with session_factory() as db:
-        retry_job = db.get(Job, body["data"]["job"]["job_id"])
+        retry_job = db.get(Job, body["data"]["job_id"])
         assert retry_job is not None
         assert retry_job.status == "queued"
         assert retry_job.retry_of_job_id == 1
         assert retry_job.started_at is None
+        assert retry_job.payload_json == {
+            "document_version_id": 1,
+            "secret": "[REDACTED]",
+            "requested_by_user_id": 1,
+        }
+
+
+def test_retry_requires_auth_and_admin(
+    jobs_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = jobs_client
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(
+            Job(
+                job_id=1,
+                job_type="document_ingest",
+                status="failed",
+                payload_json={},
+                error_code="safe_failure",
+                error_message="safe",
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        db.commit()
+
+    unauthenticated = client.post("/api/v1/jobs/1/retry", headers={"Origin": ALLOWED_ORIGIN})
+    assert unauthenticated.status_code == 401
+
+    _login_as(client, "viewer@example.com")
+    csrf_token = _session_csrf(client)
+    forbidden = client.post(
+        "/api/v1/jobs/1/retry",
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "permission_denied"
+
+
+def test_document_ingest_retry_resets_failed_version_to_processing(
+    jobs_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = jobs_client
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        admin = db.query(User).filter_by(email="admin@example.com").one()
+        document = LogicalDocument(owner_user_id=admin.user_id, title="Failed ingest")
+        db.add(document)
+        db.flush()
+        version = DocumentVersion(
+            document_version_id=1,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="0" * 64,
+            status="failed",
+            error_code="extract_failed",
+            file_name="failed.txt",
+            mime_type="text/plain",
+            file_size_bytes=10,
+            created_by=admin.user_id,
+        )
+        job = Job(
+            job_id=1,
+            job_type="document_ingest",
+            status="failed",
+            target_type="document_version",
+            target_id=1,
+            payload_json={"document_version_id": 1},
+            error_code="extract_failed",
+            error_message="safe",
+            started_at=now,
+            finished_at=now,
+        )
+        db.add_all([version, job])
+        db.commit()
+
+    _login_as(client, "admin@example.com")
+    csrf_token = _session_csrf(client)
+    response = client.post(
+        "/api/v1/jobs/1/retry",
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 201
+    assert response.json()["data"]["job_id"] != 1
+
+    with session_factory() as db:
+        stored_version = db.get(DocumentVersion, 1)
+        assert stored_version is not None
+        assert stored_version.status == "processing"
+        assert stored_version.error_code is None
 
 
 def test_retry_missing_job_returns_404_and_retry_chain_uses_original_source(
@@ -283,8 +374,11 @@ def test_retry_missing_job_returns_404_and_retry_chain_uses_original_source(
     assert response.status_code == 201
     body = response.json()["data"]
     assert body["source_job_id"] == 1
-    assert body["job"]["retry_of_job_id"] == 1
-    assert body["job"]["retry_count"] == 2
+    assert body["retry_count"] == 2
+    with session_factory() as db:
+        retry = db.get(Job, body["job_id"])
+        assert retry is not None
+        assert retry.retry_of_job_id == 1
 
 
 @pytest.mark.parametrize("status", ["queued", "running", "succeeded", "canceled"])

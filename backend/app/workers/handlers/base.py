@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
-
-from sqlalchemy.orm import Session
 
 from app.core.job_utils import redact_error_message
 
@@ -19,7 +17,6 @@ class JobExecutionContext:
     target_id: int | None
     payload: Mapping[str, object]
     worker_instance_id: str
-    session_factory: Callable[[], Session] | None = None
 
 
 @dataclass(frozen=True)

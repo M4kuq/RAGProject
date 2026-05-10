@@ -36,11 +36,13 @@ class JobDetail(JobItem):
     locked_at: datetime | None = None
     lease_expires_at: datetime | None = None
     result_json: dict[str, object] | None = None
-    source_job_id: int
+    source_job_id: int | None = None
     active_retry_job_id: int | None = None
 
 
 class JobRetryResponse(BaseModel):
     result_code: Literal["retry_created"] = "retry_created"
+    job_id: int
     source_job_id: int
-    job: JobDetail
+    status: Literal["queued"] = "queued"
+    retry_count: int

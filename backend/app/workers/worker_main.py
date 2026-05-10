@@ -5,14 +5,13 @@ import signal
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
 from types import FrameType
 from typing import cast
 
 from sqlalchemy.orm import Session
 
 from app.core.job_utils import LeaseLostError
-from app.db.models import DocumentVersion, Job
+from app.db.models import Job
 from app.db.session import SessionLocal
 from app.repositories.job_repository import JobRepository
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
@@ -69,10 +68,7 @@ class WorkerRunner:
                 lease_duration=self.config.lease_duration,
                 batch_size=self.config.batch_size,
             )
-            contexts = [
-                _context_from_job(job, self.config.worker_instance_id, self.session_factory)
-                for job in jobs
-            ]
+            contexts = [_context_from_job(job, self.config.worker_instance_id) for job in jobs]
             db.commit()
             return contexts
         except Exception:
@@ -131,7 +127,6 @@ class WorkerRunner:
                 worker_instance_id=self.config.worker_instance_id,
                 lease_duration=self.config.lease_duration,
             )
-            result = _apply_document_ingest_terminal_effect(db, context, result)
             if result.status == "succeeded":
                 self.repository.mark_succeeded(
                     db,
@@ -214,7 +209,6 @@ class _StopSignal:
 def _context_from_job(
     job: Job,
     worker_instance_id: str,
-    session_factory: Callable[[], Session],
 ) -> JobExecutionContext:
     payload = job.payload_json or {}
     return JobExecutionContext(
@@ -224,42 +218,7 @@ def _context_from_job(
         target_id=cast(int | None, job.target_id),
         payload=cast(dict[str, object], payload),
         worker_instance_id=worker_instance_id,
-        session_factory=session_factory,
     )
-
-
-def _apply_document_ingest_terminal_effect(
-    db: Session,
-    context: JobExecutionContext,
-    result: JobHandlerResult,
-) -> JobHandlerResult:
-    if context.job_type != "document_ingest":
-        return result
-    if result.error_code != "job_handler_not_implemented":
-        return result
-    document_version_id = context.payload.get("document_version_id")
-    if not isinstance(document_version_id, int) or document_version_id <= 0:
-        return result
-    if context.target_type != "document_version" or context.target_id != document_version_id:
-        return result
-
-    version = db.get(DocumentVersion, document_version_id)
-    if version is None:
-        return result
-    if version.status == "ready":
-        return JobHandlerResult.succeeded(
-            {
-                "handler_status": "already_ready",
-                "document_version_id": version.document_version_id,
-            }
-        )
-    if version.status == "archived":
-        return result
-    version.status = "failed"
-    version.error_code = "job_handler_not_implemented"
-    version.is_active = False
-    version.updated_at = datetime.now(UTC)
-    return result
 
 
 class _LeaseHeartbeat:

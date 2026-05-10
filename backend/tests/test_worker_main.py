@@ -9,9 +9,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.job_utils import LeaseLostError, redact_error_message, redact_payload
+from app.core.job_utils import (
+    LeaseLostError,
+    redact_error_message,
+    redact_payload,
+    sanitize_job_payload,
+)
 from app.db.base import Base
-from app.db.models import DocumentVersion, Job, LogicalDocument, Role, User
+from app.db.models import Job
 from app.repositories.job_repository import JobRepository
 from app.workers import worker_main
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
@@ -46,10 +51,13 @@ def test_worker_settings_parse_and_instance_id_generation() -> None:
     assert parse_enabled_job_types("document_ingest,qdrant_mirror_update") == frozenset(
         {"document_ingest", "qdrant_mirror_update"}
     )
+    assert parse_enabled_job_types("none") == frozenset()
     with pytest.raises(WorkerConfigError):
         parse_enabled_job_types("document_ingest,unknown")
     with pytest.raises(WorkerConfigError):
         parse_enabled_job_types("all,unknown")
+    with pytest.raises(WorkerConfigError):
+        parse_enabled_job_types("none,document_ingest")
 
     worker_id = build_worker_instance_id(
         hostname="host name",
@@ -76,7 +84,24 @@ def test_payload_and_error_redaction() -> None:
         "prompt": "[REDACTED]",
         "local_path": "[REDACTED]",
     }
+    assert sanitize_job_payload(
+        {
+            "document_version_id": 10,
+            "input": "raw prompt or chunk text",
+            "body": "document body",
+            "api_token": "secret-value",
+        }
+    ) == {
+        "document_version_id": 10,
+        "api_token": "[REDACTED]",
+    }
     assert redact_error_message(r"failed at C:\Users\kei01\secret.txt") == (
+        "Job failed with a redacted error."
+    )
+    assert redact_error_message("Bearer abcdefghijklmnopqrstuvwxyz") == (
+        "Job failed with a redacted error."
+    )
+    assert redact_error_message("failed at /app/storage/uploads/file.txt") == (
         "Job failed with a redacted error."
     )
 
@@ -132,6 +157,36 @@ def test_acquire_prioritizes_queued_and_reclaims_without_overwriting_started_at(
         assert reclaimed is not None
         assert reclaimed.started_at == original_started_at.replace(tzinfo=None)
         assert reclaimed.locked_by == "worker-1"
+
+
+def test_acquire_does_not_reclaim_lease_expiring_exactly_now(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repository = JobRepository()
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(
+            Job(
+                job_id=1,
+                job_type="document_ingest",
+                status="running",
+                payload_json={},
+                locked_by="worker-1",
+                locked_at=now - timedelta(minutes=5),
+                lease_expires_at=now,
+                started_at=now - timedelta(minutes=5),
+            )
+        )
+        db.commit()
+        jobs = repository.acquire_jobs(
+            db,
+            worker_instance_id="worker-2",
+            enabled_job_types=None,
+            lease_duration=timedelta(minutes=5),
+            batch_size=1,
+            now=now,
+        )
+        assert jobs == []
 
 
 def test_acquire_filters_enabled_types_and_skips_ineligible_jobs(
@@ -244,6 +299,58 @@ def test_lease_terminal_updates_and_retry_creation(session_factory: sessionmaker
         assert active_retry is not None
         assert active_retry.job_id == retry.job_id
 
+        queued = repository.create_job(
+            db,
+            job_type="document_ingest",
+            target_type="document_version",
+            target_id=9,
+            payload_json={
+                "document_version_id": 9,
+                "input": "raw prompt or chunk text",
+                "secret": "hidden",
+            },
+            created_by=100,
+        )
+        db.flush()
+        assert queued.payload_json == {
+            "document_version_id": 9,
+            "secret": "[REDACTED]",
+        }
+
+
+def test_reclaimed_job_cannot_be_finished_by_previous_worker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repository = JobRepository()
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(
+            Job(
+                job_id=1,
+                job_type="document_ingest",
+                status="running",
+                payload_json={},
+                locked_by="worker-1",
+                locked_at=now - timedelta(minutes=10),
+                lease_expires_at=now - timedelta(minutes=1),
+                started_at=now - timedelta(minutes=10),
+            )
+        )
+        db.commit()
+        reclaimed = repository.acquire_jobs(
+            db,
+            worker_instance_id="worker-2",
+            enabled_job_types=None,
+            lease_duration=timedelta(minutes=5),
+            batch_size=1,
+            now=now,
+        )
+        assert [job.job_id for job in reclaimed] == [1]
+        db.commit()
+
+        with pytest.raises(LeaseLostError):
+            repository.mark_succeeded(db, job_id=1, worker_instance_id="worker-1")
+
 
 def test_terminal_updates_raise_lease_lost_for_wrong_worker(
     session_factory: sessionmaker[Session],
@@ -307,134 +414,95 @@ def test_lease_lost_errors_do_not_mark_failed(session_factory: sessionmaker[Sess
         assert job.error_code is None
 
 
-def test_document_ingest_stub_failure_updates_version_in_terminal_transaction(
+def test_worker_skips_terminal_update_when_heartbeat_loses_lease(
+    monkeypatch: pytest.MonkeyPatch,
     session_factory: sessionmaker[Session],
 ) -> None:
     config = _worker_config()
     with session_factory() as db:
-        role = Role(role_name="admin", description="Admin")
-        db.add(role)
-        db.flush()
-        user = User(
-            role_id=role.role_id,
-            email="admin@example.com",
-            display_name="Admin",
-            status="active",
-        )
-        db.add(user)
-        db.flush()
-        document = LogicalDocument(owner_user_id=user.user_id, title="Guide")
-        db.add(document)
-        db.flush()
-        version = DocumentVersion(
-            document_version_id=1,
-            logical_document_id=document.logical_document_id,
-            version_no=1,
-            content_hash="0" * 64,
-            status="processing",
-            file_name="guide.txt",
-            mime_type="text/plain",
-            file_size_bytes=10,
-            created_by=user.user_id,
-        )
-        job = Job(
-            job_id=1,
-            job_type="document_ingest",
-            status="queued",
-            target_type="document_version",
-            target_id=1,
-            payload_json={"document_version_id": 1},
-        )
-        db.add_all([version, job])
+        db.add(Job(job_id=1, job_type="document_ingest", status="queued", payload_json={}))
         db.commit()
 
-    runner = WorkerRunner(config=config, session_factory=session_factory)
+    class LostHeartbeat:
+        lease_lost = True
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> LostHeartbeat:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+    class SuccessDispatcher:
+        def dispatch(self, context: JobExecutionContext) -> JobHandlerResult:
+            return JobHandlerResult.succeeded({"handled": True})
+
+    monkeypatch.setattr(worker_main, "_LeaseHeartbeat", LostHeartbeat)
+    runner = WorkerRunner(
+        config=config,
+        session_factory=session_factory,
+        dispatcher=cast(JobDispatcher, SuccessDispatcher()),
+    )
     assert runner.run_once() == 1
 
     with session_factory() as db:
-        stored_version = db.get(DocumentVersion, 1)
         stored_job = db.get(Job, 1)
-        assert stored_version is not None
         assert stored_job is not None
-        assert stored_version.status == "failed"
-        assert stored_version.error_code == "job_handler_not_implemented"
-        assert stored_job.status == "failed"
-        assert stored_job.error_code == "job_handler_not_implemented"
-
-
-def test_document_ingest_stub_treats_already_ready_version_as_success(
-    session_factory: sessionmaker[Session],
-) -> None:
-    config = _worker_config()
-    with session_factory() as db:
-        role = Role(role_name="admin", description="Admin")
-        db.add(role)
-        db.flush()
-        user = User(
-            role_id=role.role_id,
-            email="admin-ready@example.com",
-            display_name="Admin",
-            status="active",
-        )
-        db.add(user)
-        db.flush()
-        document = LogicalDocument(owner_user_id=user.user_id, title="Ready Guide")
-        db.add(document)
-        db.flush()
-        version = DocumentVersion(
-            document_version_id=1,
-            logical_document_id=document.logical_document_id,
-            version_no=1,
-            content_hash="1" * 64,
-            status="ready",
-            file_name="ready.txt",
-            mime_type="text/plain",
-            file_size_bytes=10,
-            created_by=user.user_id,
-        )
-        job = Job(
-            job_id=1,
-            job_type="document_ingest",
-            status="queued",
-            target_type="document_version",
-            target_id=1,
-            payload_json={"document_version_id": 1},
-        )
-        db.add_all([version, job])
-        db.commit()
-
-    runner = WorkerRunner(config=config, session_factory=session_factory)
-    assert runner.run_once() == 1
-
-    with session_factory() as db:
-        stored_version = db.get(DocumentVersion, 1)
-        stored_job = db.get(Job, 1)
-        assert stored_version is not None
-        assert stored_job is not None
-        assert stored_version.status == "ready"
-        assert stored_version.error_code is None
-        assert stored_job.status == "succeeded"
+        assert stored_job.status == "running"
         assert stored_job.error_code is None
-        assert stored_job.result_json == {
-            "handler_status": "already_ready",
-            "document_version_id": 1,
-        }
 
 
 def test_default_dispatcher_returns_stub_results() -> None:
     dispatcher = JobDispatcher()
-    base_context = JobExecutionContext(
-        job_id=1,
-        job_type="document_ingest",
-        target_type="document_version",
-        target_id=1,
-        payload={"document_version_id": 1},
-        worker_instance_id="worker-1",
-    )
+    cases = [
+        JobExecutionContext(
+            job_id=1,
+            job_type="document_ingest",
+            target_type="document_version",
+            target_id=1,
+            payload={"document_version_id": 1},
+            worker_instance_id="worker-1",
+        ),
+        JobExecutionContext(
+            job_id=2,
+            job_type="qdrant_mirror_update",
+            target_type="logical_document",
+            target_id=1,
+            payload={"logical_document_id": 1, "mirror_action": "mark_inactive"},
+            worker_instance_id="worker-1",
+        ),
+        JobExecutionContext(
+            job_id=3,
+            job_type="message_edit_regeneration",
+            target_type="chat_message",
+            target_id=1,
+            payload={"chat_message_id": 1},
+            worker_instance_id="worker-1",
+        ),
+        JobExecutionContext(
+            job_id=4,
+            job_type="evaluation_run",
+            target_type="evaluation_run",
+            target_id=1,
+            payload={"evaluation_run_id": 1},
+            worker_instance_id="worker-1",
+        ),
+        JobExecutionContext(
+            job_id=5,
+            job_type="temporary_chat_cleanup",
+            target_type=None,
+            target_id=None,
+            payload={},
+            worker_instance_id="worker-1",
+        ),
+    ]
 
-    result = dispatcher.dispatch(base_context)
-    assert result.status == "failed"
-    assert result.error_code == "job_handler_not_implemented"
+    for context in cases:
+        result = dispatcher.dispatch(context)
+        assert result.status == "failed"
+        assert result.error_code == "job_handler_not_implemented"
 
     unknown = dispatcher.dispatch(
         JobExecutionContext(
@@ -466,6 +534,23 @@ def test_run_loop_stops_at_max_iterations(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert runner.calls == 1
     assert sleeps == []
+
+    runner.run_loop(max_iterations=2)
+    assert runner.calls == 3
+    assert sleeps == [0]
+
+
+def test_run_loop_honors_stop_requested_before_first_iteration() -> None:
+    class EmptyRunner(WorkerRunner):
+        calls = 0
+
+        def run_once(self) -> int:
+            self.calls += 1
+            return 0
+
+    runner = EmptyRunner(config=_worker_config())
+    runner.run_loop(stop_requested=lambda: True)
+    assert runner.calls == 0
 
 
 def test_startup_checks_reject_invalid_lease_interval() -> None:

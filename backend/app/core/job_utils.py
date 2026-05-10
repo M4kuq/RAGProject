@@ -44,9 +44,37 @@ _SAFE_RESULT_KEYS = frozenset(
         "result_redacted",
     }
 )
+_SAFE_PAYLOAD_KEYS = frozenset(
+    {
+        "logical_document_id",
+        "document_version_id",
+        "requested_by_user_id",
+        "evaluation_run_id",
+        "chat_session_id",
+        "chat_message_id",
+        "message_id",
+        "mirror_action",
+        "cleanup_scope",
+        "result_code",
+        "status",
+    }
+)
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"[A-Za-z]:\\")
-_UNIX_ABSOLUTE_PATH_RE = re.compile(r"(^|[\s'\"])/(home|Users|var|tmp|opt|srv)/")
-_API_KEY_RE = re.compile(r"\b(sk|pk|ghp|gho|ghu|github_pat)_[A-Za-z0-9_\-]{12,}\b")
+_UNIX_ABSOLUTE_PATH_RE = re.compile(
+    r"(^|[\s'\"])/(app|data|etc|home|mnt|opt|root|srv|tmp|Users|var|workspace)/"
+)
+_API_KEY_RE = re.compile(
+    r"\b((sk|pk)-[A-Za-z0-9_\-]{12,}|"
+    r"(sk|pk|ghp|gho|ghu|github_pat)_[A-Za-z0-9_\-]{12,}|"
+    r"(AKIA|ASIA)[A-Z0-9]{16}|"
+    r"xox[baprs]-[A-Za-z0-9\-]{10,})\b"
+)
+_BEARER_TOKEN_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE)
+_KEY_VALUE_SECRET_RE = re.compile(
+    r"\b(api[_-]?key|secret|token|password|credential)\s*[:=]\s*[^,\s;]+",
+    re.IGNORECASE,
+)
+_CREDENTIAL_URL_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b")
 
 
@@ -64,6 +92,23 @@ def is_active_retry_status(status: str) -> bool:
 
 def redact_payload(value: object) -> object:
     return _redact_value(value, key=None)
+
+
+def sanitize_job_payload(value: dict[str, object] | None) -> dict[str, object]:
+    if not value:
+        return {}
+    redacted = redact_payload(value)
+    if not isinstance(redacted, dict):
+        return {}
+
+    safe: dict[str, object] = {}
+    for raw_key, raw_value in cast(dict[str, object], redacted).items():
+        key = str(raw_key)
+        if raw_value == REDACTED:
+            safe[key] = REDACTED
+        elif _is_safe_payload_key(key, raw_value):
+            safe[key] = raw_value
+    return safe
 
 
 def redact_error_message(message: str | None) -> str:
@@ -129,7 +174,25 @@ def _looks_like_absolute_path(value: str) -> bool:
 
 
 def _looks_like_secret(value: str) -> bool:
-    return bool(_API_KEY_RE.search(value) or _JWT_RE.search(value))
+    return bool(
+        _API_KEY_RE.search(value)
+        or _BEARER_TOKEN_RE.search(value)
+        or _KEY_VALUE_SECRET_RE.search(value)
+        or _CREDENTIAL_URL_RE.search(value)
+        or _JWT_RE.search(value)
+    )
+
+
+def _is_safe_payload_key(key: str, value: object) -> bool:
+    if key in _SAFE_PAYLOAD_KEYS:
+        return _is_safe_scalar(value)
+    if key.endswith("_id") and isinstance(value, int):
+        return True
+    if key.endswith("_ids") and isinstance(value, Sequence) and not isinstance(value, str):
+        return all(isinstance(item, int) for item in value)
+    if key.endswith("_count") and isinstance(value, int):
+        return True
+    return False
 
 
 def _is_safe_result_key(key: str, value: object) -> bool:

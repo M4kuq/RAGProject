@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import cast
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.responses import pagination_meta
 from app.core.errors import JobActiveRetryExists, JobNotReady, ResourceNotFound, ValidationFailed
-from app.core.job_utils import redact_error_message, redact_payload
-from app.db.models import Job, User
+from app.core.job_utils import redact_error_message, sanitize_job_payload, sanitize_result_json
+from app.db.models import DocumentVersion, Job, LogicalDocument, User
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
 from app.schemas.jobs import JobDetail, JobItem, JobPayloadView, JobRetryResponse, JobStatus
@@ -58,8 +60,11 @@ class JobService:
         source_job_id = self.repository.get_source_job_id(job)
         active_retry = self.repository.find_active_retry(db, source_job_id=source_job_id)
         if active_retry is not None:
-            raise JobActiveRetryExists({"active_retry_job_id": active_retry.job_id})
+            raise JobActiveRetryExists(
+                {"source_job_id": source_job_id, "active_retry_job_id": active_retry.job_id}
+            )
         try:
+            self._prepare_document_ingest_retry(db, job=job)
             retry_job = self.repository.create_retry_job(
                 db,
                 source_job=job,
@@ -68,11 +73,16 @@ class JobService:
             db.commit()
         except IntegrityError as exc:
             db.rollback()
-            raise JobActiveRetryExists() from exc
+            active_retry = self.repository.find_active_retry(db, source_job_id=source_job_id)
+            details = {"source_job_id": source_job_id}
+            if active_retry is not None:
+                details["active_retry_job_id"] = active_retry.job_id
+            raise JobActiveRetryExists(details) from exc
         db.refresh(retry_job)
         return JobRetryResponse(
+            job_id=retry_job.job_id,
             source_job_id=source_job_id,
-            job=self._to_detail(db, retry_job),
+            retry_count=retry_job.retry_count,
         )
 
     def _to_item(self, job: Job) -> JobItem:
@@ -103,14 +113,40 @@ class JobService:
             **item.model_dump(),
             locked_at=job.locked_at,
             lease_expires_at=job.lease_expires_at,
-            result_json=_redacted_payload_dict(job.result_json or {}) if job.result_json else None,
-            source_job_id=source_job_id,
+            result_json=sanitize_result_json(job.result_json or {}) if job.result_json else None,
+            source_job_id=job.retry_of_job_id,
             active_retry_job_id=active_retry.job_id if active_retry is not None else None,
         )
 
+    def _prepare_document_ingest_retry(self, db: Session, *, job: Job) -> None:
+        if job.job_type != "document_ingest" or job.target_type != "document_version":
+            return
+        if job.target_id is None:
+            raise ResourceNotFound()
+
+        version = db.scalar(
+            select(DocumentVersion)
+            .where(DocumentVersion.document_version_id == job.target_id)
+            .with_for_update()
+        )
+        if version is None:
+            raise ResourceNotFound()
+        if version.status != "failed":
+            return
+
+        now = datetime.now(UTC)
+        version.status = "processing"
+        version.error_code = None
+        version.is_active = False
+        version.updated_at = now
+        document = db.scalar(
+            select(LogicalDocument)
+            .where(LogicalDocument.logical_document_id == version.logical_document_id)
+            .with_for_update()
+        )
+        if document is not None:
+            document.updated_at = now
+
 
 def _redacted_payload_dict(value: object) -> dict[str, object]:
-    redacted = redact_payload(value or {})
-    if isinstance(redacted, dict):
-        return {str(key): item for key, item in redacted.items()}
-    return {}
+    return sanitize_job_payload(cast(dict[str, object], value or {}))

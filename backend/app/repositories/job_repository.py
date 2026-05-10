@@ -11,7 +11,7 @@ from app.core.job_utils import (
     LeaseLostError,
     original_source_job_id,
     redact_error_message,
-    redact_payload,
+    sanitize_job_payload,
     sanitize_result_json,
 )
 from app.db.models import Job
@@ -35,7 +35,7 @@ class JobRepository:
             priority=priority,
             target_type=target_type,
             target_id=target_id,
-            payload_json=payload_json or {},
+            payload_json=sanitize_job_payload(payload_json),
             created_by=created_by,
         )
         db.add(job)
@@ -265,7 +265,7 @@ class JobRepository:
         requested_by_user_id: int | None,
     ) -> Job:
         original_source_job_id = self.get_source_job_id(source_job)
-        payload = _as_payload_dict(redact_payload(source_job.payload_json or {}))
+        payload = sanitize_job_payload(_as_payload_dict(source_job.payload_json or {}))
         if requested_by_user_id is not None:
             payload["requested_by_user_id"] = requested_by_user_id
         retry_job = Job(
