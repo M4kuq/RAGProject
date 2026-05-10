@@ -17,14 +17,20 @@ def run_startup_checks(
     *,
     session_factory: sessionmaker[Session] = SessionLocal,
 ) -> None:
+    if config.poll_interval_seconds <= 0:
+        raise WorkerStartupError("WORKER_POLL_INTERVAL_MS must be positive.")
     if config.batch_size < 1:
         raise WorkerStartupError("WORKER_BATCH_SIZE must be positive.")
     if config.lease_duration.total_seconds() <= 0:
         raise WorkerStartupError("WORKER_LEASE_SECONDS must be positive.")
+    if config.lease_renew_interval_seconds <= 0:
+        raise WorkerStartupError("WORKER_LEASE_RENEW_INTERVAL_SECONDS must be positive.")
     if config.lease_renew_interval_seconds >= config.lease_duration.total_seconds():
         raise WorkerStartupError(
             "WORKER_LEASE_RENEW_INTERVAL_SECONDS must be shorter than WORKER_LEASE_SECONDS."
         )
+    if config.shutdown_grace_seconds <= 0:
+        raise WorkerStartupError("WORKER_SHUTDOWN_GRACE_SECONDS must be positive.")
     if config.enabled_job_types is not None:
         unknown = config.enabled_job_types - SUPPORTED_JOB_TYPES
         if unknown:

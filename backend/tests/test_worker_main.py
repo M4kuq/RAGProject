@@ -14,6 +14,7 @@ from app.core.job_utils import (
     redact_error_message,
     redact_payload,
     sanitize_job_payload,
+    sanitize_result_json,
 )
 from app.db.base import Base
 from app.db.models import Job
@@ -87,14 +88,22 @@ def test_payload_and_error_redaction() -> None:
     assert sanitize_job_payload(
         {
             "document_version_id": 10,
+            "chat_message_id": 11,
+            "message_id": 12,
             "input": "raw prompt or chunk text",
             "body": "document body",
             "api_token": "secret-value",
+            "requested_by_user_id": "not-an-int",
         }
     ) == {
         "document_version_id": 10,
+        "chat_message_id": 11,
+        "message_id": 12,
         "api_token": "[REDACTED]",
     }
+    assert sanitize_result_json(
+        {"message_id": 12, "handled": True, "message": "raw assistant message"}
+    ) == {"message_id": 12, "handled": True}
     assert redact_error_message(r"failed at C:\Users\kei01\secret.txt") == (
         "Job failed with a redacted error."
     )
@@ -231,6 +240,30 @@ def test_acquire_filters_enabled_types_and_skips_ineligible_jobs(
         )
 
     assert [job.job_id for job in jobs] == [2]
+
+
+def test_acquire_with_empty_enabled_types_processes_no_jobs(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repository = JobRepository()
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(Job(job_id=1, job_type="document_ingest", status="queued", payload_json={}))
+        db.commit()
+        jobs = repository.acquire_jobs(
+            db,
+            worker_instance_id="worker-1",
+            enabled_job_types=frozenset(),
+            lease_duration=timedelta(minutes=5),
+            batch_size=10,
+            now=now,
+        )
+
+        stored = db.get(Job, 1)
+
+    assert jobs == []
+    assert stored is not None
+    assert stored.status == "queued"
 
 
 def test_lease_terminal_updates_and_retry_creation(session_factory: sessionmaker[Session]) -> None:
@@ -562,6 +595,30 @@ def test_startup_checks_reject_invalid_lease_interval() -> None:
                 lease_duration=timedelta(seconds=10),
                 lease_renew_interval_seconds=10,
                 shutdown_grace_seconds=30,
+                enabled_job_types=None,
+                worker_instance_id="worker-1",
+            )
+        )
+    with pytest.raises(WorkerStartupError):
+        run_startup_checks(
+            WorkerConfig(
+                poll_interval_seconds=1,
+                batch_size=1,
+                lease_duration=timedelta(seconds=10),
+                lease_renew_interval_seconds=0,
+                shutdown_grace_seconds=30,
+                enabled_job_types=None,
+                worker_instance_id="worker-1",
+            )
+        )
+    with pytest.raises(WorkerStartupError):
+        run_startup_checks(
+            WorkerConfig(
+                poll_interval_seconds=1,
+                batch_size=1,
+                lease_duration=timedelta(seconds=10),
+                lease_renew_interval_seconds=1,
+                shutdown_grace_seconds=0,
                 enabled_job_types=None,
                 worker_instance_id="worker-1",
             )
