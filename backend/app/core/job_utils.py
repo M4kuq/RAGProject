@@ -192,8 +192,10 @@ def _is_safe_payload_key(key: str, value: object) -> bool:
     if key.endswith("_id"):
         return isinstance(value, int)
     if key.endswith("_ids"):
-        return isinstance(value, Sequence) and not isinstance(value, str) and all(
-            isinstance(item, int) for item in value
+        return (
+            isinstance(value, Sequence)
+            and not isinstance(value, str)
+            and all(isinstance(item, int) for item in value)
         )
     if key.endswith("_count"):
         return isinstance(value, int)
