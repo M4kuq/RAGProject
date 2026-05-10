@@ -123,11 +123,7 @@ def test_jobs_list_and_detail_return_redacted_payload(
     assert r"C:\Users\kei01" not in detail.text
     body = detail.json()
     assert body["data"]["payload_view"]["payload"]["api_token"] == "[REDACTED]"
-    assert body["data"]["result_json"] == {
-        "handled": True,
-        "content": "[REDACTED]",
-        "storage_key": "[REDACTED]",
-    }
+    assert body["data"]["result_json"] == {"handled": True}
     assert body["data"]["error_message"] == "Job failed with a redacted error."
     assert body["data"]["payload_view"]["payload_redacted"] is True
     assert body["data"]["source_job_id"] is None
