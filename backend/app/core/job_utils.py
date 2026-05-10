@@ -189,22 +189,24 @@ def _looks_like_secret(value: str) -> bool:
 
 
 def _is_safe_payload_key(key: str, value: object) -> bool:
-    if key.endswith("_id") and isinstance(value, int):
-        return True
-    if key.endswith("_ids") and isinstance(value, Sequence) and not isinstance(value, str):
-        return all(isinstance(item, int) for item in value)
-    if key.endswith("_count") and isinstance(value, int):
-        return True
+    if key.endswith("_id"):
+        return isinstance(value, int)
+    if key.endswith("_ids"):
+        return isinstance(value, Sequence) and not isinstance(value, str) and all(
+            isinstance(item, int) for item in value
+        )
+    if key.endswith("_count"):
+        return isinstance(value, int)
     if key in _SAFE_PAYLOAD_KEYS:
         return _is_safe_scalar(value)
     return False
 
 
 def _is_safe_result_key(key: str, value: object) -> bool:
-    if key.endswith("_id") and isinstance(value, int):
-        return True
-    if key.endswith("_count") and isinstance(value, int):
-        return True
+    if key.endswith("_id"):
+        return isinstance(value, int)
+    if key.endswith("_count"):
+        return isinstance(value, int)
     if key in _SAFE_RESULT_KEYS:
         return _is_safe_scalar(value)
     return False
