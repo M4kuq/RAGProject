@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Select, and_, func, or_, select
+from collections.abc import Mapping, Sequence
+
+from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
@@ -94,6 +96,20 @@ class DocumentRepository:
                 DocumentVersion.content_hash == content_hash,
             )
         )
+
+    def get_version_by_id(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        for_update: bool = False,
+    ) -> DocumentVersion | None:
+        statement = select(DocumentVersion).where(
+            DocumentVersion.document_version_id == document_version_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return db.scalar(statement)
 
     def max_version_no(self, db: Session, *, logical_document_id: int) -> int:
         return (
@@ -193,6 +209,66 @@ class DocumentRepository:
             )
             or 0
         )
+
+    def delete_chunks(self, db: Session, *, document_version_id: int) -> int:
+        result = db.execute(
+            delete(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
+
+    def bulk_insert_chunks(
+        self,
+        db: Session,
+        *,
+        chunks: Sequence[Mapping[str, object]],
+    ) -> None:
+        if not chunks:
+            return
+        db.execute(insert(DocumentChunk), list(chunks))
+        db.flush()
+
+    def update_ingest_metadata(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        page_count: int | None,
+        extractor_name: str,
+        extractor_version: str,
+        updated_at: datetime,
+    ) -> None:
+        version.page_count = page_count
+        version.extractor_name = extractor_name
+        version.extractor_version = extractor_version
+        version.status = "processing"
+        version.error_code = None
+        version.updated_at = updated_at
+        db.flush()
+
+    def reset_version_for_ingest(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        updated_at: datetime,
+    ) -> None:
+        version.status = "processing"
+        version.error_code = None
+        version.updated_at = updated_at
+        db.flush()
+
+    def mark_version_failed(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        error_code: str,
+        updated_at: datetime,
+    ) -> None:
+        version.status = "failed"
+        version.error_code = error_code
+        version.updated_at = updated_at
+        db.flush()
 
     def chunk_counts_by_version_ids(
         self, db: Session, *, document_version_ids: list[int]

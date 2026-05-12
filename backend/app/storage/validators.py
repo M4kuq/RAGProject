@@ -40,6 +40,10 @@ _MIME_TYPES_BY_EXTENSION = {
     ".markdown": {"text/markdown", "text/plain", "application/octet-stream"},
     ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"},
 }
+_DOCX_MAX_ZIP_ENTRIES = 200
+_DOCX_MAX_UNCOMPRESSED_BYTES = 10 * 1024 * 1024
+_DOCX_MAX_DOCUMENT_XML_BYTES = 5 * 1024 * 1024
+_DOCX_MAX_COMPRESSION_RATIO = 100
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,14 @@ def safe_title_from_file_name(filename: str) -> str:
     return stem or filename
 
 
+def extension_from_file_name(filename: str) -> str:
+    return _extension(sanitize_file_name(filename))
+
+
+def allowed_mime_types_for_extension(extension: str) -> set[str]:
+    return set(_MIME_TYPES_BY_EXTENSION.get(extension.lower(), {"application/octet-stream"}))
+
+
 def _extension(filename: str) -> str:
     if "." not in filename:
         raise UnsupportedMediaType()
@@ -133,15 +145,47 @@ def _validate_magic_bytes(extension: str, content: bytes) -> None:
             raise UnsafeFileRejected()
         try:
             with zipfile.ZipFile(BytesIO(content)) as archive:
-                if "word/document.xml" not in archive.namelist():
-                    raise UnsafeFileRejected()
+                _validate_docx_archive(archive)
         except zipfile.BadZipFile as exc:
             raise UnsafeFileRejected() from exc
         return
     if extension in {".txt", ".md", ".markdown", ".csv"}:
         if b"\x00" in content:
             raise UnsafeFileRejected()
-        try:
-            content.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise UnsafeFileRejected() from exc
+        for encoding in ("utf-8", "utf-8-sig", "cp932"):
+            try:
+                content.decode(encoding)
+                return
+            except UnicodeDecodeError:
+                continue
+        raise UnsafeFileRejected()
+
+
+def _validate_docx_archive(archive: zipfile.ZipFile) -> None:
+    infos = archive.infolist()
+    if not infos or len(infos) > _DOCX_MAX_ZIP_ENTRIES:
+        raise UnsafeFileRejected()
+
+    total_uncompressed = 0
+    document_xml_size: int | None = None
+    for info in infos:
+        name = info.filename
+        if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
+            raise UnsafeFileRejected()
+        if info.flag_bits & 0x1:
+            raise UnsafeFileRejected()
+        total_uncompressed += info.file_size
+        if total_uncompressed > _DOCX_MAX_UNCOMPRESSED_BYTES:
+            raise UnsafeFileRejected()
+        if info.compress_size == 0 and info.file_size > 0:
+            raise UnsafeFileRejected()
+        if (
+            info.compress_size > 0
+            and info.file_size / info.compress_size > _DOCX_MAX_COMPRESSION_RATIO
+        ):
+            raise UnsafeFileRejected()
+        if name == "word/document.xml":
+            document_xml_size = info.file_size
+
+    if document_xml_size is None or document_xml_size > _DOCX_MAX_DOCUMENT_XML_BYTES:
+        raise UnsafeFileRejected()

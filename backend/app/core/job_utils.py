@@ -29,6 +29,7 @@ _SENSITIVE_KEY_PARTS = (
     "url",
     "dsn",
 )
+_SECRET_KEY_PARTS = ("password", "secret", "token", "credential", "cookie", "csrf")
 _SAFE_RESULT_KEYS = frozenset(
     {
         "status",
@@ -37,6 +38,8 @@ _SAFE_RESULT_KEYS = frozenset(
         "handled",
         "document_version_id",
         "logical_document_id",
+        "chunk_count",
+        "page_count",
         "evaluation_run_id",
         "message_id",
         "mirror_action",
@@ -166,6 +169,10 @@ def _redact_value(value: object, *, key: str | None) -> object:
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
+    if lowered.endswith(("_id", "_ids", "_count")) and not any(
+        part in lowered for part in _SECRET_KEY_PARTS
+    ):
+        return False
     return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
 
 
@@ -184,24 +191,28 @@ def _looks_like_secret(value: str) -> bool:
 
 
 def _is_safe_payload_key(key: str, value: object) -> bool:
+    if key.endswith("_id"):
+        return isinstance(value, int)
+    if key.endswith("_ids"):
+        return (
+            isinstance(value, Sequence)
+            and not isinstance(value, str)
+            and all(isinstance(item, int) for item in value)
+        )
+    if key.endswith("_count"):
+        return isinstance(value, int)
     if key in _SAFE_PAYLOAD_KEYS:
         return _is_safe_scalar(value)
-    if key.endswith("_id") and isinstance(value, int):
-        return True
-    if key.endswith("_ids") and isinstance(value, Sequence) and not isinstance(value, str):
-        return all(isinstance(item, int) for item in value)
-    if key.endswith("_count") and isinstance(value, int):
-        return True
     return False
 
 
 def _is_safe_result_key(key: str, value: object) -> bool:
+    if key.endswith("_id"):
+        return isinstance(value, int)
+    if key.endswith("_count"):
+        return isinstance(value, int)
     if key in _SAFE_RESULT_KEYS:
         return _is_safe_scalar(value)
-    if key.endswith("_id") and isinstance(value, int):
-        return True
-    if key.endswith("_count") and isinstance(value, int):
-        return True
     return False
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
@@ -124,6 +125,8 @@ class DocumentService:
         )
         content_hash = hashlib.sha256(content).hexdigest()
         storage_key = self.storage.build_storage_key(file_name=upload.file_name)
+        storage_saved = False
+        committed = False
         try:
             document = self.repository.create_logical_document(
                 db,
@@ -142,6 +145,7 @@ class DocumentService:
                 created_by=user.user_id,
             )
             self.storage.save_bytes(storage_key=storage_key, content=content)
+            storage_saved = True
             job = self._create_ingest_job(db, user=user, document=document, version=version)
             audit(
                 db,
@@ -158,11 +162,15 @@ class DocumentService:
                 },
             )
             db.commit()
+            committed = True
             db.refresh(document)
             db.refresh(version)
             db.refresh(job)
         except Exception:
             db.rollback()
+            if storage_saved and not committed:
+                with suppress(Exception):
+                    self.storage.delete(storage_key=storage_key)
             raise
         document_item = self._document_items(db, [document])[0]
         version_detail = self._version_detail(document, version, chunk_count=0)
@@ -188,6 +196,9 @@ class DocumentService:
         content: bytes,
         request_id: str | None,
     ) -> tuple[DocumentVersionCreateResponse, bool]:
+        storage_key: str | None = None
+        storage_saved = False
+        committed = False
         try:
             document = self.repository.get_document(
                 db, logical_document_id=logical_document_id, for_update=True
@@ -256,6 +267,7 @@ class DocumentService:
             )
             self.repository.touch_document(db, document=document, updated_at=now)
             self.storage.save_bytes(storage_key=storage_key, content=content)
+            storage_saved = True
             job = self._create_ingest_job(db, user=user, document=document, version=version)
             audit(
                 db,
@@ -273,10 +285,14 @@ class DocumentService:
                 },
             )
             db.commit()
+            committed = True
             db.refresh(version)
             db.refresh(job)
         except Exception:
             db.rollback()
+            if storage_saved and storage_key is not None and not committed:
+                with suppress(Exception):
+                    self.storage.delete(storage_key=storage_key)
             raise
         return (
             DocumentVersionCreateResponse(
@@ -644,13 +660,14 @@ class DocumentService:
         )
 
     def _chunk_item(self, chunk: DocumentChunk) -> DocumentChunkItem:
-        preview = chunk.content_text[:MAX_CHUNK_PREVIEW_LENGTH]
+        preview_length = min(get_settings().ingest_chunk_preview_chars, MAX_CHUNK_PREVIEW_LENGTH)
+        preview = chunk.content_text[:preview_length]
         return DocumentChunkItem(
             document_chunk_id=chunk.document_chunk_id,
             document_version_id=chunk.document_version_id,
             chunk_index=chunk.chunk_index,
             preview=preview,
-            preview_truncated=len(chunk.content_text) > MAX_CHUNK_PREVIEW_LENGTH,
+            preview_truncated=len(chunk.content_text) > preview_length,
             page_from=chunk.page_from,
             page_to=chunk.page_to,
             section_title=chunk.section_title,

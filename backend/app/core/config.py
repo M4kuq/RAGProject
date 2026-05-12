@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     storage_root: Path = Path("storage/uploads")
     upload_max_bytes: int = 20 * 1024 * 1024
     upload_allowed_extensions: list[str] = Field(
-        default_factory=lambda: [".pdf", ".docx", ".txt", ".md", ".csv"]
+        default_factory=lambda: [".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"]
     )
     temp_chat_ttl_minutes: int = 120
     job_lease_seconds: int = 300
@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     worker_shutdown_grace_seconds: int = Field(default=30, ge=1)
     worker_enabled_job_types: str = "all"
     worker_instance_name: str | None = None
+    ingest_chunk_size_tokens: int = Field(default=512, ge=1)
+    ingest_chunk_overlap_tokens: int = Field(default=128, ge=0)
+    ingest_max_extracted_text_chars: int = Field(default=5_000_000, ge=1)
+    ingest_chunk_preview_chars: int = Field(default=200, ge=1, le=2000)
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"
@@ -83,6 +87,10 @@ class Settings(BaseSettings):
     def validate_security_settings(self) -> Self:
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE=true is required when SameSite=None")
+        if self.ingest_chunk_overlap_tokens >= self.ingest_chunk_size_tokens:
+            raise ValueError(
+                "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
+            )
 
         if self.app_env.lower() not in {"local", "ci", "test"}:
             weak_values = {

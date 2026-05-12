@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -14,6 +15,7 @@ from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import AuditLog, DocumentVersion, Job, LogicalDocument, Role, User
 from app.repositories.document_repository import DocumentRepository
+from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationParams
 from app.services.document_service import DocumentService
 from app.storage.file_storage import LocalFileStorage
@@ -27,7 +29,10 @@ def document_session_factory(
 ) -> Iterator[tuple[sessionmaker[Session], Path]]:
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "1024")
-    monkeypatch.setenv("UPLOAD_ALLOWED_EXTENSIONS", '[".pdf",".docx",".txt",".md",".csv"]')
+    monkeypatch.setenv(
+        "UPLOAD_ALLOWED_EXTENSIONS",
+        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+    )
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -188,3 +193,146 @@ def test_document_service_repository_upload_duplicate_approve_archive(
                 logical_document_id=logical_document_id,
                 document_version_id=document_version_id + 999,
             )
+
+
+def test_document_repository_ingest_chunk_cleanup_and_metadata_updates(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        created = service.upload_document(
+            db,
+            user=user,
+            title="Repository ingest",
+            filename="repository.txt",
+            content_type="text/plain",
+            content=b"repository ingest content",
+            request_id="repo-ingest-create",
+        )
+        document_version_id = created.document_version_id
+        db.commit()
+
+        repository.bulk_insert_chunks(
+            db,
+            chunks=[
+                _chunk_row(document_version_id, 0, "alpha beta", "a"),
+                _chunk_row(document_version_id, 1, "gamma delta", "b"),
+            ],
+        )
+        db.commit()
+        assert repository.count_chunks(db, document_version_id=document_version_id) == 2
+
+        with pytest.raises(IntegrityError):
+            repository.bulk_insert_chunks(
+                db,
+                chunks=[_chunk_row(document_version_id, 1, "duplicate", "c")],
+            )
+            db.commit()
+        db.rollback()
+        assert repository.count_chunks(db, document_version_id=document_version_id) == 2
+
+        assert repository.delete_chunks(db, document_version_id=document_version_id) == 2
+        repository.bulk_insert_chunks(
+            db,
+            chunks=[_chunk_row(document_version_id, 0, "retry content", "d")],
+        )
+        version = repository.get_version_by_id(
+            db, document_version_id=document_version_id, for_update=True
+        )
+        assert version is not None
+        repository.update_ingest_metadata(
+            db,
+            version=version,
+            page_count=3,
+            extractor_name="plain_text",
+            extractor_version="1",
+            updated_at=version.updated_at,
+        )
+        db.commit()
+
+        updated = db.get(DocumentVersion, document_version_id)
+        assert updated is not None
+        assert updated.status == "processing"
+        assert updated.error_code is None
+        assert updated.page_count == 3
+        assert updated.extractor_name == "plain_text"
+        assert repository.count_chunks(db, document_version_id=document_version_id) == 1
+
+        repository.mark_version_failed(
+            db,
+            version=updated,
+            error_code="text_extraction_failed",
+            updated_at=updated.updated_at,
+        )
+        assert repository.delete_chunks(db, document_version_id=document_version_id) == 1
+        db.commit()
+
+        failed = db.get(DocumentVersion, document_version_id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "text_extraction_failed"
+        assert repository.count_chunks(db, document_version_id=document_version_id) == 0
+
+
+def test_document_service_upload_cleans_storage_when_db_flow_fails(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(
+        job_repository=_FailingJobRepository(),
+        storage=LocalFileStorage(storage_root),
+    )
+
+    with session_factory() as db:
+        user = admin_user(db)
+        with pytest.raises(RuntimeError):
+            service.upload_document(
+                db,
+                user=user,
+                title="Cleanup",
+                filename="cleanup.txt",
+                content_type="text/plain",
+                content=b"cleanup content",
+                request_id="storage-cleanup",
+            )
+
+    assert [path for path in storage_root.rglob("*") if path.is_file()] == []
+
+
+def _chunk_row(
+    document_version_id: int,
+    chunk_index: int,
+    content_text: str,
+    hash_prefix: str,
+) -> dict[str, object]:
+    return {
+        "document_version_id": document_version_id,
+        "chunk_index": chunk_index,
+        "chunk_hash": hash_prefix * 64,
+        "content_text": content_text,
+        "token_count": len(content_text.split()),
+        "char_count": len(content_text),
+        "page_from": None,
+        "page_to": None,
+        "section_title": None,
+        "modality": "text",
+    }
+
+
+class _FailingJobRepository(JobRepository):
+    def create_job(
+        self,
+        db: Session,
+        *,
+        job_type: str,
+        target_type: str | None = None,
+        target_id: int | None = None,
+        payload_json: dict[str, object] | None = None,
+        created_by: int | None = None,
+        priority: int = 100,
+    ) -> Job:
+        raise RuntimeError("synthetic job creation failure")
