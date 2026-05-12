@@ -21,9 +21,7 @@ class CsvExtractor:
     name = "csv"
     version = CSV_EXTRACTOR_VERSION
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument:
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument:
         text, encoding = decode_text_file(file_path)
         text = text.lstrip("\ufeff")
         rows = csv_rows_to_text(text)

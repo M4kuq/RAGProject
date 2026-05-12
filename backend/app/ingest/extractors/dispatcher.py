@@ -44,4 +44,3 @@ class ExtractorDispatcher:
 
     def select_for_path(self, file_path: Path, *, mime_type: str) -> TextExtractor:
         return self.select(file_name=file_path.name, mime_type=mime_type)
-

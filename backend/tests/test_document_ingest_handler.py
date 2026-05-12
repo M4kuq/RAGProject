@@ -295,6 +295,7 @@ def test_document_ingest_handler_chunking_zero_failure_cleans_partial_chunks(
 
     handler = DocumentIngestHandler(
         session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
         storage=storage,
         dispatcher=cast(ExtractorDispatcher, _WhitespaceDispatcher()),
         settings=get_settings(),
@@ -523,17 +524,11 @@ def test_worker_single_iteration_processes_document_ingest_success_and_failure(
             "document_version_id": success_version_id,
             "logical_document_id": 1,
             "chunk_count": 2,
-            "page_count": None,
             "status": "processing",
         }
         assert jobs[2].status == "failed"
         assert jobs[2].error_code == "storage_file_missing"
-        assert (
-            db.query(DocumentChunk)
-            .filter_by(document_version_id=success_version_id)
-            .count()
-            > 0
-        )
+        assert db.query(DocumentChunk).filter_by(document_version_id=success_version_id).count() > 0
         failed_version = db.get(DocumentVersion, failure_version_id)
         assert failed_version is not None
         assert failed_version.status == "failed"
@@ -599,9 +594,7 @@ def _handler(
 ) -> DocumentIngestHandler:
     return DocumentIngestHandler(
         session_factory=session_factory,
-        job_repository=None
-        if enforce_lease
-        else cast(JobRepository, _NoopJobRepository()),
+        job_repository=None if enforce_lease else cast(JobRepository, _NoopJobRepository()),
         storage=storage,
         settings=get_settings(),
     )
@@ -672,11 +665,8 @@ def _assert_failed_version(
         assert version.status == "failed"
         assert version.error_code == error_code
         assert (
-            db.query(DocumentChunk)
-            .filter_by(document_version_id=document_version_id)
-            .count()
-            == 0
-    )
+            db.query(DocumentChunk).filter_by(document_version_id=document_version_id).count() == 0
+        )
 
 
 class _NoopJobRepository:
@@ -703,7 +693,7 @@ def _docx_bytes(tmp_path: Path) -> bytes:
     path = tmp_path / "fixture.docx"
     document = Document()
     document.add_paragraph("alpha beta gamma delta")
-    document.save(path)
+    document.save(str(path))
     return path.read_bytes()
 
 
@@ -732,8 +722,7 @@ def _minimal_pdf(text: str) -> bytes:
         content.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     content.extend(
         (
-            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\n"
-            f"startxref\n{xref_offset}\n%%EOF\n"
+            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\nstartxref\n{xref_offset}\n%%EOF\n"
         ).encode("ascii")
     )
     return bytes(content)

@@ -19,9 +19,7 @@ class PlainTextExtractor:
     name = "plain_text"
     version = TEXT_EXTRACTOR_VERSION
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument:
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument:
         text, encoding = decode_text_file(file_path)
         text = text.lstrip("\ufeff")
         pages = [ExtractedPage(text=text, page_number=None)]
@@ -45,4 +43,3 @@ def decode_text_file(file_path: Path) -> tuple[str, str]:
         except UnicodeDecodeError:
             continue
     raise ExtractionError("text_extraction_failed", "Text extraction failed.")
-

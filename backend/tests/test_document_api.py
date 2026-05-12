@@ -206,10 +206,7 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
         assert ingest_job is not None
         assert ingest_job.status == "succeeded"
         assert (
-            db.query(DocumentChunk)
-            .filter_by(document_version_id=document_version_id)
-            .count()
-            > 0
+            db.query(DocumentChunk).filter_by(document_version_id=document_version_id).count() > 0
         )
 
     duplicate = client.post(

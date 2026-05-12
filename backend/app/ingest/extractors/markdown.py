@@ -20,9 +20,7 @@ class MarkdownExtractor:
     name = "markdown"
     version = MARKDOWN_EXTRACTOR_VERSION
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument:
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument:
         text, encoding = decode_text_file(file_path)
         text = text.lstrip("\ufeff")
         pages = markdown_sections(text)
@@ -67,4 +65,3 @@ def markdown_sections(text: str) -> list[ExtractedPage]:
             )
         )
     return [page for page in pages if page.text.strip()]
-

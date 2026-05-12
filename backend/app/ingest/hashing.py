@@ -15,4 +15,3 @@ def chunk_hash(
 ) -> str:
     payload = f"{normalized_chunk_text}{document_version_id}{chunk_index}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-

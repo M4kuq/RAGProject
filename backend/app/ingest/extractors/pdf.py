@@ -20,9 +20,7 @@ class PdfTextExtractor:
     name = "pdf_text_layer"
     version = PDF_EXTRACTOR_VERSION
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument:
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument:
         try:
             reader = PdfReader(str(file_path))
             pages = [
@@ -40,4 +38,3 @@ class PdfTextExtractor:
                 page_count=len(pages),
             ),
         )
-

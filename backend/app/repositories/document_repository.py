@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 
 from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased

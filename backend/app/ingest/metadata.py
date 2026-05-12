@@ -20,4 +20,3 @@ def metadata_from_extracted_document(document: ExtractedDocument) -> DocumentIng
         extractor_version=document.metadata.extractor_version,
         text_char_count=document.text_char_count,
     )
-

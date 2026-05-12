@@ -20,9 +20,7 @@ class DocxExtractor:
     name = "docx"
     version = DOCX_EXTRACTOR_VERSION
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument:
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument:
         try:
             document = Document(str(file_path))
             lines = [paragraph.text.strip() for paragraph in document.paragraphs]
@@ -45,4 +43,3 @@ class DocxExtractor:
                 page_count=None,
             ),
         )
-

@@ -91,9 +91,7 @@ class DocumentIngestHandler:
                 }
             )
         if snapshot.storage_key is None:
-            return self._fail_version(
-                context, snapshot.document_version_id, "storage_file_missing"
-            )
+            return self._fail_version(context, snapshot.document_version_id, "storage_file_missing")
 
         try:
             if not self.storage.exists(storage_key=snapshot.storage_key):
@@ -171,9 +169,7 @@ class DocumentIngestHandler:
                     job_id=context.job_id,
                     worker_instance_id=context.worker_instance_id,
                 )
-                self.repository.reset_version_for_ingest(
-                    db, version=version, updated_at=_now()
-                )
+                self.repository.reset_version_for_ingest(db, version=version, updated_at=_now())
             db.commit()
             return snapshot
         except LeaseLostError:
@@ -225,9 +221,7 @@ class DocumentIngestHandler:
         chunks: list[Chunk],
     ) -> JobHandlerResult:
         if not chunks:
-            return self._fail_version(
-                context, snapshot.document_version_id, "no_chunks_created"
-            )
+            return self._fail_version(context, snapshot.document_version_id, "no_chunks_created")
         db = self.session_factory()
         try:
             version = self.repository.get_version_by_id(

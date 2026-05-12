@@ -26,7 +26,7 @@ from app.storage.validators import validate_upload
 def test_text_extractor_decodes_utf8_utf8_sig_and_cp932(tmp_path: Path) -> None:
     extractor = PlainTextExtractor()
     cases = [
-        ("utf8.txt", "hello utf8".encode("utf-8"), "hello utf8"),
+        ("utf8.txt", b"hello utf8", "hello utf8"),
         ("bom.txt", "\ufeffhello bom".encode("utf-8"), "hello bom"),
         ("cp932.txt", b"\x82\xa0", "\u3042"),
     ]
@@ -92,7 +92,7 @@ def test_docx_extraction_includes_paragraphs_and_tables(tmp_path: Path) -> None:
     table = document.add_table(rows=1, cols=2)
     table.cell(0, 0).text = "A"
     table.cell(0, 1).text = "B"
-    document.save(path)
+    document.save(str(path))
 
     extracted = DocxExtractor().extract(
         path,
@@ -143,8 +143,7 @@ def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.M
     dispatcher = ExtractorDispatcher()
 
     assert (
-        dispatcher.select(file_name="a.pdf", mime_type="application/pdf").name
-        == "pdf_text_layer"
+        dispatcher.select(file_name="a.pdf", mime_type="application/pdf").name == "pdf_text_layer"
     )
     assert dispatcher.select(file_name="a.markdown", mime_type="text/markdown").name == "markdown"
 
@@ -271,8 +270,7 @@ def _minimal_pdf(text: str) -> bytes:
         content.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     content.extend(
         (
-            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\n"
-            f"startxref\n{xref_offset}\n%%EOF\n"
+            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\nstartxref\n{xref_offset}\n%%EOF\n"
         ).encode("ascii")
     )
     return bytes(content)

@@ -41,9 +41,7 @@ class TextExtractor(Protocol):
     name: str
     version: str
 
-    def extract(
-        self, file_path: Path, metadata: ExtractionInputMetadata
-    ) -> ExtractedDocument: ...
+    def extract(self, file_path: Path, metadata: ExtractionInputMetadata) -> ExtractedDocument: ...
 
 
 class ExtractionError(RuntimeError):
@@ -60,4 +58,3 @@ def ensure_non_empty_text(pages: list[ExtractedPage]) -> None:
 
 def safe_extraction_failure() -> ExtractionError:
     return ExtractionError("text_extraction_failed", "Text extraction failed.")
-
