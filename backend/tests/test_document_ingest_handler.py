@@ -140,6 +140,7 @@ def test_document_ingest_handler_missing_storage_file_fails_safely(
         mime_type="text/plain",
         content=None,
     )
+    _set_stale_ingest_metadata(session_factory, version_id)
 
     result = _handler(session_factory, storage).handle(_context(version_id))
 
@@ -664,9 +665,24 @@ def _assert_failed_version(
         assert version is not None
         assert version.status == "failed"
         assert version.error_code == error_code
+        assert version.page_count is None
+        assert version.extractor_name is None
+        assert version.extractor_version is None
         assert (
             db.query(DocumentChunk).filter_by(document_version_id=document_version_id).count() == 0
         )
+
+
+def _set_stale_ingest_metadata(
+    session_factory: sessionmaker[Session], document_version_id: int
+) -> None:
+    with session_factory() as db:
+        version = db.get(DocumentVersion, document_version_id)
+        assert version is not None
+        version.page_count = 99
+        version.extractor_name = "stale"
+        version.extractor_version = "stale"
+        db.commit()
 
 
 class _NoopJobRepository:

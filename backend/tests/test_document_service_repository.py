@@ -275,7 +275,58 @@ def test_document_repository_ingest_chunk_cleanup_and_metadata_updates(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "text_extraction_failed"
+        assert failed.page_count is None
+        assert failed.extractor_name is None
+        assert failed.extractor_version is None
         assert repository.count_chunks(db, document_version_id=document_version_id) == 0
+
+
+def test_document_repository_retry_reset_clears_stale_ingest_metadata(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        created = service.upload_document(
+            db,
+            user=user,
+            title="Retry metadata",
+            filename="retry-metadata.txt",
+            content_type="text/plain",
+            content=b"retry metadata content",
+            request_id="repo-ingest-metadata-reset",
+        )
+        version = repository.get_version_by_id(
+            db, document_version_id=created.document_version_id, for_update=True
+        )
+        assert version is not None
+        repository.update_ingest_metadata(
+            db,
+            version=version,
+            page_count=4,
+            extractor_name="plain_text",
+            extractor_version="1",
+            updated_at=version.updated_at,
+        )
+        db.commit()
+
+        stale = repository.get_version_by_id(
+            db, document_version_id=created.document_version_id, for_update=True
+        )
+        assert stale is not None
+        repository.reset_version_for_ingest(db, version=stale, updated_at=stale.updated_at)
+        db.commit()
+
+        reset = db.get(DocumentVersion, created.document_version_id)
+        assert reset is not None
+        assert reset.status == "processing"
+        assert reset.error_code is None
+        assert reset.page_count is None
+        assert reset.extractor_name is None
+        assert reset.extractor_version is None
 
 
 def test_document_service_upload_cleans_storage_when_db_flow_fails(

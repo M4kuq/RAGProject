@@ -253,6 +253,9 @@ class DocumentRepository:
     ) -> None:
         version.status = "processing"
         version.error_code = None
+        version.page_count = None
+        version.extractor_name = None
+        version.extractor_version = None
         version.updated_at = updated_at
         db.flush()
 
@@ -266,6 +269,9 @@ class DocumentRepository:
     ) -> None:
         version.status = "failed"
         version.error_code = error_code
+        version.page_count = None
+        version.extractor_name = None
+        version.extractor_version = None
         version.updated_at = updated_at
         db.flush()
 
