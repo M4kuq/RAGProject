@@ -38,6 +38,8 @@ _SAFE_RESULT_KEYS = frozenset(
         "handled",
         "document_version_id",
         "logical_document_id",
+        "chunk_count",
+        "page_count",
         "evaluation_run_id",
         "message_id",
         "mirror_action",

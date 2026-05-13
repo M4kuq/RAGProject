@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -17,6 +18,11 @@ from app.db.base import Base
 from app.db.models import AuditLog, DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
 from app.db.session import get_db
 from app.main import create_app
+from app.storage.file_storage import LocalFileStorage
+from app.workers.handlers.document_ingest_handler import DocumentIngestHandler
+from app.workers.job_dispatcher import JobDispatcher
+from app.workers.worker_config import WorkerConfig
+from app.workers.worker_main import WorkerRunner
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -28,7 +34,10 @@ def document_client(
 ) -> Iterator[tuple[TestClient, sessionmaker[Session], Path]]:
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "64")
-    monkeypatch.setenv("UPLOAD_ALLOWED_EXTENSIONS", '[".pdf",".docx",".txt",".md",".csv"]')
+    monkeypatch.setenv(
+        "UPLOAD_ALLOWED_EXTENSIONS",
+        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+    )
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -117,6 +126,7 @@ def assert_no_sensitive_document_fields(payload: Any) -> None:
 
 def test_document_api_upload_duplicate_approve_archive_and_chunks(
     document_client: tuple[TestClient, sessionmaker[Session], Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, session_factory, storage_root = document_client
 
@@ -170,6 +180,35 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
             "requested_by_user_id": document.owner_user_id,
         }
 
+    runner = WorkerRunner(
+        config=WorkerConfig(
+            poll_interval_seconds=0,
+            batch_size=1,
+            lease_duration=timedelta(minutes=5),
+            lease_renew_interval_seconds=60,
+            shutdown_grace_seconds=30,
+            enabled_job_types=frozenset({"document_ingest"}),
+            worker_instance_id="worker-1",
+        ),
+        session_factory=session_factory,
+        dispatcher=JobDispatcher(
+            {
+                "document_ingest": DocumentIngestHandler(
+                    session_factory=session_factory,
+                    storage=LocalFileStorage(storage_root),
+                )
+            }
+        ),
+    )
+    assert runner.run_once() == 1
+    with session_factory() as db:
+        ingest_job = db.get(Job, upload_body["data"]["job_id"])
+        assert ingest_job is not None
+        assert ingest_job.status == "succeeded"
+        assert (
+            db.query(DocumentChunk).filter_by(document_version_id=document_version_id).count() > 0
+        )
+
     duplicate = client.post(
         f"/api/v1/documents/{logical_document_id}/versions",
         files={"file": ("guide.md", content, "text/markdown")},
@@ -187,6 +226,7 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
         version = db.get(DocumentVersion, document_version_id)
         assert version is not None
         version.status = "ready"
+        db.query(DocumentChunk).filter_by(document_version_id=document_version_id).delete()
         db.add(
             DocumentChunk(
                 document_version_id=document_version_id,
@@ -229,6 +269,8 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
     assert approve_again.status_code == 200
     assert approve_again.json()["data"]["result_code"] == "already_active"
 
+    monkeypatch.setenv("INGEST_CHUNK_PREVIEW_CHARS", "500")
+    get_settings.cache_clear()
     chunks = client.get(
         f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/chunks"
     )
@@ -268,6 +310,55 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
     )
     assert archived_version_add.status_code == 409
     assert archived_version_add.json()["error"]["code"] == "document_archived"
+
+
+def test_document_api_upload_markdown_extension_cp932_and_worker_ingest(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, storage_root = document_client
+    csrf_token = login(client, email="admin@example.com")
+    content = "# Title\n".encode("cp932") + b"\x82\xa0\n"
+
+    upload = client.post(
+        "/api/v1/documents",
+        data={"title": "Markdown CP932"},
+        files={"file": ("guide.markdown", content, "text/markdown")},
+        headers=unsafe_headers(csrf_token),
+    )
+
+    assert upload.status_code == 201
+    body = upload.json()["data"]
+    runner = WorkerRunner(
+        config=WorkerConfig(
+            poll_interval_seconds=0,
+            batch_size=1,
+            lease_duration=timedelta(minutes=5),
+            lease_renew_interval_seconds=60,
+            shutdown_grace_seconds=30,
+            enabled_job_types=frozenset({"document_ingest"}),
+            worker_instance_id="worker-1",
+        ),
+        session_factory=session_factory,
+        dispatcher=JobDispatcher(
+            {
+                "document_ingest": DocumentIngestHandler(
+                    session_factory=session_factory,
+                    storage=LocalFileStorage(storage_root),
+                )
+            }
+        ),
+    )
+    assert runner.run_once() == 1
+    with session_factory() as db:
+        job = db.get(Job, body["job_id"])
+        assert job is not None
+        assert job.status == "succeeded"
+        assert (
+            db.query(DocumentChunk)
+            .filter_by(document_version_id=body["document_version_id"])
+            .count()
+            > 0
+        )
 
 
 def test_document_api_upload_validation_errors(

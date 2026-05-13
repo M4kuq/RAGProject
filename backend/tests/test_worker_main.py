@@ -487,17 +487,9 @@ def test_worker_skips_terminal_update_when_heartbeat_loses_lease(
         assert stored_job.error_code is None
 
 
-def test_default_dispatcher_returns_stub_results() -> None:
+def test_default_dispatcher_returns_stub_results_for_remaining_pr09_handlers() -> None:
     dispatcher = JobDispatcher()
     cases = [
-        JobExecutionContext(
-            job_id=1,
-            job_type="document_ingest",
-            target_type="document_version",
-            target_id=1,
-            payload={"document_version_id": 1},
-            worker_instance_id="worker-1",
-        ),
         JobExecutionContext(
             job_id=2,
             job_type="qdrant_mirror_update",

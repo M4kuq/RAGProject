@@ -20,6 +20,17 @@ class LocalFileStorage:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
 
+    def resolve_path(self, *, storage_key: str) -> Path:
+        return self._safe_path(storage_key)
+
+    def exists(self, *, storage_key: str) -> bool:
+        return self._safe_path(storage_key).is_file()
+
+    def delete(self, *, storage_key: str) -> None:
+        target = self._safe_path(storage_key)
+        if target.is_file():
+            target.unlink()
+
     def _safe_path(self, storage_key: str) -> Path:
         key_path = PurePosixPath(storage_key)
         if key_path.is_absolute() or ".." in key_path.parts:
