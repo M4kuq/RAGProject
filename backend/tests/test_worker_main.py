@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import get_settings
 from app.core.job_utils import (
     LeaseLostError,
     redact_error_message,
@@ -17,10 +18,23 @@ from app.core.job_utils import (
     sanitize_result_json,
 )
 from app.db.base import Base
-from app.db.models import Job
+from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument
+from app.ingest.embedding import (
+    DocumentEmbeddingService,
+    EmbeddingBatchConfig,
+    FakeEmbeddingAdapter,
+)
+from app.ingest.qdrant import (
+    DocumentIndexingService,
+    InMemoryQdrantClient,
+    QdrantCollectionConfig,
+    QdrantPoint,
+    QdrantVectorStore,
+)
 from app.repositories.job_repository import JobRepository
 from app.workers import worker_main
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
+from app.workers.handlers.qdrant_mirror_update_handler import QdrantMirrorUpdateHandler
 from app.workers.job_dispatcher import JobDispatcher
 from app.workers.startup_checks import WorkerStartupError, run_startup_checks
 from app.workers.worker_config import (
@@ -487,25 +501,9 @@ def test_worker_skips_terminal_update_when_heartbeat_loses_lease(
         assert stored_job.error_code is None
 
 
-def test_default_dispatcher_returns_stub_results() -> None:
+def test_default_dispatcher_returns_stub_results_for_remaining_pr09_handlers() -> None:
     dispatcher = JobDispatcher()
     cases = [
-        JobExecutionContext(
-            job_id=1,
-            job_type="document_ingest",
-            target_type="document_version",
-            target_id=1,
-            payload={"document_version_id": 1},
-            worker_instance_id="worker-1",
-        ),
-        JobExecutionContext(
-            job_id=2,
-            job_type="qdrant_mirror_update",
-            target_type="logical_document",
-            target_id=1,
-            payload={"logical_document_id": 1, "mirror_action": "mark_inactive"},
-            worker_instance_id="worker-1",
-        ),
         JobExecutionContext(
             job_id=3,
             job_type="message_edit_regeneration",
@@ -549,6 +547,134 @@ def test_default_dispatcher_returns_stub_results() -> None:
     )
     assert unknown.status == "failed"
     assert unknown.error_code == "unknown_job_type"
+
+
+def test_qdrant_mirror_update_handler_syncs_payload_for_document_versions(
+    session_factory: sessionmaker[Session],
+) -> None:
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(
+        QdrantCollectionConfig(name="document_chunks", vector_dimension=4)
+    )
+    with session_factory() as db:
+        db.add(LogicalDocument(logical_document_id=1, owner_user_id=1, title="Mirror"))
+        db.add_all(
+            [
+                DocumentVersion(
+                    document_version_id=10,
+                    logical_document_id=1,
+                    version_no=1,
+                    content_hash="a" * 64,
+                    status="ready",
+                    is_active=False,
+                    file_name="old.txt",
+                    mime_type="text/plain",
+                    file_size_bytes=3,
+                    storage_key="old",
+                    created_by=1,
+                ),
+                DocumentVersion(
+                    document_version_id=20,
+                    logical_document_id=1,
+                    version_no=2,
+                    content_hash="b" * 64,
+                    status="ready",
+                    is_active=True,
+                    file_name="new.txt",
+                    mime_type="text/plain",
+                    file_size_bytes=3,
+                    storage_key="new",
+                    created_by=1,
+                ),
+                DocumentChunk(
+                    document_chunk_id=100,
+                    document_version_id=10,
+                    chunk_index=0,
+                    chunk_hash="c" * 64,
+                    content_text="old chunk",
+                ),
+                DocumentChunk(
+                    document_chunk_id=200,
+                    document_version_id=20,
+                    chunk_index=0,
+                    chunk_hash="d" * 64,
+                    content_text="new chunk",
+                ),
+            ]
+        )
+        db.commit()
+    qdrant_client.upsert_points(
+        "document_chunks",
+        [
+            QdrantPoint(
+                point_id=100,
+                vector=[0.0, 0.0, 0.0, 0.0],
+                payload={"document_version_id": 10, "is_active": True},
+            ),
+            QdrantPoint(
+                point_id=200,
+                vector=[0.0, 0.0, 0.0, 0.0],
+                payload={"document_version_id": 20, "is_active": False},
+            ),
+        ],
+    )
+    handler = QdrantMirrorUpdateHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        indexing_service=_mirror_indexing_service(qdrant_client),
+    )
+
+    result = handler.handle(
+        JobExecutionContext(
+            job_id=1,
+            job_type="qdrant_mirror_update",
+            target_type="logical_document",
+            target_id=1,
+            payload={
+                "logical_document_id": 1,
+                "document_version_id": 20,
+                "mirror_action": "sync_payload",
+            },
+            worker_instance_id="worker-1",
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.result_json["synced_version_count"] == 2
+    assert qdrant_client.points["document_chunks"][100].payload["is_active"] is False
+    assert qdrant_client.points["document_chunks"][200].payload["is_active"] is True
+    assert (
+        qdrant_client.points["document_chunks"][200].payload["logical_document_status"] == "active"
+    )
+
+    with session_factory() as db:
+        document = db.get(LogicalDocument, 1)
+        version = db.get(DocumentVersion, 20)
+        assert document is not None
+        assert version is not None
+        document.status = "archived"
+        document.archived_at = datetime.now(UTC)
+        version.is_active = False
+        db.commit()
+
+    archived = handler.handle(
+        JobExecutionContext(
+            job_id=2,
+            job_type="qdrant_mirror_update",
+            target_type="logical_document",
+            target_id=1,
+            payload={"logical_document_id": 1, "mirror_action": "mark_inactive"},
+            worker_instance_id="worker-1",
+        )
+    )
+
+    assert archived.status == "succeeded"
+    assert qdrant_client.points["document_chunks"][100].payload["is_active"] is False
+    assert qdrant_client.points["document_chunks"][200].payload["is_active"] is False
+    assert (
+        qdrant_client.points["document_chunks"][200].payload["logical_document_status"]
+        == "archived"
+    )
 
 
 def test_run_loop_stops_at_max_iterations(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -629,7 +755,7 @@ def test_startup_checks_reject_unknown_enabled_type() -> None:
     with pytest.raises(WorkerStartupError):
         run_startup_checks(
             WorkerConfig(
-                poll_interval_seconds=0,
+                poll_interval_seconds=1,
                 batch_size=1,
                 lease_duration=timedelta(seconds=10),
                 lease_renew_interval_seconds=1,
@@ -638,6 +764,51 @@ def test_startup_checks_reject_unknown_enabled_type() -> None:
                 worker_instance_id="worker-1",
             )
         )
+
+
+def test_startup_checks_require_qdrant_for_document_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: sessionmaker[Session],
+) -> None:
+    calls: list[bool] = []
+
+    def fail_ensure_collection(self: QdrantVectorStore) -> None:
+        calls.append(True)
+        raise RuntimeError("synthetic qdrant startup failure")
+
+    monkeypatch.setenv("QDRANT_REQUIRED", "true")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("EMBEDDING_FAKE_DIMENSION", "4")
+    get_settings.cache_clear()
+    monkeypatch.setattr(QdrantVectorStore, "ensure_collection", fail_ensure_collection)
+    try:
+        with pytest.raises(WorkerStartupError):
+            run_startup_checks(
+                _startup_config(enabled_job_types=frozenset({"document_ingest"})),
+                session_factory=session_factory,
+            )
+        assert calls == [True]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_startup_checks_skip_qdrant_when_no_job_types_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: sessionmaker[Session],
+) -> None:
+    def fail_if_called(self: QdrantVectorStore) -> None:
+        raise RuntimeError("qdrant startup should not run")
+
+    monkeypatch.setenv("QDRANT_REQUIRED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(QdrantVectorStore, "ensure_collection", fail_if_called)
+    try:
+        run_startup_checks(
+            _startup_config(enabled_job_types=frozenset()),
+            session_factory=session_factory,
+        )
+    finally:
+        get_settings.cache_clear()
 
 
 def test_worker_single_iteration_marks_success_failure_and_unknown(
@@ -693,3 +864,35 @@ def _worker_config(batch_size: int = 1) -> WorkerConfig:
         enabled_job_types=None,
         worker_instance_id="worker-1",
     )
+
+
+def _startup_config(enabled_job_types: frozenset[str] | None) -> WorkerConfig:
+    return WorkerConfig(
+        poll_interval_seconds=1,
+        batch_size=1,
+        lease_duration=timedelta(minutes=5),
+        lease_renew_interval_seconds=60,
+        shutdown_grace_seconds=30,
+        enabled_job_types=enabled_job_types,
+        worker_instance_id="worker-1",
+    )
+
+
+def _mirror_indexing_service(qdrant_client: InMemoryQdrantClient) -> DocumentIndexingService:
+    return DocumentIndexingService(
+        embedding_service=DocumentEmbeddingService(
+            adapter=FakeEmbeddingAdapter(dimension=4),
+            config=EmbeddingBatchConfig(dimension=4, batch_size=2),
+        ),
+        vector_store=QdrantVectorStore(
+            client=qdrant_client,
+            config=QdrantCollectionConfig(name="document_chunks", vector_dimension=4),
+            create_collection=True,
+        ),
+        upsert_batch_size=1,
+    )
+
+
+class _NoopJobRepository:
+    def assert_ownership(self, db: Session, *, job_id: int, worker_instance_id: str) -> None:
+        return None
