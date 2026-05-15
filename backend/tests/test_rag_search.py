@@ -28,7 +28,12 @@ from app.db.session import get_db
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.ingest.qdrant import InMemoryQdrantClient, QdrantCollectionConfig, QdrantPoint
 from app.main import create_app
-from app.rag.rerank import FakeRerankerClient, RerankCandidate, RerankError, normalize_rerank_score
+from app.rag.rerank import (
+    FakeRerankerClient,
+    RerankCandidate,
+    RerankError,
+    normalize_rerank_score,
+)
 from app.rag.retrieval import (
     InMemoryVectorSearchClient,
     RetrievalError,
