@@ -244,7 +244,7 @@ class _LeaseHeartbeat:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self._stop.set()
-        self._thread.join(timeout=1)
+        self._thread.join(timeout=self.config.shutdown_grace_seconds)
 
     def _run(self) -> None:
         while not self._stop.wait(self.config.lease_renew_interval_seconds):

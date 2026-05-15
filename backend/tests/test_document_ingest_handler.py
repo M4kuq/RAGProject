@@ -16,6 +16,12 @@ from app.core.job_utils import LeaseLostError
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
+from app.ingest.embedding import (
+    DocumentEmbeddingService,
+    EmbeddingAdapterError,
+    EmbeddingBatchConfig,
+    FakeEmbeddingAdapter,
+)
 from app.ingest.extractors.base import (
     ExtractedDocument,
     ExtractedPage,
@@ -23,6 +29,14 @@ from app.ingest.extractors.base import (
     ExtractionMetadata,
 )
 from app.ingest.extractors.dispatcher import ExtractorDispatcher
+from app.ingest.qdrant import (
+    DocumentIndexingService,
+    InMemoryQdrantClient,
+    QdrantCollectionConfig,
+    QdrantPoint,
+    QdrantStoreError,
+    QdrantVectorStore,
+)
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.storage.file_storage import LocalFileStorage
@@ -46,6 +60,9 @@ def ingest_session_factory(
     )
     monkeypatch.setenv("INGEST_CHUNK_SIZE_TOKENS", "5")
     monkeypatch.setenv("INGEST_CHUNK_OVERLAP_TOKENS", "1")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("EMBEDDING_FAKE_DIMENSION", "4")
+    monkeypatch.setenv("QDRANT_COLLECTION_NAME", "test_document_chunks")
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -121,7 +138,7 @@ def test_document_ingest_handler_success_for_supported_types(
             .order_by(DocumentChunk.chunk_index)
         ).all()
         assert version is not None
-        assert version.status == "processing"
+        assert version.status == "ready"
         assert version.error_code is None
         assert version.extractor_name is not None
         assert chunks
@@ -192,6 +209,16 @@ def test_document_ingest_handler_rejects_invalid_payload_before_domain_update(
             worker_instance_id="worker-1",
         )
     )
+    invalid_logical_id_bool = _handler(session_factory, storage).handle(
+        JobExecutionContext(
+            job_id=4,
+            job_type="document_ingest",
+            target_type="document_version",
+            target_id=version_id,
+            payload={"document_version_id": version_id, "logical_document_id": True},
+            worker_instance_id="worker-1",
+        )
+    )
 
     assert invalid_bool.status == "failed"
     assert invalid_bool.error_code == "validation_error"
@@ -199,6 +226,8 @@ def test_document_ingest_handler_rejects_invalid_payload_before_domain_update(
     assert mismatch.error_code == "validation_error"
     assert logical_document_mismatch.status == "failed"
     assert logical_document_mismatch.error_code == "validation_error"
+    assert invalid_logical_id_bool.status == "failed"
+    assert invalid_logical_id_bool.error_code == "validation_error"
     with session_factory() as db:
         version = db.get(DocumentVersion, version_id)
         assert version is not None
@@ -300,6 +329,7 @@ def test_document_ingest_handler_chunking_zero_failure_cleans_partial_chunks(
         storage=storage,
         dispatcher=cast(ExtractorDispatcher, _WhitespaceDispatcher()),
         settings=get_settings(),
+        indexing_service=_indexing_service(),
     )
     result = handler.handle(_context(version_id))
 
@@ -338,6 +368,7 @@ def test_document_ingest_handler_insert_failure_marks_failed_and_cleans_chunks(
         job_repository=cast(JobRepository, _NoopJobRepository()),
         storage=storage,
         settings=get_settings(),
+        indexing_service=_indexing_service(),
     )
     result = handler.handle(_context(version_id))
 
@@ -384,6 +415,7 @@ def test_document_ingest_handler_lease_lost_blocks_domain_write(
         job_repository=cast(JobRepository, _LeaseLostJobRepository()),
         storage=storage,
         settings=get_settings(),
+        indexing_service=_indexing_service(),
     )
 
     with pytest.raises(LeaseLostError):
@@ -414,17 +446,14 @@ def test_document_ingest_handler_rechecks_archived_document_before_final_write(
         storage=storage,
         dispatcher=cast(ExtractorDispatcher, _ArchivingDispatcher(session_factory)),
         settings=get_settings(),
+        indexing_service=_indexing_service(),
     )
 
     result = handler.handle(_context(version_id))
 
     assert result.status == "failed"
     assert result.error_code == "document_version_not_ingestable"
-    with session_factory() as db:
-        version = db.get(DocumentVersion, version_id)
-        assert version is not None
-        assert version.status == "processing"
-        assert db.query(DocumentChunk).filter_by(document_version_id=version_id).count() == 0
+    _assert_failed_version(session_factory, version_id, "document_version_not_ingestable")
 
 
 def test_document_ingest_handler_retry_cleans_existing_chunks_and_reinserts(
@@ -454,13 +483,15 @@ def test_document_ingest_handler_retry_cleans_existing_chunks_and_reinserts(
     result = _handler(session_factory, storage).handle(_context(version_id))
 
     assert result.status == "succeeded"
+    assert result.result_json["status"] == "ready"
+    assert result.result_json["indexed_count"] == result.result_json["chunk_count"]
     with session_factory() as db:
         version = db.get(DocumentVersion, version_id)
         chunks = db.scalars(
             select(DocumentChunk).where(DocumentChunk.document_version_id == version_id)
         ).all()
         assert version is not None
-        assert version.status == "processing"
+        assert version.status == "ready"
         assert version.error_code is None
         assert chunks
         assert all(chunk.content_text != "old chunk" for chunk in chunks)
@@ -525,7 +556,8 @@ def test_worker_single_iteration_processes_document_ingest_success_and_failure(
             "document_version_id": success_version_id,
             "logical_document_id": 1,
             "chunk_count": 2,
-            "status": "processing",
+            "indexed_count": 2,
+            "status": "ready",
         }
         assert jobs[2].status == "failed"
         assert jobs[2].error_code == "storage_file_missing"
@@ -533,6 +565,244 @@ def test_worker_single_iteration_processes_document_ingest_success_and_failure(
         failed_version = db.get(DocumentVersion, failure_version_id)
         assert failed_version is not None
         assert failed_version.status == "failed"
+
+
+def test_document_ingest_handler_embedding_failure_marks_failed_and_cleans_chunks(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="embedding-failure.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta",
+    )
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(embedding_service=_FailingEmbeddingService()),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "embedding_failed"
+    _assert_failed_version(session_factory, version_id, "embedding_failed")
+
+
+def test_document_ingest_handler_embedding_dimension_mismatch_marks_failed(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="embedding-dimension.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta",
+    )
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(embedding_service=_DimensionMismatchEmbeddingService()),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "embedding_dimension_mismatch"
+    _assert_failed_version(session_factory, version_id, "embedding_dimension_mismatch")
+
+
+def test_document_ingest_handler_qdrant_failure_marks_failed_and_cleans_partial_points(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="qdrant-failure.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta",
+    )
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.fail_upsert = True
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(qdrant_client=qdrant_client),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "qdrant_upsert_failed"
+    _assert_failed_version(session_factory, version_id, "qdrant_upsert_failed")
+
+
+def test_document_ingest_handler_cleans_points_after_partial_batch_upsert_failure(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="qdrant-partial.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta epsilon zeta eta theta",
+    )
+    qdrant_client = _PartialFailingQdrantClient()
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(
+            qdrant_client=qdrant_client,
+            upsert_batch_size=1,
+        ),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "qdrant_upsert_failed"
+    _assert_failed_version(session_factory, version_id, "qdrant_upsert_failed")
+    assert qdrant_client.points["test_document_chunks"] == {}
+
+
+def test_document_ingest_handler_ready_update_failure_attempts_qdrant_cleanup(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="ready-update-failure.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta",
+    )
+    qdrant_client = InMemoryQdrantClient()
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        repository=_FailingReadyDocumentRepository(),
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(qdrant_client=qdrant_client),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "document_ready_update_failed"
+    _assert_failed_version(session_factory, version_id, "document_ready_update_failed")
+    assert qdrant_client.points["test_document_chunks"] == {}
+
+
+def test_document_ingest_handler_preserves_chunks_when_qdrant_cleanup_fails(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="ready-update-cleanup-failure.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta",
+    )
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.fail_delete = True
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        repository=_FailingReadyDocumentRepository(),
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(qdrant_client=qdrant_client),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "failed"
+    assert result.error_code == "document_ready_update_failed"
+    with session_factory() as db:
+        version = db.get(DocumentVersion, version_id)
+        chunks = db.scalars(
+            select(DocumentChunk).where(DocumentChunk.document_version_id == version_id)
+        ).all()
+        assert version is not None
+        assert version.status == "failed"
+        assert version.error_code == "document_ready_update_failed"
+        assert chunks
+
+
+def test_document_ingest_handler_retry_cleans_existing_qdrant_points_before_reinsert(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="retry-index.txt",
+        mime_type="text/plain",
+        content=b"new alpha beta gamma delta epsilon",
+        status="failed",
+        error_code="qdrant_upsert_failed",
+    )
+    qdrant_client = InMemoryQdrantClient()
+    with session_factory() as db:
+        db.add(
+            DocumentChunk(
+                document_chunk_id=99,
+                document_version_id=version_id,
+                chunk_index=0,
+                chunk_hash="e" * 64,
+                content_text="old chunk",
+            )
+        )
+        db.commit()
+    qdrant_client.create_collection(
+        QdrantCollectionConfig(
+            name="test_document_chunks",
+            vector_dimension=get_settings().effective_embedding_dimension,
+        )
+    )
+    qdrant_client.upsert_points(
+        "test_document_chunks",
+        [
+            QdrantPoint(
+                point_id=99,
+                vector=[0.0] * get_settings().effective_embedding_dimension,
+                payload={"document_version_id": version_id, "document_chunk_id": 99},
+            )
+        ],
+    )
+    handler = DocumentIngestHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, _NoopJobRepository()),
+        storage=storage,
+        settings=get_settings(),
+        indexing_service=_indexing_service(qdrant_client=qdrant_client),
+    )
+
+    result = handler.handle(_context(version_id))
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        chunks = db.scalars(
+            select(DocumentChunk).where(DocumentChunk.document_version_id == version_id)
+        ).all()
+        assert chunks
+        assert all(chunk.document_chunk_id != 99 for chunk in chunks)
+    assert 99 not in qdrant_client.points["test_document_chunks"]
 
 
 class _WhitespaceExtractor:
@@ -592,12 +862,14 @@ def _handler(
     storage: LocalFileStorage,
     *,
     enforce_lease: bool = False,
+    indexing_service: DocumentIndexingService | None = None,
 ) -> DocumentIngestHandler:
     return DocumentIngestHandler(
         session_factory=session_factory,
         job_repository=None if enforce_lease else cast(JobRepository, _NoopJobRepository()),
         storage=storage,
         settings=get_settings(),
+        indexing_service=indexing_service or _indexing_service(),
     )
 
 
@@ -703,6 +975,72 @@ class _FailingInsertDocumentRepository(DocumentRepository):
         chunks: Sequence[Mapping[str, object]],
     ) -> None:
         raise RuntimeError("safe synthetic insert failure")
+
+
+class _FailingReadyDocumentRepository(DocumentRepository):
+    def mark_version_ready(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        updated_at: datetime,
+    ) -> None:
+        raise RuntimeError("safe synthetic ready update failure")
+
+
+class _FailingEmbeddingService:
+    def embed_chunks(self, chunks: Sequence[object]) -> list[list[float]]:
+        raise RuntimeError("safe synthetic embedding failure")
+
+
+class _DimensionMismatchEmbeddingService:
+    def embed_chunks(self, chunks: Sequence[object]) -> list[list[float]]:
+        raise EmbeddingAdapterError("embedding_dimension_mismatch")
+
+
+class _PartialFailingQdrantClient(InMemoryQdrantClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.upsert_calls = 0
+
+    def upsert_points(self, collection_name: str, points: Sequence[QdrantPoint]) -> None:
+        self.upsert_calls += 1
+        if self.upsert_calls == 1:
+            super().upsert_points(collection_name, points)
+            return
+        raise QdrantStoreError("qdrant_upsert_failed")
+
+
+def _indexing_service(
+    *,
+    qdrant_client: InMemoryQdrantClient | None = None,
+    embedding_service: (
+        DocumentEmbeddingService
+        | _FailingEmbeddingService
+        | _DimensionMismatchEmbeddingService
+        | None
+    ) = None,
+    upsert_batch_size: int | None = None,
+) -> DocumentIndexingService:
+    settings = get_settings()
+    dimension = settings.effective_embedding_dimension
+    effective_embedding_service = embedding_service or DocumentEmbeddingService(
+        adapter=FakeEmbeddingAdapter(dimension=dimension),
+        config=EmbeddingBatchConfig(dimension=dimension, batch_size=settings.embedding_batch_size),
+    )
+    return DocumentIndexingService(
+        embedding_service=cast(DocumentEmbeddingService, effective_embedding_service),
+        vector_store=QdrantVectorStore(
+            client=qdrant_client or InMemoryQdrantClient(),
+            config=QdrantCollectionConfig(
+                name=settings.qdrant_collection_name,
+                vector_dimension=dimension,
+                distance=settings.qdrant_distance,
+            ),
+            create_collection=True,
+        ),
+        upsert_batch_size=upsert_batch_size or settings.qdrant_upsert_batch_size,
+    )
 
 
 def _docx_bytes(tmp_path: Path) -> bytes:

@@ -53,10 +53,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"
+    qdrant_collection_name: str = "document_chunks"
+    qdrant_distance: str = "Cosine"
+    qdrant_create_collection: bool = True
+    qdrant_required: bool = False
+    qdrant_upsert_batch_size: int = Field(default=64, ge=1)
+    qdrant_timeout_seconds: float = Field(default=5.0, gt=0)
     ollama_url: str = "http://ollama:11434"
     use_fake_llm: bool = False
     model_name: str = "llama3.1"
+    embedding_provider: str = "fake"
     embedding_model: str = "BAAI/bge-m3"
+    embedding_vector_dimension: int = Field(default=1024, ge=1)
+    embedding_fake_dimension: int = Field(default=8, ge=1)
+    embedding_batch_size: int = Field(default=32, ge=1)
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
 
     model_config = SettingsConfigDict(
@@ -91,6 +101,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
             )
+        self.embedding_provider = self.embedding_provider.lower()
+        if self.embedding_provider not in {"fake", "local"}:
+            raise ValueError("EMBEDDING_PROVIDER must be fake or local")
+        distance = self.qdrant_distance.strip().lower()
+        if distance not in {"cosine", "dot", "euclid"}:
+            raise ValueError("QDRANT_DISTANCE must be cosine, dot, or euclid")
+        self.qdrant_distance = {"cosine": "Cosine", "dot": "Dot", "euclid": "Euclid"}[distance]
 
         if self.app_env.lower() not in {"local", "ci", "test"}:
             weak_values = {
@@ -111,6 +128,12 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return self.cors_allowed_origins
+
+    @property
+    def effective_embedding_dimension(self) -> int:
+        if self.embedding_provider == "fake":
+            return self.embedding_fake_dimension
+        return self.embedding_vector_dimension
 
 
 @lru_cache

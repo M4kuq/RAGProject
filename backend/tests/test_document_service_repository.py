@@ -354,6 +354,67 @@ def test_document_service_upload_cleans_storage_when_db_flow_fails(
     assert [path for path in storage_root.rglob("*") if path.is_file()] == []
 
 
+def test_document_repository_ready_failed_and_chunk_id_support(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        created = service.upload_document(
+            db,
+            user=user,
+            title="Repository indexing",
+            filename="repo-index.txt",
+            content_type="text/plain",
+            content=b"alpha beta",
+            request_id="repo-indexing",
+        )
+        version = repository.get_version_by_id(
+            db, document_version_id=created.document_version_id, for_update=True
+        )
+        assert version is not None
+        repository.bulk_insert_chunks(
+            db,
+            chunks=[
+                _chunk_row(created.document_version_id, 1, "beta", "b"),
+                _chunk_row(created.document_version_id, 0, "alpha", "a"),
+            ],
+        )
+        db.flush()
+
+        chunk_ids = repository.chunk_ids_by_document_version(
+            db, document_version_id=created.document_version_id
+        )
+        chunks = repository.list_chunks_for_embedding(
+            db, document_version_id=created.document_version_id
+        )
+        repository.mark_version_ready(db, version=version, updated_at=version.updated_at)
+        db.commit()
+
+        assert chunk_ids == [chunk.document_chunk_id for chunk in chunks]
+        assert [chunk.chunk_index for chunk in chunks] == [0, 1]
+        ready_version = db.get(DocumentVersion, created.document_version_id)
+        assert ready_version is not None
+        assert ready_version.status == "ready"
+        assert ready_version.error_code is None
+
+        repository.mark_version_failed(
+            db,
+            version=ready_version,
+            error_code="embedding_failed",
+            updated_at=ready_version.updated_at,
+        )
+        db.commit()
+
+        failed_version = db.get(DocumentVersion, created.document_version_id)
+        assert failed_version is not None
+        assert failed_version.status == "failed"
+        assert failed_version.error_code == "embedding_failed"
+
+
 def _chunk_row(
     document_version_id: int,
     chunk_index: int,
