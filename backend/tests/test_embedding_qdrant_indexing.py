@@ -58,6 +58,9 @@ def test_embedding_service_batches_and_rejects_invalid_results() -> None:
     with pytest.raises(EmbeddingAdapterError) as empty_exc:
         service.embed_chunks([])
     assert empty_exc.value.error_code == "embedding_empty_result"
+    with pytest.raises(EmbeddingAdapterError) as invalid_text_exc:
+        service.embed_chunks([_ChunkWithInvalidText(4, None)])
+    assert invalid_text_exc.value.error_code == "embedding_empty_result"
     mismatch = DocumentEmbeddingService(
         adapter=cast(FakeEmbeddingAdapter, _MismatchAdapter()),
         config=EmbeddingBatchConfig(dimension=4, batch_size=2),
@@ -98,6 +101,18 @@ def test_local_embedding_adapter_import_failure_is_safe(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     adapter = LocalEmbeddingAdapter(model_name="BAAI/bge-m3", dimension=1024)
+
+    with pytest.raises(EmbeddingAdapterError) as exc:
+        adapter.embed_texts(["alpha"])
+
+    assert exc.value.error_code == "embedding_failed"
+
+
+def test_local_embedding_adapter_invalid_model_output_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = LocalEmbeddingAdapter(model_name="BAAI/bge-m3", dimension=2)
+    monkeypatch.setattr(adapter, "_model", _InvalidLocalModel())
 
     with pytest.raises(EmbeddingAdapterError) as exc:
         adapter.embed_texts(["alpha"])
@@ -184,8 +199,11 @@ def test_qdrant_upsert_and_cleanup_fake_success_and_failure() -> None:
     with pytest.raises(QdrantStoreError) as upsert_exc:
         store.upsert([point], batch_size=1)
     assert upsert_exc.value.error_code == "qdrant_upsert_failed"
-
     client.fail_upsert = False
+    with pytest.raises(QdrantStoreError) as invalid_batch_exc:
+        store.upsert([point], batch_size=0)
+    assert invalid_batch_exc.value.error_code == "qdrant_upsert_failed"
+
     client.fail_delete = True
     with pytest.raises(QdrantStoreError) as cleanup_exc:
         store.cleanup(document_version_id=2, point_ids=[1])
@@ -254,6 +272,11 @@ class _MismatchAdapter:
         return [[1.0, 2.0]]
 
 
+class _InvalidLocalModel:
+    def encode(self, texts: list[str], *, normalize_embeddings: bool) -> list[list[object]]:
+        return [[object(), object()]]
+
+
 class _ChunkRepository:
     def __init__(self, chunks: Sequence[object]) -> None:
         self.chunks = chunks
@@ -292,3 +315,9 @@ class _Chunk:
     section_title: str | None = "Intro"
     modality: str = "text"
     created_at: datetime = datetime(2026, 5, 13, tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class _ChunkWithInvalidText:
+    document_chunk_id: int
+    content_text: object

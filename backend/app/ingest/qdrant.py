@@ -282,6 +282,8 @@ class QdrantVectorStore:
     def upsert(self, points: Sequence[QdrantPoint], *, batch_size: int) -> None:
         if not points:
             raise QdrantStoreError("qdrant_upsert_failed")
+        if batch_size < 1:
+            raise QdrantStoreError("qdrant_upsert_failed")
         for point in points:
             if len(point.vector) != self.config.vector_dimension:
                 raise QdrantStoreError("qdrant_collection_dimension_mismatch")
