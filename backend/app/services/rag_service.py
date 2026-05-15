@@ -15,9 +15,9 @@ from app.ingest.embedding import (
 )
 from app.rag.rerank import (
     RerankCandidate,
+    RerankerClient,
     RerankError,
     RerankResult,
-    RerankerClient,
     create_reranker,
 )
 from app.rag.retrieval import (
