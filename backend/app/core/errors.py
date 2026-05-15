@@ -43,6 +43,8 @@ ERROR_MESSAGES: dict[str, str] = {
     "qdrant_collection_dimension_mismatch": "Qdrant collection dimension mismatch.",
     "qdrant_upsert_failed": "Qdrant upsert failed.",
     "qdrant_cleanup_failed": "Qdrant cleanup failed.",
+    "retrieval_failed": "Retrieval pipeline failed.",
+    "rerank_failed": "Rerank pipeline failed.",
     "document_indexing_failed": "Document indexing failed.",
     "document_ready_update_failed": "Document ready update failed.",
     "payload_too_large": "Payload too large.",

@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import current_user, pagination_params, require_admin, require_csrf
-from app.api.responses import paginate, success_response
+from app.api.deps import current_user, require_admin, require_csrf
+from app.api.responses import get_request_id, success_response
+from app.core.config import get_settings
 from app.db.models import ChatMessage, Citation, RetrievalRun, RetrievalRunItem, User
 from app.db.session import get_db
 from app.rag.fake_pipeline import build_answer, search_chunks
-from app.schemas.common import PaginationParams
+from app.schemas.rag import RagSearchRequest
 from app.services.chat_service import ChatService
+from app.services.rag_service import RagSearchPipelineError, RagService, create_rag_service
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -25,6 +27,10 @@ class AskRequest(BaseModel):
 
 def chat_service() -> ChatService:
     return ChatService()
+
+
+def rag_search_service() -> RagService:
+    return create_rag_service(get_settings())
 
 
 @router.post("/ask")
@@ -138,23 +144,14 @@ def ask(
 
 @router.post("/search")
 def search(
-    payload: AskRequest,
+    payload: RagSearchRequest,
     request: Request,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
-    pagination: PaginationParams = Depends(pagination_params),
+    service: RagService = Depends(rag_search_service),
 ) -> dict[str, object]:
-    hits = search_chunks(db, payload.question)
-    page_hits, page_meta = paginate(hits, pagination)
-    return success_response(
-        [
-            {
-                "document_chunk_id": chunk.document_chunk_id,
-                "snippet": chunk.content_text[:240],
-                "score": score,
-            }
-            for chunk, score in page_hits
-        ],
-        request,
-        pagination=page_meta,
-    )
+    try:
+        result = service.search(db, payload=payload, request_id=get_request_id(request))
+    except RagSearchPipelineError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+    return success_response(result.model_dump(mode="json"), request)
