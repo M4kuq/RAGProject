@@ -138,8 +138,7 @@ class RetrievalRepository:
             )
         rows = db.execute(statement).all()
         row_by_chunk_id = {
-            chunk.document_chunk_id: (chunk, version, document)
-            for chunk, version, document in rows
+            chunk.document_chunk_id: (chunk, version, document) for chunk, version, document in rows
         }
 
         checked: list[CheckedRetrievalCandidate] = []

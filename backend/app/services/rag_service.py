@@ -139,8 +139,12 @@ class RagService:
             item_inputs = [
                 _run_item_input(
                     candidate,
-                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
-                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                    rerank_score=rerank_by_chunk_id[
+                        candidate.chunk.document_chunk_id
+                    ].rerank_score,
+                    rerank_order=rerank_by_chunk_id[
+                        candidate.chunk.document_chunk_id
+                    ].rerank_order,
                     selected_flag=index <= selected_count,
                 )
                 for index, candidate in enumerate(ordered_candidates, start=1)
@@ -199,13 +203,25 @@ class RagService:
                 ],
             )
         except (EmbeddingAdapterError, RetrievalError):
-            self._mark_failed_safely(db, retrieval_run_id=run_id, error_code="retrieval_failed")
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="retrieval_failed",
+            )
             raise RagSearchPipelineError("retrieval_failed", 503) from None
         except RerankError:
-            self._mark_failed_safely(db, retrieval_run_id=run_id, error_code="rerank_failed")
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+            )
             raise RagSearchPipelineError("rerank_failed", 503) from None
         except Exception:
-            self._mark_failed_safely(db, retrieval_run_id=run_id, error_code="internal_error")
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="internal_error",
+            )
             raise
 
     def _effective_top_k(self, requested: int | None) -> int:
@@ -223,7 +239,10 @@ class RagService:
             raise
         except Exception as exc:
             raise EmbeddingAdapterError("embedding_failed") from exc
-        if len(vectors) != 1 or len(vectors[0]) != self.settings.effective_embedding_dimension:
+        if (
+            len(vectors) != 1
+            or len(vectors[0]) != self.settings.effective_embedding_dimension
+        ):
             raise EmbeddingAdapterError("embedding_dimension_mismatch")
         return [float(value) for value in vectors[0]]
 
@@ -294,11 +313,11 @@ def _score_summary(
         selected_count=selected_count,
         excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
         top1_retrieval_score=_round_score(retrieval_scores[0]) if retrieval_scores else None,
-        top3_avg_retrieval_score=_round_score(
-            sum(retrieval_scores[:3]) / min(3, len(retrieval_scores))
-        )
-        if retrieval_scores
-        else None,
+        top3_avg_retrieval_score=(
+            _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
+            if retrieval_scores
+            else None
+        ),
         top1_rerank_score=(
             _round_score(top1_rerank_score) if top1_rerank_score is not None else None
         ),
