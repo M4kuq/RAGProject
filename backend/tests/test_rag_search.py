@@ -47,7 +47,9 @@ TEST_PASSWORD = "password"
 
 
 @pytest.fixture
-def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"]]:
+def rag_client() -> Iterator[
+    tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"]
+]:
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -146,7 +148,9 @@ def test_retrieval_and_rerank_settings_validation() -> None:
 
 def test_in_memory_vector_search_client_scores_fake_qdrant_points() -> None:
     qdrant = InMemoryQdrantClient()
-    qdrant.create_collection(QdrantCollectionConfig(name="document_chunks", vector_dimension=3))
+    qdrant.create_collection(
+        QdrantCollectionConfig(name="document_chunks", vector_dimension=3),
+    )
     qdrant.upsert_points(
         "document_chunks",
         [
@@ -318,7 +322,11 @@ def test_rag_search_retrieval_failure_marks_run_failed(
     assert body["error"]["code"] == "retrieval_failed"
     assert "secret-token" not in str(body)
     with session_factory() as db:
-        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
+        run = (
+            db.query(RetrievalRun)
+            .order_by(RetrievalRun.retrieval_run_id.desc())
+            .first()
+        )
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "retrieval_failed"
@@ -356,7 +364,11 @@ def test_rag_search_rerank_failure_marks_run_failed_without_items(
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "rerank_failed"
     with session_factory() as db:
-        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
+        run = (
+            db.query(RetrievalRun)
+            .order_by(RetrievalRun.retrieval_run_id.desc())
+            .first()
+        )
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
@@ -449,8 +461,16 @@ def _seed_documents(db: Session) -> None:
                 status="archived",
                 archived_at=now,
             ),
-            LogicalDocument(logical_document_id=30, owner_user_id=1, title="InactiveVersion"),
-            LogicalDocument(logical_document_id=40, owner_user_id=1, title="FailedVersion"),
+            LogicalDocument(
+                logical_document_id=30,
+                owner_user_id=1,
+                title="InactiveVersion",
+            ),
+            LogicalDocument(
+                logical_document_id=40,
+                owner_user_id=1,
+                title="FailedVersion",
+            ),
         ]
     )
     db.add_all(
@@ -468,7 +488,13 @@ def _seed_documents(db: Session) -> None:
                 10,
                 "alpha policy full active chunk text should not be returned whole " * 4,
             ),
-            _chunk(101, 10, "alpha secondary material " * 5, chunk_index=1, page_from=2),
+            _chunk(
+                101,
+                10,
+                "alpha secondary material " * 5,
+                chunk_index=1,
+                page_from=2,
+            ),
             _chunk(200, 20, "alpha archived"),
             _chunk(300, 30, "alpha inactive"),
             _chunk(400, 40, "alpha failed"),
