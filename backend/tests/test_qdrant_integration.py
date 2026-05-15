@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 from contextlib import suppress
 from uuid import uuid4
