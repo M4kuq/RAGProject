@@ -4,7 +4,7 @@ import hashlib
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from app.core.config import Settings
 
@@ -160,7 +160,7 @@ def _to_score_list(value: object, *, expected_count: int) -> list[float]:
     scores: list[float] = []
     for item in value:
         try:
-            score = float(cast(object, item))
+            score = float(cast(Any, item))
         except (TypeError, ValueError) as exc:
             raise RerankError() from exc
         if not math.isfinite(score):

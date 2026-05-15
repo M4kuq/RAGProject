@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -343,7 +343,7 @@ def test_rag_search_rerank_failure_marks_run_failed_without_items(
         vector_client=vector_client,
         reranker=_FailingReranker(),
     )
-    client.app.dependency_overrides[rag_search_service] = lambda: failing_service
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: failing_service
     csrf_token = _login(client)
 
     response = client.post(
