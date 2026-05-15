@@ -209,6 +209,24 @@ class DocumentRepository:
             or 0
         )
 
+    def chunk_ids_by_document_version(self, db: Session, *, document_version_id: int) -> list[int]:
+        rows = db.scalars(
+            select(DocumentChunk.document_chunk_id)
+            .where(DocumentChunk.document_version_id == document_version_id)
+            .order_by(DocumentChunk.chunk_index.asc(), DocumentChunk.document_chunk_id.asc())
+        ).all()
+        return [int(document_chunk_id) for document_chunk_id in rows]
+
+    def list_chunks_for_embedding(
+        self, db: Session, *, document_version_id: int
+    ) -> list[DocumentChunk]:
+        rows = db.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_version_id == document_version_id)
+            .order_by(DocumentChunk.chunk_index.asc(), DocumentChunk.document_chunk_id.asc())
+        ).all()
+        return list(rows)
+
     def delete_chunks(self, db: Session, *, document_version_id: int) -> int:
         result = db.execute(
             delete(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)
@@ -272,6 +290,18 @@ class DocumentRepository:
         version.page_count = None
         version.extractor_name = None
         version.extractor_version = None
+        version.updated_at = updated_at
+        db.flush()
+
+    def mark_version_ready(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        updated_at: datetime,
+    ) -> None:
+        version.status = "ready"
+        version.error_code = None
         version.updated_at = updated_at
         db.flush()
 

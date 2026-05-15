@@ -17,6 +17,17 @@ from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import AuditLog, DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
 from app.db.session import get_db
+from app.ingest.embedding import (
+    DocumentEmbeddingService,
+    EmbeddingBatchConfig,
+    FakeEmbeddingAdapter,
+)
+from app.ingest.qdrant import (
+    DocumentIndexingService,
+    InMemoryQdrantClient,
+    QdrantCollectionConfig,
+    QdrantVectorStore,
+)
 from app.main import create_app
 from app.storage.file_storage import LocalFileStorage
 from app.workers.handlers.document_ingest_handler import DocumentIngestHandler
@@ -38,6 +49,9 @@ def document_client(
         "UPLOAD_ALLOWED_EXTENSIONS",
         '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
     )
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("EMBEDDING_FAKE_DIMENSION", "4")
+    monkeypatch.setenv("QDRANT_COLLECTION_NAME", "test_document_chunks")
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -113,6 +127,30 @@ def issue_csrf(client: TestClient) -> str:
 
 def storage_path(storage_root: Path, storage_key: str) -> Path:
     return storage_root.joinpath(*PurePosixPath(storage_key).parts)
+
+
+def indexing_service() -> DocumentIndexingService:
+    settings = get_settings()
+    dimension = settings.effective_embedding_dimension
+    return DocumentIndexingService(
+        embedding_service=DocumentEmbeddingService(
+            adapter=FakeEmbeddingAdapter(dimension=dimension),
+            config=EmbeddingBatchConfig(
+                dimension=dimension,
+                batch_size=settings.embedding_batch_size,
+            ),
+        ),
+        vector_store=QdrantVectorStore(
+            client=InMemoryQdrantClient(),
+            config=QdrantCollectionConfig(
+                name=settings.qdrant_collection_name,
+                vector_dimension=dimension,
+                distance=settings.qdrant_distance,
+            ),
+            create_collection=True,
+        ),
+        upsert_batch_size=settings.qdrant_upsert_batch_size,
+    )
 
 
 def assert_no_sensitive_document_fields(payload: Any) -> None:
@@ -196,6 +234,7 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
                 "document_ingest": DocumentIngestHandler(
                     session_factory=session_factory,
                     storage=LocalFileStorage(storage_root),
+                    indexing_service=indexing_service(),
                 )
             }
         ),
@@ -208,6 +247,9 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
         assert (
             db.query(DocumentChunk).filter_by(document_version_id=document_version_id).count() > 0
         )
+        version = db.get(DocumentVersion, document_version_id)
+        assert version is not None
+        assert version.status == "ready"
 
     duplicate = client.post(
         f"/api/v1/documents/{logical_document_id}/versions",
@@ -344,6 +386,7 @@ def test_document_api_upload_markdown_extension_cp932_and_worker_ingest(
                 "document_ingest": DocumentIngestHandler(
                     session_factory=session_factory,
                     storage=LocalFileStorage(storage_root),
+                    indexing_service=indexing_service(),
                 )
             }
         ),
@@ -353,6 +396,9 @@ def test_document_api_upload_markdown_extension_cp932_and_worker_ingest(
         job = db.get(Job, body["job_id"])
         assert job is not None
         assert job.status == "succeeded"
+        version = db.get(DocumentVersion, body["document_version_id"])
+        assert version is not None
+        assert version.status == "ready"
         assert (
             db.query(DocumentChunk)
             .filter_by(document_version_id=body["document_version_id"])

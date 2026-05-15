@@ -3,12 +3,29 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import DocumentChunk
+from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 
 
 def search_chunks(db: Session, query: str, limit: int = 5) -> list[tuple[DocumentChunk, float]]:
     terms = {t.lower() for t in query.split() if t.strip()}
-    chunks = db.scalars(select(DocumentChunk).limit(200)).all()
+    chunks = db.scalars(
+        select(DocumentChunk)
+        .join(
+            DocumentVersion,
+            DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+        )
+        .join(
+            LogicalDocument,
+            LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+        )
+        .where(
+            LogicalDocument.status == "active",
+            DocumentVersion.status == "ready",
+            DocumentVersion.is_active.is_(True),
+        )
+        .order_by(DocumentChunk.document_chunk_id.asc())
+        .limit(200)
+    ).all()
     scored: list[tuple[DocumentChunk, float]] = []
     for chunk in chunks:
         haystack = chunk.content_text.lower()

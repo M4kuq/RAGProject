@@ -195,6 +195,15 @@ Windows Docker Desktop では Linux container engine が起動していること
 
 `docker compose down -v` は PostgreSQL、Qdrant、Ollama、アップロード済みファイルの volume を削除する可能性があります。対象は主に `ragproject_postgres_data`、`ragproject_qdrant_data`、`ragproject_ollama_data`、`ragproject_upload_storage` です。デモデータや検証データを消す操作なので、必要な場合だけ実行してください。
 
+## PR-11 ingest indexing defaults
+
+Document ingest now finishes extraction, chunking, deterministic fake embedding, Qdrant
+collection ensure/upsert, and `document_versions.status=ready`. CI keeps
+`EMBEDDING_PROVIDER=fake` and `EMBEDDING_FAKE_DIMENSION=8`, so `BAAI/bge-m3`, GPU, Ollama
+model pull, and external API keys are not required for the default checks. For local
+model experiments, set `EMBEDDING_PROVIDER=local`, keep `EMBEDDING_MODEL=BAAI/bge-m3`,
+and set `EMBEDDING_VECTOR_DIMENSION=1024`.
+
 ## デモ
 
 - [5分デモ手順](docs/demo/5-minute-demo.md)
