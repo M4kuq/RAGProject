@@ -47,9 +47,7 @@ TEST_PASSWORD = "password"
 
 
 @pytest.fixture
-def rag_client() -> Iterator[
-    tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"]
-]:
+def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"]]:
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -125,16 +123,19 @@ def test_fake_reranker_is_deterministic_and_normalized() -> None:
 
 
 def test_retrieval_and_rerank_settings_validation() -> None:
-    assert Settings(
-        app_env="test",
-        retrieval_top_k_default=3,
-        retrieval_top_k_max=5,
-        rerank_top_n_default=2,
-        rerank_top_n_max=3,
-        rerank_provider="fake",
-        rerank_score_min=0.0,
-        rerank_score_max=1.0,
-    ).rerank_provider == "fake"
+    assert (
+        Settings(
+            app_env="test",
+            retrieval_top_k_default=3,
+            retrieval_top_k_max=5,
+            rerank_top_n_default=2,
+            rerank_top_n_max=3,
+            rerank_provider="fake",
+            rerank_score_min=0.0,
+            rerank_score_max=1.0,
+        ).rerank_provider
+        == "fake"
+    )
 
     with pytest.raises(ValueError):
         Settings(rerank_provider="remote")
@@ -230,10 +231,7 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert run.confidence_label is None
         assert run.retrieval_score_summary == data["retrieval_score_summary"]
         assert (
-            db.query(RetrievalRunItem)
-            .filter_by(retrieval_run_id=run.retrieval_run_id)
-            .count()
-            == 2
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
         )
         assert db.query(Citation).count() == 0
         snapshots = [
@@ -268,10 +266,7 @@ def test_rag_search_zero_result_succeeds_without_items(
         assert run is not None
         assert run.status == "succeeded"
         assert (
-            db.query(RetrievalRunItem)
-            .filter_by(retrieval_run_id=run.retrieval_run_id)
-            .count()
-            == 0
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
 
 
@@ -322,11 +317,7 @@ def test_rag_search_retrieval_failure_marks_run_failed(
     assert body["error"]["code"] == "retrieval_failed"
     assert "secret-token" not in str(body)
     with session_factory() as db:
-        run = (
-            db.query(RetrievalRun)
-            .order_by(RetrievalRun.retrieval_run_id.desc())
-            .first()
-        )
+        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "retrieval_failed"
@@ -364,19 +355,12 @@ def test_rag_search_rerank_failure_marks_run_failed_without_items(
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "rerank_failed"
     with session_factory() as db:
-        run = (
-            db.query(RetrievalRun)
-            .order_by(RetrievalRun.retrieval_run_id.desc())
-            .first()
-        )
+        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
         assert (
-            db.query(RetrievalRunItem)
-            .filter_by(retrieval_run_id=run.retrieval_run_id)
-            .count()
-            == 0
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
 
 

@@ -143,20 +143,16 @@ class RagService:
 
             ordered_candidates = sorted(
                 checked_candidates,
-                key=lambda candidate: rerank_by_chunk_id[
-                    candidate.chunk.document_chunk_id
-                ].rerank_order,
+                key=lambda candidate: (
+                    rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+                ),
             )
             selected_count = min(rerank_top_n, len(ordered_candidates))
             item_inputs = [
                 _run_item_input(
                     candidate,
-                    rerank_score=rerank_by_chunk_id[
-                        candidate.chunk.document_chunk_id
-                    ].rerank_score,
-                    rerank_order=rerank_by_chunk_id[
-                        candidate.chunk.document_chunk_id
-                    ].rerank_order,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
                     selected_flag=index <= selected_count,
                 )
                 for index, candidate in enumerate(ordered_candidates, start=1)
@@ -170,9 +166,7 @@ class RagService:
                 1.0,
                 max(
                     0.0,
-                    rerank_by_chunk_id[
-                        ordered_candidates[0].chunk.document_chunk_id
-                    ].rerank_score,
+                    rerank_by_chunk_id[ordered_candidates[0].chunk.document_chunk_id].rerank_score,
                 ),
             )
             summary = _score_summary(
@@ -251,10 +245,7 @@ class RagService:
             raise
         except Exception as exc:
             raise EmbeddingAdapterError("embedding_failed") from exc
-        if (
-            len(vectors) != 1
-            or len(vectors[0]) != self.settings.effective_embedding_dimension
-        ):
+        if len(vectors) != 1 or len(vectors[0]) != self.settings.effective_embedding_dimension:
             raise EmbeddingAdapterError("embedding_dimension_mismatch")
         return [float(value) for value in vectors[0]]
 
@@ -324,9 +315,7 @@ def _score_summary(
         post_filter_candidate_count=len(checked_candidates),
         selected_count=selected_count,
         excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
-        top1_retrieval_score=(
-            _round_score(retrieval_scores[0]) if retrieval_scores else None
-        ),
+        top1_retrieval_score=(_round_score(retrieval_scores[0]) if retrieval_scores else None),
         top3_avg_retrieval_score=(
             _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
             if retrieval_scores
@@ -399,10 +388,7 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
 def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     raw_label = candidate.document_version.file_name or candidate.logical_document.title
     normalized = raw_label.replace("\\", "/").strip()
-    label = (
-        PurePosixPath(normalized).name.strip()
-        or candidate.logical_document.title.strip()
-    )
+    label = PurePosixPath(normalized).name.strip() or candidate.logical_document.title.strip()
     return (label or f"document:{candidate.logical_document.logical_document_id}")[:255]
 
 
