@@ -8,8 +8,18 @@ from pathlib import PurePosixPath
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.ingest.embedding import EmbeddingAdapter, EmbeddingAdapterError, create_embedding_adapter
-from app.rag.rerank import RerankCandidate, RerankError, RerankerClient, create_reranker
+from app.ingest.embedding import (
+    EmbeddingAdapter,
+    EmbeddingAdapterError,
+    create_embedding_adapter,
+)
+from app.rag.rerank import (
+    RerankCandidate,
+    RerankError,
+    RerankResult,
+    RerankerClient,
+    create_reranker,
+)
 from app.rag.retrieval import (
     HttpQdrantSearchClient,
     RetrievalError,
@@ -123,7 +133,9 @@ class RagService:
                     for candidate in checked_candidates
                 ],
             )
-            rerank_by_chunk_id = {result.document_chunk_id: result for result in rerank_results}
+            rerank_by_chunk_id: dict[int, RerankResult] = {}
+            for result in rerank_results:
+                rerank_by_chunk_id[result.document_chunk_id] = result
             if set(rerank_by_chunk_id) != {
                 candidate.chunk.document_chunk_id for candidate in checked_candidates
             }:
@@ -312,7 +324,9 @@ def _score_summary(
         post_filter_candidate_count=len(checked_candidates),
         selected_count=selected_count,
         excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
-        top1_retrieval_score=_round_score(retrieval_scores[0]) if retrieval_scores else None,
+        top1_retrieval_score=(
+            _round_score(retrieval_scores[0]) if retrieval_scores else None
+        ),
         top3_avg_retrieval_score=(
             _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
             if retrieval_scores
@@ -385,7 +399,10 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
 def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     raw_label = candidate.document_version.file_name or candidate.logical_document.title
     normalized = raw_label.replace("\\", "/").strip()
-    label = PurePosixPath(normalized).name.strip() or candidate.logical_document.title.strip()
+    label = (
+        PurePosixPath(normalized).name.strip()
+        or candidate.logical_document.title.strip()
+    )
     return (label or f"document:{candidate.logical_document.logical_document_id}")[:255]
 
 
@@ -397,7 +414,10 @@ def _snippet(text: str, *, max_chars: int) -> str:
 
 
 def _decimal_score(value: float) -> Decimal:
-    return Decimal(str(_round_score(value))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
+    return Decimal(str(_round_score(value))).quantize(
+        SCORE_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
 
 
 def _round_score(value: float) -> float:
