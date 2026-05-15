@@ -80,9 +80,9 @@ class LocalEmbeddingAdapter:
                 list(texts),
                 normalize_embeddings=True,
             )
+            vectors = _to_vector_list(encoded)
         except Exception as exc:
             raise EmbeddingAdapterError("embedding_failed") from exc
-        vectors = _to_vector_list(encoded)
         _validate_vectors(vectors, expected_count=len(texts), dimension=self._dimension)
         return vectors
 
@@ -107,7 +107,7 @@ class DocumentEmbeddingService:
     def embed_chunks(self, chunks: Sequence[object]) -> list[list[float]]:
         if not chunks:
             raise EmbeddingAdapterError("embedding_empty_result")
-        texts = [str(getattr(chunk, "content_text", "")) for chunk in chunks]
+        texts = [_chunk_text(chunk) for chunk in chunks]
         _validate_texts(texts)
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self.config.batch_size):
@@ -166,6 +166,13 @@ def _validate_texts(texts: Sequence[str]) -> None:
             raise EmbeddingAdapterError("embedding_empty_result")
 
 
+def _chunk_text(chunk: object) -> str:
+    text = getattr(chunk, "content_text", None)
+    if not isinstance(text, str):
+        raise EmbeddingAdapterError("embedding_empty_result")
+    return text
+
+
 def _validate_vectors(
     vectors: Sequence[Sequence[float]],
     *,
@@ -208,5 +215,8 @@ def _to_vector_list(value: object) -> list[list[float]]:
             row = row.tolist()  # type: ignore[no-untyped-call]
         if not isinstance(row, Sequence) or isinstance(row, (bytes, bytearray, str)):
             raise EmbeddingAdapterError("embedding_failed")
-        vectors.append([float(cast(Any, item)) for item in cast(Sequence[object], row)])
+        try:
+            vectors.append([float(cast(Any, item)) for item in cast(Sequence[object], row)])
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingAdapterError("embedding_failed") from exc
     return vectors
