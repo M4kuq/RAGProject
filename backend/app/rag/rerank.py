@@ -145,7 +145,7 @@ def _fake_rerank_score(query: str, candidate: RerankCandidate) -> float:
     if query_terms:
         overlap = sum(1 for term in query_terms if term in candidate_text) / len(query_terms)
     digest = hashlib.sha256(
-        f"{query}\0{candidate.document_chunk_id}\0{candidate.text[:256]}".encode("utf-8")
+        f"{query}\0{candidate.document_chunk_id}\0{candidate.text[:256]}".encode()
     ).digest()
     tie_breaker = int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
     retrieval_component = min(1.0, max(0.0, (candidate.retrieval_score + 1.0) / 2.0))

@@ -47,7 +47,7 @@ TEST_PASSWORD = "password"
 
 
 @pytest.fixture
-def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"]]:
+def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], _StaticVectorClient]]:
     get_settings.cache_clear()
     engine = create_engine(
         "sqlite://",
@@ -180,7 +180,7 @@ def test_in_memory_vector_search_client_scores_fake_qdrant_points() -> None:
 
 
 def test_rag_search_admin_success_persists_standalone_run_and_items(
-    rag_client: tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"],
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_client
     csrf_token = _login(client)
@@ -244,7 +244,7 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
 
 
 def test_rag_search_zero_result_succeeds_without_items(
-    rag_client: tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"],
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_client
     vector_client.candidates = []
@@ -271,7 +271,7 @@ def test_rag_search_zero_result_succeeds_without_items(
 
 
 def test_rag_search_auth_admin_and_csrf_required(
-    rag_client: tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"],
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, _, _ = rag_client
 
@@ -300,7 +300,7 @@ def test_rag_search_auth_admin_and_csrf_required(
 
 
 def test_rag_search_retrieval_failure_marks_run_failed(
-    rag_client: tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"],
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_client
     vector_client.fail = True
@@ -325,7 +325,7 @@ def test_rag_search_retrieval_failure_marks_run_failed(
 
 
 def test_rag_search_rerank_failure_marks_run_failed_without_items(
-    rag_client: tuple[TestClient, sessionmaker[Session], "_StaticVectorClient"],
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_client
     settings = Settings(
