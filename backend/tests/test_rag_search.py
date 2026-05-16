@@ -242,8 +242,10 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             .filter_by(retrieval_run_id=run.retrieval_run_id)
             .all()
         ]
-        assert all("content_text" not in str(snapshot) for snapshot in snapshots)
-        assert all("document_name" not in snapshot for snapshot in snapshots)
+        for snapshot in snapshots:
+            assert snapshot is not None
+            assert "content_text" not in str(snapshot)
+            assert "document_name" not in snapshot
 
 
 def test_rag_search_zero_result_succeeds_without_items(
