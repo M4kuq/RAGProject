@@ -67,7 +67,15 @@ class Settings(BaseSettings):
     embedding_vector_dimension: int = Field(default=1024, ge=1)
     embedding_fake_dimension: int = Field(default=8, ge=1)
     embedding_batch_size: int = Field(default=32, ge=1)
+    retrieval_top_k_default: int = Field(default=20, ge=1, le=20)
+    retrieval_top_k_max: int = Field(default=20, ge=1, le=20)
+    rerank_provider: str = "fake"
+    rerank_top_n_default: int = Field(default=5, ge=1, le=20)
+    rerank_top_n_max: int = Field(default=5, ge=1, le=20)
+    rerank_score_min: float = 0.0
+    rerank_score_max: float = 1.0
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    search_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -104,6 +112,15 @@ class Settings(BaseSettings):
         self.embedding_provider = self.embedding_provider.lower()
         if self.embedding_provider not in {"fake", "local"}:
             raise ValueError("EMBEDDING_PROVIDER must be fake or local")
+        self.rerank_provider = self.rerank_provider.lower()
+        if self.rerank_provider not in {"fake", "local"}:
+            raise ValueError("RERANK_PROVIDER must be fake or local")
+        if self.retrieval_top_k_default > self.retrieval_top_k_max:
+            raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
+        if self.rerank_top_n_default > self.rerank_top_n_max:
+            raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
+        if self.rerank_score_max <= self.rerank_score_min:
+            raise ValueError("RERANK_SCORE_MAX must be greater than RERANK_SCORE_MIN")
         distance = self.qdrant_distance.strip().lower()
         if distance not in {"cosine", "dot", "euclid"}:
             raise ValueError("QDRANT_DISTANCE must be cosine, dot, or euclid")
