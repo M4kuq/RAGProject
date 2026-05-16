@@ -213,10 +213,12 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
     assert [item["rerank_order"] for item in data["items"]] == [1, 2]
     assert sum(1 for item in data["items"] if item["selected_flag"]) == 1
     first = data["items"][0]
-    assert first["source_label"] == "handbook.pdf"
+    assert first["source_label"] == "hand book.pdf"
     assert len(first["snippet"]) <= 32
     assert "full active chunk text should not be returned whole" not in first["snippet"]
     assert "content_text" not in str(first["payload_snapshot"])
+    assert "document_name" not in first["payload_snapshot"]
+    assert first["payload_snapshot"]["source_label"] == first["source_label"]
     assert "storage_key" not in str(data).lower()
     assert "password" not in str(data).lower()
 
@@ -241,6 +243,7 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             .all()
         ]
         assert all("content_text" not in str(snapshot) for snapshot in snapshots)
+        assert all("document_name" not in snapshot for snapshot in snapshots)
 
 
 def test_rag_search_zero_result_succeeds_without_items(
@@ -459,7 +462,7 @@ def _seed_documents(db: Session) -> None:
     )
     db.add_all(
         [
-            _version(10, 10, "ready", True, "a", file_name=r"C:\unsafe\handbook.pdf"),
+            _version(10, 10, "ready", True, "a", file_name="C:\\unsafe\\hand\tbook.pdf"),
             _version(20, 20, "ready", True, "b"),
             _version(30, 30, "ready", False, "c"),
             _version(40, 40, "failed", False, "d", error_code="embedding_failed"),

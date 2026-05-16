@@ -375,7 +375,6 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
         "logical_document_id": candidate.logical_document.logical_document_id,
         "document_version_id": candidate.document_version.document_version_id,
         "source_label": _source_label(candidate),
-        "document_name": candidate.logical_document.title,
         "version_no": candidate.document_version.version_no,
         "modality": candidate.chunk.modality,
     }
@@ -387,9 +386,11 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
 
 def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     raw_label = candidate.document_version.file_name or candidate.logical_document.title
-    normalized = raw_label.replace("\\", "/").strip()
-    label = PurePosixPath(normalized).name.strip() or candidate.logical_document.title.strip()
-    return (label or f"document:{candidate.logical_document.logical_document_id}")[:255]
+    normalized = _sanitize_label(raw_label.replace("\\", "/"))
+    label = _sanitize_label(PurePosixPath(normalized).name)
+    fallback = _sanitize_label(candidate.logical_document.title)
+    safe_label = label or fallback or f"document:{candidate.logical_document.logical_document_id}"
+    return safe_label[:255]
 
 
 def _snippet(text: str, *, max_chars: int) -> str:
@@ -397,6 +398,11 @@ def _snippet(text: str, *, max_chars: int) -> str:
     if len(cleaned) <= max_chars:
         return cleaned
     return f"{cleaned[: max_chars - 3]}..."
+
+
+def _sanitize_label(value: str) -> str:
+    printable = "".join(char if char.isprintable() else " " for char in value)
+    return " ".join(printable.split())
 
 
 def _decimal_score(value: float) -> Decimal:
