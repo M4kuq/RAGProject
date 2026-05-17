@@ -370,9 +370,9 @@ class RagService:
 
         ordered_candidates = sorted(
             checked_candidates,
-            key=lambda candidate: rerank_by_chunk_id[
-                candidate.chunk.document_chunk_id
-            ].rerank_order,
+            key=lambda candidate: (
+                rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+            ),
         )
         selected_count = min(rerank_top_n, len(ordered_candidates))
         item_inputs = [
