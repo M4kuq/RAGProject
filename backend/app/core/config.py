@@ -127,9 +127,15 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:
             raise ValueError("RERANK_SCORE_MAX must be greater than RERANK_SCORE_MIN")
-        if self.ask_top_k_default > self.retrieval_top_k_max:
+        if (
+            "ask_top_k_default" in self.model_fields_set
+            and self.ask_top_k_default > self.retrieval_top_k_max
+        ):
             raise ValueError("ASK_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
-        if self.ask_rerank_top_n_default > self.rerank_top_n_max:
+        if (
+            "ask_rerank_top_n_default" in self.model_fields_set
+            and self.ask_rerank_top_n_default > self.rerank_top_n_max
+        ):
             raise ValueError("ASK_RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         self.generation_provider = self.generation_provider.lower()
         if self.generation_provider not in {"fake", "ollama"}:
