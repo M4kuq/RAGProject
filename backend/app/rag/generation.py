@@ -86,7 +86,7 @@ class OllamaAnswerGenerator:
         if not isinstance(raw_content, str) or not raw_content.strip():
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(raw_content.strip(), request.max_output_chars)
+            content=_truncate_output(raw_content.strip(), request.max_output_chars),
         )
 
 
