@@ -341,18 +341,25 @@ def _validated_rerank_results(
             raise RerankError()
         if result.document_chunk_id in normalized:
             raise RerankError()
-        if result.rerank_order < 1:
-            raise RerankError()
-        orders.append(result.rerank_order)
+        rerank_order = _positive_rerank_order(result.rerank_order)
+        orders.append(rerank_order)
         normalized[result.document_chunk_id] = RerankResult(
             document_chunk_id=result.document_chunk_id,
             rerank_score=_unit_score(result.rerank_score),
-            rerank_order=result.rerank_order,
+            rerank_order=rerank_order,
         )
 
     if sorted(orders) != list(range(1, len(expected_ids) + 1)):
         raise RerankError()
     return normalized
+
+
+def _positive_rerank_order(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RerankError()
+    if value < 1:
+        raise RerankError()
+    return value
 
 
 def _unit_score(value: float) -> float:

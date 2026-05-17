@@ -444,6 +444,46 @@ def test_rag_search_malformed_rerank_results_mark_run_failed(
         )
 
 
+def test_rag_search_invalid_rerank_order_type_marks_run_failed(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    malformed_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_InvalidOrderTypeReranker(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: malformed_service
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "rerank_failed"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "rerank_failed"
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+
+
 class _StaticVectorClient:
     def __init__(self, candidates: list[VectorSearchCandidate]) -> None:
         self.candidates = candidates
@@ -518,6 +558,23 @@ class _DuplicateOrderReranker:
                 rerank_order=1,
             )
             for candidate in candidates
+        ]
+
+
+class _InvalidOrderTypeReranker:
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: Sequence[RerankCandidate],
+    ) -> list[RerankResult]:
+        return [
+            RerankResult(
+                document_chunk_id=candidate.document_chunk_id,
+                rerank_score=0.5,
+                rerank_order=cast(Any, "1" if index == 1 else index),
+            )
+            for index, candidate in enumerate(candidates, start=1)
         ]
 
 
