@@ -146,8 +146,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert run.confidence_label is None
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
         assert (
-            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count()
-            == 2
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
         )
         assert db.query(Citation).count() == 0
 
@@ -267,8 +266,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
     assert "missing context" not in str(no_context.json())
     with session_factory() as db:
         no_context_roles = [
-            m.role
-            for m in db.query(ChatMessage).filter_by(chat_session_id=no_context_session_id)
+            m.role for m in db.query(ChatMessage).filter_by(chat_session_id=no_context_session_id)
         ]
         assert no_context_roles == ["user"]
         run = db.query(RetrievalRun).filter_by(chat_session_id=no_context_session_id).one()
@@ -331,8 +329,7 @@ def test_rag_ask_retrieval_and_rerank_failures_keep_only_user_message(
     assert retrieval_failed.json()["error"]["code"] == "retrieval_failed"
     with session_factory() as db:
         retrieval_roles = [
-            m.role
-            for m in db.query(ChatMessage).filter_by(chat_session_id=retrieval_session_id)
+            m.role for m in db.query(ChatMessage).filter_by(chat_session_id=retrieval_session_id)
         ]
         assert retrieval_roles == ["user"]
         run = db.query(RetrievalRun).filter_by(chat_session_id=retrieval_session_id).one()
@@ -363,8 +360,7 @@ def test_rag_ask_retrieval_and_rerank_failures_keep_only_user_message(
     assert rerank_failed.json()["error"]["code"] == "rerank_failed"
     with session_factory() as db:
         rerank_roles = [
-            m.role
-            for m in db.query(ChatMessage).filter_by(chat_session_id=rerank_session_id)
+            m.role for m in db.query(ChatMessage).filter_by(chat_session_id=rerank_session_id)
         ]
         assert rerank_roles == ["user"]
         run = db.query(RetrievalRun).filter_by(chat_session_id=rerank_session_id).one()
