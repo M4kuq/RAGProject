@@ -92,7 +92,7 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
                 text="raw context text that should not be echoed",
                 page_from=1,
                 page_to=1,
-            )
+            ),
         ],
         max_output_chars=200,
     )
