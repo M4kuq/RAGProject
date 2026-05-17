@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     rerank_score_max: float = 1.0
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     search_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
+    ask_top_k_default: int = Field(default=20, ge=1, le=20)
+    ask_rerank_top_n_default: int = Field(default=5, ge=1, le=20)
+    generation_provider: str = "fake"
+    generation_model_name: str = "fake-rag-answer"
+    generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
+    generation_max_output_chars: int = Field(default=2000, ge=20, le=20000)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -121,6 +127,13 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:
             raise ValueError("RERANK_SCORE_MAX must be greater than RERANK_SCORE_MIN")
+        if self.ask_top_k_default > self.retrieval_top_k_max:
+            raise ValueError("ASK_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
+        if self.ask_rerank_top_n_default > self.rerank_top_n_max:
+            raise ValueError("ASK_RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
+        self.generation_provider = self.generation_provider.lower()
+        if self.generation_provider not in {"fake", "ollama"}:
+            raise ValueError("GENERATION_PROVIDER must be fake or ollama")
         distance = self.qdrant_distance.strip().lower()
         if distance not in {"cosine", "dot", "euclid"}:
             raise ValueError("QDRANT_DISTANCE must be cosine, dot, or euclid")
