@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import PurePosixPath
@@ -133,13 +134,10 @@ class RagService:
                     for candidate in checked_candidates
                 ],
             )
-            rerank_by_chunk_id: dict[int, RerankResult] = {}
-            for result in rerank_results:
-                rerank_by_chunk_id[result.document_chunk_id] = result
-            if set(rerank_by_chunk_id) != {
-                candidate.chunk.document_chunk_id for candidate in checked_candidates
-            }:
-                raise RerankError()
+            rerank_by_chunk_id = _validated_rerank_results(
+                rerank_results,
+                checked_candidates=checked_candidates,
+            )
 
             ordered_candidates = sorted(
                 checked_candidates,
@@ -325,6 +323,53 @@ def _score_summary(
             _round_score(top1_rerank_score) if top1_rerank_score is not None else None
         ),
     )
+
+
+def _validated_rerank_results(
+    results: list[RerankResult],
+    *,
+    checked_candidates: list[CheckedRetrievalCandidate],
+) -> dict[int, RerankResult]:
+    expected_ids = {candidate.chunk.document_chunk_id for candidate in checked_candidates}
+    if len(results) != len(expected_ids):
+        raise RerankError()
+
+    normalized: dict[int, RerankResult] = {}
+    orders: list[int] = []
+    for result in results:
+        if result.document_chunk_id not in expected_ids:
+            raise RerankError()
+        if result.document_chunk_id in normalized:
+            raise RerankError()
+        rerank_order = _positive_rerank_order(result.rerank_order)
+        orders.append(rerank_order)
+        normalized[result.document_chunk_id] = RerankResult(
+            document_chunk_id=result.document_chunk_id,
+            rerank_score=_unit_score(result.rerank_score),
+            rerank_order=rerank_order,
+        )
+
+    if sorted(orders) != list(range(1, len(expected_ids) + 1)):
+        raise RerankError()
+    return normalized
+
+
+def _positive_rerank_order(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RerankError()
+    if value < 1:
+        raise RerankError()
+    return value
+
+
+def _unit_score(value: float) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RerankError() from exc
+    if not math.isfinite(score):
+        raise RerankError()
+    return min(1.0, max(0.0, score))
 
 
 def _run_item_input(
