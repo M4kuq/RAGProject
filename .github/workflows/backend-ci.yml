@@ -75,7 +75,7 @@ jobs:
           cache-dependency-glob: backend/pyproject.toml
 
       - name: Ruff format check
-        run: uv run --extra dev ruff format --check .
+        run: uv run --extra dev ruff format --check --diff .
 
       - name: Ruff lint
         run: uv run --extra dev ruff check .
