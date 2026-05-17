@@ -128,10 +128,7 @@ def _context_label(item: GenerationContextItem) -> str:
 
 def _ollama_prompt(request: GenerationRequest) -> str:
     context_lines = [
-        (
-            f"[source={_context_label(item)}]\n"
-            f"{item.text}"
-        )
+        f"[source={_context_label(item)}]\n" f"{item.text}"
         for item in request.context_items
     ]
     return (
