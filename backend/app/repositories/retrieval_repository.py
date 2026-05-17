@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -282,6 +282,13 @@ class RetrievalRepository:
     ) -> list[CitationRecord]:
         statement = (
             select(Citation, DocumentChunk, DocumentVersion, LogicalDocument)
+            .join(
+                RetrievalRunItem,
+                and_(
+                    RetrievalRunItem.retrieval_run_id == Citation.retrieval_run_id,
+                    RetrievalRunItem.document_chunk_id == Citation.document_chunk_id,
+                ),
+            )
             .join(DocumentChunk, DocumentChunk.document_chunk_id == Citation.document_chunk_id)
             .join(
                 DocumentVersion,
@@ -291,7 +298,10 @@ class RetrievalRepository:
                 LogicalDocument,
                 LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
-            .where(Citation.retrieval_run_id == retrieval_run_id)
+            .where(
+                Citation.retrieval_run_id == retrieval_run_id,
+                RetrievalRunItem.selected_flag.is_(True),
+            )
             .order_by(Citation.rank_order.asc(), Citation.citation_id.asc())
         )
         return [

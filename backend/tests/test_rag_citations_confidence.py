@@ -15,7 +15,7 @@ from app.schemas.rag import RetrievalScoreSummary
 
 def test_marker_parser_validates_unique_markers_and_duplicate_references() -> None:
     source_map = [_source(1), _source(2)]
-    parsed = parse_generation_output("日本語[1]. claim[1] and [2].")
+    parsed = parse_generation_output("claim[1] and another claim [1] then [2].")
 
     citations = validate_generation_citations(parsed, source_map=source_map)
 
@@ -47,6 +47,12 @@ def test_marker_validation_rejects_zero_unknown_and_oversized_markers() -> None:
 
     with pytest.raises(CitationBuildError):
         parse_generation_output("Alpha [9999999].")
+
+    with pytest.raises(CitationBuildError):
+        validate_generation_citations(
+            parse_generation_output("[1] [1]"),
+            source_map=source_map,
+        )
 
 
 def test_confidence_scores_are_clamped_and_label_rules_are_deterministic() -> None:

@@ -118,9 +118,9 @@ class RagAskAssistantMessage(BaseModel):
 
 
 class RagAskCitation(BaseModel):
-    citation_id: int
-    local_citation_id: int
-    document_chunk_id: int
+    citation_id: int = Field(ge=1)
+    local_citation_id: int = Field(ge=1)
+    document_chunk_id: int = Field(ge=1)
     source_label: str
     snippet: str
     page_from: int | None = None
@@ -130,8 +130,8 @@ class RagAskCitation(BaseModel):
 
 
 class RagAskConfidence(BaseModel):
-    answer_confidence: float
-    groundedness_score: float
+    answer_confidence: float = Field(ge=0.0, le=1.0)
+    groundedness_score: float = Field(ge=0.0, le=1.0)
     confidence_label: Literal["High", "Medium", "Low"]
 
 

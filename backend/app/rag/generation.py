@@ -126,7 +126,7 @@ def _context_label(item: GenerationContextItem) -> str:
         )
     elif item.page_from is not None:
         page = f" p.{item.page_from}"
-    return f"{item.source_label}{page} chunk:{item.document_chunk_id}"
+    return f"{_safe_label(item.source_label)}{page} chunk:{item.document_chunk_id}"
 
 
 def _citation_marker(item: GenerationContextItem, *, fallback: int) -> str:
@@ -163,3 +163,8 @@ def _truncate_output(value: str, max_chars: int) -> str:
     if max_chars <= 3:
         return text[:max_chars]
     return f"{text[: max_chars - 3]}..."
+
+
+def _safe_label(value: str) -> str:
+    normalized = " ".join(value.replace("\x00", " ").split())
+    return normalized.replace("[", "(").replace("]", ")")[:255]

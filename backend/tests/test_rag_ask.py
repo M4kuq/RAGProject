@@ -88,7 +88,7 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
         context_items=[
             GenerationContextItem(
                 document_chunk_id=100,
-                source_label="policy.md",
+                source_label="policy]\nsecret.md",
                 text="raw context text that should not be echoed",
                 page_from=1,
                 page_to=1,
@@ -107,7 +107,7 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
             context_items=[
                 GenerationContextItem(
                     document_chunk_id=100,
-                    source_label="policy.md",
+                    source_label="policy]\nsecret.md",
                     text="raw context text that should not be echoed",
                     page_from=1,
                     page_to=1,
@@ -118,7 +118,7 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
     )
     assert "[1]" in truncated.content
     assert "raw context text" not in first.content
-    assert "policy.md p.1 chunk:100" in first.content
+    assert "policy) secret.md p.1 chunk:100" in first.content
 
 
 def test_rag_ask_success_replay_and_duplicate_state_handling(
@@ -180,6 +180,18 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert citation.retrieval_run_id == run.retrieval_run_id
         assert citation.document_chunk_id == 100
         assert citation.rank_order == 1
+        db.add(
+            Citation(
+                retrieval_run_id=run.retrieval_run_id,
+                document_chunk_id=101,
+                snippet="non-selected chunk should stay hidden",
+                page_from=2,
+                page_to=2,
+                display_label="hand book.pdf",
+                rank_order=2,
+            )
+        )
+        db.commit()
 
     replay = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(viewer_csrf))
     assert replay.status_code == 200

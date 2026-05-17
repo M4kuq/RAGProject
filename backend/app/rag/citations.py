@@ -67,6 +67,8 @@ def validate_generation_citations(
 ) -> list[CitationSource]:
     if not parsed.markers:
         raise CitationBuildError("citation_build_failed")
+    if not MARKER_RE.sub("", parsed.answer_text).strip():
+        raise CitationBuildError("citation_build_failed")
 
     if any(local_id < 1 for local_id in parsed.unique_marker_ids):
         raise CitationBuildError("citation_build_failed")
