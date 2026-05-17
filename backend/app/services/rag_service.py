@@ -405,12 +405,8 @@ class RagService:
                 _response_item(
                     candidate,
                     saved_item_id=saved_item.retrieval_run_item_id,
-                    rerank_score=rerank_by_chunk_id[
-                        candidate.chunk.document_chunk_id
-                    ].rerank_score,
-                    rerank_order=rerank_by_chunk_id[
-                        candidate.chunk.document_chunk_id
-                    ].rerank_order,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
                     selected_flag=index <= selected_count,
                     snippet_max_chars=self.settings.search_snippet_max_chars,
                 )
@@ -549,9 +545,7 @@ def _score_summary(
         post_filter_candidate_count=len(checked_candidates),
         selected_count=selected_count,
         excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
-        top1_retrieval_score=(
-            _round_score(retrieval_scores[0]) if retrieval_scores else None
-        ),
+        top1_retrieval_score=_round_score(retrieval_scores[0]) if retrieval_scores else None,
         top3_avg_retrieval_score=(
             _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
             if retrieval_scores
