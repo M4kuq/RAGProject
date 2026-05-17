@@ -117,9 +117,29 @@ class RagAskAssistantMessage(BaseModel):
     created_at: datetime
 
 
+class RagAskCitation(BaseModel):
+    citation_id: int
+    local_citation_id: int
+    document_chunk_id: int
+    source_label: str
+    snippet: str
+    page_from: int | None = None
+    page_to: int | None = None
+    section_title: str | None = None
+    old_version_flag: bool
+
+
+class RagAskConfidence(BaseModel):
+    answer_confidence: float
+    groundedness_score: float
+    confidence_label: Literal["High", "Medium", "Low"]
+
+
 class RagAskResponse(BaseModel):
     chat_session_id: int
     user_message: RagAskUserMessage
     assistant_message: RagAskAssistantMessage
+    citations: list[RagAskCitation]
+    confidence: RagAskConfidence
     retrieval_run_id: int
     replayed: bool = False

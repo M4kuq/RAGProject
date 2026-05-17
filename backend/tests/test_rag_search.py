@@ -15,6 +15,7 @@ from app.core.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import (
+    ChatMessage,
     Citation,
     DocumentChunk,
     DocumentVersion,
@@ -28,6 +29,13 @@ from app.db.session import get_db
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.ingest.qdrant import InMemoryQdrantClient, QdrantCollectionConfig, QdrantPoint
 from app.main import create_app
+from app.rag.generation import (
+    AnswerGenerationError,
+    FakeAnswerGenerator,
+    GenerationContextItem,
+    GenerationRequest,
+    GenerationResult,
+)
 from app.rag.rerank import (
     FakeRerankerClient,
     RerankCandidate,
@@ -123,6 +131,30 @@ def test_fake_reranker_is_deterministic_and_normalized() -> None:
     assert normalize_rerank_score(5.0, score_min=10.0, score_max=20.0) == 0.0
 
 
+def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> None:
+    generator = FakeAnswerGenerator()
+    request = GenerationRequest(
+        message="alpha policy",
+        context_items=[
+            GenerationContextItem(
+                document_chunk_id=100,
+                source_label="policy.md",
+                text="raw context text that should not be echoed",
+                page_from=1,
+                page_to=1,
+            )
+        ],
+        max_output_chars=200,
+    )
+
+    first = generator.generate(request)
+    second = generator.generate(request)
+
+    assert first == second
+    assert "raw context text" not in first.content
+    assert "policy.md p.1 chunk:100" in first.content
+
+
 def test_retrieval_and_rerank_settings_validation() -> None:
     assert (
         Settings(
@@ -134,6 +166,9 @@ def test_retrieval_and_rerank_settings_validation() -> None:
             rerank_provider="fake",
             rerank_score_min=0.0,
             rerank_score_max=1.0,
+            ask_top_k_default=3,
+            ask_rerank_top_n_default=2,
+            generation_provider="fake",
         ).rerank_provider
         == "fake"
     )
@@ -146,6 +181,12 @@ def test_retrieval_and_rerank_settings_validation() -> None:
         Settings(rerank_top_n_default=6, rerank_top_n_max=5)
     with pytest.raises(ValueError):
         Settings(rerank_score_min=1.0, rerank_score_max=1.0)
+    with pytest.raises(ValueError):
+        Settings(ask_top_k_default=6, retrieval_top_k_max=5)
+    with pytest.raises(ValueError):
+        Settings(ask_rerank_top_n_default=6, rerank_top_n_max=5)
+    with pytest.raises(ValueError):
+        Settings(generation_provider="remote")
 
 
 def test_in_memory_vector_search_client_scores_fake_qdrant_points() -> None:
@@ -484,6 +525,417 @@ def test_rag_search_invalid_rerank_order_type_marks_run_failed(
         )
 
 
+def test_rag_ask_viewer_and_admin_success_persists_messages_run_items_with_citations(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    viewer_csrf = _login(client, email="viewer@example.com")
+    viewer_session_id = _create_chat_session(client, viewer_csrf, title="viewer ask")
+
+    viewer_response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": viewer_session_id,
+            "client_message_id": "viewer-msg-1",
+            "message": "alpha policy summary",
+            "top_k": 5,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(viewer_csrf),
+    )
+
+    assert viewer_response.status_code == 200
+    body = viewer_response.json()
+    assert body["meta"]["replayed"] is False
+    data = body["data"]
+    assert data["chat_session_id"] == viewer_session_id
+    assert data["user_message"]["role"] == "user"
+    assert data["user_message"]["client_message_id"] == "viewer-msg-1"
+    assert data["assistant_message"]["role"] == "assistant"
+    assert data["assistant_message"]["linked_retrieval_run_id"] == data["retrieval_run_id"]
+    assert "Fake answer" in data["assistant_message"]["content"]
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["citations"][0]["document_chunk_id"] == 100
+    assert data["citations"][0]["source_label"] == "hand book.pdf"
+    assert data["citations"][0]["old_version_flag"] is False
+    assert data["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
+    assert (
+        "full active chunk text should not be returned whole"
+        not in data["assistant_message"]["content"]
+    )
+    assert len(data["citations"][0]["snippet"]) <= 240
+    assert "token" not in str(body).lower()
+    assert "storage_key" not in str(body).lower()
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.chat_session_id == viewer_session_id
+        assert run.request_message_id == data["user_message"]["chat_message_id"]
+        assert run.status == "succeeded"
+        assert run.answer_confidence is not None
+        assert run.groundedness_score is not None
+        assert run.confidence_label in {"High", "Medium", "Low"}
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
+        )
+        citation = db.query(Citation).one()
+        assert citation.retrieval_run_id == run.retrieval_run_id
+        assert citation.document_chunk_id == 100
+        assert citation.rank_order == 1
+        messages = (
+            db.query(ChatMessage)
+            .filter_by(chat_session_id=viewer_session_id)
+            .order_by(ChatMessage.chat_message_id.asc())
+            .all()
+        )
+        assert [message.role for message in messages] == ["user", "assistant"]
+        assert messages[1].linked_retrieval_run_id == run.retrieval_run_id
+
+    client.cookies.clear()
+    admin_csrf = _login(client, email="admin@example.com")
+    admin_session_id = _create_chat_session(client, admin_csrf, title="admin ask")
+    admin_response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": admin_session_id,
+            "client_message_id": "admin-msg-1",
+            "message": "alpha policy summary",
+        },
+        headers=_unsafe_headers(admin_csrf),
+    )
+    assert admin_response.status_code == 200
+    assert admin_response.json()["data"]["chat_session_id"] == admin_session_id
+
+
+def test_rag_ask_replay_and_duplicate_state_handling(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="duplicates")
+    payload = {
+        "chat_session_id": chat_session_id,
+        "client_message_id": "dup-msg-1",
+        "message": "alpha policy replay",
+    }
+
+    first = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(csrf_token))
+    assert first.status_code == 200
+    replay = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(csrf_token))
+    assert replay.status_code == 200
+    assert replay.json()["meta"]["replayed"] is True
+    assert (
+        replay.json()["data"]["user_message"]["chat_message_id"]
+        == first.json()["data"]["user_message"]["chat_message_id"]
+    )
+    assert replay.json()["data"]["citations"] == first.json()["data"]["citations"]
+    assert replay.json()["data"]["confidence"] == first.json()["data"]["confidence"]
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
+
+    conflict = client.post(
+        "/api/v1/rag/ask",
+        json={**payload, "message": "different body"},
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "client_message_conflict"
+
+    now = datetime.now(UTC)
+    with session_factory() as db:
+        db.add(ChatMessage(chat_session_id=chat_session_id, role="user", content="still running"))
+        db.flush()
+        running_message = db.query(ChatMessage).order_by(ChatMessage.chat_message_id.desc()).first()
+        assert running_message is not None
+        running_message.client_message_id = "running-msg"
+        db.add(
+            RetrievalRun(
+                chat_session_id=chat_session_id,
+                request_message_id=running_message.chat_message_id,
+                status="running",
+                started_at=now,
+            )
+        )
+        db.add(ChatMessage(chat_session_id=chat_session_id, role="user", content="failed body"))
+        db.flush()
+        failed_message = db.query(ChatMessage).order_by(ChatMessage.chat_message_id.desc()).first()
+        assert failed_message is not None
+        failed_message.client_message_id = "failed-msg"
+        db.add(
+            RetrievalRun(
+                chat_session_id=chat_session_id,
+                request_message_id=failed_message.chat_message_id,
+                status="failed",
+                error_code="retrieval_failed",
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        db.commit()
+
+    running = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "running-msg",
+            "message": "still running",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert running.status_code == 409
+    assert running.json()["error"]["code"] == "request_in_progress"
+
+    failed = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "failed-msg",
+            "message": "failed body",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert failed.status_code == 409
+    assert failed.json()["error"]["code"] == "conflict"
+
+
+def test_rag_ask_context_assembly_is_bounded_to_selected_items(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, _, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        generation_max_context_chars=100,
+    )
+    generator = _RecordingAnswerGenerator()
+    service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=generator,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: service
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="context")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "context-msg",
+            "message": "alpha policy context",
+            "top_k": 5,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    assert generator.last_request is not None
+    assert len(generator.last_request.context_items) == 1
+    assert sum(len(item.text) for item in generator.last_request.context_items) <= 100
+    assert generator.last_request.context_items[0].source_label == "hand book.pdf"
+
+
+def test_rag_ask_no_context_marks_run_failed_without_assistant(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    vector_client.candidates = []
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="no context")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "no-context-msg",
+            "message": "missing context",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    assert "missing context" not in str(response.json())
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.request_message_id == messages[0].chat_message_id
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+        assert db.query(Citation).count() == 0
+
+
+def test_rag_ask_generation_failure_keeps_user_message_without_placeholder(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    failing_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_FailingAnswerGenerator(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: failing_service
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="generation failure")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "generation-fail-msg",
+            "message": "alpha policy generation failure",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "generation_failed"
+    assert "alpha policy generation failure" not in str(response.json())
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "generation_failed"
+        assert run.request_message_id == messages[0].chat_message_id
+        assert db.query(Citation).count() == 0
+
+
+def test_rag_ask_retrieval_failure_marks_run_failed_without_assistant(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    vector_client.fail = True
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="retrieval failure")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "retrieval-fail-msg",
+            "message": "alpha policy retrieval failure",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "retrieval_failed"
+    assert "alpha policy retrieval failure" not in str(response.json())
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "retrieval_failed"
+        assert run.request_message_id == messages[0].chat_message_id
+        assert db.query(Citation).count() == 0
+
+
+def test_rag_ask_rerank_failure_marks_run_failed_without_assistant(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    failing_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_FailingReranker(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: failing_service
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="rerank failure")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "rerank-fail-msg",
+            "message": "alpha policy rerank failure",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "rerank_failed"
+    assert "alpha policy rerank failure" not in str(response.json())
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "rerank_failed"
+        assert run.request_message_id == messages[0].chat_message_id
+        assert db.query(Citation).count() == 0
+
+
+def test_rag_ask_auth_csrf_and_client_message_id_required(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, _, _ = rag_client
+
+    unauthenticated = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": 1, "client_message_id": "x", "message": "alpha"},
+    )
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "auth_required"
+
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="auth")
+    missing_csrf = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": chat_session_id, "client_message_id": "x", "message": "alpha"},
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_missing"
+
+    missing_client_id = client.post(
+        "/api/v1/rag/ask",
+        json={"chat_session_id": chat_session_id, "message": "alpha"},
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert missing_client_id.status_code == 422
+    assert missing_client_id.json()["error"]["code"] == "validation_error"
+
+
 class _StaticVectorClient:
     def __init__(self, candidates: list[VectorSearchCandidate]) -> None:
         self.candidates = candidates
@@ -525,6 +977,20 @@ class _FailingReranker:
         candidates: Sequence[RerankCandidate],
     ) -> list[Any]:
         raise RerankError()
+
+
+class _FailingAnswerGenerator:
+    def generate(self, request: GenerationRequest) -> Any:
+        raise AnswerGenerationError()
+
+
+class _RecordingAnswerGenerator:
+    def __init__(self) -> None:
+        self.last_request: GenerationRequest | None = None
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.last_request = request
+        return GenerationResult(content="recorded answer [1]")
 
 
 class _OutOfRangeReranker:
@@ -731,6 +1197,16 @@ def _login(client: TestClient, email: str = "admin@example.com") -> str:
     )
     assert response.status_code == 200
     return str(response.json()["data"]["csrf_token"])
+
+
+def _create_chat_session(client: TestClient, csrf_token: str, *, title: str) -> int:
+    response = client.post(
+        "/api/v1/chat/sessions",
+        json={"title": title},
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert response.status_code == 201
+    return int(response.json()["data"]["chat_session_id"])
 
 
 def _unsafe_headers(csrf_token: str) -> dict[str, str]:
