@@ -50,12 +50,54 @@ textarea {
   min-height: 320px;
 }
 
+.messages.empty {
+  align-items: center;
+  color: #5c6670;
+  display: flex;
+}
+
 .message {
   background: #ffffff;
   border: 1px solid #d8dee4;
   border-radius: 8px;
   margin: 16px 0;
   padding: 16px;
+}
+
+.message p {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message.assistant {
+  border-left: 4px solid #316c72;
+}
+
+.message.user {
+  border-left: 4px solid #68737d;
+}
+
+.message.loading {
+  color: #5c6670;
+}
+
+.message-header,
+.chat-header,
+.citation-title,
+.citation-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.chat-header {
+  justify-content: space-between;
+}
+
+.chat-header p {
+  color: #5c6670;
+  margin: 4px 0 0;
 }
 
 .composer {
@@ -67,6 +109,106 @@ textarea {
   min-height: 120px;
 }
 
+.composer button {
+  justify-self: start;
+}
+
 .error {
   color: #a4001d;
+}
+
+.notice {
+  color: #5c6670;
+}
+
+.mode-banner {
+  background: #fff6d8;
+  border: 1px solid #e6c75c;
+  border-radius: 8px;
+  margin: 16px 0;
+  padding: 12px 14px;
+}
+
+.mode-temporary {
+  background: #edf7f5;
+  border-color: #8dbdb4;
+}
+
+.mode-badge,
+.confidence-badge,
+.old-source-badge,
+.pending-badge,
+.replay-badge {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.mode-badge,
+.pending-badge {
+  background: #eef1f4;
+  color: #39444d;
+}
+
+.replay-badge {
+  background: #edf7f5;
+  color: #24585e;
+}
+
+.confidence-high {
+  background: #e8f5ed;
+  color: #176033;
+}
+
+.confidence-medium,
+.confidence-unknown {
+  background: #fff6d8;
+  color: #765500;
+}
+
+.confidence-low {
+  background: #fdebed;
+  color: #9b1c31;
+}
+
+.old-source-badge {
+  background: #fdebed;
+  color: #9b1c31;
+}
+
+.citation-panel {
+  background: #f7f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.citation-panel h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.citation-panel ol {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.citation-title {
+  font-weight: 600;
+  justify-content: space-between;
+}
+
+.citation-meta {
+  color: #5c6670;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.citation-item p {
+  margin: 6px 0 0;
 }
