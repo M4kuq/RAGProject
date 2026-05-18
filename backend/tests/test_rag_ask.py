@@ -88,7 +88,7 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
         context_items=[
             GenerationContextItem(
                 document_chunk_id=100,
-                source_label="policy.md",
+                source_label="policy]\nsecret.md",
                 text="raw context text that should not be echoed",
                 page_from=1,
                 page_to=1,
@@ -101,8 +101,24 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
     second = generator.generate(request)
 
     assert first == second
+    truncated = generator.generate(
+        GenerationRequest(
+            message="alpha policy",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=100,
+                    source_label="policy]\nsecret.md",
+                    text="raw context text that should not be echoed",
+                    page_from=1,
+                    page_to=1,
+                ),
+            ],
+            max_output_chars=20,
+        )
+    )
+    assert "[1]" in truncated.content
     assert "raw context text" not in first.content
-    assert "policy.md p.1 chunk:100" in first.content
+    assert "policy) secret.md p.1 chunk:100" in first.content
 
 
 def test_rag_ask_success_replay_and_duplicate_state_handling(
@@ -130,7 +146,19 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert data["assistant_message"]["role"] == "assistant"
     assert data["assistant_message"]["linked_retrieval_run_id"] == data["retrieval_run_id"]
     assert "Fake answer" in data["assistant_message"]["content"]
-    assert "full active chunk text should not be returned whole" not in str(body)
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["citations"][0]["document_chunk_id"] == 100
+    assert data["citations"][0]["source_label"] == "hand book.pdf"
+    assert data["citations"][0]["old_version_flag"] is False
+    assert 0.0 <= data["confidence"]["answer_confidence"] <= 1.0
+    assert 0.0 <= data["confidence"]["groundedness_score"] <= 1.0
+    assert data["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
+    assert (
+        "full active chunk text should not be returned whole"
+        not in data["assistant_message"]["content"]
+    )
+    assert len(data["citations"][0]["snippet"]) <= 240
     assert "token" not in str(body).lower()
     assert "storage_key" not in str(body).lower()
     assert len(vector_client.query_vectors) == 1
@@ -141,22 +169,56 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert run.chat_session_id == chat_session_id
         assert run.request_message_id == data["user_message"]["chat_message_id"]
         assert run.status == "succeeded"
-        assert run.answer_confidence is None
-        assert run.groundedness_score is None
-        assert run.confidence_label is None
+        assert run.answer_confidence is not None
+        assert run.groundedness_score is not None
+        assert run.confidence_label in {"High", "Medium", "Low"}
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
         )
-        assert db.query(Citation).count() == 0
+        citation = db.query(Citation).one()
+        assert citation.retrieval_run_id == run.retrieval_run_id
+        assert citation.document_chunk_id == 100
+        assert citation.rank_order == 1
+        db.add(
+            Citation(
+                retrieval_run_id=run.retrieval_run_id,
+                document_chunk_id=101,
+                snippet="non-selected chunk should stay hidden",
+                page_from=2,
+                page_to=2,
+                display_label="hand book.pdf",
+                rank_order=2,
+            )
+        )
+        db.commit()
 
     replay = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(viewer_csrf))
     assert replay.status_code == 200
     assert replay.json()["meta"]["replayed"] is True
+    assert replay.json()["data"]["citations"] == data["citations"]
+    assert replay.json()["data"]["confidence"] == data["confidence"]
     assert (
         replay.json()["data"]["user_message"]["chat_message_id"]
         == data["user_message"]["chat_message_id"]
     )
+    with session_factory() as db:
+        version = db.get(DocumentVersion, 10)
+        assert version is not None
+        version.is_active = False
+        db.commit()
+    old_version_replay = client.post(
+        "/api/v1/rag/ask",
+        json=payload,
+        headers=_unsafe_headers(viewer_csrf),
+    )
+    assert old_version_replay.status_code == 200
+    assert old_version_replay.json()["data"]["citations"][0]["old_version_flag"] is True
+    with session_factory() as db:
+        version = db.get(DocumentVersion, 10)
+        assert version is not None
+        version.is_active = True
+        db.commit()
     with session_factory() as db:
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
 
@@ -243,6 +305,55 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert admin.status_code == 200
 
 
+def test_rag_ask_persists_and_replays_multiple_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    service = RagService(
+        settings=_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("answer cites second [2] then first[1]"),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: service
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="multi citation")
+    payload = {
+        "chat_session_id": chat_session_id,
+        "client_message_id": "multi-citation-msg",
+        "message": "alpha policy multi citation",
+        "top_k": 2,
+        "rerank_top_n": 2,
+    }
+
+    response = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(csrf_token))
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [citation["local_citation_id"] for citation in data["citations"]] == [1, 2]
+    assert [citation["document_chunk_id"] for citation in data["citations"]] == [100, 101]
+    assert data["citations"][0]["source_label"] == "hand book.pdf"
+    assert data["citations"][1]["source_label"] == "hand book.pdf"
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        citations = (
+            db.query(Citation)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(Citation.rank_order.asc())
+            .all()
+        )
+        assert [citation.rank_order for citation in citations] == [1, 2]
+        assert [citation.document_chunk_id for citation in citations] == [100, 101]
+
+    replay = client.post("/api/v1/rag/ask", json=payload, headers=_unsafe_headers(csrf_token))
+    assert replay.status_code == 200
+    assert replay.json()["meta"]["replayed"] is True
+    assert replay.json()["data"]["citations"] == data["citations"]
+    assert replay.json()["data"]["confidence"] == data["confidence"]
+
+
 def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -304,6 +415,105 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         run = db.query(RetrievalRun).filter_by(chat_session_id=generation_session_id).one()
         assert run.status == "failed"
         assert run.error_code == "generation_failed"
+        assert db.query(Citation).count() == 0
+
+    no_marker_service = RagService(
+        settings=_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("answer without citation marker"),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: no_marker_service
+    no_marker_session_id = _create_chat_session(client, csrf_token, title="no marker")
+
+    no_marker = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": no_marker_session_id,
+            "client_message_id": "no-marker-msg",
+            "message": "alpha policy no marker",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert no_marker.status_code == 500
+    assert no_marker.json()["error"]["code"] == "citation_build_failed"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=no_marker_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=no_marker_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "citation_build_failed"
+        assert db.query(Citation).count() == 0
+
+    unknown_marker_service = RagService(
+        settings=_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("answer with unknown marker [9]"),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: unknown_marker_service
+    unknown_marker_session_id = _create_chat_session(client, csrf_token, title="unknown marker")
+
+    unknown_marker = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": unknown_marker_session_id,
+            "client_message_id": "unknown-marker-msg",
+            "message": "alpha policy unknown marker",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert unknown_marker.status_code == 500
+    assert unknown_marker.json()["error"]["code"] == "citation_build_failed"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=unknown_marker_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=unknown_marker_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "citation_build_failed"
+        assert db.query(Citation).count() == 0
+
+    sensitive_output_service = RagService(
+        settings=_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("answer leaks password=verysecret [1]"),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: (
+        sensitive_output_service
+    )
+    sensitive_output_session_id = _create_chat_session(
+        client,
+        csrf_token,
+        title="sensitive output",
+    )
+
+    sensitive_output = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": sensitive_output_session_id,
+            "client_message_id": "sensitive-output-msg",
+            "message": "alpha policy sensitive output",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert sensitive_output.status_code == 500
+    assert sensitive_output.json()["error"]["code"] == "citation_build_failed"
+    assert "verysecret" not in str(sensitive_output.json())
+    with session_factory() as db:
+        messages = (
+            db.query(ChatMessage).filter_by(chat_session_id=sensitive_output_session_id).all()
+        )
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=sensitive_output_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "citation_build_failed"
         assert db.query(Citation).count() == 0
 
 
@@ -445,6 +655,14 @@ class _FailingReranker:
 class _FailingAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         raise AnswerGenerationError()
+
+
+class _StaticAnswerGenerator:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        return GenerationResult(content=self.content)
 
 
 def _settings() -> Settings:

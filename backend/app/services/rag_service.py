@@ -2,22 +2,31 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import PurePosixPath
+from typing import Literal, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import ClientMessageConflict, ConflictError, RequestInProgress
-from app.db.models import ChatMessage, User
+from app.db.models import ChatMessage, RetrievalRun, RetrievalRunItem, User
 from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
     create_embedding_adapter,
 )
+from app.rag.citations import (
+    CitationBuildError,
+    CitationSource,
+    parse_generation_output,
+    validate_generation_citations,
+)
+from app.rag.confidence import ConfidenceInputs, calculate_confidence
 from app.rag.generation import (
     AnswerGenerationError,
     AnswerGenerator,
@@ -41,11 +50,15 @@ from app.rag.retrieval import (
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import (
     CheckedRetrievalCandidate,
+    CitationInput,
+    CitationRecord,
     RetrievalRepository,
     RetrievalRunItemInput,
 )
 from app.schemas.rag import (
     RagAskAssistantMessage,
+    RagAskCitation,
+    RagAskConfidence,
     RagAskRequest,
     RagAskResponse,
     RagAskUserMessage,
@@ -57,6 +70,10 @@ from app.schemas.rag import (
 from app.services.chat_service import ChatService
 
 SCORE_QUANT = Decimal("0.000001")
+SENSITIVE_OUTPUT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|secret|password|token)\b\s*[:=]\s*\S{8,}"
+    r"|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
+)
 
 
 class RagPipelineError(RuntimeError):
@@ -79,6 +96,7 @@ class RetrievalPipelineResult:
     summary: RetrievalScoreSummary
     items: list[RagSearchItem]
     selected_candidates: list[CheckedRetrievalCandidate]
+    citation_sources: list[CitationSource]
 
 
 class RagService:
@@ -251,7 +269,12 @@ class RagService:
 
             context_items = _assemble_context(
                 result.selected_candidates,
+                citation_sources=result.citation_sources,
                 max_context_chars=self.settings.generation_max_context_chars,
+            )
+            prompt_citation_sources = _prompt_citation_sources(
+                context_items=context_items,
+                citation_sources=result.citation_sources,
             )
             generation = self.answer_generator.generate(
                 GenerationRequest(
@@ -260,12 +283,40 @@ class RagService:
                     max_output_chars=self.settings.generation_max_output_chars,
                 )
             )
+            parsed_generation = parse_generation_output(generation.content)
+            _validate_generation_output_safety(
+                parsed_generation.answer_text,
+                context_items=context_items,
+            )
+            cited_sources = validate_generation_citations(
+                parsed_generation,
+                source_map=prompt_citation_sources,
+            )
             assistant_message = self.chat_repository.create_message(
                 db,
                 chat_session_id=payload.chat_session_id,
                 role="assistant",
-                content=generation.content,
+                content=parsed_generation.answer_text,
                 linked_retrieval_run_id=run_id,
+            )
+            self.repository.save_citations(
+                db,
+                citations=[
+                    _citation_input(source, retrieval_run_id=run_id) for source in cited_sources
+                ],
+            )
+            citation_records = self.repository.list_citations_for_run(
+                db,
+                retrieval_run_id=run_id,
+            )
+            confidence = calculate_confidence(
+                ConfidenceInputs(
+                    retrieval_score_summary=result.summary,
+                    marker_count=len(parsed_generation.markers),
+                    unique_citation_count=len(cited_sources),
+                    selected_count=len(prompt_citation_sources),
+                ),
+                self.settings,
             )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
@@ -273,6 +324,9 @@ class RagService:
                 run=run,
                 retrieval_score_summary=result.summary.model_dump(mode="json"),
                 rerank_score_top1=_optional_decimal_score(result.summary.top1_rerank_score),
+                answer_confidence=_decimal_score(confidence.answer_confidence),
+                groundedness_score=_decimal_score(confidence.groundedness_score),
+                confidence_label=confidence.confidence_label,
                 finished_at=datetime.now(UTC),
             )
             self.chat_repository.touch_session(
@@ -286,9 +340,18 @@ class RagService:
             return _ask_response(
                 user_message=user_message,
                 assistant_message=assistant_message,
+                citation_records=citation_records,
+                run=run,
                 retrieval_run_id=run_id,
                 replayed=False,
             )
+        except CitationBuildError:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="citation_build_failed",
+            )
+            raise RagAskPipelineError("citation_build_failed", 500) from None
         except RagAskPipelineError:
             raise
         except (EmbeddingAdapterError, RetrievalError):
@@ -350,7 +413,12 @@ class RagService:
                 selected_count=0,
                 top1_rerank_score=None,
             )
-            return RetrievalPipelineResult(summary=summary, items=[], selected_candidates=[])
+            return RetrievalPipelineResult(
+                summary=summary,
+                items=[],
+                selected_candidates=[],
+                citation_sources=[],
+            )
 
         rerank_results = self.reranker.rerank(
             query=query,
@@ -416,6 +484,22 @@ class RagService:
                 )
             ],
             selected_candidates=ordered_candidates[:selected_count],
+            citation_sources=[
+                _citation_source(
+                    candidate,
+                    saved_item=saved_item,
+                    local_citation_id=local_id,
+                    snippet_max_chars=self.settings.citation_preview_max_chars,
+                )
+                for local_id, (candidate, saved_item) in enumerate(
+                    zip(
+                        ordered_candidates[:selected_count],
+                        saved_items[:selected_count],
+                        strict=True,
+                    ),
+                    start=1,
+                )
+            ],
         )
 
     def _classify_duplicate(
@@ -447,6 +531,11 @@ class RagService:
         return _ask_response(
             user_message=existing,
             assistant_message=assistant,
+            citation_records=self.repository.list_citations_for_run(
+                db,
+                retrieval_run_id=run.retrieval_run_id,
+            ),
+            run=run,
             retrieval_run_id=run.retrieval_run_id,
             replayed=True,
         )
@@ -478,7 +567,7 @@ class RagService:
             raise EmbeddingAdapterError("embedding_dimension_mismatch")
         return [float(value) for value in vectors[0]]
 
-    def _require_run(self, db: Session, retrieval_run_id: int):
+    def _require_run(self, db: Session, retrieval_run_id: int) -> RetrievalRun:
         run = self.repository.get_run(db, retrieval_run_id=retrieval_run_id)
         if run is None:
             raise RuntimeError("retrieval_run_missing")
@@ -647,6 +736,37 @@ def _response_item(
     )
 
 
+def _citation_source(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    saved_item: RetrievalRunItem,
+    local_citation_id: int,
+    snippet_max_chars: int,
+) -> CitationSource:
+    return CitationSource(
+        local_citation_id=local_citation_id,
+        retrieval_run_item_id=saved_item.retrieval_run_item_id,
+        document_chunk_id=candidate.chunk.document_chunk_id,
+        source_label=_source_label(candidate),
+        snippet=_snippet(candidate.chunk.content_text, max_chars=snippet_max_chars),
+        page_from=candidate.chunk.page_from,
+        page_to=candidate.chunk.page_to,
+        section_title=_safe_display_text(candidate.chunk.section_title),
+    )
+
+
+def _citation_input(source: CitationSource, *, retrieval_run_id: int) -> CitationInput:
+    return CitationInput(
+        retrieval_run_id=retrieval_run_id,
+        document_chunk_id=source.document_chunk_id,
+        snippet=source.snippet,
+        page_from=source.page_from,
+        page_to=source.page_to,
+        display_label=source.source_label,
+        rank_order=source.local_citation_id,
+    )
+
+
 def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "logical_document_id": candidate.logical_document.logical_document_id,
@@ -657,7 +777,7 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
     }
     _add_optional(snapshot, "page_from", candidate.chunk.page_from)
     _add_optional(snapshot, "page_to", candidate.chunk.page_to)
-    _add_optional(snapshot, "section_title", candidate.chunk.section_title)
+    _add_optional(snapshot, "section_title", _safe_display_text(candidate.chunk.section_title))
     return snapshot
 
 
@@ -673,11 +793,12 @@ def _source_label(candidate: CheckedRetrievalCandidate) -> str:
 def _assemble_context(
     candidates: list[CheckedRetrievalCandidate],
     *,
+    citation_sources: list[CitationSource],
     max_context_chars: int,
 ) -> list[GenerationContextItem]:
     remaining = max_context_chars
     items: list[GenerationContextItem] = []
-    for candidate in candidates:
+    for candidate, source in zip(candidates, citation_sources, strict=True):
         if remaining <= 0:
             break
         text = _clean_context_text(candidate.chunk.content_text)
@@ -690,6 +811,7 @@ def _assemble_context(
                 document_chunk_id=candidate.chunk.document_chunk_id,
                 source_label=_source_label(candidate),
                 text=clipped,
+                local_citation_id=source.local_citation_id,
                 page_from=candidate.chunk.page_from,
                 page_to=candidate.chunk.page_to,
             )
@@ -697,10 +819,37 @@ def _assemble_context(
     return items
 
 
+def _prompt_citation_sources(
+    *,
+    context_items: list[GenerationContextItem],
+    citation_sources: list[CitationSource],
+) -> list[CitationSource]:
+    included_ids = {
+        item.local_citation_id for item in context_items if item.local_citation_id is not None
+    }
+    return [source for source in citation_sources if source.local_citation_id in included_ids]
+
+
+def _validate_generation_output_safety(
+    answer_text: str,
+    *,
+    context_items: list[GenerationContextItem],
+) -> None:
+    if SENSITIVE_OUTPUT_RE.search(answer_text):
+        raise CitationBuildError("citation_build_failed")
+    normalized_answer = _clean_context_text(answer_text)
+    for item in context_items:
+        context_text = _clean_context_text(item.text)
+        if len(context_text) >= 80 and context_text in normalized_answer:
+            raise CitationBuildError("citation_build_failed")
+
+
 def _ask_response(
     *,
     user_message: ChatMessage,
     assistant_message: ChatMessage,
+    citation_records: list[CitationRecord],
+    run: RetrievalRun,
     retrieval_run_id: int,
     replayed: bool,
 ) -> RagAskResponse:
@@ -722,8 +871,49 @@ def _ask_response(
             linked_retrieval_run_id=assistant_message.linked_retrieval_run_id or retrieval_run_id,
             created_at=_aware_utc(assistant_message.created_at),
         ),
+        citations=[_citation_response(record) for record in citation_records],
+        confidence=_confidence_response(run),
         retrieval_run_id=retrieval_run_id,
         replayed=replayed,
+    )
+
+
+def _citation_response(record: CitationRecord) -> RagAskCitation:
+    return RagAskCitation(
+        citation_id=record.citation.citation_id,
+        local_citation_id=record.citation.rank_order,
+        document_chunk_id=record.citation.document_chunk_id,
+        source_label=record.citation.display_label,
+        snippet=record.citation.snippet,
+        page_from=record.citation.page_from,
+        page_to=record.citation.page_to,
+        section_title=_safe_display_text(record.chunk.section_title),
+        old_version_flag=_old_version_flag(record),
+    )
+
+
+def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
+    if (
+        run.answer_confidence is None
+        or run.groundedness_score is None
+        or run.confidence_label is None
+    ):
+        raise RuntimeError("retrieval_run_confidence_missing")
+    if run.confidence_label not in {"High", "Medium", "Low"}:
+        raise RuntimeError("retrieval_run_confidence_missing")
+    label = cast(Literal["High", "Medium", "Low"], run.confidence_label)
+    return RagAskConfidence(
+        answer_confidence=_round_score(float(run.answer_confidence)),
+        groundedness_score=_round_score(float(run.groundedness_score)),
+        confidence_label=label,
+    )
+
+
+def _old_version_flag(record: CitationRecord) -> bool:
+    return (
+        record.document_version.status != "ready"
+        or not record.document_version.is_active
+        or record.logical_document.status != "active"
     )
 
 
@@ -741,6 +931,15 @@ def _clean_context_text(text: str) -> str:
 def _sanitize_label(value: str) -> str:
     printable = "".join(char if char.isprintable() else " " for char in value)
     return " ".join(printable.split())
+
+
+def _safe_display_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    sanitized = _sanitize_label(value)
+    if not sanitized:
+        return None
+    return sanitized[:255]
 
 
 def _optional_decimal_score(value: float | None) -> Decimal | None:

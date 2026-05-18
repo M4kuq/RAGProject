@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     generation_model_name: str = "fake-rag-answer"
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=2000, ge=20, le=20000)
+    citation_preview_max_chars: int = Field(default=240, ge=20, le=2000)
+    confidence_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
+    groundedness_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    groundedness_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -127,6 +132,14 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:
             raise ValueError("RERANK_SCORE_MAX must be greater than RERANK_SCORE_MIN")
+        if self.confidence_high_threshold <= self.confidence_medium_threshold:
+            raise ValueError(
+                "CONFIDENCE_HIGH_THRESHOLD must be greater than CONFIDENCE_MEDIUM_THRESHOLD"
+            )
+        if self.groundedness_high_threshold <= self.groundedness_medium_threshold:
+            raise ValueError(
+                "GROUNDEDNESS_HIGH_THRESHOLD must be greater than GROUNDEDNESS_MEDIUM_THRESHOLD"
+            )
         if (
             "ask_top_k_default" in self.model_fields_set
             and self.ask_top_k_default > self.retrieval_top_k_max
