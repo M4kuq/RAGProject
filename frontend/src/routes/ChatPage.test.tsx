@@ -230,6 +230,64 @@ test("request_in_progress removes optimistic rows and shows processing notice", 
   expect(screen.queryByText("回答を生成しています...")).not.toBeInTheDocument();
 });
 
+test("existing route session disables submission until session detail loads", async () => {
+  let resolveSession: (response: Response) => void = () => undefined;
+  const sessionPromise = new Promise<Response>((resolve) => {
+    resolveSession = resolve;
+  });
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.endsWith("/api/v1/chat/sessions/10/messages?page=1&page_size=100")) return jsonResponse(emptyMessages());
+    if (path.endsWith("/api/v1/chat/sessions/10")) return sessionPromise;
+    if (path.endsWith("/api/v1/chat/sessions") && method === "POST") return jsonResponse(sessionResponse(), 201);
+    if (path.includes("/api/v1/rag/ask")) return jsonResponse(askSuccess());
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/10");
+  await screen.findByText("Viewer / viewer");
+
+  expect(await screen.findByLabelText("message")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/api/v1/chat/sessions") && init?.method === "POST")).toBe(
+    false
+  );
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/rag/ask"))).toBe(false);
+
+  resolveSession(new Response(JSON.stringify(sessionResponse()), { status: 200 }));
+  await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
+});
+
+test("existing route session error does not create a replacement chat", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.endsWith("/api/v1/chat/sessions/10/messages?page=1&page_size=100")) return jsonResponse(emptyMessages());
+    if (path.endsWith("/api/v1/chat/sessions/10")) {
+      return jsonResponse({ error: { code: "resource_not_found", message: "not found" }, meta: {} }, 404);
+    }
+    if (path.endsWith("/api/v1/chat/sessions") && method === "POST") return jsonResponse(sessionResponse(), 201);
+    if (path.includes("/api/v1/rag/ask")) return jsonResponse(askSuccess());
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/10");
+  await screen.findByText("Viewer / viewer");
+  await waitFor(() => expect(screen.getByLabelText("message")).toBeDisabled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/api/v1/chat/sessions") && init?.method === "POST")).toBe(
+    false
+  );
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/rag/ask"))).toBe(false);
+});
+
 test("archived and temporary expired sessions disable the composer", async () => {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const path = String(input);

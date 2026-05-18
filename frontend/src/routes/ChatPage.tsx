@@ -117,6 +117,13 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const session = sessionQuery.data;
   const displayMode: ChatMode = session?.mode ?? (mode === "temporary" ? "temporary" : "active");
   const disabledReason = readonlyReason(displayMode);
+  const routeSessionUnavailableReason =
+    routeSessionId !== null && !session
+      ? sessionQuery.isError
+        ? safeErrorMessage(sessionQuery.error)
+        : "チャット情報を読み込んでいます。"
+      : null;
+  const inputDisabledReason = disabledReason ?? routeSessionUnavailableReason;
   const messages = useMemo(
     () => mergeMessages(messagesQuery.data ?? [], localMessages),
     [localMessages, messagesQuery.data]
@@ -126,6 +133,14 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   async function ensureSession(message: string): Promise<ChatSession> {
     if (session) {
       return session;
+    }
+    if (routeSessionId !== null) {
+      throw new ApiError({
+        code: sessionQuery.isError ? "session_unavailable" : "session_loading",
+        message: "Chat session is not ready.",
+        requestId: null,
+        status: sessionQuery.isError ? 404 : 409
+      });
     }
     const creator = mode === "temporary" ? createTemporaryChat : createChat;
     const created = await creator.mutateAsync({
@@ -140,7 +155,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
 
   async function submitQuestion() {
     const message = question.trim();
-    if (!message || disabledReason || isSending) {
+    if (!message || inputDisabledReason || isSending) {
       return;
     }
 
@@ -252,8 +267,8 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
       {messagesQuery.isLoading ? <p className="notice">メッセージを読み込んでいます...</p> : null}
       <MessageList messages={messages} />
       <MessageInput
-        disabled={Boolean(disabledReason) || currentUser.isLoading || currentUser.isError}
-        disabledReason={disabledReason}
+        disabled={Boolean(inputDisabledReason) || currentUser.isLoading || currentUser.isError}
+        disabledReason={inputDisabledReason}
         isSending={isSending}
         onChange={setQuestion}
         onSubmit={submitQuestion}
