@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 let apiFetch: (path: string, init?: RequestInit) => Promise<unknown>;
+let ApiErrorClass: typeof import("./apiClient").ApiError;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ apiFetch } = await import("./apiClient"));
+  ({ apiFetch, ApiError: ApiErrorClass } = await import("./apiClient"));
 });
 
 afterEach(() => {
@@ -66,4 +67,27 @@ test("keeps form data content type unset", async () => {
 
   const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
   expect(new Headers(init.headers).has("content-type")).toBe(false);
+});
+
+test("maps API errors to safe client errors", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        error: {
+          code: "job_active_retry_exists",
+          message: "An active retry already exists.",
+          details: { active_retry_job_id: 301 }
+        }
+      }),
+      { status: 409 }
+    )
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(apiFetch("/api/v1/jobs/300/retry", { method: "POST" })).rejects.toMatchObject({
+    code: "job_active_retry_exists",
+    status: 409,
+    message: "An active retry already exists."
+  });
+  await expect(apiFetch("/api/v1/jobs/300/retry", { method: "POST" })).rejects.toBeInstanceOf(ApiErrorClass);
 });
