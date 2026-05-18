@@ -8,14 +8,17 @@ export class ApiError extends Error {
   code: string;
   status: number;
   requestId: string | null;
+  details: unknown;
 
   constructor({
     code,
+    details = null,
     message,
     requestId,
     status
   }: {
     code: string;
+    details?: unknown;
     message: string;
     requestId: string | null;
     status: number;
@@ -25,6 +28,7 @@ export class ApiError extends Error {
     this.code = code;
     this.status = status;
     this.requestId = requestId;
+    this.details = details;
   }
 }
 
@@ -73,6 +77,7 @@ function readError(json: unknown, status: number, fallback: string): ApiError {
         : {};
     return new ApiError({
       code: typeof error.code === "string" ? error.code : "error",
+      details: "details" in error ? error.details : null,
       message: typeof error.message === "string" ? error.message : fallback,
       requestId: typeof meta.request_id === "string" ? meta.request_id : null,
       status

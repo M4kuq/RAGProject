@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { apiFetch } from "../lib/apiClient";
+import { useSetCurrentUser } from "../features/auth/authHooks";
+import type { CurrentUser } from "../features/auth/authTypes";
+import type { ApiResponse } from "../types/api";
 
 type LoginForm = { email: string; password: string };
 
@@ -9,13 +12,21 @@ export function LoginPage() {
     defaultValues: { email: "admin@example.com", password: "password" }
   });
   const [error, setError] = useState<string | null>(null);
+  const setCurrentUser = useSetCurrentUser();
 
   async function onSubmit(values: LoginForm) {
     setError(null);
     await apiFetch("/api/v1/auth/csrf");
-    await apiFetch("/api/v1/auth/login", { method: "POST", body: JSON.stringify(values) }).catch((err) =>
-      setError(err.message)
-    );
+    const response = await apiFetch<ApiResponse<{ user: CurrentUser; csrf_token: string }>>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify(values)
+    }).catch((err) => {
+      setError(err.message);
+      return null;
+    });
+    if (response) {
+      setCurrentUser(response.data.user);
+    }
   }
 
   return (
