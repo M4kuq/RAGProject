@@ -288,6 +288,28 @@ test("existing route session error does not create a replacement chat", async ()
   expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/rag/ask"))).toBe(false);
 });
 
+test("invalid route session id disables submission without creating a chat", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.endsWith("/api/v1/chat/sessions") && method === "POST") return jsonResponse(sessionResponse(), 201);
+    if (path.includes("/api/v1/rag/ask")) return jsonResponse(askSuccess());
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/not-a-number");
+  await screen.findByText("Viewer / viewer");
+
+  expect(await screen.findByText("チャットIDが不正です。")).toBeInTheDocument();
+  expect(screen.getByLabelText("message")).toBeDisabled();
+  expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/api/v1/chat/sessions") && init?.method === "POST")).toBe(
+    false
+  );
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/rag/ask"))).toBe(false);
+});
+
 test("archived and temporary expired sessions disable the composer", async () => {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const path = String(input);

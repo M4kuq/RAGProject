@@ -103,7 +103,9 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const routeSessionId = parseId(mode === "temporary" ? params.temporaryChatId : params.chatSessionId);
+  const routeSessionParam = mode === "temporary" ? params.temporaryChatId : params.chatSessionId;
+  const hasRouteSessionParam = routeSessionParam !== undefined;
+  const routeSessionId = parseId(routeSessionParam);
   const currentUser = useCurrentUser();
   const sessionQuery = useChatSession(routeSessionId);
   const messagesQuery = useChatMessages(routeSessionId);
@@ -118,11 +120,13 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const displayMode: ChatMode = session?.mode ?? (mode === "temporary" ? "temporary" : "active");
   const disabledReason = readonlyReason(displayMode);
   const routeSessionUnavailableReason =
-    routeSessionId !== null && !session
-      ? sessionQuery.isError
-        ? safeErrorMessage(sessionQuery.error)
-        : "チャット情報を読み込んでいます。"
-      : null;
+    hasRouteSessionParam && routeSessionId === null
+      ? "チャットIDが不正です。"
+      : routeSessionId !== null && !session
+        ? sessionQuery.isError
+          ? safeErrorMessage(sessionQuery.error)
+          : "チャット情報を読み込んでいます。"
+        : null;
   const inputDisabledReason = disabledReason ?? routeSessionUnavailableReason;
   const messages = useMemo(
     () => mergeMessages(messagesQuery.data ?? [], localMessages),
@@ -134,12 +138,13 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
     if (session) {
       return session;
     }
-    if (routeSessionId !== null) {
+    if (hasRouteSessionParam) {
       throw new ApiError({
-        code: sessionQuery.isError ? "session_unavailable" : "session_loading",
+        code:
+          routeSessionId === null ? "invalid_chat_session" : sessionQuery.isError ? "session_unavailable" : "session_loading",
         message: "Chat session is not ready.",
         requestId: null,
-        status: sessionQuery.isError ? 404 : 409
+        status: routeSessionId === null ? 400 : sessionQuery.isError ? 404 : 409
       });
     }
     const creator = mode === "temporary" ? createTemporaryChat : createChat;
