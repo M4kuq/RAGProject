@@ -1,8 +1,8 @@
 import { RagAskCitation } from "../../features/chat/chatTypes";
 import { OldSourceBadge } from "./OldSourceBadge";
 
-function truncate(value: string, maxLength: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
+function truncate(value: string | null | undefined, maxLength: number, fallback = ""): string {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim() || fallback;
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}...` : normalized;
 }
 
@@ -27,7 +27,7 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
         {citations.map((citation) => (
           <li key={citation.local_citation_id} className="citation-item">
             <div className="citation-title">
-              <span>[{citation.local_citation_id}] {truncate(citation.source_label, 80)}</span>
+              <span>[{citation.local_citation_id}] {truncate(citation.source_label, 80, "source")}</span>
               {citation.old_version_flag ? <OldSourceBadge /> : null}
             </div>
             <div className="citation-meta">

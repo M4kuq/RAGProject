@@ -171,6 +171,42 @@ test("renders replayed ask as a normal assistant answer with replay badge", asyn
   expect(screen.getByText("再表示")).toBeInTheDocument();
 });
 
+test("renders fallback confidence and sparse citation fields without crashing", async () => {
+  vi.stubGlobal("crypto", { randomUUID: () => "fallbacks" });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+      if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+      if (path.includes("/api/v1/chat/sessions/10/messages")) return jsonResponse(emptyMessages());
+      if (path.includes("/api/v1/rag/ask")) {
+        const response = askSuccess();
+        response.data.confidence = {
+          answer_confidence: Number.NaN,
+          groundedness_score: Number.NaN,
+          confidence_label: "Unexpected"
+        };
+        response.data.citations[0].source_label = "";
+        response.data.citations[0].snippet = "";
+        return jsonResponse(response);
+      }
+      if (path.endsWith("/api/v1/chat/sessions") && method === "POST") return jsonResponse(sessionResponse(), 201);
+      return jsonResponse({ data: [] });
+    })
+  );
+
+  renderChat("/chat/10");
+  await screen.findByText("Viewer / viewer");
+  await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
+  fireEvent.change(screen.getByLabelText("message"), { target: { value: "Fallbacks" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByText("信頼度 不明")).toBeInTheDocument();
+  expect(screen.getByText(/\[1\] source/)).toBeInTheDocument();
+});
+
 test("no_context keeps the user message, removes loading, and shows safe error", async () => {
   vi.stubGlobal("crypto", { randomUUID: () => "no-context" });
   vi.stubGlobal(
