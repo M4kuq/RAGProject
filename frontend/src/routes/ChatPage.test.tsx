@@ -242,10 +242,10 @@ test("archived and temporary expired sessions disable the composer", async () =>
 
   renderChat("/chat/10");
 
+  expect(await screen.findByText("アーカイブ済みのため読み取り専用です。")).toBeInTheDocument();
   const input = await screen.findByLabelText("message");
   expect(input).toBeDisabled();
   expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-  expect(screen.getByText("アーカイブ済みのため読み取り専用です。")).toBeInTheDocument();
 
   vi.unstubAllGlobals();
   vi.stubGlobal(
