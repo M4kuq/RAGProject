@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -40,6 +41,31 @@ class RagSearchRequest(BaseModel):
         return stripped
 
 
+class RagAskRequest(BaseModel):
+    chat_session_id: int = Field(ge=1)
+    client_message_id: str = Field(min_length=1, max_length=255)
+    message: str = Field(min_length=1, max_length=8000)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    rerank_top_n: int | None = Field(default=None, ge=1, le=20)
+    filters: RagSearchFilters | None = None
+
+    @field_validator("client_message_id")
+    @classmethod
+    def validate_client_message_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("client_message_id must not be blank")
+        return stripped
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("message must not be blank")
+        return stripped
+
+
 class RetrievalScoreSummary(BaseModel):
     requested_top_k: int
     qdrant_candidate_count: int
@@ -71,3 +97,29 @@ class RagSearchResponse(BaseModel):
     status: Literal["succeeded"]
     retrieval_score_summary: RetrievalScoreSummary
     items: list[RagSearchItem]
+
+
+class RagAskUserMessage(BaseModel):
+    chat_message_id: int
+    chat_session_id: int
+    role: Literal["user"]
+    content: str
+    client_message_id: str
+    created_at: datetime
+
+
+class RagAskAssistantMessage(BaseModel):
+    chat_message_id: int
+    chat_session_id: int
+    role: Literal["assistant"]
+    content: str
+    linked_retrieval_run_id: int
+    created_at: datetime
+
+
+class RagAskResponse(BaseModel):
+    chat_session_id: int
+    user_message: RagAskUserMessage
+    assistant_message: RagAskAssistantMessage
+    retrieval_run_id: int
+    replayed: bool = False

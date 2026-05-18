@@ -80,6 +80,61 @@ class ChatRepository:
         ).all()
         return list(rows), total
 
+    def get_user_message_by_client_message_id(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+        client_message_id: str,
+        for_update: bool = False,
+    ) -> ChatMessage | None:
+        statement = select(ChatMessage).where(
+            ChatMessage.chat_session_id == chat_session_id,
+            ChatMessage.role == "user",
+            ChatMessage.client_message_id == client_message_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return db.scalar(statement)
+
+    def get_assistant_message_for_retrieval_run(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+        retrieval_run_id: int,
+    ) -> ChatMessage | None:
+        return db.scalar(
+            select(ChatMessage)
+            .where(
+                ChatMessage.chat_session_id == chat_session_id,
+                ChatMessage.role == "assistant",
+                ChatMessage.linked_retrieval_run_id == retrieval_run_id,
+            )
+            .order_by(ChatMessage.chat_message_id.asc())
+        )
+
+    def create_message(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+        role: str,
+        content: str,
+        client_message_id: str | None = None,
+        linked_retrieval_run_id: int | None = None,
+    ) -> ChatMessage:
+        message = ChatMessage(
+            chat_session_id=chat_session_id,
+            role=role,
+            content=content,
+            client_message_id=client_message_id,
+            linked_retrieval_run_id=linked_retrieval_run_id,
+        )
+        db.add(message)
+        db.flush()
+        return message
+
     def list_tags(self, db: Session, *, chat_session_id: int) -> list[ChatTag]:
         return list(
             db.scalars(

@@ -61,8 +61,52 @@ class RetrievalRepository:
         db.flush()
         return run
 
+    def create_chat_run(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+        request_message_id: int,
+        top_k: int,
+        query_hash: str,
+        request_id: str | None,
+        started_at: datetime,
+    ) -> RetrievalRun:
+        run = RetrievalRun(
+            chat_session_id=chat_session_id,
+            request_message_id=request_message_id,
+            status="running",
+            started_at=started_at,
+            top_k=top_k,
+            query_hash=query_hash,
+            request_id=request_id,
+        )
+        db.add(run)
+        db.flush()
+        return run
+
     def get_run(self, db: Session, *, retrieval_run_id: int) -> RetrievalRun | None:
         return db.get(RetrievalRun, retrieval_run_id)
+
+    def get_latest_run_for_request_message(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+        request_message_id: int,
+        for_update: bool = False,
+    ) -> RetrievalRun | None:
+        statement = (
+            select(RetrievalRun)
+            .where(
+                RetrievalRun.chat_session_id == chat_session_id,
+                RetrievalRun.request_message_id == request_message_id,
+            )
+            .order_by(RetrievalRun.created_at.desc(), RetrievalRun.retrieval_run_id.desc())
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return db.scalar(statement)
 
     def mark_succeeded(
         self,

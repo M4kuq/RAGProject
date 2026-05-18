@@ -2,17 +2,28 @@ from __future__ import annotations
 
 import hashlib
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import PurePosixPath
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.errors import ClientMessageConflict, ConflictError, RequestInProgress
+from app.db.models import ChatMessage, User
 from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
     create_embedding_adapter,
+)
+from app.rag.generation import (
+    AnswerGenerationError,
+    AnswerGenerator,
+    GenerationContextItem,
+    GenerationRequest,
+    create_answer_generator,
 )
 from app.rag.rerank import (
     RerankCandidate,
@@ -27,26 +38,47 @@ from app.rag.retrieval import (
     RetrievalFilters,
     VectorSearchClient,
 )
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import (
     CheckedRetrievalCandidate,
     RetrievalRepository,
     RetrievalRunItemInput,
 )
 from app.schemas.rag import (
+    RagAskAssistantMessage,
+    RagAskRequest,
+    RagAskResponse,
+    RagAskUserMessage,
     RagSearchItem,
     RagSearchRequest,
     RagSearchResponse,
     RetrievalScoreSummary,
 )
+from app.services.chat_service import ChatService
 
 SCORE_QUANT = Decimal("0.000001")
 
 
-class RagSearchPipelineError(RuntimeError):
+class RagPipelineError(RuntimeError):
     def __init__(self, error_code: str, status_code: int) -> None:
         super().__init__(error_code)
         self.error_code = error_code
         self.status_code = status_code
+
+
+class RagSearchPipelineError(RagPipelineError):
+    pass
+
+
+class RagAskPipelineError(RagPipelineError):
+    pass
+
+
+@dataclass(frozen=True)
+class RetrievalPipelineResult:
+    summary: RetrievalScoreSummary
+    items: list[RagSearchItem]
+    selected_candidates: list[CheckedRetrievalCandidate]
 
 
 class RagService:
@@ -57,13 +89,18 @@ class RagService:
         embedding_adapter: EmbeddingAdapter,
         vector_client: VectorSearchClient,
         reranker: RerankerClient,
+        answer_generator: AnswerGenerator | None = None,
         repository: RetrievalRepository | None = None,
+        chat_repository: ChatRepository | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
         self.vector_client = vector_client
         self.reranker = reranker
+        self.answer_generator = answer_generator or create_answer_generator(settings)
         self.repository = repository or RetrievalRepository()
+        self.chat_repository = chat_repository or ChatRepository()
+        self.chat_service = ChatService(self.chat_repository)
 
     def search(
         self,
@@ -87,124 +124,28 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            query_vector = self._embed_query(payload.query)
-            vector_candidates = self.vector_client.search(
-                collection_name=self.settings.qdrant_collection_name,
-                query_vector=query_vector,
-                limit=top_k,
-                filters=filters,
-            )
-            checked_candidates = self.repository.final_check_candidates(
+            result = self._retrieve_and_rerank(
                 db,
-                candidates=vector_candidates,
-                filters=filters,
-            )
-            if not checked_candidates:
-                summary = _score_summary(
-                    requested_top_k=top_k,
-                    qdrant_candidate_count=len(vector_candidates),
-                    checked_candidates=[],
-                    selected_count=0,
-                    top1_rerank_score=None,
-                )
-                run = self._require_run(db, run_id)
-                self.repository.mark_succeeded(
-                    db,
-                    run=run,
-                    retrieval_score_summary=summary.model_dump(mode="json"),
-                    rerank_score_top1=None,
-                    finished_at=datetime.now(UTC),
-                )
-                db.commit()
-                return RagSearchResponse(
-                    retrieval_run_id=run_id,
-                    status="succeeded",
-                    retrieval_score_summary=summary,
-                    items=[],
-                )
-
-            rerank_results = self.reranker.rerank(
                 query=payload.query,
-                candidates=[
-                    RerankCandidate(
-                        document_chunk_id=candidate.chunk.document_chunk_id,
-                        text=candidate.chunk.content_text,
-                        retrieval_score=candidate.retrieval_score,
-                    )
-                    for candidate in checked_candidates
-                ],
-            )
-            rerank_by_chunk_id = _validated_rerank_results(
-                rerank_results,
-                checked_candidates=checked_candidates,
-            )
-
-            ordered_candidates = sorted(
-                checked_candidates,
-                key=lambda candidate: (
-                    rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
-                ),
-            )
-            selected_count = min(rerank_top_n, len(ordered_candidates))
-            item_inputs = [
-                _run_item_input(
-                    candidate,
-                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
-                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
-                    selected_flag=index <= selected_count,
-                )
-                for index, candidate in enumerate(ordered_candidates, start=1)
-            ]
-            saved_items = self.repository.save_items(
-                db,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                filters=filters,
                 retrieval_run_id=run_id,
-                items=item_inputs,
-            )
-            top1_rerank_score = min(
-                1.0,
-                max(
-                    0.0,
-                    rerank_by_chunk_id[ordered_candidates[0].chunk.document_chunk_id].rerank_score,
-                ),
-            )
-            summary = _score_summary(
-                requested_top_k=top_k,
-                qdrant_candidate_count=len(vector_candidates),
-                checked_candidates=checked_candidates,
-                selected_count=selected_count,
-                top1_rerank_score=top1_rerank_score,
             )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
                 db,
                 run=run,
-                retrieval_score_summary=summary.model_dump(mode="json"),
-                rerank_score_top1=_decimal_score(top1_rerank_score),
+                retrieval_score_summary=result.summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(result.summary.top1_rerank_score),
                 finished_at=datetime.now(UTC),
             )
             db.commit()
             return RagSearchResponse(
                 retrieval_run_id=run_id,
                 status="succeeded",
-                retrieval_score_summary=summary,
-                items=[
-                    _response_item(
-                        candidate,
-                        saved_item_id=saved_item.retrieval_run_item_id,
-                        rerank_score=rerank_by_chunk_id[
-                            candidate.chunk.document_chunk_id
-                        ].rerank_score,
-                        rerank_order=rerank_by_chunk_id[
-                            candidate.chunk.document_chunk_id
-                        ].rerank_order,
-                        selected_flag=index <= selected_count,
-                        snippet_max_chars=self.settings.search_snippet_max_chars,
-                    )
-                    for index, (candidate, saved_item) in enumerate(
-                        zip(ordered_candidates, saved_items, strict=True),
-                        start=1,
-                    )
-                ],
+                retrieval_score_summary=result.summary,
+                items=result.items,
             )
         except (EmbeddingAdapterError, RetrievalError):
             self._mark_failed_safely(
@@ -228,12 +169,302 @@ class RagService:
             )
             raise
 
+    def ask(
+        self,
+        db: Session,
+        *,
+        payload: RagAskRequest,
+        user: User,
+        request_id: str | None,
+    ) -> RagAskResponse:
+        session = self.chat_service.ensure_session_can_append_messages(
+            db,
+            user=user,
+            chat_session_id=payload.chat_session_id,
+        )
+        existing = self.chat_repository.get_user_message_by_client_message_id(
+            db,
+            chat_session_id=payload.chat_session_id,
+            client_message_id=payload.client_message_id,
+            for_update=True,
+        )
+        if existing is not None:
+            return self._classify_duplicate(db, payload=payload, existing=existing)
+
+        top_k = self._effective_ask_top_k(payload.top_k)
+        rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
+        now = datetime.now(UTC)
+        try:
+            user_message = self.chat_repository.create_message(
+                db,
+                chat_session_id=payload.chat_session_id,
+                role="user",
+                content=payload.message,
+                client_message_id=payload.client_message_id,
+            )
+            run = self.repository.create_chat_run(
+                db,
+                chat_session_id=payload.chat_session_id,
+                request_message_id=user_message.chat_message_id,
+                top_k=top_k,
+                query_hash=_query_hash(payload.message),
+                request_id=request_id,
+                started_at=now,
+            )
+            self.chat_repository.touch_session(db, session=session, updated_at=now)
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            existing_after_race = self.chat_repository.get_user_message_by_client_message_id(
+                db,
+                chat_session_id=payload.chat_session_id,
+                client_message_id=payload.client_message_id,
+            )
+            if existing_after_race is not None:
+                return self._classify_duplicate(
+                    db,
+                    payload=payload,
+                    existing=existing_after_race,
+                )
+            raise ConflictError() from exc
+
+        db.refresh(user_message)
+        db.refresh(run)
+        run_id = run.retrieval_run_id
+
+        try:
+            result = self._retrieve_and_rerank(
+                db,
+                query=payload.message,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                filters=_retrieval_filters(payload),
+                retrieval_run_id=run_id,
+            )
+            if not result.selected_candidates:
+                self._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="no_context_found",
+                )
+                raise RagAskPipelineError("no_context_found", 422)
+
+            context_items = _assemble_context(
+                result.selected_candidates,
+                max_context_chars=self.settings.generation_max_context_chars,
+            )
+            generation = self.answer_generator.generate(
+                GenerationRequest(
+                    message=payload.message,
+                    context_items=context_items,
+                    max_output_chars=self.settings.generation_max_output_chars,
+                )
+            )
+            assistant_message = self.chat_repository.create_message(
+                db,
+                chat_session_id=payload.chat_session_id,
+                role="assistant",
+                content=generation.content,
+                linked_retrieval_run_id=run_id,
+            )
+            run = self._require_run(db, run_id)
+            self.repository.mark_succeeded(
+                db,
+                run=run,
+                retrieval_score_summary=result.summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(result.summary.top1_rerank_score),
+                finished_at=datetime.now(UTC),
+            )
+            self.chat_repository.touch_session(
+                db,
+                session=session,
+                updated_at=datetime.now(UTC),
+            )
+            db.commit()
+            db.refresh(assistant_message)
+            db.refresh(user_message)
+            return _ask_response(
+                user_message=user_message,
+                assistant_message=assistant_message,
+                retrieval_run_id=run_id,
+                replayed=False,
+            )
+        except RagAskPipelineError:
+            raise
+        except (EmbeddingAdapterError, RetrievalError):
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="retrieval_failed",
+            )
+            raise RagAskPipelineError("retrieval_failed", 503) from None
+        except RerankError:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+            )
+            raise RagAskPipelineError("rerank_failed", 503) from None
+        except AnswerGenerationError:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="generation_failed",
+            )
+            raise RagAskPipelineError("generation_failed", 503) from None
+        except Exception:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="internal_error",
+            )
+            raise
+
+    def _retrieve_and_rerank(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+    ) -> RetrievalPipelineResult:
+        query_vector = self._embed_query(query)
+        vector_candidates = self.vector_client.search(
+            collection_name=self.settings.qdrant_collection_name,
+            query_vector=query_vector,
+            limit=top_k,
+            filters=filters,
+        )
+        checked_candidates = self.repository.final_check_candidates(
+            db,
+            candidates=vector_candidates,
+            filters=filters,
+        )
+        if not checked_candidates:
+            summary = _score_summary(
+                requested_top_k=top_k,
+                qdrant_candidate_count=len(vector_candidates),
+                checked_candidates=[],
+                selected_count=0,
+                top1_rerank_score=None,
+            )
+            return RetrievalPipelineResult(summary=summary, items=[], selected_candidates=[])
+
+        rerank_results = self.reranker.rerank(
+            query=query,
+            candidates=[
+                RerankCandidate(
+                    document_chunk_id=candidate.chunk.document_chunk_id,
+                    text=candidate.chunk.content_text,
+                    retrieval_score=candidate.retrieval_score,
+                )
+                for candidate in checked_candidates
+            ],
+        )
+        rerank_by_chunk_id = _validated_rerank_results(
+            rerank_results,
+            checked_candidates=checked_candidates,
+        )
+
+        ordered_candidates = sorted(
+            checked_candidates,
+            key=lambda candidate: (
+                rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+            ),
+        )
+        selected_count = min(rerank_top_n, len(ordered_candidates))
+        item_inputs = [
+            _run_item_input(
+                candidate,
+                rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                selected_flag=index <= selected_count,
+            )
+            for index, candidate in enumerate(ordered_candidates, start=1)
+        ]
+        saved_items = self.repository.save_items(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            items=item_inputs,
+        )
+        top1_rerank_score = rerank_by_chunk_id[
+            ordered_candidates[0].chunk.document_chunk_id
+        ].rerank_score
+        summary = _score_summary(
+            requested_top_k=top_k,
+            qdrant_candidate_count=len(vector_candidates),
+            checked_candidates=checked_candidates,
+            selected_count=selected_count,
+            top1_rerank_score=top1_rerank_score,
+        )
+        return RetrievalPipelineResult(
+            summary=summary,
+            items=[
+                _response_item(
+                    candidate,
+                    saved_item_id=saved_item.retrieval_run_item_id,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                    selected_flag=index <= selected_count,
+                    snippet_max_chars=self.settings.search_snippet_max_chars,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(ordered_candidates, saved_items, strict=True),
+                    start=1,
+                )
+            ],
+            selected_candidates=ordered_candidates[:selected_count],
+        )
+
+    def _classify_duplicate(
+        self,
+        db: Session,
+        *,
+        payload: RagAskRequest,
+        existing: ChatMessage,
+    ) -> RagAskResponse:
+        if existing.content != payload.message:
+            raise ClientMessageConflict()
+        run = self.repository.get_latest_run_for_request_message(
+            db,
+            chat_session_id=payload.chat_session_id,
+            request_message_id=existing.chat_message_id,
+            for_update=True,
+        )
+        if run is None or run.status == "running":
+            raise RequestInProgress()
+        if run.status == "failed":
+            raise ConflictError()
+        assistant = self.chat_repository.get_assistant_message_for_retrieval_run(
+            db,
+            chat_session_id=payload.chat_session_id,
+            retrieval_run_id=run.retrieval_run_id,
+        )
+        if assistant is None:
+            raise ConflictError()
+        return _ask_response(
+            user_message=existing,
+            assistant_message=assistant,
+            retrieval_run_id=run.retrieval_run_id,
+            replayed=True,
+        )
+
     def _effective_top_k(self, requested: int | None) -> int:
         value = requested or self.settings.retrieval_top_k_default
         return min(value, self.settings.retrieval_top_k_max, 20)
 
     def _effective_rerank_top_n(self, requested: int | None) -> int:
         value = requested or self.settings.rerank_top_n_default
+        return min(value, self.settings.rerank_top_n_max, 20)
+
+    def _effective_ask_top_k(self, requested: int | None) -> int:
+        value = requested or self.settings.ask_top_k_default
+        return min(value, self.settings.retrieval_top_k_max, 20)
+
+    def _effective_ask_rerank_top_n(self, requested: int | None) -> int:
+        value = requested or self.settings.ask_rerank_top_n_default
         return min(value, self.settings.rerank_top_n_max, 20)
 
     def _embed_query(self, query: str) -> list[float]:
@@ -282,10 +513,11 @@ def create_rag_service(settings: Settings) -> RagService:
             timeout_seconds=settings.qdrant_timeout_seconds,
         ),
         reranker=create_reranker(settings),
+        answer_generator=create_answer_generator(settings),
     )
 
 
-def _retrieval_filters(payload: RagSearchRequest) -> RetrievalFilters:
+def _retrieval_filters(payload: RagSearchRequest | RagAskRequest) -> RetrievalFilters:
     if payload.filters is None:
         return RetrievalFilters()
     return RetrievalFilters(
@@ -313,7 +545,7 @@ def _score_summary(
         post_filter_candidate_count=len(checked_candidates),
         selected_count=selected_count,
         excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
-        top1_retrieval_score=(_round_score(retrieval_scores[0]) if retrieval_scores else None),
+        top1_retrieval_score=_round_score(retrieval_scores[0]) if retrieval_scores else None,
         top3_avg_retrieval_score=(
             _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
             if retrieval_scores
@@ -438,16 +670,83 @@ def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     return safe_label[:255]
 
 
+def _assemble_context(
+    candidates: list[CheckedRetrievalCandidate],
+    *,
+    max_context_chars: int,
+) -> list[GenerationContextItem]:
+    remaining = max_context_chars
+    items: list[GenerationContextItem] = []
+    for candidate in candidates:
+        if remaining <= 0:
+            break
+        text = _clean_context_text(candidate.chunk.content_text)
+        if not text:
+            continue
+        clipped = text[:remaining]
+        remaining -= len(clipped)
+        items.append(
+            GenerationContextItem(
+                document_chunk_id=candidate.chunk.document_chunk_id,
+                source_label=_source_label(candidate),
+                text=clipped,
+                page_from=candidate.chunk.page_from,
+                page_to=candidate.chunk.page_to,
+            )
+        )
+    return items
+
+
+def _ask_response(
+    *,
+    user_message: ChatMessage,
+    assistant_message: ChatMessage,
+    retrieval_run_id: int,
+    replayed: bool,
+) -> RagAskResponse:
+    return RagAskResponse(
+        chat_session_id=user_message.chat_session_id,
+        user_message=RagAskUserMessage(
+            chat_message_id=user_message.chat_message_id,
+            chat_session_id=user_message.chat_session_id,
+            role="user",
+            content=user_message.content,
+            client_message_id=user_message.client_message_id or "",
+            created_at=_aware_utc(user_message.created_at),
+        ),
+        assistant_message=RagAskAssistantMessage(
+            chat_message_id=assistant_message.chat_message_id,
+            chat_session_id=assistant_message.chat_session_id,
+            role="assistant",
+            content=assistant_message.content,
+            linked_retrieval_run_id=assistant_message.linked_retrieval_run_id or retrieval_run_id,
+            created_at=_aware_utc(assistant_message.created_at),
+        ),
+        retrieval_run_id=retrieval_run_id,
+        replayed=replayed,
+    )
+
+
 def _snippet(text: str, *, max_chars: int) -> str:
-    cleaned = " ".join(text.replace("\x00", " ").split())
+    cleaned = _clean_context_text(text)
     if len(cleaned) <= max_chars:
         return cleaned
     return f"{cleaned[: max_chars - 3]}..."
 
 
+def _clean_context_text(text: str) -> str:
+    return " ".join(text.replace("\x00", " ").split())
+
+
 def _sanitize_label(value: str) -> str:
     printable = "".join(char if char.isprintable() else " " for char in value)
     return " ".join(printable.split())
+
+
+def _optional_decimal_score(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    return _decimal_score(value)
 
 
 def _decimal_score(value: float) -> Decimal:
@@ -464,3 +763,9 @@ def _round_score(value: float) -> float:
 def _add_optional(payload: dict[str, object], key: str, value: object) -> None:
     if value is not None:
         payload[key] = value
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
