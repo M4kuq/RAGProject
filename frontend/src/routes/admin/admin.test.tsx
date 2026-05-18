@@ -100,7 +100,7 @@ test("document list renders filters, statuses and safe escaped text", async () =
   expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
   expect(screen.getByLabelText("status")).toBeInTheDocument();
   expect(screen.getByText("pending_review")).toBeInTheDocument();
-  expect(screen.getByText("<b>Guide</b>")).toBeInTheDocument();
+  expect(await screen.findByText("<b>Guide</b>")).toBeInTheDocument();
   expect(document.querySelector("script")).toBeNull();
 });
 
