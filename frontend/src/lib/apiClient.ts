@@ -4,6 +4,12 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 let csrfToken: string | null = null;
 
+export function resetApiClientStateForTests(): void {
+  if (import.meta.env.MODE === "test") {
+    csrfToken = null;
+  }
+}
+
 export class ApiError extends Error {
   code: string;
   status: number;

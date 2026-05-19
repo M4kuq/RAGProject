@@ -7,6 +7,7 @@ import { DocumentUploadForm } from "../../components/admin/DocumentUploadForm";
 import { JobPayloadView } from "../../components/admin/JobPayloadView";
 import { AppProviders } from "../../app/providers";
 import { AppRouter } from "../../app/router";
+import { resetApiClientStateForTests } from "../../lib/apiClient";
 import { queryClient } from "../../lib/queryClient";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -16,6 +17,8 @@ function jsonResponse(body: unknown, status = 200) {
 beforeEach(() => {
   vi.restoreAllMocks();
   queryClient.clear();
+  resetApiClientStateForTests();
+  document.cookie = "rag_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   window.history.pushState({}, "", "/");
 });
 
