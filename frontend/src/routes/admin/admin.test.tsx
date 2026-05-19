@@ -154,6 +154,9 @@ test("keeps the existing admin evaluation page reachable", async () => {
           data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
         });
       }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
       return jsonResponse({ data: [] });
     })
   );
@@ -176,6 +179,9 @@ test("document list renders filters, statuses and safe escaped text", async () =
         return jsonResponse({
           data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
         });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
       }
       if (url.includes("/api/v1/documents")) {
         return jsonResponse({
@@ -223,6 +229,9 @@ test("document list pagination requests the selected page", async () => {
           data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
         });
       }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
       if (url.includes("/api/v1/documents")) {
         documentRequests.push(url);
         const page = url.includes("page=2") ? 2 : 1;
@@ -267,6 +276,9 @@ test("review page exposes pagination", async () => {
         return jsonResponse({
           data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
         });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
       }
       if (url.includes("/api/v1/documents")) {
         reviewRequests.push(url);
@@ -450,6 +462,9 @@ test("job list pagination requests the selected page", async () => {
         return jsonResponse({
           data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
         });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
       }
       if (url.includes("/api/v1/jobs")) {
         jobRequests.push(url);
