@@ -1,6 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import { AdminSidebar } from "../../components/admin/AdminSidebar";
+import { ErrorState, LoadingState } from "../../components/common/States";
 import { RoleGuard } from "../../features/auth/RoleGuard";
+import { useCsrfToken } from "../../features/auth/authHooks";
 import { AdminPage } from "../AdminPage";
 import { DocumentDetailPage } from "./documents/DocumentDetailPage";
 import { DocumentListPage } from "./documents/DocumentListPage";
@@ -12,8 +14,28 @@ import { JobListPage } from "./jobs/JobListPage";
 export function AdminLayout() {
   return (
     <RoleGuard role="admin">
-      <div className="admin-layout">
-        <AdminSidebar />
+      <AdminShell />
+    </RoleGuard>
+  );
+}
+
+function AdminShell() {
+  const csrf = useCsrfToken();
+
+  return (
+    <div className="admin-layout">
+      <AdminSidebar />
+      {csrf.isLoading ? (
+        <main className="admin-main">
+          <LoadingState label="Loading admin session..." />
+        </main>
+      ) : null}
+      {csrf.isError ? (
+        <main className="admin-main">
+          <ErrorState title="Unable to load admin session" error={csrf.error} />
+        </main>
+      ) : null}
+      {csrf.isSuccess ? (
         <Routes>
           <Route index element={<AdminPage />} />
           <Route path="evaluations" element={<AdminPage />} />
@@ -27,7 +49,7 @@ export function AdminLayout() {
           <Route path="jobs" element={<JobListPage />} />
           <Route path="jobs/:jobId" element={<JobDetailPage />} />
         </Routes>
-      </div>
-    </RoleGuard>
+      ) : null}
+    </div>
   );
 }

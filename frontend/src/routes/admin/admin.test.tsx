@@ -385,8 +385,7 @@ test("job payload view redacts secret and absolute path fields", () => {
   expect(screen.queryByText("C:\\storage\\uploads\\raw.txt")).not.toBeInTheDocument();
 });
 
-test("failed job retry sends mutation with csrf header", async () => {
-  document.cookie = "rag_csrf=test-token";
+test("failed job retry refreshes csrf before mutation", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith("/api/v1/auth/me")) {
@@ -394,8 +393,11 @@ test("failed job retry sends mutation with csrf header", async () => {
         data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
       });
     }
+    if (url.endsWith("/api/v1/auth/csrf")) {
+      return jsonResponse({ data: { csrf_token: "session-token" } });
+    }
     if (url.endsWith("/api/v1/jobs/300/retry")) {
-      expect(new Headers(init?.headers).get("x-csrf-token")).toBe("test-token");
+      expect(new Headers(init?.headers).get("x-csrf-token")).toBe("session-token");
       return jsonResponse({ data: { result_code: "retry_created", job_id: 301, source_job_id: 300, status: "queued", retry_count: 1 } }, 201);
     }
     if (url.includes("/api/v1/jobs")) {

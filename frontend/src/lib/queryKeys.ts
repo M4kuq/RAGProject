@@ -7,7 +7,8 @@ export const queryKeys = {
   chatSession: (chatSessionId: number | null) => ["chat", "session", chatSessionId] as const,
   chatMessages: (chatSessionId: number | null) => ["chat", "messages", chatSessionId] as const,
   auth: {
-    me: ["auth", "me"] as const
+    me: ["auth", "me"] as const,
+    csrf: ["auth", "csrf"] as const
   },
   documents: {
     all: ["documents"] as const,
