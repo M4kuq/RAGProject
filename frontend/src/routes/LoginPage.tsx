@@ -1,11 +1,21 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
+import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/apiClient";
 import { useSetCurrentUser } from "../features/auth/authHooks";
 import type { CurrentUser } from "../features/auth/authTypes";
 import type { ApiResponse } from "../types/api";
 
 type LoginForm = { email: string; password: string };
+type LoginLocationState = { from?: { pathname?: string; search?: string; hash?: string } };
+
+function getRedirectTarget(state: unknown): string {
+  const from = (state as LoginLocationState | null)?.from;
+  if (!from?.pathname?.startsWith("/")) {
+    return "/chat";
+  }
+  return `${from.pathname}${from.search ?? ""}${from.hash ?? ""}`;
+}
 
 export function LoginPage() {
   const { register, handleSubmit } = useForm<LoginForm>({
@@ -13,6 +23,8 @@ export function LoginPage() {
   });
   const [error, setError] = useState<string | null>(null);
   const setCurrentUser = useSetCurrentUser();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   async function onSubmit(values: LoginForm) {
     setError(null);
@@ -26,6 +38,7 @@ export function LoginPage() {
     });
     if (response) {
       setCurrentUser(response.data.user);
+      navigate(getRedirectTarget(location.state), { replace: true });
     }
   }
 

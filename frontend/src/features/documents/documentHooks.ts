@@ -82,6 +82,9 @@ export function useApproveDocumentVersion() {
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents.detail(result.logical_document_id) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.documents.version(result.logical_document_id, result.document_version_id)
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.all });
     }
   });

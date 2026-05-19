@@ -26,7 +26,7 @@ export function useRetryJob() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.detail(jobId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.detail(result.job_id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents.all });
     }
   });
 }
-

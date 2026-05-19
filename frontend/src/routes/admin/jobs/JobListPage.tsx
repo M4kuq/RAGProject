@@ -5,6 +5,7 @@ import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
 import { useJobs, useRetryJob } from "../../../features/jobs/jobHooks";
+import { ApiError } from "../../../lib/apiClient";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
@@ -13,6 +14,7 @@ export function JobListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [jobTypeDraft, setJobTypeDraft] = useState(searchParams.get("job_type") ?? "");
   const [message, setMessage] = useState<string | null>(null);
+  const [retryingJobIds, setRetryingJobIds] = useState<Set<number>>(() => new Set());
   const params = useMemo(
     () => ({
       status: searchParams.get("status") ?? "",
@@ -51,8 +53,12 @@ export function JobListPage() {
     }
     try {
       const result = await retry.mutateAsync(jobId);
+      setRetryingJobIds((current) => new Set(current).add(jobId));
       setMessage(`Retry created. New job #${result.job_id}`);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "job_active_retry_exists") {
+        setRetryingJobIds((current) => new Set(current).add(jobId));
+      }
       setMessage(null);
     }
   }
@@ -106,7 +112,8 @@ export function JobListPage() {
             </thead>
             <tbody>
               {jobs.data.items.map((job) => {
-                const canRetry = job.status === "failed";
+                const retryKnownActive = retryingJobIds.has(job.job_id);
+                const canRetry = job.status === "failed" && !retryKnownActive;
                 return (
                   <tr key={job.job_id}>
                     <td>
@@ -125,7 +132,7 @@ export function JobListPage() {
                     <td>{job.error_code ? truncateText(job.error_code, 40) : formatSafeText(job.error_message, 40)}</td>
                     <td>
                       <button type="button" disabled={!canRetry || retry.isPending} onClick={() => void retryJob(job.job_id)}>
-                        Retry
+                        {retryKnownActive ? "Retry queued" : "Retry"}
                       </button>
                     </td>
                   </tr>

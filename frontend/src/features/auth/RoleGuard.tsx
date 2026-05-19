@@ -28,6 +28,15 @@ export function RoleGuard({ children, role }: { children: ReactNode; role: "admi
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
+  if (currentUser.error) {
+    return (
+      <main className="panel">
+        <h1>Unable to load user</h1>
+        <p>{currentUser.error.message}</p>
+      </main>
+    );
+  }
+
   if (currentUser.data?.role !== role) {
     return <ForbiddenPage message="This admin UI is available only to admin users." />;
   }

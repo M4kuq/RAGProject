@@ -81,6 +81,67 @@ test("unauthenticated admin route redirects to login", async () => {
   expect(screen.queryByRole("heading", { name: "Forbidden" })).not.toBeInTheDocument();
 });
 
+test("login returns to the originally requested admin route", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({ error: { code: "unauthorized", message: "Login required." } }, 401);
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "pre-auth" } });
+      }
+      if (url.endsWith("/api/v1/auth/login")) {
+        return jsonResponse({
+          data: {
+            user: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" },
+            csrf_token: "session-token"
+          }
+        });
+      }
+      if (url.includes("/api/v1/documents")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Login" }));
+  expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+});
+
+test("admin auth load failure is not shown as forbidden", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({ error: { code: "server_error", message: "Auth unavailable." } }, 500);
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Unable to load user" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Forbidden" })).not.toBeInTheDocument();
+});
+
 test("keeps the existing admin evaluation page reachable", async () => {
   vi.stubGlobal(
     "fetch",
@@ -372,6 +433,7 @@ test("failed job retry sends mutation with csrf header", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/jobs/300/retry"), expect.any(Object)));
+  expect(await screen.findByRole("button", { name: "Retry queued" })).toBeDisabled();
 });
 
 test("job list pagination requests the selected page", async () => {
