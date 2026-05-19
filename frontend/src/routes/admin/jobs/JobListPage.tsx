@@ -5,7 +5,7 @@ import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
 import { useJobs, useRetryJob } from "../../../features/jobs/jobHooks";
-import { formatDate, truncateText } from "../../../lib/format";
+import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
 
@@ -122,7 +122,7 @@ export function JobListPage() {
                     <td>{formatDate(job.created_at)}</td>
                     <td>{formatDate(job.started_at)}</td>
                     <td>{formatDate(job.finished_at)}</td>
-                    <td>{truncateText(job.error_code ?? job.error_message, 40)}</td>
+                    <td>{job.error_code ? truncateText(job.error_code, 40) : formatSafeText(job.error_message, 40)}</td>
                     <td>
                       <button type="button" disabled={!canRetry || retry.isPending} onClick={() => void retryJob(job.job_id)}>
                         Retry

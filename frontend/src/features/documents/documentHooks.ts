@@ -94,7 +94,7 @@ export function useArchiveDocument() {
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents.detail(result.logical_document_id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.all });
     }
   });
 }
-

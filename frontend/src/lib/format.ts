@@ -1,4 +1,5 @@
 const ABSOLUTE_PATH_PATTERN = /(^[a-zA-Z]:[\\/])|(^\/[A-Za-z0-9_.-]+\/)/;
+const SENSITIVE_TEXT_PATTERN = /(token|secret|password|csrf|session|cookie)\s*[:=]/i;
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) {
@@ -40,4 +41,14 @@ export function truncateText(value: string | null | undefined, maxLength = 120):
 
 export function isUnsafeDisplayValue(value: unknown): boolean {
   return typeof value === "string" && ABSOLUTE_PATH_PATTERN.test(value);
+}
+
+export function formatSafeText(value: string | null | undefined, maxLength = 120): string {
+  if (!value) {
+    return "-";
+  }
+  if (isUnsafeDisplayValue(value) || SENSITIVE_TEXT_PATTERN.test(value)) {
+    return "[redacted]";
+  }
+  return truncateText(value, maxLength);
 }

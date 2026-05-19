@@ -4,7 +4,7 @@ import { JobPayloadView } from "../../../components/admin/JobPayloadView";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { useJobDetail, useRetryJob } from "../../../features/jobs/jobHooks";
-import { formatDate, truncateText } from "../../../lib/format";
+import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
 export function JobDetailPage() {
   const jobId = Number(useParams().jobId);
@@ -102,7 +102,7 @@ export function JobDetailPage() {
 
       <section className="admin-section">
         <h2>Error</h2>
-        <p>{truncateText(job.data.error_code ?? job.data.error_message, 160)}</p>
+        <p>{job.data.error_code ? truncateText(job.data.error_code, 160) : formatSafeText(job.data.error_message, 160)}</p>
       </section>
 
       <section className="admin-section">

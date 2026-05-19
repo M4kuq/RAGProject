@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { ChunkPreviewTable } from "../../../components/admin/ChunkPreviewTable";
+import { validateDocumentFile } from "../../../components/admin/DocumentUploadForm";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { VersionList } from "../../../components/admin/VersionList";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
@@ -41,6 +42,11 @@ export function DocumentDetailPage() {
   async function submitVersion() {
     if (!versionFile) {
       setMessage("Select a new version file.");
+      return;
+    }
+    const fileError = validateDocumentFile(versionFile);
+    if (fileError) {
+      setMessage(fileError);
       return;
     }
     try {
@@ -86,7 +92,11 @@ export function DocumentDetailPage() {
         </button>
       </header>
 
-      {message ? <InlineAlert tone={message.includes("Select") ? "error" : "success"}>{message}</InlineAlert> : null}
+      {message ? (
+        <InlineAlert tone={message.includes("Select") || message.includes("Allowed") || message.includes("File size") ? "error" : "success"}>
+          {message}
+        </InlineAlert>
+      ) : null}
       {archive.error ? <InlineAlert tone="error">{archive.error.message}</InlineAlert> : null}
       {uploadVersion.error ? <InlineAlert tone="error">{uploadVersion.error.message}</InlineAlert> : null}
 

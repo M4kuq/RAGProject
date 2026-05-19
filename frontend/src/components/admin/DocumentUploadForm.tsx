@@ -6,7 +6,7 @@ import type { DocumentUploadResponse } from "../../features/documents/documentTy
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"];
 
-function validateFile(file: File | null): string | null {
+export function validateDocumentFile(file: File | null): string | null {
   if (!file) {
     return "Select a file.";
   }
@@ -30,7 +30,7 @@ export function DocumentUploadForm({ onUploaded }: { onUploaded?: (result: Docum
   async function submit(event: FormEvent) {
     event.preventDefault();
     const titleValue = title.trim();
-    const fileError = validateFile(file);
+    const fileError = validateDocumentFile(file);
     if (!titleValue) {
       setClientError("Enter a title.");
       return;

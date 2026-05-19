@@ -40,7 +40,7 @@ export function VersionList({
             <td>
               <StatusBadge status={version.display_status} />
             </td>
-            <td title={version.file_name ?? undefined}>{truncateText(version.file_name, 40)}</td>
+            <td>{truncateText(version.file_name, 40)}</td>
             <td>{formatBytes(version.file_size_bytes)}</td>
             <td>{version.chunk_count ?? "-"}</td>
             <td>{formatDate(version.created_at)}</td>
@@ -53,4 +53,3 @@ export function VersionList({
     </table>
   );
 }
-
