@@ -1,6 +1,7 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { AdminSidebar } from "../../components/admin/AdminSidebar";
 import { RoleGuard } from "../../features/auth/RoleGuard";
+import { AdminPage } from "../AdminPage";
 import { DocumentDetailPage } from "./documents/DocumentDetailPage";
 import { DocumentListPage } from "./documents/DocumentListPage";
 import { DocumentReviewPage } from "./documents/DocumentReviewPage";
@@ -14,7 +15,8 @@ export function AdminLayout() {
       <div className="admin-layout">
         <AdminSidebar />
         <Routes>
-          <Route index element={<Navigate to="documents" replace />} />
+          <Route index element={<AdminPage />} />
+          <Route path="evaluations" element={<AdminPage />} />
           <Route path="documents" element={<DocumentListPage />} />
           <Route path="documents/review" element={<DocumentReviewPage />} />
           <Route path="documents/:logicalDocumentId" element={<DocumentDetailPage />} />

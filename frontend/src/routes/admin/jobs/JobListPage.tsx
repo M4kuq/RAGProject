@@ -34,7 +34,9 @@ export function JobListPage() {
     } else {
       next.delete(key);
     }
-    next.set("page", "1");
+    if (key !== "page") {
+      next.set("page", "1");
+    }
     setSearchParams(next);
   }
 

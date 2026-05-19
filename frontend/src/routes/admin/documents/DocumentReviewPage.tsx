@@ -2,14 +2,18 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
+import { Pagination } from "../../../components/common/Pagination";
 import {
   useApproveDocumentVersion,
   useDocuments
 } from "../../../features/documents/documentHooks";
 import { formatDate, truncateText } from "../../../lib/format";
 
+const PAGE_SIZE = 20;
+
 export function DocumentReviewPage() {
-  const pending = useDocuments({ display_status: "pending_review", page: 1, page_size: 100 });
+  const [page, setPage] = useState(1);
+  const pending = useDocuments({ display_status: "pending_review", page, page_size: PAGE_SIZE });
   const approve = useApproveDocumentVersion();
   const [message, setMessage] = useState<string | null>(null);
 
@@ -39,54 +43,57 @@ export function DocumentReviewPage() {
       {pending.error ? <ErrorState error={pending.error} /> : null}
       {pending.data?.items.length === 0 ? <EmptyState title="No pending review">No pending versions.</EmptyState> : null}
       {pending.data && pending.data.items.length > 0 ? (
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Document</th>
-              <th>Version</th>
-              <th>File</th>
-              <th>Created</th>
-              <th>Chunks</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pending.data.items.map((document) => {
-              const version = document.latest_version;
-              const canApprove = version?.status === "ready" && version.display_status === "pending_review";
-              return (
-                <tr key={document.logical_document_id}>
-                  <td>
-                    <Link to={`/admin/documents/${document.logical_document_id}`}>
-                      {truncateText(document.title || document.document_name, 48)}
-                    </Link>
-                  </td>
-                  <td>{version ? `v${version.version_no}` : "-"}</td>
-                  <td>{truncateText(version?.file_name, 40)}</td>
-                  <td>{formatDate(version?.created_at)}</td>
-                  <td>{version?.chunk_count ?? "-"}</td>
-                  <td>
-                    <StatusBadge status={version?.display_status ?? document.display_status} />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      disabled={!version || !canApprove || approve.isPending}
-                      onClick={() =>
-                        version
-                          ? void approveVersion(document.logical_document_id, version.document_version_id, version.is_active)
-                          : undefined
-                      }
-                    >
-                      Approve
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <>
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Document</th>
+                <th>Version</th>
+                <th>File</th>
+                <th>Created</th>
+                <th>Chunks</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.data.items.map((document) => {
+                const version = document.latest_version;
+                const canApprove = version?.status === "ready" && version.display_status === "pending_review";
+                return (
+                  <tr key={document.logical_document_id}>
+                    <td>
+                      <Link to={`/admin/documents/${document.logical_document_id}`}>
+                        {truncateText(document.title || document.document_name, 48)}
+                      </Link>
+                    </td>
+                    <td>{version ? `v${version.version_no}` : "-"}</td>
+                    <td>{truncateText(version?.file_name, 40)}</td>
+                    <td>{formatDate(version?.created_at)}</td>
+                    <td>{version?.chunk_count ?? "-"}</td>
+                    <td>
+                      <StatusBadge status={version?.display_status ?? document.display_status} />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        disabled={!version || !canApprove || approve.isPending}
+                        onClick={() =>
+                          version
+                            ? void approveVersion(document.logical_document_id, version.document_version_id, version.is_active)
+                            : undefined
+                        }
+                      >
+                        Approve
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <Pagination meta={pending.data.pagination} onPageChange={setPage} />
+        </>
       ) : null}
     </main>
   );

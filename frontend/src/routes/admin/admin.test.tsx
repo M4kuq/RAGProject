@@ -59,6 +59,51 @@ test("viewer cannot enter admin route and does not see admin navigation", async 
   expect(screen.queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
 });
 
+test("unauthenticated admin route redirects to login", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({ error: { code: "unauthorized", message: "Login required." } }, 401);
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "RAGProject" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Forbidden" })).not.toBeInTheDocument();
+});
+
+test("keeps the existing admin evaluation page reachable", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("button", { name: "Run evaluation" })).toBeInTheDocument();
+});
+
 test("document list renders filters, statuses and safe escaped text", async () => {
   vi.stubGlobal(
     "fetch",
@@ -102,6 +147,105 @@ test("document list renders filters, statuses and safe escaped text", async () =
   expect(screen.getByText("pending_review")).toBeInTheDocument();
   expect(await screen.findByText("<b>Guide</b>")).toBeInTheDocument();
   expect(document.querySelector("script")).toBeNull();
+});
+
+test("document list pagination requests the selected page", async () => {
+  const documentRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.includes("/api/v1/documents")) {
+        documentRequests.push(url);
+        const page = url.includes("page=2") ? 2 : 1;
+        return jsonResponse({
+          data: [
+            {
+              logical_document_id: page,
+              document_name: `Guide ${page}`,
+              title: `Guide ${page}`,
+              status: "active",
+              display_status: "active",
+              latest_version: null,
+              active_version: null,
+              created_at: "2026-04-30T00:00:00Z",
+              updated_at: "2026-04-30T00:00:00Z"
+            }
+          ],
+          meta: { pagination: { page, page_size: 20, total: 40, has_next: page < 2 } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  await waitFor(() => expect(documentRequests.some((url) => url.includes("page=2"))).toBe(true));
+});
+
+test("review page exposes pagination", async () => {
+  const reviewRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.includes("/api/v1/documents")) {
+        reviewRequests.push(url);
+        const page = url.includes("page=2") ? 2 : 1;
+        return jsonResponse({
+          data: [
+            {
+              logical_document_id: page,
+              document_name: `Pending ${page}`,
+              title: `Pending ${page}`,
+              status: "active",
+              display_status: "pending_review",
+              latest_version: {
+                document_version_id: 2000 + page,
+                version_no: page,
+                status: "ready",
+                display_status: "pending_review",
+                is_active: false,
+                file_name: `pending-${page}.txt`,
+                chunk_count: 3,
+                created_at: "2026-04-30T00:00:00Z"
+              },
+              active_version: null,
+              created_at: "2026-04-30T00:00:00Z",
+              updated_at: "2026-04-30T00:00:00Z"
+            }
+          ],
+          meta: { pagination: { page, page_size: 20, total: 40, has_next: page < 2 } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents/review");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  await waitFor(() => expect(reviewRequests.some((url) => url.includes("page=2"))).toBe(true));
 });
 
 test("upload form validates extension before reading or sending file", async () => {
@@ -228,4 +372,56 @@ test("failed job retry sends mutation with csrf header", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/jobs/300/retry"), expect.any(Object)));
+});
+
+test("job list pagination requests the selected page", async () => {
+  const jobRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.includes("/api/v1/jobs")) {
+        jobRequests.push(url);
+        const page = url.includes("page=2") ? 2 : 1;
+        return jsonResponse({
+          data: [
+            {
+              job_id: 300 + page,
+              job_type: "document_ingest",
+              status: "succeeded",
+              priority: 100,
+              target_type: "document_version",
+              target_id: 2000 + page,
+              retry_of_job_id: null,
+              retry_count: 0,
+              created_by: 1,
+              started_at: null,
+              finished_at: null,
+              created_at: "2026-04-30T00:00:00Z",
+              updated_at: "2026-04-30T00:00:00Z",
+              error_code: null,
+              error_message: null,
+              payload_view: { payload: { logical_document_id: 1000 + page }, payload_redacted: true }
+            }
+          ],
+          meta: { pagination: { page, page_size: 20, total: 40, has_next: page < 2 } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/jobs");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  await waitFor(() => expect(jobRequests.some((url) => url.includes("page=2"))).toBe(true));
 });

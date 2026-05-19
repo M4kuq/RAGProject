@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Navigate, useLocation } from "react-router-dom";
+import { ApiError } from "../../lib/apiClient";
 import { useCurrentUser } from "./authHooks";
 
 export function ForbiddenPage({ message = "Forbidden" }: { message?: string }) {
@@ -12,6 +14,7 @@ export function ForbiddenPage({ message = "Forbidden" }: { message?: string }) {
 
 export function RoleGuard({ children, role }: { children: ReactNode; role: "admin" }) {
   const currentUser = useCurrentUser();
+  const location = useLocation();
 
   if (currentUser.isLoading) {
     return (
@@ -19,6 +22,10 @@ export function RoleGuard({ children, role }: { children: ReactNode; role: "admi
         <p>Loading...</p>
       </main>
     );
+  }
+
+  if (currentUser.error instanceof ApiError && currentUser.error.status === 401) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   if (currentUser.data?.role !== role) {
