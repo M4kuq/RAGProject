@@ -47,7 +47,8 @@ class EvaluationRagService(Protocol):
         request_id: str | None,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
-    ) -> RagEvaluationResult: ...
+    ) -> RagEvaluationResult:
+        ...
 
 
 class EvaluationService:
