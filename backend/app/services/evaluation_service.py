@@ -47,8 +47,7 @@ class EvaluationRagService(Protocol):
         request_id: str | None,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
-    ) -> RagEvaluationResult:
-        ...
+    ) -> RagEvaluationResult: ...
 
 
 class EvaluationService:
@@ -277,9 +276,7 @@ class EvaluationService:
             raise RuntimeError("invalid_evaluation_case_result")
         status = str(case_result["status"])
         metric_by_name = {
-            metric.metric_name: metric
-            for metric in metrics
-            if isinstance(metric, MetricValue)
+            metric.metric_name: metric for metric in metrics if isinstance(metric, MetricValue)
         }
         self.repository.finish_item(
             db,
@@ -297,9 +294,7 @@ class EvaluationService:
             db,
             evaluation_run_item_id=item.evaluation_run_item_id,
             results=[
-                _result_input(metric)
-                for metric in metrics
-                if isinstance(metric, MetricValue)
+                _result_input(metric) for metric in metrics if isinstance(metric, MetricValue)
             ],
         )
 
