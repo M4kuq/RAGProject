@@ -10,8 +10,40 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
+}
+
+button,
+.button-link {
+  align-items: center;
+  background: #1f6feb;
+  border: 1px solid #1f6feb;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  text-decoration: none;
+}
+
+button:disabled {
+  background: #d8dee4;
+  border-color: #d8dee4;
+  color: #57606a;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid #c9d1d9;
+  border-radius: 6px;
+  box-sizing: border-box;
+  padding: 8px 10px;
 }
 
 .shell {
@@ -107,10 +139,6 @@ textarea {
 
 .composer textarea {
   min-height: 120px;
-}
-
-.composer button {
-  justify-self: start;
 }
 
 .error {
@@ -211,4 +239,227 @@ textarea {
 
 .citation-item p {
   margin: 6px 0 0;
+}
+
+.muted {
+  color: #57606a;
+}
+
+.admin-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: calc(100vh - 53px);
+}
+
+.admin-sidebar {
+  background: #ffffff;
+  border-right: 1px solid #d8dee4;
+  padding: 20px;
+}
+
+.admin-sidebar h2 {
+  font-size: 16px;
+  margin: 0 0 16px;
+}
+
+.admin-sidebar nav {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-sidebar a {
+  border-radius: 6px;
+  color: #172026;
+  padding: 8px 10px;
+  text-decoration: none;
+}
+
+.admin-sidebar a.active {
+  background: #e7f0ff;
+  color: #0a4aa3;
+  font-weight: 600;
+}
+
+.admin-main {
+  min-width: 0;
+  padding: 24px;
+}
+
+.page-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-header h1 {
+  font-size: 28px;
+  margin: 0;
+}
+
+.admin-section {
+  border-top: 1px solid #d8dee4;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+
+.admin-section h2 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+.filter-bar,
+.inline-form {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.filter-bar label,
+.upload-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-table {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.admin-table th,
+.admin-table td {
+  border-bottom: 1px solid #d8dee4;
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-table th {
+  background: #f1f4f8;
+  font-size: 13px;
+}
+
+.admin-table td {
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-badge {
+  background: #eef2f6;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+
+.status-active,
+.status-succeeded,
+.status-ready {
+  background: #dafbe1;
+  border-color: #aceebb;
+  color: #116329;
+}
+
+.status-pending_review,
+.status-processing,
+.status-queued,
+.status-running {
+  background: #fff8c5;
+  border-color: #eac54f;
+  color: #7d4e00;
+}
+
+.status-failed,
+.status-canceled {
+  background: #ffebe9;
+  border-color: #ffb3ad;
+  color: #a40e26;
+}
+
+.status-archived {
+  background: #f6f8fa;
+  color: #57606a;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.detail-grid div {
+  min-width: 0;
+}
+
+.detail-grid dt {
+  color: #57606a;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.state-box,
+.inline-alert {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.error-box,
+.inline-alert-error {
+  background: #ffebe9;
+  border-color: #ffb3ad;
+  color: #a40e26;
+}
+
+.inline-alert-success {
+  background: #dafbe1;
+  border-color: #aceebb;
+  color: #116329;
+}
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 860px) {
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    border-bottom: 1px solid #d8dee4;
+    border-right: 0;
+  }
+
+  .admin-sidebar nav,
+  .page-header {
+    flex-direction: column;
+  }
+
+  .admin-table {
+    display: block;
+    overflow-x: auto;
+  }
 }
