@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -405,7 +405,7 @@ class _FakeVectorClient(VectorSearchClient):
         self,
         *,
         collection_name: str,
-        query_vector: list[float],
+        query_vector: Sequence[float],
         limit: int,
         filters: RetrievalFilters,
     ) -> list[VectorSearchCandidate]:
