@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Body, Depends, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,7 @@ router = APIRouter()
 @router.post("/evaluations/runs", status_code=status.HTTP_202_ACCEPTED)
 def create_evaluation(
     request: Request,
-    payload: EvaluationRunCreateRequest,
+    payload: EvaluationRunCreateRequest = Body(default_factory=EvaluationRunCreateRequest),
     _: None = Depends(require_csrf),
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),

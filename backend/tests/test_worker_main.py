@@ -513,14 +513,6 @@ def test_default_dispatcher_returns_stub_results_for_remaining_pr09_handlers() -
             worker_instance_id="worker-1",
         ),
         JobExecutionContext(
-            job_id=4,
-            job_type="evaluation_run",
-            target_type="evaluation_run",
-            target_id=1,
-            payload={"evaluation_run_id": 1},
-            worker_instance_id="worker-1",
-        ),
-        JobExecutionContext(
             job_id=5,
             job_type="temporary_chat_cleanup",
             target_type=None,
