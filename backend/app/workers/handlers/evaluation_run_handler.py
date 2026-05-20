@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -37,6 +38,11 @@ class EvaluationRunHandler:
                 return JobHandlerResult.failed(
                     error_code=str(exc),
                     error_message="Evaluation run failed.",
+                )
+            except OperationalError:
+                return JobHandlerResult.failed(
+                    error_code="job_handler_not_implemented",
+                    error_message="Evaluation run storage is not initialized.",
                 )
             except Exception:
                 return JobHandlerResult.failed(
