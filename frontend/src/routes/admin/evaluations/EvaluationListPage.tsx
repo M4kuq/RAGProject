@@ -67,7 +67,7 @@ export function EvaluationListPage() {
           />
         </label>
         <button type="submit" disabled={createRun.isPending}>
-          Create run
+          Run evaluation
         </button>
         <button type="button" onClick={() => void runs.refetch()}>
           Refresh
