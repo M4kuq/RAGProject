@@ -5,7 +5,6 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -16,7 +15,14 @@ from app.core.config import Settings
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
-from app.db.models import EvaluationRun, EvaluationRunItem, Job, RetrievalRun, Role, User
+from app.db.models import (
+    EvaluationRun,
+    EvaluationRunItem,
+    Job,
+    RetrievalRun,
+    Role,
+    User,
+)
 from app.db.session import get_db
 from app.evaluation.fixtures import load_evaluation_cases
 from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
@@ -87,8 +93,9 @@ def test_evaluation_api_admin_create_list_detail_and_safe_response() -> None:
                 "/api/v1/evaluations/runs",
                 json={"dataset_name": "phase1_smoke", "case_limit": 1},
             )
+            run_id = created.json()["data"]["evaluation_run_id"]
             listing = client.get("/api/v1/evaluations/runs")
-            detail = client.get(f"/api/v1/evaluations/runs/{created.json()['data']['evaluation_run_id']}")
+            detail = client.get(f"/api/v1/evaluations/runs/{run_id}")
             missing = client.get("/api/v1/evaluations/runs/999")
             invalid = client.post(
                 "/api/v1/evaluations/runs",
@@ -110,8 +117,10 @@ def test_evaluation_api_admin_create_list_detail_and_safe_response() -> None:
         assert "secret" not in detail.text.lower()
 
         with session_factory() as db:
-            assert db.scalar(select(EvaluationRun)).status == "queued"
+            run = db.scalar(select(EvaluationRun))
             job = db.scalar(select(Job))
+            assert run is not None
+            assert run.status == "queued"
             assert job is not None
             assert job.job_type == "evaluation_run"
             assert job.target_type == "evaluation_run"
@@ -214,17 +223,19 @@ class _FakeEvaluationRagService:
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
         retrieval_run = _create_fake_retrieval_run(db, question=question, request_id=request_id)
+        answer = "Qdrant and deterministic fake adapters support citation-aware retrieval traces."
+        snippet = "Qdrant, deterministic fake adapters, and citation-aware retrieval traces."
         return RagEvaluationResult(
             retrieval_run_id=retrieval_run.retrieval_run_id,
             status="succeeded",
-            answer_text="Qdrant and deterministic fake adapters support citation-aware retrieval traces.",
+            answer_text=answer,
             citations=[
                 RagAskCitation(
                     citation_id=1,
                     local_citation_id=1,
                     document_chunk_id=1,
                     source_label="phase1-seed.md",
-                    snippet="Qdrant, deterministic fake adapters, and citation-aware retrieval traces.",
+                    snippet=snippet,
                     old_version_flag=False,
                 )
             ],
@@ -250,10 +261,11 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
     def evaluate_question(self, db: Session, **kwargs: Any) -> RagEvaluationResult:
         self.calls += 1
         if self.calls == 2:
+            request_id = kwargs.get("request_id")
             retrieval_run = _create_fake_retrieval_run(
                 db,
                 question=str(kwargs.get("question", "")),
-                request_id=kwargs.get("request_id") if isinstance(kwargs.get("request_id"), str) else None,
+                request_id=request_id if isinstance(request_id, str) else None,
                 status="failed",
                 error_code="no_context_found",
             )
