@@ -22,8 +22,8 @@ from app.db.models import (
     EvaluationRunItem,
     Job,
     LogicalDocument,
-    Role,
     RetrievalRun,
+    Role,
     User,
 )
 from app.db.session import get_db
