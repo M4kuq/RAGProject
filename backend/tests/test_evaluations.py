@@ -200,6 +200,7 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
     assert viewer_create_forbidden.status_code == 403
     assert viewer_create_forbidden.json()["error"]["code"] == "permission_denied"
 
+    _logout(client)
     _login_as(client, "admin@example.com")
     missing_csrf = client.post(
         "/api/v1/evaluations/runs",
@@ -583,3 +584,11 @@ def _session_csrf(client: TestClient) -> str:
     response = client.get("/api/v1/auth/csrf", headers={"Origin": ALLOWED_ORIGIN})
     assert response.status_code == 200
     return str(response.json()["data"]["csrf_token"])
+
+
+def _logout(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": _session_csrf(client), "Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 200

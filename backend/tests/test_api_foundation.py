@@ -154,7 +154,7 @@ def test_admin_jobs_pagination_is_not_pre_limited_to_first_50_rows() -> None:
     }
 
 
-def test_admin_create_evaluation_keeps_stub_terminal() -> None:
+def test_admin_create_evaluation_creates_queued_run_and_job() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -174,20 +174,22 @@ def test_admin_create_evaluation_keeps_stub_terminal() -> None:
     try:
         response = TestClient(app).post(
             "/api/v1/evaluations/runs",
+            json={"dataset_name": "phase1_smoke", "case_limit": 1},
             headers={"X-Request-ID": "evaluation-create-1"},
         )
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
-    assert body["data"]["status"] == "succeeded"
+    assert body["data"]["status"] == "queued"
+    assert body["data"]["job_id"] >= 1
 
     with session_factory() as db:
         run = db.query(EvaluationRun).one()
-        assert run.status == "succeeded"
-        assert run.started_at is not None
-        assert run.finished_at is not None
+        assert run.status == "queued"
+        assert run.started_at is None
+        assert run.finished_at is None
 
 
 def test_unhandled_exception_is_logged_with_generic_error_response(

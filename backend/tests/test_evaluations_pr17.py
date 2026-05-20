@@ -52,8 +52,8 @@ def test_fixture_loader_and_metric_clamp() -> None:
                 )
             ],
             confidence=RagAskConfidence(
-                answer_confidence=2.0,
-                groundedness_score=1.5,
+                answer_confidence=1.0,
+                groundedness_score=1.0,
                 confidence_label="High",
             ),
             retrieval_summary=RetrievalScoreSummary(
