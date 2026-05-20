@@ -24,5 +24,10 @@ export const queryKeys = {
     all: ["jobs"] as const,
     list: (params: JobListParams) => ["jobs", "list", params] as const,
     detail: (jobId: number) => ["jobs", "detail", jobId] as const
+  },
+  evaluations: {
+    all: ["evaluations"] as const,
+    list: (params: { page: number; page_size: number }) => ["evaluations", "list", params] as const,
+    detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const
   }
 };

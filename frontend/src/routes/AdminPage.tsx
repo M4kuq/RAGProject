@@ -5,11 +5,14 @@ export function AdminPage() {
   const [status, setStatus] = useState("");
 
   async function runEvaluation() {
-    const result = await apiFetch<{ data: { evaluation_run_id: number } }>("/api/v1/evaluations/runs", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-    setStatus(`Evaluation #${result.data.evaluation_run_id} completed`);
+    const result = await apiFetch<{ data: { evaluation_run_id: number; job_id: number } }>(
+      "/api/v1/evaluations/runs",
+      {
+        method: "POST",
+        body: JSON.stringify({})
+      }
+    );
+    setStatus(`Evaluation #${result.data.evaluation_run_id} queued as job #${result.data.job_id}`);
   }
 
   return (

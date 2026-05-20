@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 const links = [
   { to: "/admin/documents", label: "Documents" },
   { to: "/admin/documents/review", label: "Review" },
+  { to: "/admin/evaluations", label: "Evaluations" },
   { to: "/admin/jobs", label: "Jobs" }
 ];
 
@@ -20,4 +21,3 @@ export function AdminSidebar() {
     </aside>
   );
 }
-
