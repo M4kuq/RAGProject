@@ -1,48 +1,52 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import pagination_params, require_admin, require_csrf
 from app.api.responses import paginate, success_response
-from app.db.models import AuditLog, EvaluationRun, SystemSetting, User
+from app.db.models import AuditLog, SystemSetting, User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
+from app.schemas.evaluations import EvaluationRunCreateRequest
+from app.services.evaluation_service import EvaluationService
 
-router = APIRouter(dependencies=[Depends(require_csrf)])
+router = APIRouter()
 
 
-@router.post("/evaluations/runs")
+@router.post("/evaluations/runs", status_code=status.HTTP_202_ACCEPTED)
 def create_evaluation(
     request: Request,
+    payload: EvaluationRunCreateRequest,
+    _: None = Depends(require_csrf),
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    now = datetime.now(UTC)
-    run = EvaluationRun(
-        status="succeeded",
-        metrics_config={
-            "trigger_type": "manual",
-            "retrieval": 1.0,
-            "generation": 1.0,
-            "hallucination_basic": 0.0,
-            "prompt_injection_basic": "not_detected",
-            "citation_coverage": 1.0,
-        },
-        created_by=user.user_id,
-        started_at=now,
-        finished_at=now,
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    return success_response(
-        {"evaluation_run_id": run.evaluation_run_id, "status": run.status},
-        request,
-    )
+    result = EvaluationService().create_run(db, payload=payload, user=user)
+    return success_response(result.model_dump(), request)
+
+
+@router.get("/evaluations/runs")
+def evaluation_runs(
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
+) -> dict[str, object]:
+    rows, page_meta = EvaluationService().list_runs(db, pagination=pagination)
+    return success_response([row.model_dump(mode="json") for row in rows], request, page_meta)
+
+
+@router.get("/evaluations/runs/{evaluation_run_id}")
+def evaluation_run_detail(
+    evaluation_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_run_detail(db, evaluation_run_id=evaluation_run_id)
+    return success_response(result.model_dump(mode="json"), request)
 
 
 @router.get("/audit-logs")
