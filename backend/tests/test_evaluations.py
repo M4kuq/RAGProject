@@ -1,51 +1,50 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import Any
 
 import pytest
-from app.evaluation.runner import EvaluationRunError, EvaluationRunner
-from app.evaluation.seed_data import seed_default_dataset
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
+from app.core.security import hash_password
 from app.db.base import Base
-from app.db.evaluation_models import EvaluationDatasetCase
-from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
-from app.evaluation.rag_service import RagEvaluationResult
-from app.main import create_app
-from app.rag.retrieval import (
-    RetrievalFilters,
-    VectorSearchCandidate,
-    VectorSearchClient,
+from app.db.evaluation_models import EvaluationResult
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    EvaluationRun,
+    EvaluationRunItem,
+    Job,
+    LogicalDocument,
+    RetrievalRun,
+    Role,
+    User,
 )
+from app.db.session import get_db
+from app.evaluation.fixtures import load_evaluation_cases
+from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
+from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
+from app.ingest.embedding import FakeEmbeddingAdapter
+from app.main import create_app
+from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
+from app.schemas.evaluations import EvaluationRunCreateRequest
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
 from app.services.evaluation_service import EvaluationService
+from app.workers.handlers.base import JobExecutionContext
+from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
+
+ALLOWED_ORIGIN = "http://localhost:5173"
+TEST_PASSWORD = "password"
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="sqlite://",
-        session_secret="test-session-secret",
-        storage_root=tmp_path / "uploads",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        rerank_provider="fake",
-        generation_provider="fake",
-        evaluation_default_dataset_path=Path("data/evaluation/phase1_smoke.csv"),
-    )
-
-
-@pytest.fixture
-def seeded_client(settings: Settings) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
+def evaluation_client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -53,339 +52,393 @@ def seeded_client(settings: Settings) -> Iterator[tuple[TestClient, sessionmaker
     )
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    password_hash = hash_password(TEST_PASSWORD)
     with session_factory() as db:
-        _seed_auth(db)
-        _seed_document(db)
-        db.commit()
-    app = create_app(settings=settings, session_factory=session_factory)
-    with TestClient(app) as client:
-        yield client, session_factory
-    engine.dispose()
-
-
-def test_seed_default_dataset_creates_cases(settings: Settings) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        result = seed_default_dataset(db, settings)
-        db.commit()
-
-        assert result.created == 3
-        assert result.skipped == 0
-        assert db.query(EvaluationDatasetCase).count() == 3
-        assert {case.case_id for case in db.query(EvaluationDatasetCase).all()} == {
-            "phase1_security_controls",
-            "phase1_ingest_pipeline",
-            "phase1_citation_behavior",
-        }
-    engine.dispose()
-
-
-def test_evaluation_runner_executes_cases(settings: Settings) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        _seed_document(db)
-        seed_default_dataset(db, settings)
-        db.commit()
-
-        runner = EvaluationRunner(
-            settings=settings,
-            session_factory=session_factory,
-            rag_service_factory=lambda _settings, _db: _FakeEvaluationRagService(),
+        admin_role = Role(role_name="admin", description="Admin")
+        viewer_role = Role(role_name="viewer", description="Viewer")
+        db.add_all([admin_role, viewer_role])
+        db.flush()
+        db.add_all(
+            [
+                User(
+                    role_id=admin_role.role_id,
+                    email="admin@example.com",
+                    display_name="Admin",
+                    password_hash=password_hash,
+                    status="active",
+                ),
+                User(
+                    role_id=viewer_role.role_id,
+                    email="viewer@example.com",
+                    display_name="Viewer",
+                    password_hash=password_hash,
+                    status="active",
+                ),
+            ]
         )
-        summary = runner.run_default_dataset()
-
-        assert summary.status == "succeeded"
-        assert summary.succeeded_items == 3
-        assert summary.failed_items == 0
-        assert summary.metrics["faithfulness"]["score"] == pytest.approx(1.0)
-        assert summary.metrics["groundedness"]["score"] == pytest.approx(1.0)
-        assert summary.metrics["citation_coverage"]["score"] == pytest.approx(1.0)
-
-
-def test_evaluation_runner_records_partial_failures(settings: Settings) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        _seed_document(db)
-        seed_default_dataset(db, settings)
         db.commit()
 
-        runner = EvaluationRunner(
-            settings=settings,
-            session_factory=session_factory,
-            rag_service_factory=lambda _settings, _db: _PartiallyFailingRagService(),
-        )
-        summary = runner.run_default_dataset()
+    def override_db() -> Iterator[Session]:
+        with session_factory() as db:
+            yield db
 
-        assert summary.status == "succeeded"
-        assert summary.total_items == 3
-        assert summary.succeeded_items == 2
-        assert summary.failed_items == 1
-        assert summary.metrics["faithfulness"]["score"] == pytest.approx(1.0)
-        assert summary.metrics["groundedness"]["score"] == pytest.approx(1.0)
-        assert summary.metrics["citation_coverage"]["score"] == pytest.approx(1.0)
+    app = create_app()
+    app.dependency_overrides[get_db] = override_db
+    try:
+        yield TestClient(app), session_factory
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
 
 
-def test_evaluation_runner_requires_dataset(settings: Settings) -> None:
-    missing_settings = settings.model_copy(
-        update={"evaluation_default_dataset_path": Path("missing.csv")},
-    )
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        db.commit()
+def test_fixture_loader_and_metric_clamp() -> None:
+    cases = load_evaluation_cases("phase1_smoke", case_limit=1)
+    assert [case.case_id for case in cases] == ["phase1_seed_stack"]
 
-    runner = EvaluationRunner(
-        settings=missing_settings,
-        session_factory=session_factory,
-        rag_service_factory=lambda _settings, _db: _FakeEvaluationRagService(),
-    )
-
-    with pytest.raises(EvaluationRunError, match="dataset_not_found"):
-        runner.run_default_dataset()
-    engine.dispose()
-
-
-def test_evaluation_runner_rejects_empty_dataset(settings: Settings, tmp_path: Path) -> None:
-    empty_path = tmp_path / "empty.csv"
-    empty_path.write_text("case_id,question,expected_keywords\n", encoding="utf-8")
-    empty_settings = settings.model_copy(update={"evaluation_default_dataset_path": empty_path})
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        db.commit()
-
-    runner = EvaluationRunner(
-        settings=empty_settings,
-        session_factory=session_factory,
-        rag_service_factory=lambda _settings, _db: _FakeEvaluationRagService(),
-    )
-
-    with pytest.raises(EvaluationRunError, match="dataset_empty"):
-        runner.run_default_dataset()
-    engine.dispose()
-
-
-def test_evaluation_runner_setup_failure_marks_run_failed(settings: Settings) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    with session_factory() as db:
-        _seed_auth(db)
-        _seed_document(db)
-        seed_default_dataset(db, settings)
-        db.commit()
-
-    runner = EvaluationRunner(
-        settings=settings,
-        session_factory=session_factory,
-        rag_service_factory=_failing_rag_service_factory,
-    )
-
-    with pytest.raises(RuntimeError, match="synthetic evaluation setup failure"):
-        runner.run_default_dataset()
-
-    with session_factory() as db:
-        service = EvaluationService(settings)
-        runs, _ = service.list_runs(db)
-        assert len(runs) == 1
-        assert runs[0].status == "failed"
-        assert runs[0].error_code == "evaluation_setup_failed"
-
-
-def test_evaluation_service_lists_and_reads_runs(
-    seeded_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, session_factory = seeded_client
-    login_as_admin(client)
-    response = client.get("/api/v1/evaluations/runs")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"] == []
-
-    with session_factory() as db:
-        _create_evaluation_result(db)
-        db.commit()
-
-    response = client.get("/api/v1/evaluations/runs")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["items"][0]["evaluation_run_id"] == 1
-    assert payload["items"][0]["metrics"]["faithfulness"]["score"] == "0.9000"
-
-    detail_response = client.get("/api/v1/evaluations/runs/1")
-    assert detail_response.status_code == 200
-    detail = detail_response.json()
-    assert detail["evaluation_run_id"] == 1
-    assert detail["items"][0]["metrics"][0]["metric_name"] == "faithfulness"
-
-
-def test_evaluation_run_detail_not_found(
-    seeded_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, _ = seeded_client
-    login_as_admin(client)
-    response = client.get("/api/v1/evaluations/runs/999")
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "evaluation_run_not_found"
-
-
-def test_evaluation_run_list_requires_admin(
-    seeded_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, _ = seeded_client
-    response = client.get("/api/v1/evaluations/runs")
-    assert response.status_code == 401
-
-
-def test_evaluation_run_detail_requires_admin(
-    seeded_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, _ = seeded_client
-    response = client.get("/api/v1/evaluations/runs/1")
-    assert response.status_code == 401
-
-
-def login_as_admin(client: TestClient) -> None:
-    assert client.get("/api/v1/auth/csrf").status_code == 204
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"email": "admin@example.com", "password": "password123"},
-        headers={"X-CSRF-Token": "test-csrf-token"},
-    )
-    assert response.status_code == 200
-
-
-def _seed_auth(db: Session) -> None:
-    role = Role(role_name="admin", description="Admin")
-    db.add(role)
-    db.flush()
-    user = User(
-        role_id=role.role_id,
-        email="admin@example.com",
-        display_name="Admin",
-        password_hash="$2b$12$6C/KI/08/64PYTqmT7TKaOs8n7dK2wr9Uwup5oF.PPqayydh0N8sG",
-        status="active",
-    )
-    db.add(user)
-
-
-def _seed_document(db: Session) -> None:
-    document = LogicalDocument(
-        logical_document_id=1,
-        owner_user_id=1,
-        title="phase1-seed.md",
-        status="active",
-    )
-    db.add(document)
-    version = DocumentVersion(
-        document_version_id=1,
-        logical_document_id=1,
-        version_no=1,
-        content_hash="a" * 64,
-        status="ready",
-        is_active=True,
-        file_name="phase1-seed.md",
-        mime_type="text/markdown",
-        file_size_bytes=1024,
-        storage_key="test/phase1-seed.md",
-        page_count=1,
-        created_by=1,
-    )
-    db.add(version)
-    db.add(
-        DocumentChunk(
-            document_chunk_id=1,
-            document_version_id=1,
-            chunk_index=0,
-            chunk_hash="b" * 64,
-            content_text=(
-                "Qdrant indexes deterministic fake adapters for citation-aware retrieval traces. "
-                "The ingest pipeline uses job leases, extraction, chunking, embeddings, "
-                "and indexing. "
-                "Security controls include CSRF, sessions, RBAC, and safe admin APIs."
+    metrics = calculate_metrics(
+        EvaluationMetricInputs(
+            case=cases[0],
+            answer_text="Qdrant is used.",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    snippet="Qdrant appears in a safe citation preview.",
+                    old_version_flag=False,
+                )
+            ],
+            confidence=RagAskConfidence(
+                answer_confidence=1.0,
+                groundedness_score=1.0,
+                confidence_label="High",
             ),
-            token_count=32,
-            char_count=200,
-            page_from=1,
-            page_to=1,
-            section_title="Phase1",
-            modality="text",
-        ),
+            retrieval_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+        )
     )
 
+    by_name = {metric.metric_name: metric for metric in metrics}
+    assert by_name["faithfulness"].metric_score == 1.0
+    assert by_name["groundedness"].metric_score == 1.0
+    assert by_name["citation_coverage"].metric_score == 1.0
+    assert by_name["context_precision"].metric_score == 1.0
+    assert "Qdrant" not in str(by_name["faithfulness"].details)
 
-def _create_evaluation_result(db: Session) -> None:
-    from app.db.evaluation_models import EvaluationResult
-    from app.db.models import EvaluationRun, EvaluationRunItem
 
-    run = EvaluationRun(
-        evaluation_run_id=1,
-        created_by=1,
-        status="succeeded",
-        target_type="fixture_dataset",
-        metrics_config={"dataset_name": "phase1_smoke", "case_limit": 1},
-        started_at=datetime.now(UTC),
-        finished_at=datetime.now(UTC),
+def test_database_vector_search_client_uses_ready_active_chunks() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            admin = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=admin.user_id,
+                title="Evaluation seed",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="a" * 64,
+                status="ready",
+                is_active=True,
+                file_name="evaluation-seed.md",
+                mime_type="text/markdown",
+                file_size_bytes=10,
+                created_by=admin.user_id,
+            )
+            db.add(version)
+            db.flush()
+            distractor_texts = [
+                f"Architecture note {index} without the requested evaluation signal."
+                for index in range(6)
+            ]
+            target_text = "Qdrant deterministic fake adapters citation retrieval traces"
+            chunks = [
+                DocumentChunk(
+                    document_version_id=version.document_version_id,
+                    chunk_index=index,
+                    chunk_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    content_text=text,
+                    modality="text",
+                )
+                for index, text in enumerate([*distractor_texts, target_text])
+            ]
+            db.add_all(chunks)
+            db.commit()
+            target_chunk_id = chunks[-1].document_chunk_id
+            query_vector = FakeEmbeddingAdapter(dimension=8).embed_texts([target_text])[0]
+
+            candidates = DatabaseVectorSearchClient(db).search(
+                collection_name="unused",
+                query_vector=query_vector,
+                limit=1,
+                filters=RetrievalFilters(),
+            )
+
+        assert [candidate.document_chunk_id for candidate in candidates] == [target_chunk_id]
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_api_admin_create_list_detail_and_rbac(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+
+    assert client.get("/api/v1/evaluations/runs").status_code == 401
+
+    _login_as(client, "viewer@example.com")
+    viewer_forbidden = client.get("/api/v1/evaluations/runs")
+    assert viewer_forbidden.status_code == 403
+    assert viewer_forbidden.json()["error"]["code"] == "permission_denied"
+    viewer_csrf_token = _session_csrf(client)
+    viewer_create_forbidden = client.post(
+        "/api/v1/evaluations/runs",
+        json={"dataset_name": "phase1_smoke", "case_limit": 1},
+        headers={"X-CSRF-Token": viewer_csrf_token, "Origin": ALLOWED_ORIGIN},
     )
-    db.add(run)
-    item = EvaluationRunItem(
-        evaluation_run_item_id=1,
-        evaluation_run_id=1,
-        retrieval_run_id=None,
-        status="succeeded",
-        faithfulness_score="0.9",
-        groundedness_score="0.8",
-        citation_coverage="1.0",
-        latency_ms=12,
+    assert viewer_create_forbidden.status_code == 403
+    assert viewer_create_forbidden.json()["error"]["code"] == "permission_denied"
+
+    _logout(client)
+    _login_as(client, "admin@example.com")
+    missing_csrf = client.post(
+        "/api/v1/evaluations/runs",
+        json={"dataset_name": "phase1_smoke", "case_limit": 1},
+        headers={"Origin": ALLOWED_ORIGIN},
     )
-    db.add(item)
-    db.flush()
-    db.add(
-        EvaluationResult(
-            evaluation_run_item_id=item.evaluation_run_item_id,
-            metric_name="faithfulness",
-            metric_score="0.9",
-            metric_label="High",
-            details_json={"case_id": "phase1_security_controls"},
-        ),
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_missing"
+
+    csrf_token = _session_csrf(client)
+    created = client.post(
+        "/api/v1/evaluations/runs",
+        json={"dataset_name": "phase1_smoke", "case_limit": 1},
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
     )
+    assert created.status_code == 202
+    body = created.json()
+    assert body["data"]["status"] == "queued"
+    assert body["data"]["job_id"] >= 1
+
+    listing = client.get("/api/v1/evaluations/runs")
+    detail = client.get(f"/api/v1/evaluations/runs/{body['data']['evaluation_run_id']}")
+    missing = client.get("/api/v1/evaluations/runs/999")
+
+    assert listing.status_code == 200
+    assert listing.json()["data"][0]["dataset_name"] == "phase1_smoke"
+    assert listing.json()["data"][0]["case_count"] == 1
+    assert detail.status_code == 200
+    assert detail.json()["data"]["case_count"] == 1
+    assert detail.json()["data"]["items"] == []
+    assert missing.status_code == 404
+    assert "token" not in listing.text.lower()
+    assert "secret" not in detail.text.lower()
+
+    invalid_dataset = client.post(
+        "/api/v1/evaluations/runs",
+        json={"dataset_name": "../phase1_smoke", "case_limit": 1},
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert invalid_dataset.status_code == 422
+
+    with session_factory() as db:
+        run = db.scalar(select(EvaluationRun))
+        job = db.scalar(select(Job))
+        assert run is not None
+        assert run.status == "queued"
+        assert job is not None
+        assert job.job_type == "evaluation_run"
+        assert job.target_type == "evaluation_run"
+        assert job.target_id == run.evaluation_run_id
+
+
+def test_evaluation_summary_uses_planned_case_count_while_running() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            run.status = "running"
+            run.started_at = datetime.now(UTC)
+            db.add(
+                EvaluationRunItem(
+                    evaluation_run_id=created.evaluation_run_id,
+                    status="running",
+                )
+            )
+            db.commit()
+
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert response.case_count == 2
+        assert len(response.items) == 1
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runner_persists_items_results_and_safe_details() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            items = db.scalars(select(EvaluationRunItem)).all()
+            results = db.scalars(select(EvaluationResult)).all()
+            assert len(items) == 2
+            assert all(item.status == "succeeded" for item in items)
+            assert {result.metric_name for result in results} >= {
+                "faithfulness",
+                "groundedness",
+                "citation_coverage",
+                "context_precision",
+            }
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert response.case_count == 2
+            assert response.items[0].case_id == "phase1_seed_stack"
+            assert "raw prompt" not in response.model_dump_json().lower()
+            assert "full context" not in response.model_dump_json().lower()
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_handler_processes_job_and_case_failure() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _PartiallyFailingRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        handler_service = EvaluationService(
+            rag_service_factory=lambda settings, db: _PartiallyFailingRagService(),
+            settings=Settings(app_env="test"),
+        )
+        handler = EvaluationRunHandler(
+            session_factory=session_factory,
+            service_factory=lambda: handler_service,
+        )
+        result = handler.handle(
+            JobExecutionContext(
+                job_id=10,
+                job_type="evaluation_run",
+                target_type="evaluation_run",
+                target_id=created.evaluation_run_id,
+                payload={"evaluation_run_id": created.evaluation_run_id},
+                worker_instance_id="worker-1",
+            )
+        )
+
+        assert result.status == "succeeded"
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.status for item in items] == ["succeeded", "failed"]
+            assert items[1].error_code == "no_context_found"
+            failed_metadata = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.evaluation_run_item_id == items[1].evaluation_run_item_id,
+                    EvaluationResult.metric_name == "case_metadata",
+                )
+            )
+            assert failed_metadata is not None
+            assert failed_metadata.details_json == {
+                "case_id": "phase1_seed_ci",
+                "expected_keyword_count": 2,
+                "required_citation": True,
+                "error_code": "no_context_found",
+            }
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_marks_run_failed_when_setup_fails() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=_failing_rag_service_factory,
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=1),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=_failing_rag_service_factory,
+                settings=Settings(app_env="test"),
+            )
+            with pytest.raises(RuntimeError):
+                service.run_job(
+                    db,
+                    evaluation_run_id=created.evaluation_run_id,
+                    request_id="test-eval",
+                )
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "failed"
+            assert run.error_code == "internal_error"
+            assert run.finished_at is not None
+    finally:
+        engine.dispose()
 
 
 class _FakeVectorClient(VectorSearchClient):
@@ -393,7 +446,7 @@ class _FakeVectorClient(VectorSearchClient):
         self,
         *,
         collection_name: str,
-        query_vector: list[float],
+        query_vector: Sequence[float],
         limit: int,
         filters: RetrievalFilters,
     ) -> list[VectorSearchCandidate]:
@@ -504,18 +557,80 @@ def _create_fake_retrieval_run(
     status: str,
     request_id: str | None,
     error_code: str | None = None,
-):
-    from app.db.models import RetrievalRun
-
-    query_hash = hashlib.sha256(f"{question}:{request_id or ''}".encode()).hexdigest()
+) -> RetrievalRun:
+    now = datetime.now(UTC)
     run = RetrievalRun(
-        query_hash=query_hash,
         status=status,
-        top_k=5,
-        filters_json={},
-        request_id=request_id,
         error_code=error_code,
+        started_at=now,
+        finished_at=now,
+        top_k=5,
+        query_hash=hashlib.sha256(question.encode("utf-8")).hexdigest(),
+        retrieval_score_summary={
+            "requested_top_k": 5,
+            "qdrant_candidate_count": 1,
+            "post_filter_candidate_count": 1,
+            "selected_count": 1 if status == "succeeded" else 0,
+            "excluded_by_rdb_check_count": 0,
+        },
+        answer_confidence=0.9 if status == "succeeded" else None,
+        groundedness_score=0.9 if status == "succeeded" else None,
+        confidence_label="High" if status == "succeeded" else None,
+        request_id=request_id,
     )
     db.add(run)
     db.flush()
     return run
+
+
+def _session_factory() -> tuple[Any, sessionmaker[Session]]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def _seed_admin(db: Session) -> User:
+    role = Role(role_name="admin", description="Admin")
+    db.add(role)
+    db.flush()
+    user = User(
+        role_id=role.role_id,
+        email="admin@example.com",
+        display_name="Admin",
+        password_hash=hash_password(TEST_PASSWORD),
+        status="active",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _login_as(client: TestClient, email: str) -> dict[str, Any]:
+    csrf = client.get("/api/v1/auth/csrf", headers={"Origin": ALLOWED_ORIGIN})
+    assert csrf.status_code == 200
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": TEST_PASSWORD},
+        headers={"X-CSRF-Token": csrf.json()["data"]["csrf_token"], "Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _session_csrf(client: TestClient) -> str:
+    response = client.get("/api/v1/auth/csrf", headers={"Origin": ALLOWED_ORIGIN})
+    assert response.status_code == 200
+    return str(response.json()["data"]["csrf_token"])
+
+
+def _logout(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": _session_csrf(client), "Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 200
