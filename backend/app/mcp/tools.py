@@ -47,7 +47,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             name="rag_ask",
             description=(
                 "Answer a question with citations from active RAG documents. "
-                "No raw context is returned."
+                "No raw context is returned; retrieval audit records may be persisted."
             ),
             input_schema=_object_schema(
                 {
@@ -176,10 +176,11 @@ def call_tool(
         return _tool_error(exc)
     except McpError:
         raise
-    return _tool_success(structured)
+    is_error = name == "rag_ask" and structured.get("status") == "failed"
+    return _tool_success(structured, is_error=is_error)
 
 
-def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
+def _tool_success(structured: dict[str, Any], *, is_error: bool) -> dict[str, Any]:
     return {
         "content": [
             {
@@ -188,7 +189,7 @@ def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "structuredContent": structured,
-        "isError": False,
+        "isError": is_error,
     }
 
 

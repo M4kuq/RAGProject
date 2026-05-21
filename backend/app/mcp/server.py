@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import sys
 from pathlib import Path
@@ -20,7 +19,7 @@ from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry, call_tool, list_tools
 
 PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {"2025-06-18", "2025-03-26", "2024-11-05"}
+SUPPORTED_PROTOCOL_VERSIONS = {"2025-06-18"}
 
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
@@ -37,9 +36,11 @@ class JsonRpcMcpServer:
         self.initialized = False
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
-        if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
-            return _error_response(message.get("id"), JSONRPC_INVALID_REQUEST, "Invalid request")
         request_id = message.get("id")
+        if "id" in message and not _is_valid_request_id(request_id):
+            return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
+        if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+            return _error_response(request_id, JSONRPC_INVALID_REQUEST, "Invalid request")
         method = message["method"]
         params = message.get("params", {})
         if params is None:
@@ -56,7 +57,7 @@ class JsonRpcMcpServer:
             return _error_response(
                 request_id,
                 JSONRPC_METHOD_NOT_FOUND,
-                str(exc),
+                "Method not found",
                 {"code": exc.code},
             )
         except McpNotFound as exc:
@@ -81,7 +82,7 @@ class JsonRpcMcpServer:
             if not isinstance(name, str):
                 raise McpInvalidRequest("tool name is required")
             arguments = params.get("arguments", {})
-            return self._call_tool_with_timeout(name, arguments)
+            return self._call_tool(name, arguments)
         if method == "resources/list":
             return list_resources()
         if method == "resources/templates/list":
@@ -98,41 +99,12 @@ class JsonRpcMcpServer:
             if not isinstance(name, str):
                 raise McpInvalidRequest("prompt name is required")
             return get_prompt(name, params.get("arguments"))
-        raise McpMethodNotFound(f"Unknown method: {method}")
+        raise McpMethodNotFound("Method not found")
 
-    def _call_tool_with_timeout(self, name: str, arguments: object) -> dict[str, Any]:
-        timeout_seconds = self.adapter.mcp_settings.tool_timeout_seconds
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(call_tool, self.tools, name, arguments)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": json.dumps(
-                            {
-                                "status": "failed",
-                                "error_code": "tool_timeout",
-                                "message": "MCP tool timed out.",
-                            },
-                            ensure_ascii=False,
-                        ),
-                    }
-                ],
-                "structuredContent": {
-                    "status": "failed",
-                    "error_code": "tool_timeout",
-                    "message": "MCP tool timed out.",
-                },
-                "isError": True,
-            }
-        finally:
-            if future.done():
-                executor.shutdown(wait=True)
+    def _call_tool(self, name: str, arguments: object) -> dict[str, Any]:
+        # Phase1 keeps stdio execution synchronous so a timeout response cannot race with
+        # a still-running DB-backed tool. Clients may apply their own call timeout.
+        return call_tool(self.tools, name, arguments)
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
@@ -198,6 +170,12 @@ def main(argv: list[str] | None = None) -> int:
 def _write_message(message: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.flush()
+
+
+def _is_valid_request_id(value: object) -> bool:
+    return value is None or isinstance(value, str) or (
+        isinstance(value, int) and not isinstance(value, bool)
+    )
 
 
 def _error_response(

@@ -9,12 +9,51 @@ SENSITIVE_KEY_RE = re.compile(
     r"secret|session|token)",
     re.IGNORECASE,
 )
-RAW_CONTEXT_KEY_RE = re.compile(
-    r"^(content_text|context_text|full_context|full_prompt|job_payload|payload_json|"
-    r"prompt|qdrant_payload|raw|raw_chunk_text|raw_context|raw_prompt|storage_key|"
-    r"storage_path)$",
-    re.IGNORECASE,
-)
+RAW_CONTEXT_KEY_NAMES = {
+    "chunkcontent",
+    "chunktext",
+    "contenttext",
+    "context",
+    "contextchunks",
+    "contextmessages",
+    "contexttext",
+    "fullcontext",
+    "fullprompt",
+    "jobpayload",
+    "payloadjson",
+    "prompt",
+    "prompttext",
+    "qdrantpayload",
+    "raw",
+    "rawchunk",
+    "rawchunktext",
+    "rawcontext",
+    "rawprompt",
+    "retrievedcontext",
+    "sourcetext",
+    "storagekey",
+    "storagepath",
+}
+SAFE_METRIC_DETAIL_NAMES = {
+    "answerpresent",
+    "caseid",
+    "caselabel",
+    "casename",
+    "citationcoverage",
+    "confidence",
+    "confidencelabel",
+    "confidencescore",
+    "errorcode",
+    "expectedanswerpresent",
+    "faithfulnessscore",
+    "groundednessscore",
+    "hasconfidence",
+    "latencyms",
+    "requiredcitation",
+    "source",
+    "sourcelabel",
+    "status",
+}
 SECRET_VALUE_RE = re.compile(
     r"(?i)\b(api[_-]?key|secret|password|token|csrf|session)\b\s*[:=]\s*\S+"
 )
@@ -64,7 +103,7 @@ def redact_data(value: Any, *, max_string_chars: int) -> Any:
             key_text = str(key)
             if SENSITIVE_KEY_RE.search(key_text):
                 redacted["redacted_sensitive"] = True
-            elif RAW_CONTEXT_KEY_RE.search(key_text):
+            elif _is_raw_context_key(key_text):
                 redacted["omitted_raw_field"] = True
             else:
                 redacted[key_text] = redact_data(item, max_string_chars=max_string_chars)
@@ -88,7 +127,31 @@ def safe_metric_details(
     allowed: dict[str, object] = {}
     for key, item in value.items():
         key_text = str(key)
-        if SENSITIVE_KEY_RE.search(key_text) or RAW_CONTEXT_KEY_RE.search(key_text):
+        if SENSITIVE_KEY_RE.search(key_text) or _is_raw_context_key(key_text):
+            continue
+        if not _is_safe_metric_detail_key(key_text):
+            allowed["omitted_unsafe_detail"] = True
             continue
         allowed[key_text] = redact_data(item, max_string_chars=max_string_chars)
     return allowed
+
+
+def _normalize_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _is_raw_context_key(value: str) -> bool:
+    normalized = _normalize_key(value)
+    return normalized in RAW_CONTEXT_KEY_NAMES
+
+
+def _is_safe_metric_detail_key(value: str) -> bool:
+    normalized = _normalize_key(value)
+    return (
+        normalized in SAFE_METRIC_DETAIL_NAMES
+        or normalized.endswith("count")
+        or normalized.endswith("score")
+        or normalized.endswith("rate")
+        or normalized.endswith("ratio")
+        or normalized.endswith("ms")
+    )

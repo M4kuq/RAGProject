@@ -18,6 +18,7 @@ from app.services.document_service import DocumentService
 from app.services.evaluation_service import EvaluationService
 from app.services.job_service import JobService
 from app.services.rag_service import RagSearchPipelineError, RagService, create_rag_service
+from app.storage.file_storage import LocalFileStorage
 
 from .errors import McpInvalidRequest, McpNotFound, McpToolExecutionError
 from .redaction import redact_data, safe_metric_details, safe_source_label, truncate_text
@@ -57,7 +58,9 @@ class McpServiceAdapter:
         self.session_factory = session_factory or _default_session_factory(self.settings)
         self.rag_service_factory = rag_service_factory or _default_rag_service_factory
         self.actor = McpActorContext()
-        self.document_service = DocumentService()
+        self.document_service = DocumentService(
+            storage=LocalFileStorage(base_dir=self.settings.storage_root),
+        )
         self.job_service = JobService()
         self.evaluation_service = EvaluationService(settings=self.settings)
 
