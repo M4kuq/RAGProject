@@ -229,7 +229,9 @@ def test_evaluation_runner_setup_failure_marks_run_failed(settings: Settings) ->
         assert runs[0].error_code == "evaluation_setup_failed"
 
 
-def test_evaluation_service_lists_and_reads_runs(seeded_client: tuple[TestClient, sessionmaker[Session]]) -> None:
+def test_evaluation_service_lists_and_reads_runs(
+    seeded_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
     client, session_factory = seeded_client
     login_as_admin(client)
     response = client.get("/api/v1/evaluations/runs")
@@ -254,7 +256,9 @@ def test_evaluation_service_lists_and_reads_runs(seeded_client: tuple[TestClient
     assert detail["items"][0]["metrics"][0]["metric_name"] == "faithfulness"
 
 
-def test_evaluation_run_detail_not_found(seeded_client: tuple[TestClient, sessionmaker[Session]]) -> None:
+def test_evaluation_run_detail_not_found(
+    seeded_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
     client, _ = seeded_client
     login_as_admin(client)
     response = client.get("/api/v1/evaluations/runs/999")
@@ -262,13 +266,17 @@ def test_evaluation_run_detail_not_found(seeded_client: tuple[TestClient, sessio
     assert response.json()["detail"]["code"] == "evaluation_run_not_found"
 
 
-def test_evaluation_run_list_requires_admin(seeded_client: tuple[TestClient, sessionmaker[Session]]) -> None:
+def test_evaluation_run_list_requires_admin(
+    seeded_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
     client, _ = seeded_client
     response = client.get("/api/v1/evaluations/runs")
     assert response.status_code == 401
 
 
-def test_evaluation_run_detail_requires_admin(seeded_client: tuple[TestClient, sessionmaker[Session]]) -> None:
+def test_evaluation_run_detail_requires_admin(
+    seeded_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
     client, _ = seeded_client
     response = client.get("/api/v1/evaluations/runs/1")
     assert response.status_code == 401
