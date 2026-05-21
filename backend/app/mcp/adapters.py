@@ -37,6 +37,7 @@ SessionFactory: TypeAlias = sessionmaker[Session]
 RagServiceFactory: TypeAlias = Callable[[Settings, Session], RagService]
 T = TypeVar("T", bound=BaseModel)
 RAW_CONTEXT_ANSWER_OMITTED = "[OMITTED: answer contained raw retrieved context]"
+RAW_CONTEXT_OVERLAP_MIN_CHARS = 40
 
 
 @dataclass(frozen=True)
@@ -325,7 +326,6 @@ def _safe_rag_ask_output(
         answer,
         answer_max_chars=answer_max_chars,
         context_sources=context_sources or [],
-        snippet_max_chars=snippet_max_chars,
     )
     return safe
 
@@ -335,7 +335,6 @@ def _safe_rag_answer(
     *,
     answer_max_chars: int,
     context_sources: list[str],
-    snippet_max_chars: int,
 ) -> object:
     if not isinstance(answer, str):
         return answer
@@ -343,7 +342,6 @@ def _safe_rag_answer(
     if _contains_raw_context_overlap(
         safe_answer,
         context_sources=context_sources,
-        snippet_max_chars=snippet_max_chars,
     ):
         return RAW_CONTEXT_ANSWER_OMITTED
     return safe_answer
@@ -353,7 +351,6 @@ def _contains_raw_context_overlap(
     answer: str,
     *,
     context_sources: list[str],
-    snippet_max_chars: int,
 ) -> bool:
     normalized_answer = _normalize_text_for_overlap(answer)
     if not normalized_answer:
@@ -362,7 +359,7 @@ def _contains_raw_context_overlap(
         normalized_source = _normalize_text_for_overlap(source)
         if len(normalized_source) < 24:
             continue
-        threshold = min(max(24, snippet_max_chars), len(normalized_source))
+        threshold = min(RAW_CONTEXT_OVERLAP_MIN_CHARS, len(normalized_source))
         for start in range(0, len(normalized_source) - threshold + 1):
             if normalized_source[start : start + threshold] in normalized_answer:
                 return True

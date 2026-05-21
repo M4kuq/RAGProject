@@ -4,6 +4,8 @@ import io
 import json
 import sys
 from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,12 +14,34 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.db.base import Base
+from app.evaluation.rag_service import EvaluationRagQuestionService
 from app.mcp.adapters import (
     RAW_CONTEXT_ANSWER_OMITTED,
     McpServiceAdapter,
     _safe_rag_ask_output,
 )
 from app.mcp.server import JsonRpcMcpServer, run_stdio
+
+
+@dataclass(frozen=True)
+class _FakeCitation:
+    source_label: str
+    snippet: str
+
+    def model_dump(self, *, mode: str) -> dict[str, Any]:
+        assert mode == "json"
+        return {"source_label": self.source_label, "snippet": self.snippet}
+
+
+@dataclass(frozen=True)
+class _FakeRagAskResult:
+    retrieval_run_id: int | None
+    status: str
+    answer_text: str
+    citations: list[_FakeCitation]
+    confidence: None = None
+    retrieval_score_summary: None = None
+    error_code: str | None = None
 
 
 @pytest.fixture
@@ -163,12 +187,47 @@ def test_rag_ask_answer_omits_raw_context_overlap() -> None:
         },
         answer_max_chars=160,
         context_sources=[raw_context],
-        snippet_max_chars=48,
+        snippet_max_chars=240,
     )
 
     assert safe["answer"] == RAW_CONTEXT_ANSWER_OMITTED
     assert "Alpha citation policy uses deterministic fake adapters" not in safe["answer"]
-    assert len(safe["citations"][0]["snippet"]) <= 48
+    assert len(safe["citations"][0]["snippet"]) <= 240
+
+
+def test_rag_ask_adapter_omits_raw_context_overlap(
+    mcp_adapter: McpServiceAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_context = (
+        "Alpha citation policy uses deterministic fake adapters and raw context. "
+        "This content should only appear as a bounded citation snippet."
+    )
+
+    def fake_evaluate_question(
+        self: EvaluationRagQuestionService,
+        *_args: object,
+        **_kwargs: object,
+    ) -> _FakeRagAskResult:
+        del self
+        return _FakeRagAskResult(
+            retrieval_run_id=1,
+            status="succeeded",
+            answer_text="The answer is: " + raw_context,
+            citations=[_FakeCitation(source_label="Alpha handbook", snippet=raw_context)],
+        )
+
+    monkeypatch.setattr(
+        EvaluationRagQuestionService,
+        "evaluate_question",
+        fake_evaluate_question,
+    )
+
+    result = mcp_adapter.rag_ask({"question": "repeat raw context"})
+
+    assert result["answer"] == RAW_CONTEXT_ANSWER_OMITTED
+    assert "Alpha citation policy uses deterministic fake adapters" not in result["answer"]
+    assert len(result["citations"][0]["snippet"]) <= 48
 
 
 def test_stdio_initialized_notification_does_not_emit_response(
