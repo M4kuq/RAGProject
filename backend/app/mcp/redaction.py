@@ -70,7 +70,7 @@ BEARER_TOKEN_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE
 CREDENTIAL_URL_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b")
 WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\"'\r\n]+")
-UNIX_STORAGE_PATH_RE = re.compile(r"/(?:app/)?(?:storage|data|tmp)/[^\s\"']+")
+UNIX_STORAGE_PATH_RE = re.compile(r"/(?:app/)?(?:storage|data|tmp)/[^\"'\r\n]+")
 
 REDACTED = "[REDACTED]"
 OMITTED = "[OMITTED]"
@@ -102,14 +102,20 @@ def safe_source_label(value: str | None, *, max_chars: int = 255) -> str | None:
 def redact_data(value: Any, *, max_string_chars: int) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
+        saw_sensitive = False
+        saw_raw = False
         for key, item in value.items():
             key_text = str(key)
             if SENSITIVE_KEY_RE.search(key_text):
-                redacted["redacted_sensitive"] = True
+                saw_sensitive = True
             elif _is_raw_context_key(key_text):
-                redacted["omitted_raw_field"] = True
+                saw_raw = True
             else:
                 redacted[key_text] = redact_data(item, max_string_chars=max_string_chars)
+        if saw_sensitive:
+            redacted["redacted_sensitive"] = True
+        if saw_raw:
+            redacted["omitted_raw_field"] = True
         return redacted
     if isinstance(value, list):
         return [redact_data(item, max_string_chars=max_string_chars) for item in value]

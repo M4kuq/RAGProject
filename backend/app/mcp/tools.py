@@ -164,9 +164,7 @@ def call_tool(
 ) -> dict[str, Any]:
     if name not in registry:
         raise McpNotFound("tool not found")
-    if arguments is None:
-        parsed_arguments: dict[str, Any] = {}
-    elif isinstance(arguments, dict):
+    if isinstance(arguments, dict):
         parsed_arguments = arguments
     else:
         raise McpInvalidRequest("tool arguments must be an object")

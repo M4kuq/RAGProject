@@ -29,7 +29,7 @@ from app.db.models import (
 )
 from app.evaluation.rag_service import DatabaseVectorSearchClient
 from app.ingest.embedding import FakeEmbeddingAdapter
-from app.mcp.adapters import McpServiceAdapter
+from app.mcp.adapters import McpServiceAdapter, _safe_rag_ask_output
 from app.mcp.prompts import get_prompt, list_prompts
 from app.mcp.redaction import redact_data, safe_metric_details, truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
@@ -273,7 +273,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
         },
         "safe": (
             "Bearer abcdefghijklmnop and https://user:pass@example.test/path "
-            "C:\\Users\\Kei My Docs\\secret file.txt"
+            "C:\\Users\\Kei My Docs\\secret file.txt "
+            "/app/storage/Kei My Docs/secret file.txt "
+            "/storage/Shared Docs/private.txt /data/Team Docs/private.txt "
+            "/tmp/RAG Project/private.txt"
         ),
     }
 
@@ -286,6 +289,13 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert "C:\\" not in dumped
     assert "Kei My Docs" not in dumped
     assert "secret file.txt" not in dumped
+    assert "/app/storage" not in dumped
+    assert "/storage" not in dumped
+    assert "/data" not in dumped
+    assert "/tmp" not in dumped
+    assert "Shared Docs" not in dumped
+    assert "Team Docs" not in dumped
+    assert "RAG Project" not in dumped
     assert "Bearer abcdefghijklmnop" not in dumped
     assert "user:pass" not in dumped
     assert "omitted_raw_field" in dumped
@@ -314,6 +324,21 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert details["omitted_unsafe_detail"] is True
 
 
+def test_mcp_rag_ask_answer_uses_generation_limit_not_snippet_limit() -> None:
+    data = {
+        "status": "succeeded",
+        "answer": "Answer [1] " + ("x" * 120),
+        "citations": [{"snippet": "citation " + ("y" * 120)}],
+    }
+
+    safe = _safe_rag_ask_output(data, answer_max_chars=80, snippet_max_chars=48)
+
+    assert len(safe["answer"]) == 80
+    assert safe["answer"].endswith("...")
+    assert len(safe["citations"][0]["snippet"]) == 48
+    assert safe["citations"][0]["snippet"].endswith("...")
+
+
 def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
     value = (
         "secret_token=abcd1234 access_token: abcdefghijklmnop "
@@ -333,6 +358,22 @@ def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
     assert "credential=plain" not in redacted
     assert "private_key" not in redacted.lower()
     assert redacted.count("[REDACTED]") == 8
+
+
+def test_mcp_redaction_preserves_sentinals_when_input_keys_collide() -> None:
+    redacted = redact_data(
+        {
+            "redacted_sensitive": False,
+            "omitted_raw_field": False,
+            "api_key": "should be removed",
+            "raw_prompt": "should be removed",
+        },
+        max_string_chars=120,
+    )
+
+    assert redacted["redacted_sensitive"] is True
+    assert redacted["omitted_raw_field"] is True
+    assert "should be removed" not in json.dumps(redacted)
 
 
 def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
@@ -637,6 +678,63 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
                 "params": {
                     "name": "list_evaluation_runs",
                     "arguments": {"page_size": 101},
+                },
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 15,
+                "method": "tools/call",
+                "params": {"name": "list_documents", "arguments": None},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {"name": "get_job_status", "arguments": {"job_id": "1"}},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "tools/call",
+                "params": {
+                    "name": "rag_search",
+                    "arguments": {"query": "alpha", "top_k": "3"},
+                },
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 18,
+                "method": "tools/call",
+                "params": {"name": "list_documents", "arguments": {"page": 0}},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 19,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_documents",
+                    "arguments": {"display_status": "deleted"},
+                },
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_evaluation_runs",
+                    "arguments": {"status": "unknown"},
                 },
             },
         ),

@@ -81,7 +81,7 @@ class JsonRpcMcpServer:
             name = params.get("name")
             if not isinstance(name, str):
                 raise McpInvalidRequest("tool name is required")
-            arguments = params.get("arguments", {})
+            arguments = params["arguments"] if "arguments" in params else {}
             return self._call_tool(name, arguments)
         if method == "resources/list":
             return list_resources()
