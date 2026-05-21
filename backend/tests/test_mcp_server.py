@@ -271,14 +271,19 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "rawChunkText": "RAW_CHUNK_SHOULD_NOT_APPEAR",
             "storagePath": "C:\\private\\chunk.txt",
             "authorization": "Bearer abcdefghijklmnop",
+            "api key": "sk-testshouldberemoved1234567890",
+            "private key": "-----BEGIN PRIVATE KEY----- abcdef -----END PRIVATE KEY-----",
         },
         "safe": (
             "Bearer abcdefghijklmnop and https://user:pass@example.test/path "
             "C:\\Users\\Kei My Docs\\secret file.txt "
+            "\\\\server\\share\\secret file.txt "
             "/app/storage/Kei My Docs/secret file.txt "
             "/storage/Shared Docs/private.txt /data/Team Docs/private.txt "
             "/tmp/RAG Project/private.txt /home/kei/private.txt "
-            "/var/lib/rag/private.txt"
+            "/var/lib/rag/private.txt /Users/kei/private.txt "
+            "/private/var/rag/private.txt /Volumes/RAG/private.txt "
+            "api key: plaintextkey private key: -----BEGIN PRIVATE KEY----- abcdef"
         ),
     }
 
@@ -291,17 +296,25 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert "C:\\" not in dumped
     assert "Kei My Docs" not in dumped
     assert "secret file.txt" not in dumped
+    assert "server" not in dumped
+    assert "share" not in dumped
     assert "/app/storage" not in dumped
     assert "/storage" not in dumped
     assert "/data" not in dumped
     assert "/tmp" not in dumped
     assert "/home" not in dumped
     assert "/var/lib" not in dumped
+    assert "/Users" not in dumped
+    assert "/private" not in dumped
+    assert "/Volumes" not in dumped
     assert "Shared Docs" not in dumped
     assert "Team Docs" not in dumped
     assert "RAG Project" not in dumped
     assert "Bearer abcdefghijklmnop" not in dumped
     assert "user:pass" not in dumped
+    assert "sk-testshouldberemoved1234567890" not in dumped
+    assert "plaintextkey" not in dumped
+    assert "BEGIN PRIVATE KEY" not in dumped
     assert "omitted_raw_field" in dumped
     assert "redacted_sensitive" in dumped
     assert "[REDACTED]" in dumped
@@ -312,8 +325,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "source_label": "Alpha handbook",
             "matched_count": 2,
             "safe_score": 0.8,
+            "source_label_long": "Alpha citation policy uses deterministic fake adapters.",
             "source": "RAW_CHUNK_SHOULD_NOT_APPEAR raw context should be removed",
-            "status": ["raw prompt should be removed"],
+            "status": "succeeded",
+            "unsafe_status": ["raw prompt should be removed"],
             "promptText": "raw prompt should be removed",
             "retrieved_context": "full context should be removed",
             "retrieved_context_score": "full context should be removed",
@@ -328,8 +343,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
 
     assert details["case_id"] == "case-alpha"
     assert details["source_label"] == "Alpha handbook"
+    assert details["status"] == "succeeded"
     assert details["matched_count"] == 2
     assert details["safe_score"] == 0.8
+    assert "Alpha citation policy uses deterministic fake adapters" not in details_dumped
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in details_dumped
     assert "raw prompt should be removed" not in details_dumped
     assert "full context should be removed" not in details_dumped
@@ -821,6 +838,57 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
         assert response["error"]["code"] == -32602
 
 
+def test_jsonrpc_string_id_is_redacted_in_error_response(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(mcp_adapter)
+
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": "request secret_token=abcd1234",
+            "method": "unknown",
+        },
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32601
+    assert "abcd1234" not in json.dumps(response)
+    assert response["id"] == "request [REDACTED]"
+
+
+def test_jsonrpc_resources_read_job_and_evaluation_are_redacted(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(mcp_adapter)
+    job = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/read",
+            "params": {"uri": "rag://jobs/1"},
+        },
+    )
+    evaluation = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": {"uri": "rag://evaluations/1"},
+        },
+    )
+
+    assert job is not None
+    assert evaluation is not None
+    dumped = json.dumps([job, evaluation])
+    assert "secret_token" not in dumped.lower()
+    assert "password=abcd1234" not in dumped
+    assert "raw prompt" not in dumped.lower()
+    assert "full context" not in dumped.lower()
+    assert "C:\\" not in dumped
+    assert "/app/storage" not in dumped
+
+
 def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
@@ -838,6 +906,33 @@ def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
 
     assert forbidden.isdisjoint(tool_names)
     for index, name in enumerate(forbidden, start=2):
+        response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            },
+        )
+        assert response is not None
+        assert response["error"]["code"] == -32002
+
+
+def test_jsonrpc_common_write_like_tool_names_are_not_callable(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(mcp_adapter)
+    forbidden = {
+        "approve_version",
+        "archive_version",
+        "delete_document",
+        "rerun_evaluation",
+        "retry_ingest_job",
+        "update_document",
+        "upload",
+    }
+
+    for index, name in enumerate(forbidden, start=1):
         response = server.handle_message(
             {
                 "jsonrpc": "2.0",
@@ -943,7 +1038,7 @@ def test_stdio_handles_jsonrpc_batch_requests(
     assert len(batch) == 2
     assert batch[0]["result"]["serverInfo"]["name"] == "ragproject-mcp"
     assert "rag_search" in {tool["name"] for tool in batch[1]["result"]["tools"]}
-    assert empty_batch[0]["error"]["code"] == -32600
+    assert empty_batch["error"]["code"] == -32600
     assert mixed_batch[0]["result"] == {}
     assert mixed_batch[1]["error"]["code"] == -32600
 

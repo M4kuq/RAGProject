@@ -14,12 +14,14 @@ if __package__ and __package__.startswith("backend."):
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.errors import McpError, McpInvalidRequest, McpMethodNotFound, McpNotFound
 from app.mcp.prompts import get_prompt, list_prompts
+from app.mcp.redaction import truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry, call_tool, list_tools
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {"2025-06-18"}
+RESPONSE_ID_MAX_CHARS = 128
 
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
@@ -36,9 +38,10 @@ class JsonRpcMcpServer:
         self.initialized = False
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
-        request_id = message.get("id")
-        if "id" in message and not _is_valid_request_id(request_id):
+        raw_request_id = message.get("id")
+        if "id" in message and not _is_valid_request_id(raw_request_id):
             return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
+        request_id = _safe_request_id(raw_request_id)
         if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
             return _error_response(request_id, JSONRPC_INVALID_REQUEST, "Invalid request")
         method = message["method"]
@@ -143,9 +146,9 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
             _write_message(_error_response(None, JSONRPC_PARSE_ERROR, "Parse error"))
             continue
         if isinstance(message, list):
-            responses = _handle_batch(active_server, message)
-            if responses is not None:
-                _write_message(responses)
+            response = _handle_batch(active_server, message)
+            if response is not None:
+                _write_message(response)
             continue
         if not isinstance(message, dict):
             _write_message(_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request"))
@@ -159,9 +162,9 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
 def _handle_batch(
     server: JsonRpcMcpServer,
     messages: list[object],
-) -> list[dict[str, Any]] | None:
+) -> dict[str, Any] | list[dict[str, Any]] | None:
     if not messages:
-        return [_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")]
+        return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
     responses: list[dict[str, Any]] = []
     for item in messages:
         if not isinstance(item, dict):
@@ -202,6 +205,12 @@ def _is_valid_request_id(value: object) -> bool:
         or isinstance(value, str)
         or (isinstance(value, int) and not isinstance(value, bool))
     )
+
+
+def _safe_request_id(value: object) -> object:
+    if isinstance(value, str):
+        return truncate_text(value, max_chars=RESPONSE_ID_MAX_CHARS)
+    return value
 
 
 def _error_response(
