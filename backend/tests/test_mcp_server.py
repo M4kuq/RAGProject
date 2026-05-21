@@ -717,9 +717,7 @@ def test_stdio_handles_jsonrpc_batch_requests(
 
     assert run_stdio(JsonRpcMcpServer(mcp_adapter)) == 0
 
-    batch, empty_batch, mixed_batch = [
-        json.loads(line) for line in stdout.getvalue().splitlines()
-    ]
+    batch, empty_batch, mixed_batch = [json.loads(line) for line in stdout.getvalue().splitlines()]
     assert len(batch) == 2
     assert batch[0]["result"]["serverInfo"]["name"] == "ragproject-mcp"
     assert "rag_search" in {tool["name"] for tool in batch[1]["result"]["tools"]}
