@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,7 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
-from app.ingest.embedding import EmbeddingAdapterError, create_embedding_adapter
+from app.ingest.embedding import (
+    EmbeddingAdapterError,
+    FakeEmbeddingAdapter,
+    create_embedding_adapter,
+)
 from app.rag.citations import (
     CitationBuildError,
     parse_generation_output,
@@ -232,15 +235,15 @@ class DatabaseVectorSearchClient(VectorSearchClient):
         if limit < 1:
             raise RetrievalError()
         normalized_query = _normalized_vector(query_vector)
+        chunk_vector_adapter = (
+            FakeEmbeddingAdapter(dimension=len(normalized_query)) if normalized_query else None
+        )
         rows = self.db.execute(_eligible_chunks_statement(filters)).all()
         scored: list[tuple[float, float, DocumentChunk]] = []
         for chunk, _, _ in rows:
             lexical_score = _lexical_score(chunk.content_text, filters)
-            if normalized_query:
-                chunk_vector = _evaluation_chunk_vector(
-                    chunk.content_text,
-                    dimension=len(normalized_query),
-                )
+            if chunk_vector_adapter is not None:
+                chunk_vector = chunk_vector_adapter.embed_texts([chunk.content_text])[0]
                 vector_score = (_dot_product(normalized_query, chunk_vector) + 1.0) / 2.0
                 score = min(1.0, (vector_score * 0.9) + (lexical_score * 0.1))
             else:
@@ -321,21 +324,6 @@ def _normalized_vector(values: Sequence[float]) -> list[float]:
     if norm <= 0:
         return []
     return [value / norm for value in vector]
-
-
-def _evaluation_chunk_vector(text: str, *, dimension: int) -> list[float]:
-    values: list[float] = []
-    counter = 0
-    seed = text.encode("utf-8")
-    while len(values) < dimension:
-        digest = hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
-        counter += 1
-        for offset in range(0, len(digest), 4):
-            if len(values) >= dimension:
-                break
-            raw = int.from_bytes(digest[offset : offset + 4], "big")
-            values.append((raw / 0xFFFFFFFF) * 2.0 - 1.0)
-    return _normalized_vector(values)
 
 
 def _dot_product(left: Sequence[float], right: Sequence[float]) -> float:
