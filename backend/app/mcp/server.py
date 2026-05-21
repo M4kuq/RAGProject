@@ -173,8 +173,10 @@ def _write_message(message: dict[str, Any]) -> None:
 
 
 def _is_valid_request_id(value: object) -> bool:
-    return value is None or isinstance(value, str) or (
-        isinstance(value, int) and not isinstance(value, bool)
+    return (
+        value is None
+        or isinstance(value, str)
+        or (isinstance(value, int) and not isinstance(value, bool))
     )
 
 
