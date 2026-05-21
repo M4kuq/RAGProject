@@ -39,15 +39,8 @@ class JsonRpcMcpServer:
         request_id = message.get("id")
         if "id" in message and not _is_valid_request_id(request_id):
             return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
-        if message.get("jsonrpc") != "2.0" or not isinstance(
-            message.get("method"),
-            str,
-        ):
-            return _error_response(
-                request_id,
-                JSONRPC_INVALID_REQUEST,
-                "Invalid request",
-            )
+        if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+            return _error_response(request_id, JSONRPC_INVALID_REQUEST, "Invalid request")
         method = message["method"]
         params = message.get("params", {})
         if params is None:
@@ -68,26 +61,11 @@ class JsonRpcMcpServer:
                 {"code": exc.code},
             )
         except McpNotFound as exc:
-            return _error_response(
-                request_id,
-                MCP_RESOURCE_NOT_FOUND,
-                str(exc),
-                {"code": exc.code},
-            )
+            return _error_response(request_id, MCP_RESOURCE_NOT_FOUND, str(exc), {"code": exc.code})
         except McpInvalidRequest as exc:
-            return _error_response(
-                request_id,
-                JSONRPC_INVALID_PARAMS,
-                str(exc),
-                {"code": exc.code},
-            )
+            return _error_response(request_id, JSONRPC_INVALID_PARAMS, str(exc), {"code": exc.code})
         except McpError as exc:
-            return _error_response(
-                request_id,
-                JSONRPC_INTERNAL_ERROR,
-                str(exc),
-                {"code": exc.code},
-            )
+            return _error_response(request_id, JSONRPC_INTERNAL_ERROR, str(exc), {"code": exc.code})
         except Exception:
             return _error_response(request_id, JSONRPC_INTERNAL_ERROR, "Internal error")
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
@@ -124,9 +102,8 @@ class JsonRpcMcpServer:
         raise McpMethodNotFound("Method not found")
 
     def _call_tool(self, name: str, arguments: object) -> dict[str, Any]:
-        # Phase1 keeps stdio execution synchronous so a timeout response cannot
-        # race with a still-running DB-backed tool. Clients may apply their own
-        # call timeout.
+        # Phase1 keeps stdio execution synchronous so a timeout response cannot race with
+        # a still-running DB-backed tool. Clients may apply their own call timeout.
         return call_tool(self.tools, name, arguments)
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -146,8 +123,7 @@ class JsonRpcMcpServer:
             },
             "serverInfo": {"name": "ragproject-mcp", "version": "0.1.0"},
             "instructions": (
-                "Local-only read-mostly RAGProject MCP server. Write tools, "
-                "remote MCP, "
+                "Local-only read-mostly RAGProject MCP server. Write tools, remote MCP, "
                 "OAuth, sampling, and elicitation are not implemented in Phase1."
             ),
         }
@@ -165,9 +141,7 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
             _write_message(_error_response(None, JSONRPC_PARSE_ERROR, "Parse error"))
             continue
         if not isinstance(message, dict):
-            _write_message(
-                _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request"),
-            )
+            _write_message(_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request"))
             continue
         response = active_server.handle_message(message)
         if response is not None:
@@ -176,15 +150,9 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run the local-only RAGProject MCP stdio server.",
-    )
+    parser = argparse.ArgumentParser(description="Run the local-only RAGProject MCP stdio server.")
     parser.add_argument("--transport", default="stdio", choices=["stdio"])
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        help="Print server version and exit.",
-    )
+    parser.add_argument("--version", action="store_true", help="Print server version and exit.")
     args = parser.parse_args(argv)
     if args.version:
         print("ragproject-mcp 0.1.0")
@@ -200,9 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _write_message(message: dict[str, Any]) -> None:
-    sys.stdout.write(
-        json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n",
-    )
+    sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
 
