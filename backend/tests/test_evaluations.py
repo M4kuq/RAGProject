@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -503,8 +504,9 @@ def _create_fake_retrieval_run(
 ):
     from app.db.models import RetrievalRun
 
+    query_hash = hashlib.sha256(f"{question}:{request_id or ''}".encode("utf-8")).hexdigest()
     run = RetrievalRun(
-        query_hash=f"eval-{abs(hash((question, request_id))) % 10_000_000}",
+        query_hash=query_hash,
         status=status,
         top_k=5,
         filters_json={},
