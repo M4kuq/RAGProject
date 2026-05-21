@@ -33,7 +33,11 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                 {
                     "query": {"type": "string", "minLength": 1, "maxLength": 8000},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
-                    "rerank_top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
                 },
                 required=["query"],
             ),
@@ -49,7 +53,11 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                 {
                     "question": {"type": "string", "minLength": 1, "maxLength": 8000},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
-                    "rerank_top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
                 },
                 required=["question"],
             ),
@@ -65,10 +73,21 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                     "status": {"type": "string", "enum": ["active", "archived"]},
                     "display_status": {
                         "type": "string",
-                        "enum": ["active", "pending_review", "processing", "failed", "archived"],
+                        "enum": [
+                            "active",
+                            "pending_review",
+                            "processing",
+                            "failed",
+                            "archived",
+                        ],
                     },
                     "page": {"type": "integer", "minimum": 1, "default": 1},
-                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                    },
                 },
             ),
             handler=adapter.list_documents,
@@ -101,10 +120,21 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                 {
                     "status": {
                         "type": "string",
-                        "enum": ["queued", "running", "succeeded", "failed", "canceled"],
+                        "enum": [
+                            "queued",
+                            "running",
+                            "succeeded",
+                            "failed",
+                            "canceled",
+                        ],
                     },
                     "page": {"type": "integer", "minimum": 1, "default": 1},
-                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                    },
                 },
             ),
             handler=adapter.list_evaluation_runs,
@@ -148,7 +178,9 @@ def call_tool(registry: dict[str, McpTool], name: str, arguments: object) -> dic
 
 def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
     return {
-        "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False, indent=2)}],
+        "content": [
+            {"type": "text", "text": json.dumps(structured, ensure_ascii=False, indent=2)}
+        ],
         "structuredContent": structured,
         "isError": False,
     }

@@ -123,7 +123,9 @@ def test_tool_registry_exposes_only_phase1_tools(mcp_adapter: McpServiceAdapter)
 def test_rag_search_and_ask_return_safe_truncated_output(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
-    search = mcp_adapter.rag_search({"query": "alpha citation", "top_k": 3, "rerank_top_n": 2})
+    search = mcp_adapter.rag_search(
+        {"query": "alpha citation", "top_k": 3, "rerank_top_n": 2}
+    )
 
     assert search["status"] == "succeeded"
     assert search["items"]
