@@ -30,6 +30,7 @@ from app.db.session import get_db
 from app.evaluation.fixtures import load_evaluation_cases
 from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
 from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
+from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.schemas.evaluations import EvaluationRunCreateRequest
@@ -156,26 +157,34 @@ def test_database_vector_search_client_uses_ready_active_chunks() -> None:
             )
             db.add(version)
             db.flush()
-            text = "Qdrant deterministic fake adapters citation retrieval traces"
-            chunk = DocumentChunk(
-                document_version_id=version.document_version_id,
-                chunk_index=0,
-                chunk_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                content_text=text,
-                modality="text",
-            )
-            db.add(chunk)
+            distractor_texts = [
+                f"Architecture note {index} without the requested evaluation signal."
+                for index in range(6)
+            ]
+            target_text = "Qdrant deterministic fake adapters citation retrieval traces"
+            chunks = [
+                DocumentChunk(
+                    document_version_id=version.document_version_id,
+                    chunk_index=index,
+                    chunk_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    content_text=text,
+                    modality="text",
+                )
+                for index, text in enumerate([*distractor_texts, target_text])
+            ]
+            db.add_all(chunks)
             db.commit()
-            chunk_id = chunk.document_chunk_id
+            target_chunk_id = chunks[-1].document_chunk_id
+            query_vector = FakeEmbeddingAdapter(dimension=8).embed_texts([target_text])[0]
 
             candidates = DatabaseVectorSearchClient(db).search(
                 collection_name="unused",
-                query_vector=[0.1, 0.2],
-                limit=5,
+                query_vector=query_vector,
+                limit=1,
                 filters=RetrievalFilters(),
             )
 
-        assert [candidate.document_chunk_id for candidate in candidates] == [chunk_id]
+        assert [candidate.document_chunk_id for candidate in candidates] == [target_chunk_id]
     finally:
         engine.dispose()
 
@@ -251,6 +260,37 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
         assert job.job_type == "evaluation_run"
         assert job.target_type == "evaluation_run"
         assert job.target_id == run.evaluation_run_id
+
+
+def test_evaluation_summary_uses_planned_case_count_while_running() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            run.status = "running"
+            run.started_at = datetime.now(UTC)
+            db.add(
+                EvaluationRunItem(
+                    evaluation_run_id=created.evaluation_run_id,
+                    status="running",
+                )
+            )
+            db.commit()
+
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert response.case_count == 2
+        assert len(response.items) == 1
+    finally:
+        engine.dispose()
 
 
 def test_evaluation_service_runner_persists_items_results_and_safe_details() -> None:

@@ -335,9 +335,8 @@ class EvaluationService:
         )
         metric_summary = _metric_summary(results_by_item)
         job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
-        case_count = len(items)
-        if case_count == 0 and run.status in {"queued", "running"}:
-            case_count = _planned_case_count(run)
+        planned_case_count = _planned_case_count(run) if run.status in {"queued", "running"} else 0
+        case_count = max(len(items), planned_case_count)
         return EvaluationRunSummary(
             evaluation_run_id=run.evaluation_run_id,
             job_id=job.job_id if job is not None else None,

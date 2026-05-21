@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -226,20 +228,27 @@ class DatabaseVectorSearchClient(VectorSearchClient):
         limit: int,
         filters: RetrievalFilters,
     ) -> list[VectorSearchCandidate]:
-        del collection_name, query_vector
-        rows = self.db.execute(
-            _eligible_chunks_statement(filters).limit(max(limit * 5, limit))
-        ).all()
-        scored: list[tuple[float, DocumentChunk]] = []
+        del collection_name
+        if limit < 1:
+            raise RetrievalError()
+        normalized_query = _normalized_vector(query_vector)
+        rows = self.db.execute(_eligible_chunks_statement(filters)).all()
+        scored: list[tuple[float, float, DocumentChunk]] = []
         for chunk, _, _ in rows:
-            score = _lexical_score(chunk.content_text, filters)
-            if score > 0:
-                scored.append((score, chunk))
-        if not scored:
-            scored = [(0.15, chunk) for chunk, _, _ in rows]
+            lexical_score = _lexical_score(chunk.content_text, filters)
+            if normalized_query:
+                chunk_vector = _evaluation_chunk_vector(
+                    chunk.content_text,
+                    dimension=len(normalized_query),
+                )
+                vector_score = (_dot_product(normalized_query, chunk_vector) + 1.0) / 2.0
+                score = min(1.0, (vector_score * 0.9) + (lexical_score * 0.1))
+            else:
+                score = lexical_score if lexical_score > 0 else 0.15
+            scored.append((score, lexical_score, chunk))
         ranked = sorted(
             scored,
-            key=lambda item: (item[0], -item[1].document_chunk_id),
+            key=lambda item: (item[0], item[1], -item[2].document_chunk_id),
             reverse=True,
         )[:limit]
         return [
@@ -249,7 +258,7 @@ class DatabaseVectorSearchClient(VectorSearchClient):
                 qdrant_order=index,
                 payload={"document_chunk_id": chunk.document_chunk_id},
             )
-            for index, (score, chunk) in enumerate(ranked, start=1)
+            for index, (score, _, chunk) in enumerate(ranked, start=1)
         ]
 
 
@@ -297,6 +306,42 @@ def _lexical_score(text: str, filters: RetrievalFilters) -> float:
         if term in haystack:
             score += 0.1
     return min(1.0, score)
+
+
+def _normalized_vector(values: Sequence[float]) -> list[float]:
+    vector: list[float] = []
+    for value in values:
+        number = float(value)
+        if not math.isfinite(number):
+            return []
+        vector.append(number)
+    if not vector:
+        return []
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm <= 0:
+        return []
+    return [value / norm for value in vector]
+
+
+def _evaluation_chunk_vector(text: str, *, dimension: int) -> list[float]:
+    values: list[float] = []
+    counter = 0
+    seed = text.encode("utf-8")
+    while len(values) < dimension:
+        digest = hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
+        counter += 1
+        for offset in range(0, len(digest), 4):
+            if len(values) >= dimension:
+                break
+            raw = int.from_bytes(digest[offset : offset + 4], "big")
+            values.append((raw / 0xFFFFFFFF) * 2.0 - 1.0)
+    return _normalized_vector(values)
+
+
+def _dot_product(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right):
+        return 0.0
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _failed_evaluation_result(
