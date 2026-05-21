@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, TypeAlias, TypeVar, cast
+from typing import Any, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import create_engine
