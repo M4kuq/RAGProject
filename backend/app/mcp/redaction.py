@@ -70,7 +70,10 @@ BEARER_TOKEN_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE
 CREDENTIAL_URL_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b")
 WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\"'\r\n]+")
-UNIX_STORAGE_PATH_RE = re.compile(r"/(?:app/)?(?:storage|data|tmp)/[^\"'\r\n]+")
+UNIX_STORAGE_PATH_RE = re.compile(
+    r"(?<!:)/(?:app|data|home|mnt|opt|srv|storage|tmp|usr|var|workspace|"
+    r"workspaces)/[^\"'\r\n]+"
+)
 
 REDACTED = "[REDACTED]"
 OMITTED = "[OMITTED]"
@@ -110,6 +113,8 @@ def redact_data(value: Any, *, max_string_chars: int) -> Any:
                 saw_sensitive = True
             elif _is_raw_context_key(key_text):
                 saw_raw = True
+            elif _is_path_like_key(key_text):
+                redacted[key_text] = REDACTED
             else:
                 redacted[key_text] = redact_data(item, max_string_chars=max_string_chars)
         if saw_sensitive:
@@ -138,7 +143,7 @@ def safe_metric_details(
         key_text = str(key)
         if SENSITIVE_KEY_RE.search(key_text) or _is_raw_context_key(key_text):
             continue
-        if not _is_safe_metric_detail_value(key_text, item):
+        if not _is_safe_metric_detail_value(key_text, item, max_string_chars=max_string_chars):
             allowed["omitted_unsafe_detail"] = True
             continue
         allowed[key_text] = redact_data(item, max_string_chars=max_string_chars)
@@ -167,10 +172,31 @@ def _is_raw_context_key(value: str) -> bool:
     return any(fragment in normalized for fragment in dangerous_fragments)
 
 
-def _is_safe_metric_detail_value(value: str, item: object) -> bool:
+def _is_path_like_key(value: str) -> bool:
+    normalized = _normalize_key(value)
+    return normalized in {
+        "absolutepath",
+        "filepath",
+        "localpath",
+        "outputpath",
+        "path",
+        "resultpath",
+    }
+
+
+def _is_safe_metric_detail_value(
+    value: str,
+    item: object,
+    *,
+    max_string_chars: int,
+) -> bool:
     normalized = _normalize_key(value)
     if normalized in SAFE_METRIC_DETAIL_NAMES:
-        return True
+        if item is None or isinstance(item, bool | int | float):
+            return True
+        if isinstance(item, str):
+            return _is_safe_metric_detail_text(item, max_string_chars=max_string_chars)
+        return False
     if isinstance(item, bool | int | float) or item is None:
         return (
             normalized.endswith("count")
@@ -180,3 +206,26 @@ def _is_safe_metric_detail_value(value: str, item: object) -> bool:
             or normalized.endswith("ms")
         )
     return False
+
+
+def _is_safe_metric_detail_text(value: str, *, max_string_chars: int) -> bool:
+    cleaned = " ".join(value.replace("\x00", " ").split())
+    if not cleaned or len(cleaned) > max_string_chars:
+        return False
+    if cleaned != truncate_text(cleaned, max_chars=max_string_chars):
+        return False
+    normalized = _normalize_key(cleaned)
+    unsafe_fragments = (
+        "chunkcontent",
+        "chunktext",
+        "contenttext",
+        "fullcontext",
+        "fullprompt",
+        "qdrantpayload",
+        "rawchunk",
+        "rawcontext",
+        "rawprompt",
+        "retrievedcontext",
+        "sourcetext",
+    )
+    return not any(fragment in normalized for fragment in unsafe_fragments)

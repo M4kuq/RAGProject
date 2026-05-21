@@ -108,6 +108,8 @@ class JsonRpcMcpServer:
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
+        if requested is not None and not isinstance(requested, str):
+            raise McpInvalidRequest("protocolVersion must be a string")
         protocol_version = (
             requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
         )

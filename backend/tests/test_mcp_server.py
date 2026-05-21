@@ -277,7 +277,8 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "C:\\Users\\Kei My Docs\\secret file.txt "
             "/app/storage/Kei My Docs/secret file.txt "
             "/storage/Shared Docs/private.txt /data/Team Docs/private.txt "
-            "/tmp/RAG Project/private.txt"
+            "/tmp/RAG Project/private.txt /home/kei/private.txt "
+            "/var/lib/rag/private.txt"
         ),
     }
 
@@ -294,6 +295,8 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert "/storage" not in dumped
     assert "/data" not in dumped
     assert "/tmp" not in dumped
+    assert "/home" not in dumped
+    assert "/var/lib" not in dumped
     assert "Shared Docs" not in dumped
     assert "Team Docs" not in dumped
     assert "RAG Project" not in dumped
@@ -306,8 +309,11 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     details = safe_metric_details(
         {
             "case_id": "case-alpha",
+            "source_label": "Alpha handbook",
             "matched_count": 2,
             "safe_score": 0.8,
+            "source": "RAW_CHUNK_SHOULD_NOT_APPEAR raw context should be removed",
+            "status": ["raw prompt should be removed"],
             "promptText": "raw prompt should be removed",
             "retrieved_context": "full context should be removed",
             "retrieved_context_score": "full context should be removed",
@@ -321,8 +327,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     details_dumped = json.dumps(details)
 
     assert details["case_id"] == "case-alpha"
+    assert details["source_label"] == "Alpha handbook"
     assert details["matched_count"] == 2
     assert details["safe_score"] == 0.8
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in details_dumped
     assert "raw prompt should be removed" not in details_dumped
     assert "full context should be removed" not in details_dumped
     assert "unsafe detail should be removed" not in details_dumped
@@ -666,6 +674,14 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "method": "ping",
         },
     )
+    bad_initialize_version = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "initialize",
+            "params": {"protocolVersion": []},
+        },
+    )
     invalid_tool_boundaries = [
         server.handle_message(
             {
@@ -798,6 +814,8 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
     assert invalid_id is not None
     assert invalid_id["id"] is None
     assert invalid_id["error"]["code"] == -32600
+    assert bad_initialize_version is not None
+    assert bad_initialize_version["error"]["code"] == -32602
     for response in invalid_tool_boundaries:
         assert response is not None
         assert response["error"]["code"] == -32602
