@@ -292,9 +292,7 @@ def _seed_auth(db: Session) -> None:
         role_id=role.role_id,
         email="admin@example.com",
         display_name="Admin",
-        password_hash=(
-            "$2b$12$6C/KI/08/64PYTqmT7TKaOs8n7dK2wr9Uwup5oF.PPqayydh0N8sG"
-        ),
+        password_hash="$2b$12$6C/KI/08/64PYTqmT7TKaOs8n7dK2wr9Uwup5oF.PPqayydh0N8sG",
         status="active",
     )
     db.add(user)
