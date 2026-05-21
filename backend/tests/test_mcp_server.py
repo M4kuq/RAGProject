@@ -104,7 +104,9 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_tool_timeout_seconds=0)
 
 
-def test_tool_registry_exposes_only_phase1_tools(mcp_adapter: McpServiceAdapter) -> None:
+def test_tool_registry_exposes_only_phase1_tools(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
     registry = build_tool_registry(mcp_adapter)
 
     assert set(registry) == {
@@ -146,7 +148,9 @@ def test_rag_search_and_ask_return_safe_truncated_output(
     assert "raw_prompt" not in json.dumps(ask).lower()
 
 
-def test_document_job_and_evaluation_tools_are_redacted(mcp_adapter: McpServiceAdapter) -> None:
+def test_document_job_and_evaluation_tools_are_redacted(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
     documents = mcp_adapter.list_documents({})
     document = mcp_adapter.get_document_status({"logical_document_id": 1})
     job = mcp_adapter.get_job_status({"job_id": 1})
@@ -229,7 +233,9 @@ def test_jsonrpc_lists_reads_resources_and_gets_prompts(
 ) -> None:
     server = JsonRpcMcpServer(mcp_adapter)
 
-    resources = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
+    resources = server.handle_message(
+        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"}
+    )
     templates = server.handle_message(
         {"jsonrpc": "2.0", "id": 2, "method": "resources/templates/list"}
     )
@@ -241,7 +247,9 @@ def test_jsonrpc_lists_reads_resources_and_gets_prompts(
             "params": {"uri": "rag://documents/1"},
         }
     )
-    prompts = server.handle_message({"jsonrpc": "2.0", "id": 4, "method": "prompts/list"})
+    prompts = server.handle_message(
+        {"jsonrpc": "2.0", "id": 4, "method": "prompts/list"}
+    )
     prompt = server.handle_message(
         {
             "jsonrpc": "2.0",

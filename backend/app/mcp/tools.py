@@ -28,7 +28,9 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
     tools = [
         McpTool(
             name="rag_search",
-            description="Search active RAG document chunks. Returns truncated snippets only.",
+            description=(
+                "Search active RAG document chunks. Returns truncated snippets only."
+            ),
             input_schema=_object_schema(
                 {
                     "query": {"type": "string", "minLength": 1, "maxLength": 8000},
@@ -66,7 +68,8 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         McpTool(
             name="list_documents",
             description=(
-                "List document metadata. Archived documents are returned only when requested."
+                "List document metadata. Archived documents are returned only when "
+                "requested."
             ),
             input_schema=_object_schema(
                 {
@@ -94,7 +97,9 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         ),
         McpTool(
             name="get_document_status",
-            description="Get safe document status, version summaries, and chunk counts.",
+            description=(
+                "Get safe document status, version summaries, and chunk counts."
+            ),
             input_schema=_object_schema(
                 {"logical_document_id": {"type": "integer", "minimum": 1}},
                 required=["logical_document_id"],
@@ -115,7 +120,9 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         ),
         McpTool(
             name="list_evaluation_runs",
-            description="List evaluation run summaries. Does not create or rerun evaluations.",
+            description=(
+                "List evaluation run summaries. Does not create or rerun evaluations."
+            ),
             input_schema=_object_schema(
                 {
                     "status": {
@@ -142,7 +149,8 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         McpTool(
             name="get_evaluation_result",
             description=(
-                "Get safe evaluation metrics and case summaries without prompts or full context."
+                "Get safe evaluation metrics and case summaries without prompts or "
+                "full context."
             ),
             input_schema=_object_schema(
                 {"evaluation_run_id": {"type": "integer", "minimum": 1}},
@@ -158,7 +166,11 @@ def list_tools(registry: dict[str, McpTool]) -> dict[str, Any]:
     return {"tools": [registry[name].definition() for name in sorted(registry)]}
 
 
-def call_tool(registry: dict[str, McpTool], name: str, arguments: object) -> dict[str, Any]:
+def call_tool(
+    registry: dict[str, McpTool],
+    name: str,
+    arguments: object,
+) -> dict[str, Any]:
     if name not in registry:
         raise McpNotFound("tool not found")
     if arguments is None:
@@ -179,7 +191,10 @@ def call_tool(registry: dict[str, McpTool], name: str, arguments: object) -> dic
 def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
     return {
         "content": [
-            {"type": "text", "text": json.dumps(structured, ensure_ascii=False, indent=2)}
+            {
+                "type": "text",
+                "text": json.dumps(structured, ensure_ascii=False, indent=2),
+            }
         ],
         "structuredContent": structured,
         "isError": False,
@@ -189,7 +204,9 @@ def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
 def _tool_error(error: McpToolExecutionError) -> dict[str, Any]:
     structured = {"status": "failed", "error_code": error.code, "message": str(error)}
     return {
-        "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False)}],
+        "content": [
+            {"type": "text", "text": json.dumps(structured, ensure_ascii=False)}
+        ],
         "structuredContent": structured,
         "isError": True,
     }
