@@ -56,7 +56,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0001_initial"
+    assert version == "0002_evaluation_results"
 
     expected_tables = {
         "roles",
@@ -76,6 +76,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "citations",
         "evaluation_runs",
         "evaluation_run_items",
+        "evaluation_results",
         "audit_logs",
         "system_settings",
     }
@@ -99,6 +100,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_jobs_running_required_fields",
         "ck_jobs_failed_error_code",
         "fk_citations_retrieval_item",
+        "uq_evaluation_results_item_metric",
         "fk_chat_messages_linked_retrieval_run_same_session",
         "ck_audit_logs_request_id_not_empty",
     }
@@ -121,6 +123,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ux_jobs_active_retry_per_source",
         "ux_jobs_active_message_edit",
         "ux_retrieval_run_items_run_rerank_order",
+        "ix_evaluation_results_metric_score",
     }
     actual_indexes = scalar_set(
         pg_engine,

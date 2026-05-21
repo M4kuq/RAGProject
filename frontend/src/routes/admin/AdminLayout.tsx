@@ -8,6 +8,8 @@ import { DocumentDetailPage } from "./documents/DocumentDetailPage";
 import { DocumentListPage } from "./documents/DocumentListPage";
 import { DocumentReviewPage } from "./documents/DocumentReviewPage";
 import { VersionDetailPage } from "./documents/VersionDetailPage";
+import { EvaluationDetailPage } from "./evaluations/EvaluationDetailPage";
+import { EvaluationListPage } from "./evaluations/EvaluationListPage";
 import { JobDetailPage } from "./jobs/JobDetailPage";
 import { JobListPage } from "./jobs/JobListPage";
 
@@ -38,7 +40,8 @@ function AdminShell() {
       {csrf.isSuccess ? (
         <Routes>
           <Route index element={<AdminPage />} />
-          <Route path="evaluations" element={<AdminPage />} />
+          <Route path="evaluations" element={<EvaluationListPage />} />
+          <Route path="evaluations/:evaluationRunId" element={<EvaluationDetailPage />} />
           <Route path="documents" element={<DocumentListPage />} />
           <Route path="documents/review" element={<DocumentReviewPage />} />
           <Route path="documents/:logicalDocumentId" element={<DocumentDetailPage />} />

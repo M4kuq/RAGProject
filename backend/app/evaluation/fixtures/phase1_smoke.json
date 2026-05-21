@@ -1,0 +1,23 @@
+{
+  "dataset_name": "phase1_smoke",
+  "cases": [
+    {
+      "case_id": "phase1_seed_stack",
+      "question": "What vector database is used by the Phase1 RAG stack?",
+      "expected_keywords": ["Qdrant"],
+      "required_citation": true
+    },
+    {
+      "case_id": "phase1_seed_ci",
+      "question": "What kind of adapters keep CI deterministic?",
+      "expected_keywords": ["deterministic", "fake adapters"],
+      "required_citation": true
+    },
+    {
+      "case_id": "phase1_seed_citations",
+      "question": "What retrieval trace capability does the seed document mention?",
+      "expected_keywords": ["citation-aware retrieval traces"],
+      "required_citation": true
+    }
+  ]
+}
