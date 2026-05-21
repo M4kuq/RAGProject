@@ -54,7 +54,35 @@ def test_jsonrpc_list_methods_are_exposed(mcp_adapter: McpServiceAdapter) -> Non
     prompts = server.handle_message({"jsonrpc": "2.0", "id": 4, "method": "prompts/list"})
 
     assert tools is not None
-    assert "rag_search" in {tool["name"] for tool in tools["result"]["tools"]}
+    tool_names = {tool["name"] for tool in tools["result"]["tools"]}
+    assert tool_names == {
+        "rag_search",
+        "rag_ask",
+        "list_documents",
+        "get_document_status",
+        "get_job_status",
+        "list_evaluation_runs",
+        "get_evaluation_result",
+    }
+    forbidden = {
+        "approve_document",
+        "archive_document",
+        "create_evaluation_run",
+        "retry_job",
+        "upload_document",
+    }
+    assert forbidden.isdisjoint(tool_names)
+    for index, tool_name in enumerate(forbidden, start=20):
+        response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": {}},
+            },
+        )
+        assert response is not None
+        assert response["error"]["code"] == -32002
     assert resources is not None
     assert resources["result"]["resources"][0]["uri"] == "rag://documents"
     assert templates is not None
@@ -96,6 +124,10 @@ def test_jsonrpc_unsafe_string_ids_are_rejected_without_echo(
     server = JsonRpcMcpServer(mcp_adapter)
     unsafe_ids = [
         "request secret_token=abcd1234",
+        "session abcdefghijklmnop",
+        "csrf token",
+        "SessionRequest-123",
+        "x" * 129,
         "Bearer abcdefghijklmnop",
         "sk-testshouldberemoved1234567890",
         "ghp_testshouldberemoved1234567890",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,6 @@ if __package__ and __package__.startswith("backend."):
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.errors import McpError, McpInvalidRequest, McpMethodNotFound, McpNotFound
 from app.mcp.prompts import get_prompt, list_prompts
-from app.mcp.redaction import truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry, call_tool, list_tools
@@ -28,6 +28,24 @@ JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
 MCP_RESOURCE_NOT_FOUND = -32002
+_SAFE_STRING_REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_SENSITIVE_REQUEST_ID_TERMS = {
+    "api",
+    "authorization",
+    "cookie",
+    "credential",
+    "csrf",
+    "password",
+    "private",
+    "secret",
+    "session",
+    "token",
+}
+_UNSAFE_REQUEST_ID_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_-]{8,}", re.IGNORECASE),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{8,}", re.IGNORECASE),
+    re.compile(r"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+)
 
 
 class JsonRpcMcpServer:
@@ -213,7 +231,12 @@ def _is_valid_request_id(value: object) -> bool:
 def _is_safe_request_id(value: object) -> bool:
     if not isinstance(value, str):
         return True
-    return truncate_text(value, max_chars=max(len(value) + 1, 128)) == value
+    if _SAFE_STRING_REQUEST_ID.fullmatch(value) is None:
+        return False
+    lowered = value.lower()
+    if any(term in lowered for term in _SENSITIVE_REQUEST_ID_TERMS):
+        return False
+    return not any(pattern.search(value) for pattern in _UNSAFE_REQUEST_ID_PATTERNS)
 
 
 def _error_response(

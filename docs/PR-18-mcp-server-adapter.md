@@ -94,9 +94,9 @@ Claude Desktop-style local server config:
     "ragproject": {
       "command": "python",
       "args": ["-m", "backend.app.mcp.server"],
-      "cwd": "C:\\Users\\kei01\\RAGProject",
+      "cwd": "<REPO_ROOT>",
       "env": {
-        "DATABASE_URL": "postgresql+psycopg://rag:rag@localhost:5432/rag",
+        "DATABASE_URL": "<DATABASE_URL>",
         "MCP_TRANSPORT": "stdio",
         "MCP_LOCAL_ONLY": "true",
         "MCP_ALLOW_WRITE_TOOLS": "false"
@@ -114,7 +114,7 @@ Local backend-directory variant:
     "ragproject": {
       "command": "python",
       "args": ["-m", "app.mcp.server"],
-      "cwd": "C:\\Users\\kei01\\RAGProject\\backend"
+      "cwd": "<REPO_ROOT>\\backend"
     }
   }
 }
