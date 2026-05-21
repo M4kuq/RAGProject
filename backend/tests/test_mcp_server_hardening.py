@@ -39,6 +39,7 @@ class _FakeRagAskResult:
     status: str
     answer_text: str
     citations: list[_FakeCitation]
+    context_sources_for_safety: list[str]
     confidence: None = None
     retrieval_score_summary: None = None
     error_code: str | None = None
@@ -214,7 +215,13 @@ def test_rag_ask_adapter_omits_raw_context_overlap(
             retrieval_run_id=1,
             status="succeeded",
             answer_text="The answer is: " + raw_context,
-            citations=[_FakeCitation(source_label="Alpha handbook", snippet=raw_context)],
+            citations=[
+                _FakeCitation(
+                    source_label="Alpha handbook",
+                    snippet=raw_context[:48] + "...",
+                ),
+            ],
+            context_sources_for_safety=[raw_context],
         )
 
     monkeypatch.setattr(

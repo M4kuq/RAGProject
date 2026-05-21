@@ -147,7 +147,7 @@ class McpServiceAdapter:
         return _safe_rag_ask_output(
             data,
             answer_max_chars=self.settings.generation_max_output_chars,
-            context_sources=[citation.snippet for citation in result.citations],
+            context_sources=result.context_sources_for_safety,
             snippet_max_chars=self.mcp_settings.snippet_max_chars,
         )
 

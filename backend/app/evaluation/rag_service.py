@@ -53,6 +53,7 @@ class RagEvaluationResult:
     citations: list[RagAskCitation]
     confidence: RagAskConfidence | None
     retrieval_score_summary: RetrievalScoreSummary | None
+    context_sources_for_safety: list[str]
     error_code: str | None = None
 
 
@@ -181,6 +182,7 @@ class EvaluationRagQuestionService:
                 citations=[_citation_response(record) for record in citation_records],
                 confidence=_confidence_response(run),
                 retrieval_score_summary=result.summary,
+                context_sources_for_safety=[item.text for item in context_items],
             )
         except CitationBuildError:
             self.service._mark_failed_safely(
@@ -345,5 +347,6 @@ def _failed_evaluation_result(
         citations=[],
         confidence=None,
         retrieval_score_summary=retrieval_score_summary,
+        context_sources_for_safety=[],
         error_code=error_code,
     )
