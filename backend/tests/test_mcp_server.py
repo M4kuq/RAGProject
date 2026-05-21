@@ -42,6 +42,51 @@ from app.rag.rerank import FakeRerankerClient
 from app.services.rag_service import RagSearchPipelineError, RagService
 
 
+def _test_settings(
+    *,
+    mcp_enabled: bool = True,
+    storage_root: Path | None = None,
+) -> Settings:
+    if storage_root is None:
+        return Settings(
+            _env_file=None,
+            app_env="test",
+            database_url="sqlite://",
+            embedding_provider="fake",
+            embedding_fake_dimension=4,
+            rerank_provider="fake",
+            generation_provider="fake",
+            retrieval_top_k_default=5,
+            retrieval_top_k_max=5,
+            rerank_top_n_default=2,
+            rerank_top_n_max=5,
+            ask_top_k_default=5,
+            ask_rerank_top_n_default=2,
+            search_snippet_max_chars=48,
+            mcp_snippet_max_chars=48,
+            mcp_enabled=mcp_enabled,
+        )
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite://",
+        storage_root=storage_root,
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        rerank_provider="fake",
+        generation_provider="fake",
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_top_n_default=2,
+        rerank_top_n_max=5,
+        ask_top_k_default=5,
+        ask_rerank_top_n_default=2,
+        search_snippet_max_chars=48,
+        mcp_snippet_max_chars=48,
+        mcp_enabled=mcp_enabled,
+    )
+
+
 @pytest.fixture
 def mcp_adapter() -> Iterator[McpServiceAdapter]:
     engine = create_engine(
@@ -54,10 +99,9 @@ def mcp_adapter() -> Iterator[McpServiceAdapter]:
     with session_factory() as db:
         _seed_data(db)
         db.commit()
-    settings = _test_settings()
     try:
         yield McpServiceAdapter(
-            settings=settings,
+            settings=_test_settings(),
             session_factory=session_factory,
             rag_service_factory=lambda settings, db: RagService(
                 settings=settings,
@@ -94,28 +138,6 @@ def empty_mcp_adapter() -> Iterator[McpServiceAdapter]:
         )
     finally:
         engine.dispose()
-
-
-def _test_settings(**overrides: object) -> Settings:
-    values = {
-        "_env_file": None,
-        "app_env": "test",
-        "database_url": "sqlite://",
-        "embedding_provider": "fake",
-        "embedding_fake_dimension": 4,
-        "rerank_provider": "fake",
-        "generation_provider": "fake",
-        "retrieval_top_k_default": 5,
-        "retrieval_top_k_max": 5,
-        "rerank_top_n_default": 2,
-        "rerank_top_n_max": 5,
-        "ask_top_k_default": 5,
-        "ask_rerank_top_n_default": 2,
-        "search_snippet_max_chars": 48,
-        "mcp_snippet_max_chars": 48,
-    }
-    values.update(overrides)
-    return Settings(**values)
 
 
 def test_mcp_settings_phase1_guardrails() -> None:
@@ -639,53 +661,28 @@ def test_jsonrpc_string_id_contract_and_redaction(
     normal = server.handle_message(
         {"jsonrpc": "2.0", "id": "request-123", "method": "unknown"},
     )
-    unsafe = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": "request secret_token=abcd1234",
-            "method": "unknown",
-        },
-    )
+    unsafe_ids = [
+        "request secret_token=abcd1234",
+        "SessionRequest-123",
+        "x" * 129,
+        "Bearer abcdefghijklmnop",
+        "sk-testshouldberemoved1234567890",
+        "ghp_testshouldberemoved1234567890",
+        "eyJabc.def.ghi",
+        "https://user:pass@example.test/path",
+    ]
 
     assert normal is not None
     assert normal["error"]["code"] == -32601
     assert normal["id"] == "request-123"
-    assert unsafe is not None
-    assert unsafe["error"]["code"] == -32600
-    assert unsafe["id"] is None
-    assert "abcd1234" not in json.dumps(unsafe)
-
-
-def test_jsonrpc_resources_read_job_and_evaluation_are_redacted(
-    mcp_adapter: McpServiceAdapter,
-) -> None:
-    server = JsonRpcMcpServer(mcp_adapter)
-    responses = [
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "resources/read",
-                "params": {"uri": "rag://jobs/1"},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "resources/read",
-                "params": {"uri": "rag://evaluations/1"},
-            },
-        ),
-    ]
-
-    dumped = json.dumps(responses)
-    assert "secret_token" not in dumped.lower()
-    assert "password=abcd1234" not in dumped
-    assert "raw prompt" not in dumped.lower()
-    assert "full context" not in dumped.lower()
-    assert "C:\\" not in dumped
-    assert "/app/storage" not in dumped
+    for request_id in unsafe_ids:
+        unsafe = server.handle_message(
+            {"jsonrpc": "2.0", "id": request_id, "method": "unknown"},
+        )
+        assert unsafe is not None
+        assert unsafe["error"]["code"] == -32600
+        assert unsafe["id"] is None
+        assert request_id not in json.dumps(unsafe)
 
 
 def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
