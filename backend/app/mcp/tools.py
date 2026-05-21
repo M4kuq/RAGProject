@@ -28,9 +28,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
     tools = [
         McpTool(
             name="rag_search",
-            description=(
-                "Search active RAG document chunks. Returns truncated snippets only."
-            ),
+            description="Search active RAG document chunks. Returns truncated snippets only.",
             input_schema=_object_schema(
                 {
                     "query": {"type": "string", "minLength": 1, "maxLength": 8000},
@@ -97,9 +95,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         ),
         McpTool(
             name="get_document_status",
-            description=(
-                "Get safe document status, version summaries, and chunk counts."
-            ),
+            description="Get safe document status, version summaries, and chunk counts.",
             input_schema=_object_schema(
                 {"logical_document_id": {"type": "integer", "minimum": 1}},
                 required=["logical_document_id"],
@@ -120,9 +116,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         ),
         McpTool(
             name="list_evaluation_runs",
-            description=(
-                "List evaluation run summaries. Does not create or rerun evaluations."
-            ),
+            description="List evaluation run summaries. Does not create or rerun evaluations.",
             input_schema=_object_schema(
                 {
                     "status": {
@@ -194,7 +188,7 @@ def _tool_success(structured: dict[str, Any]) -> dict[str, Any]:
             {
                 "type": "text",
                 "text": json.dumps(structured, ensure_ascii=False, indent=2),
-            }
+            },
         ],
         "structuredContent": structured,
         "isError": False,
@@ -205,7 +199,10 @@ def _tool_error(error: McpToolExecutionError) -> dict[str, Any]:
     structured = {"status": "failed", "error_code": error.code, "message": str(error)}
     return {
         "content": [
-            {"type": "text", "text": json.dumps(structured, ensure_ascii=False)}
+            {
+                "type": "text",
+                "text": json.dumps(structured, ensure_ascii=False),
+            },
         ],
         "structuredContent": structured,
         "isError": True,

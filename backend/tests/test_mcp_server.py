@@ -126,7 +126,7 @@ def test_rag_search_and_ask_return_safe_truncated_output(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
     search = mcp_adapter.rag_search(
-        {"query": "alpha citation", "top_k": 3, "rerank_top_n": 2}
+        {"query": "alpha citation", "top_k": 3, "rerank_top_n": 2},
     )
 
     assert search["status"] == "succeeded"
@@ -200,7 +200,7 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
             "id": 1,
             "method": "initialize",
             "params": {"protocolVersion": "2025-06-18", "capabilities": {}},
-        }
+        },
     )
     assert initialize is not None
     assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
@@ -217,14 +217,16 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
             "id": 3,
             "method": "tools/call",
             "params": {"name": "rag_search", "arguments": {"query": "alpha"}},
-        }
+        },
     )
     assert response is not None
     assert response["result"]["structuredContent"]["status"] == "succeeded"
-    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in response["result"]["content"][0]["text"]
+    assert (
+        "RAW_CHUNK_SHOULD_NOT_APPEAR" not in response["result"]["content"][0]["text"]
+    )
     assert "secret_token" not in response["result"]["content"][0]["text"].lower()
     assert server.handle_message(
-        {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
     ) is None
 
 
@@ -234,10 +236,10 @@ def test_jsonrpc_lists_reads_resources_and_gets_prompts(
     server = JsonRpcMcpServer(mcp_adapter)
 
     resources = server.handle_message(
-        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"}
+        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"},
     )
     templates = server.handle_message(
-        {"jsonrpc": "2.0", "id": 2, "method": "resources/templates/list"}
+        {"jsonrpc": "2.0", "id": 2, "method": "resources/templates/list"},
     )
     document = server.handle_message(
         {
@@ -245,10 +247,10 @@ def test_jsonrpc_lists_reads_resources_and_gets_prompts(
             "id": 3,
             "method": "resources/read",
             "params": {"uri": "rag://documents/1"},
-        }
+        },
     )
     prompts = server.handle_message(
-        {"jsonrpc": "2.0", "id": 4, "method": "prompts/list"}
+        {"jsonrpc": "2.0", "id": 4, "method": "prompts/list"},
     )
     prompt = server.handle_message(
         {
@@ -259,7 +261,7 @@ def test_jsonrpc_lists_reads_resources_and_gets_prompts(
                 "name": "rag_search_debug",
                 "arguments": {"question": "Bearer abcdefghijklmnop"},
             },
-        }
+        },
     )
 
     assert resources is not None
@@ -291,7 +293,7 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "id": 1,
             "method": "tools/call",
             "params": {"name": "list_documents", "arguments": []},
-        }
+        },
     )
     unknown_tool = server.handle_message(
         {
@@ -299,7 +301,7 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "id": 2,
             "method": "tools/call",
             "params": {"name": "archive_document", "arguments": {}},
-        }
+        },
     )
     blank_query = server.handle_message(
         {
@@ -307,7 +309,7 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "id": 3,
             "method": "tools/call",
             "params": {"name": "rag_search", "arguments": {"query": "   "}},
-        }
+        },
     )
     missing_resource = server.handle_message(
         {
@@ -315,7 +317,7 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "id": 4,
             "method": "resources/read",
             "params": {"uri": "rag://documents/999"},
-        }
+        },
     )
     bad_prompt_args = server.handle_message(
         {
@@ -323,7 +325,7 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "id": 5,
             "method": "prompts/get",
             "params": {"name": "rag_search_debug", "arguments": []},
-        }
+        },
     )
 
     assert bad_arguments is not None
@@ -352,11 +354,11 @@ def test_stdio_smoke_handles_initialize_and_parse_error(
                         "id": 1,
                         "method": "initialize",
                         "params": {"protocolVersion": "2025-06-18"},
-                    }
+                    },
                 ),
                 "",
             ]
-        )
+        ),
     )
     stdout = io.StringIO()
     monkeypatch.setattr(sys, "stdin", stdin)
@@ -428,7 +430,7 @@ def _seed_data(db: Session) -> None:
             page_to=1,
             section_title="Alpha section",
             modality="text",
-        )
+        ),
     )
     db.add(
         Job(
@@ -449,7 +451,7 @@ def _seed_data(db: Session) -> None:
             finished_at=now,
             error_code="ingest_failed",
             error_message="failed with password=abcd1234",
-        )
+        ),
     )
     run = EvaluationRun(
         evaluation_run_id=1,
@@ -485,5 +487,5 @@ def _seed_data(db: Session) -> None:
                 "raw_prompt": "raw prompt should be removed",
                 "full_context": "full context should be removed",
             },
-        )
+        ),
     )
