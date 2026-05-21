@@ -55,7 +55,8 @@ SAFE_METRIC_DETAIL_NAMES = {
     "status",
 }
 SECRET_VALUE_RE = re.compile(
-    r"(?i)\b(api[_-]?key|secret|password|token|csrf|session)\b\s*[:=]\s*\S+"
+    r"(?i)\b[A-Za-z0-9_-]*(api[_-]?key|secret|password|token|csrf|session)"
+    r"[A-Za-z0-9_-]*\s*[:=]\s*\S+"
 )
 API_KEY_RE = re.compile(
     r"\b((sk|pk)-[A-Za-z0-9_\-]{12,}|"

@@ -140,6 +140,11 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
         except json.JSONDecodeError:
             _write_message(_error_response(None, JSONRPC_PARSE_ERROR, "Parse error"))
             continue
+        if isinstance(message, list):
+            responses = _handle_batch(active_server, message)
+            if responses is not None:
+                _write_message(responses)
+            continue
         if not isinstance(message, dict):
             _write_message(_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request"))
             continue
@@ -147,6 +152,23 @@ def run_stdio(server: JsonRpcMcpServer | None = None) -> int:
         if response is not None:
             _write_message(response)
     return 0
+
+
+def _handle_batch(
+    server: JsonRpcMcpServer,
+    messages: list[object],
+) -> list[dict[str, Any]] | None:
+    if not messages:
+        return [_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")]
+    responses: list[dict[str, Any]] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            responses.append(_error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request"))
+            continue
+        response = server.handle_message(item)
+        if response is not None:
+            responses.append(response)
+    return responses or None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     return run_stdio()
 
 
-def _write_message(message: dict[str, Any]) -> None:
+def _write_message(message: dict[str, Any] | list[dict[str, Any]]) -> None:
     sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 

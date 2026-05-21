@@ -31,7 +31,7 @@ from app.evaluation.rag_service import DatabaseVectorSearchClient
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.prompts import get_prompt, list_prompts
-from app.mcp.redaction import redact_data, safe_metric_details
+from app.mcp.redaction import redact_data, safe_metric_details, truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.server import JsonRpcMcpServer, main, run_stdio
 from app.mcp.settings import get_mcp_settings
@@ -301,6 +301,21 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert "full context should be removed" not in details_dumped
     assert "unsafe detail should be removed" not in details_dumped
     assert details["omitted_unsafe_detail"] is True
+
+
+def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
+    value = (
+        "secret_token=abcd1234 access_token: abcdefghijklmnop "
+        "csrf_token=csrf123456789 session_id=session123456789"
+    )
+
+    redacted = truncate_text(value, max_chars=200)
+
+    assert "abcd1234" not in redacted
+    assert "abcdefghijklmnop" not in redacted
+    assert "csrf123456789" not in redacted
+    assert "session123456789" not in redacted
+    assert redacted.count("[REDACTED]") == 4
 
 
 def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
@@ -669,6 +684,48 @@ def test_stdio_smoke_handles_initialize_and_parse_error(
     assert lines[0]["error"]["code"] == -32700
     assert lines[1]["result"]["serverInfo"]["name"] == "ragproject-mcp"
     assert "rag_search" in {tool["name"] for tool in lines[2]["result"]["tools"]}
+
+
+def test_stdio_handles_jsonrpc_batch_requests(
+    mcp_adapter: McpServiceAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdin = io.StringIO(
+        "\n".join(
+            [
+                json.dumps(
+                    [
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {"protocolVersion": "2025-06-18"},
+                        },
+                        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    ],
+                ),
+                json.dumps([]),
+                json.dumps([{"jsonrpc": "2.0", "id": 3, "method": "ping"}, 1]),
+                "",
+            ],
+        ),
+    )
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    assert run_stdio(JsonRpcMcpServer(mcp_adapter)) == 0
+
+    batch, empty_batch, mixed_batch = [
+        json.loads(line) for line in stdout.getvalue().splitlines()
+    ]
+    assert len(batch) == 2
+    assert batch[0]["result"]["serverInfo"]["name"] == "ragproject-mcp"
+    assert "rag_search" in {tool["name"] for tool in batch[1]["result"]["tools"]}
+    assert empty_batch[0]["error"]["code"] == -32600
+    assert mixed_batch[0]["result"] == {}
+    assert mixed_batch[1]["error"]["code"] == -32600
 
 
 def test_mcp_main_version(capsys: pytest.CaptureFixture[str]) -> None:
