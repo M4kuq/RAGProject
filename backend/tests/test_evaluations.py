@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from app.evaluation.runner import EvaluationRunError, EvaluationRunner
+from app.evaluation.seed_data import seed_default_dataset
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
@@ -16,8 +18,6 @@ from app.db.base import Base
 from app.db.evaluation_models import EvaluationDatasetCase
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
 from app.evaluation.rag_service import RagEvaluationResult
-from app.evaluation.runner import EvaluationRunError, EvaluationRunner
-from app.evaluation.seed_data import seed_default_dataset
 from app.main import create_app
 from app.rag.retrieval import (
     RetrievalFilters,
