@@ -12,7 +12,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.db.base import Base
-from app.mcp.adapters import McpServiceAdapter
+from app.mcp.adapters import (
+    RAW_CONTEXT_ANSWER_OMITTED,
+    McpServiceAdapter,
+    _safe_rag_ask_output,
+)
 from app.mcp.server import JsonRpcMcpServer, run_stdio
 
 
@@ -144,6 +148,27 @@ def test_jsonrpc_unsafe_string_ids_are_rejected_without_echo(
         assert response["id"] is None
         assert response["error"]["code"] == -32600
         assert request_id not in dumped
+
+
+def test_rag_ask_answer_omits_raw_context_overlap() -> None:
+    raw_context = (
+        "Alpha citation policy uses deterministic fake adapters and raw context. "
+        "This content should only appear as a bounded citation snippet."
+    )
+    safe = _safe_rag_ask_output(
+        {
+            "status": "succeeded",
+            "answer": "The answer is: " + raw_context,
+            "citations": [{"snippet": raw_context}],
+        },
+        answer_max_chars=160,
+        context_sources=[raw_context],
+        snippet_max_chars=48,
+    )
+
+    assert safe["answer"] == RAW_CONTEXT_ANSWER_OMITTED
+    assert "Alpha citation policy uses deterministic fake adapters" not in safe["answer"]
+    assert len(safe["citations"][0]["snippet"]) <= 48
 
 
 def test_stdio_initialized_notification_does_not_emit_response(

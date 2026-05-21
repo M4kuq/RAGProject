@@ -36,6 +36,7 @@ from .settings import McpSettings, get_mcp_settings
 SessionFactory: TypeAlias = sessionmaker[Session]
 RagServiceFactory: TypeAlias = Callable[[Settings, Session], RagService]
 T = TypeVar("T", bound=BaseModel)
+RAW_CONTEXT_ANSWER_OMITTED = "[OMITTED: answer contained raw retrieved context]"
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,7 @@ class McpServiceAdapter:
         return _safe_rag_ask_output(
             data,
             answer_max_chars=self.settings.generation_max_output_chars,
+            context_sources=[citation.snippet for citation in result.citations],
             snippet_max_chars=self.mcp_settings.snippet_max_chars,
         )
 
@@ -312,13 +314,60 @@ def _safe_rag_ask_output(
     *,
     answer_max_chars: int,
     snippet_max_chars: int,
+    context_sources: list[str] | None = None,
 ) -> dict[str, Any]:
     answer = data.get("answer")
     safe = _safe_output(
         {key: value for key, value in data.items() if key != "answer"},
         snippet_max_chars,
     )
-    safe["answer"] = (
-        truncate_text(answer, max_chars=answer_max_chars) if isinstance(answer, str) else answer
+    safe["answer"] = _safe_rag_answer(
+        answer,
+        answer_max_chars=answer_max_chars,
+        context_sources=context_sources or [],
+        snippet_max_chars=snippet_max_chars,
     )
     return safe
+
+
+def _safe_rag_answer(
+    answer: object,
+    *,
+    answer_max_chars: int,
+    context_sources: list[str],
+    snippet_max_chars: int,
+) -> object:
+    if not isinstance(answer, str):
+        return answer
+    safe_answer = truncate_text(answer, max_chars=answer_max_chars)
+    if _contains_raw_context_overlap(
+        safe_answer,
+        context_sources=context_sources,
+        snippet_max_chars=snippet_max_chars,
+    ):
+        return RAW_CONTEXT_ANSWER_OMITTED
+    return safe_answer
+
+
+def _contains_raw_context_overlap(
+    answer: str,
+    *,
+    context_sources: list[str],
+    snippet_max_chars: int,
+) -> bool:
+    normalized_answer = _normalize_text_for_overlap(answer)
+    if not normalized_answer:
+        return False
+    for source in context_sources:
+        normalized_source = _normalize_text_for_overlap(source)
+        if len(normalized_source) < 24:
+            continue
+        threshold = min(max(24, snippet_max_chars), len(normalized_source))
+        for start in range(0, len(normalized_source) - threshold + 1):
+            if normalized_source[start : start + threshold] in normalized_answer:
+                return True
+    return False
+
+
+def _normalize_text_for_overlap(value: str) -> str:
+    return " ".join(value.casefold().split())
