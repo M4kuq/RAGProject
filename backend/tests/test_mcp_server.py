@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine
@@ -38,7 +39,7 @@ from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry
 from app.rag.generation import FakeAnswerGenerator
 from app.rag.rerank import FakeRerankerClient
-from app.services.rag_service import RagService
+from app.services.rag_service import RagSearchPipelineError, RagService
 
 
 @pytest.fixture
@@ -309,6 +310,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "safe_score": 0.8,
             "promptText": "raw prompt should be removed",
             "retrieved_context": "full context should be removed",
+            "retrieved_context_score": "full context should be removed",
+            "raw_prompt_text": "raw prompt should be removed",
+            "prompt_score": "raw prompt should be removed",
+            "full_context_text": "full context should be removed",
             "unknown_text": "unsafe detail should be removed",
         },
         max_string_chars=120,
@@ -491,6 +496,36 @@ def test_jsonrpc_rag_ask_no_context_failure_contract(
     assert response["result"]["structuredContent"]["status"] == "failed"
     assert response["result"]["structuredContent"]["error_code"] == "no_context_found"
     assert response["result"]["structuredContent"]["citations"] == []
+
+
+def test_jsonrpc_rag_search_pipeline_failure_contract(
+    empty_mcp_adapter: McpServiceAdapter,
+) -> None:
+    class FailingRagService:
+        def search(self, *_args: object, **_kwargs: object) -> None:
+            raise RagSearchPipelineError("retrieval_failed", 503)
+
+    empty_mcp_adapter.rag_service_factory = lambda _settings, _db: cast(
+        RagService,
+        FailingRagService(),
+    )
+    server = JsonRpcMcpServer(empty_mcp_adapter)
+
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "rag_search", "arguments": {"query": "alpha"}},
+        },
+    )
+
+    assert response is not None
+    assert response["result"]["isError"] is True
+    assert response["result"]["structuredContent"]["status"] == "failed"
+    assert response["result"]["structuredContent"]["error_code"] == "retrieval_failed"
+    assert "raw context" not in response["result"]["content"][0]["text"].lower()
+    assert "secret_token" not in response["result"]["content"][0]["text"].lower()
 
 
 def test_jsonrpc_lists_reads_resources_and_gets_prompts(

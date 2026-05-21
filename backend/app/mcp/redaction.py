@@ -138,7 +138,7 @@ def safe_metric_details(
         key_text = str(key)
         if SENSITIVE_KEY_RE.search(key_text) or _is_raw_context_key(key_text):
             continue
-        if not _is_safe_metric_detail_key(key_text):
+        if not _is_safe_metric_detail_value(key_text, item):
             allowed["omitted_unsafe_detail"] = True
             continue
         allowed[key_text] = redact_data(item, max_string_chars=max_string_chars)
@@ -151,16 +151,32 @@ def _normalize_key(value: str) -> str:
 
 def _is_raw_context_key(value: str) -> bool:
     normalized = _normalize_key(value)
-    return normalized in RAW_CONTEXT_KEY_NAMES
-
-
-def _is_safe_metric_detail_key(value: str) -> bool:
-    normalized = _normalize_key(value)
-    return (
-        normalized in SAFE_METRIC_DETAIL_NAMES
-        or normalized.endswith("count")
-        or normalized.endswith("score")
-        or normalized.endswith("rate")
-        or normalized.endswith("ratio")
-        or normalized.endswith("ms")
+    if normalized in RAW_CONTEXT_KEY_NAMES:
+        return True
+    dangerous_fragments = (
+        "chunkcontent",
+        "chunktext",
+        "context",
+        "fullprompt",
+        "prompt",
+        "qdrantpayload",
+        "raw",
+        "retrievedcontext",
+        "sourcetext",
     )
+    return any(fragment in normalized for fragment in dangerous_fragments)
+
+
+def _is_safe_metric_detail_value(value: str, item: object) -> bool:
+    normalized = _normalize_key(value)
+    if normalized in SAFE_METRIC_DETAIL_NAMES:
+        return True
+    if isinstance(item, bool | int | float) or item is None:
+        return (
+            normalized.endswith("count")
+            or normalized.endswith("score")
+            or normalized.endswith("rate")
+            or normalized.endswith("ratio")
+            or normalized.endswith("ms")
+        )
+    return False
