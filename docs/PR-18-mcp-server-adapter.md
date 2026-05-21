@@ -1,0 +1,109 @@
+# PR-18 MCP Server Adapter
+
+## Scope
+
+Phase1 MCP support is local-only, stdio-only, and read-mostly. The MCP server is
+separate from the FastAPI app and is started with:
+
+```bash
+python -m backend.app.mcp.server
+```
+
+In Docker/backend working directories, the equivalent module path is:
+
+```bash
+python -m app.mcp.server
+```
+
+Remote MCP transports, HTTP/SSE/Streamable HTTP exposure, OAuth, sampling,
+elicitation, upload, approve, archive, retry, and evaluation-run creation are
+intentionally not implemented.
+
+The MCP entrypoint does not read `.env`; pass required settings through the
+process environment or an MCP client `env` block.
+
+## Tools
+
+- `rag_search`: search active document chunks and return safe metadata plus
+  truncated snippets.
+- `rag_ask`: answer a question using the standalone RAG evaluation path and
+  return answer, citations, confidence, and retrieval summary without raw
+  prompt or full context.
+- `list_documents`: list active documents by default; archived documents require
+  `status=archived`.
+- `get_document_status`: return safe document detail, active/latest versions,
+  version summaries, and chunk counts.
+- `get_job_status`: return safe job status and redacted payload/result summary.
+- `list_evaluation_runs`: return evaluation run summaries.
+- `get_evaluation_result`: return safe metric and case summaries.
+
+Write tools are not registered.
+
+## Resources
+
+- `rag://documents`
+- `rag://documents/{logical_document_id}`
+- `rag://jobs/{job_id}`
+- `rag://evaluations/{evaluation_run_id}`
+
+Resources are JSON text resources and share the same redaction path as tools.
+
+## Prompts
+
+- `rag_answer_with_citations`
+- `rag_search_debug`
+- `rag_evaluation_review`
+
+Prompt templates instruct clients to use the MCP tools without requesting raw
+chunks, full prompts, full context, secrets, or destructive operations.
+
+## Actor and Safety Policy
+
+The MCP actor is `mcp_local` and does not reuse browser cookies, CSRF tokens, or
+admin/viewer sessions. It does not impersonate a DB user. RAG ask may create
+standalone retrieval/citation records as part of answer generation, but no
+external destructive operation is exposed.
+
+MCP output is sanitized before returning:
+
+- token, secret, password, CSRF, session, cookie, credential keys are redacted
+- storage keys and absolute paths are removed or redacted
+- raw prompt, full context, raw chunk text, raw Qdrant payload, and raw job
+  payload are omitted
+- snippets and metric details are truncated/sanitized
+
+## Minimal Client Config Examples
+
+Claude Desktop-style local server config:
+
+```json
+{
+  "mcpServers": {
+    "ragproject": {
+      "command": "python",
+      "args": ["-m", "backend.app.mcp.server"],
+      "cwd": "C:\\Users\\kei01\\RAGProject",
+      "env": {
+        "DATABASE_URL": "postgresql+psycopg://rag:rag@localhost:5432/rag",
+        "MCP_TRANSPORT": "stdio",
+        "MCP_LOCAL_ONLY": "true",
+        "MCP_ALLOW_WRITE_TOOLS": "false"
+      }
+    }
+  }
+}
+```
+
+Local backend-directory variant:
+
+```json
+{
+  "mcpServers": {
+    "ragproject": {
+      "command": "python",
+      "args": ["-m", "app.mcp.server"],
+      "cwd": "C:\\Users\\kei01\\RAGProject\\backend"
+    }
+  }
+}
+```

@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     groundedness_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     groundedness_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
+    mcp_enabled: bool = True
+    mcp_transport: str = "stdio"
+    mcp_local_only: bool = True
+    mcp_actor_mode: str = "mcp_local"
+    mcp_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
+    mcp_tool_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    mcp_allow_write_tools: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -153,6 +160,15 @@ class Settings(BaseSettings):
         self.generation_provider = self.generation_provider.lower()
         if self.generation_provider not in {"fake", "ollama"}:
             raise ValueError("GENERATION_PROVIDER must be fake or ollama")
+        self.mcp_transport = self.mcp_transport.lower()
+        if self.mcp_transport != "stdio":
+            raise ValueError("MCP_TRANSPORT must be stdio in Phase1")
+        if not self.mcp_local_only:
+            raise ValueError("MCP_LOCAL_ONLY must be true in Phase1")
+        if self.mcp_actor_mode != "mcp_local":
+            raise ValueError("MCP_ACTOR_MODE must be mcp_local in Phase1")
+        if self.mcp_allow_write_tools:
+            raise ValueError("MCP_ALLOW_WRITE_TOOLS must be false in Phase1")
         distance = self.qdrant_distance.strip().lower()
         if distance not in {"cosine", "dot", "euclid"}:
             raise ValueError("QDRANT_DISTANCE must be cosine, dot, or euclid")
