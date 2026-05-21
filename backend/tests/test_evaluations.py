@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import csv
-import io
-import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,14 +15,13 @@ from app.db import evaluation_models as _evaluation_models  # noqa: F401
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationDatasetCase
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
-from app.evaluation.runner import EvaluationRunner, EvaluationRunError
 from app.evaluation.rag_service import RagEvaluationResult
+from app.evaluation.runner import EvaluationRunError, EvaluationRunner
 from app.evaluation.seed_data import seed_default_dataset
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
 from app.services.evaluation_service import EvaluationService
-from app.services.rag_service import RagService
 
 
 @pytest.fixture
@@ -337,7 +333,8 @@ def _seed_document(db: Session) -> None:
             chunk_hash="b" * 64,
             content_text=(
                 "Qdrant indexes deterministic fake adapters for citation-aware retrieval traces. "
-                "The ingest pipeline uses job leases, extraction, chunking, embeddings, and indexing. "
+                "The ingest pipeline uses job leases, extraction, chunking, embeddings, "
+                "and indexing. "
                 "Security controls include CSRF, sessions, RBAC, and safe admin APIs."
             ),
             token_count=32,
@@ -351,8 +348,8 @@ def _seed_document(db: Session) -> None:
 
 
 def _create_evaluation_result(db: Session) -> None:
-    from app.db.models import EvaluationRun, EvaluationRunItem
     from app.db.evaluation_models import EvaluationResult
+    from app.db.models import EvaluationRun, EvaluationRunItem
 
     run = EvaluationRun(
         evaluation_run_id=1,
