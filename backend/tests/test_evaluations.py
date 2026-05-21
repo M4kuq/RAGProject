@@ -14,13 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationDatasetCase
-from app.db.models import (
-    DocumentChunk,
-    DocumentVersion,
-    LogicalDocument,
-    Role,
-    User,
-)
+from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
 from app.evaluation.rag_service import RagEvaluationResult
 from app.evaluation.runner import EvaluationRunError, EvaluationRunner
 from app.evaluation.seed_data import seed_default_dataset
@@ -30,11 +24,7 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
     VectorSearchClient,
 )
-from app.schemas.rag import (
-    RagAskCitation,
-    RagAskConfidence,
-    RetrievalScoreSummary,
-)
+from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
 from app.services.evaluation_service import EvaluationService
 
 
