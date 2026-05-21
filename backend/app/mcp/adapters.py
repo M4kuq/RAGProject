@@ -142,7 +142,11 @@ class McpServiceAdapter:
             ),
             "error_code": result.error_code,
         }
-        return _safe_output(data, self.mcp_settings.snippet_max_chars)
+        return _safe_rag_ask_output(
+            data,
+            answer_max_chars=self.settings.generation_max_output_chars,
+            snippet_max_chars=self.mcp_settings.snippet_max_chars,
+        )
 
     def list_documents(self, arguments: dict[str, Any]) -> dict[str, Any]:
         payload = _validate(McpListDocumentsInput, arguments)
@@ -301,3 +305,20 @@ def _safe_evaluation_item(data: dict[str, Any], max_chars: int) -> dict[str, Any
 
 def _safe_output(data: dict[str, Any], max_chars: int) -> dict[str, Any]:
     return redact_data(data, max_string_chars=max_chars)
+
+
+def _safe_rag_ask_output(
+    data: dict[str, Any],
+    *,
+    answer_max_chars: int,
+    snippet_max_chars: int,
+) -> dict[str, Any]:
+    answer = data.get("answer")
+    safe = _safe_output(
+        {key: value for key, value in data.items() if key != "answer"},
+        snippet_max_chars,
+    )
+    safe["answer"] = (
+        truncate_text(answer, max_chars=answer_max_chars) if isinstance(answer, str) else answer
+    )
+    return safe

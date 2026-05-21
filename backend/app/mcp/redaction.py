@@ -55,8 +55,10 @@ SAFE_METRIC_DETAIL_NAMES = {
     "status",
 }
 SECRET_VALUE_RE = re.compile(
-    r"(?i)\b[A-Za-z0-9_-]*(api[_-]?key|secret|password|token|csrf|session)"
-    r"[A-Za-z0-9_-]*\s*[:=]\s*\S+"
+    r"(?i)\b[A-Za-z0-9_-]*"
+    r"(api[_-]?key|authorization|cookie|credential|csrf|password|private[_-]?key|"
+    r"secret|session|token)"
+    r"[A-Za-z0-9_-]*\s*[:=]\s*(?:(?:basic|bearer)\s+[^\s,;]+|[^\s,;]+)"
 )
 API_KEY_RE = re.compile(
     r"\b((sk|pk)-[A-Za-z0-9_\-]{12,}|"
@@ -67,7 +69,7 @@ API_KEY_RE = re.compile(
 BEARER_TOKEN_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE)
 CREDENTIAL_URL_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b")
-WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s\"']+")
+WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\"'\r\n]+")
 UNIX_STORAGE_PATH_RE = re.compile(r"/(?:app/)?(?:storage|data|tmp)/[^\s\"']+")
 
 REDACTED = "[REDACTED]"

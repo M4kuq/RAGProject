@@ -146,6 +146,10 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_actor_mode="admin")
     with pytest.raises(ValueError):
         Settings(_env_file=None, app_env="test", mcp_tool_timeout_seconds=0)
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, app_env="test", mcp_snippet_max_chars=19)
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, app_env="test", mcp_snippet_max_chars=2001)
 
 
 def test_mcp_adapter_injects_storage_without_global_settings(
@@ -214,7 +218,9 @@ def test_rag_search_and_ask_return_safe_truncated_output(
 
     assert ask["status"] == "succeeded"
     assert ask["answer"]
+    assert len(ask["answer"]) > 48
     assert ask["citations"]
+    assert all(len(citation["snippet"]) <= 48 for citation in ask["citations"])
     assert ask["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in json.dumps(ask)
     assert "full_context" not in json.dumps(ask).lower()
@@ -265,7 +271,10 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "storagePath": "C:\\private\\chunk.txt",
             "authorization": "Bearer abcdefghijklmnop",
         },
-        "safe": "Bearer abcdefghijklmnop and https://user:pass@example.test/path",
+        "safe": (
+            "Bearer abcdefghijklmnop and https://user:pass@example.test/path "
+            "C:\\Users\\Kei My Docs\\secret file.txt"
+        ),
     }
 
     redacted = redact_data(payload, max_string_chars=120)
@@ -275,6 +284,8 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
     assert "full context should be omitted" not in dumped
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
     assert "C:\\" not in dumped
+    assert "Kei My Docs" not in dumped
+    assert "secret file.txt" not in dumped
     assert "Bearer abcdefghijklmnop" not in dumped
     assert "user:pass" not in dumped
     assert "omitted_raw_field" in dumped
@@ -306,7 +317,9 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
 def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
     value = (
         "secret_token=abcd1234 access_token: abcdefghijklmnop "
-        "csrf_token=csrf123456789 session_id=session123456789"
+        "csrf_token=csrf123456789 session_id=session123456789 "
+        "Authorization: Basic dXNlcjpwYXNz Cookie: session=abcdef "
+        "credential=plain private_key: -----BEGIN"
     )
 
     redacted = truncate_text(value, max_chars=200)
@@ -315,7 +328,11 @@ def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
     assert "abcdefghijklmnop" not in redacted
     assert "csrf123456789" not in redacted
     assert "session123456789" not in redacted
-    assert redacted.count("[REDACTED]") == 4
+    assert "dXNlcjpwYXNz" not in redacted
+    assert "session=abcdef" not in redacted
+    assert "credential=plain" not in redacted
+    assert "private_key" not in redacted.lower()
+    assert redacted.count("[REDACTED]") == 8
 
 
 def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
@@ -573,6 +590,57 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "method": "ping",
         },
     )
+    invalid_tool_boundaries = [
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_document_status",
+                    "arguments": {"logical_document_id": 0},
+                },
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "get_job_status", "arguments": {"job_id": 0}},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_evaluation_result",
+                    "arguments": {"evaluation_run_id": 0},
+                },
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "tools/call",
+                "params": {"name": "list_documents", "arguments": {"status": "deleted"}},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 14,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_evaluation_runs",
+                    "arguments": {"page_size": 101},
+                },
+            },
+        ),
+    ]
 
     assert bad_arguments is not None
     assert bad_arguments["error"]["code"] == -32602
@@ -597,6 +665,9 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
     assert invalid_id is not None
     assert invalid_id["id"] is None
     assert invalid_id["error"]["code"] == -32600
+    for response in invalid_tool_boundaries:
+        assert response is not None
+        assert response["error"]["code"] == -32602
 
 
 def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
