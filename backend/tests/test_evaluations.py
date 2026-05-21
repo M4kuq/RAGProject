@@ -17,7 +17,7 @@ from app.db.base import Base
 from app.db.evaluation_models import EvaluationDatasetCase
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
 from app.evaluation.rag_service import RagEvaluationResult
-from app.evaluation.runner import EvaluationRunError, EvaluationRunner
+from app.evaluation.runner import EvaluationRunner, EvaluationRunError
 from app.evaluation.seed_data import seed_default_dataset
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
@@ -504,7 +504,7 @@ def _create_fake_retrieval_run(
 ):
     from app.db.models import RetrievalRun
 
-    query_hash = hashlib.sha256(f"{question}:{request_id or ''}".encode("utf-8")).hexdigest()
+    query_hash = hashlib.sha256(f"{question}:{request_id or ''}".encode()).hexdigest()
     run = RetrievalRun(
         query_hash=query_hash,
         status=status,
