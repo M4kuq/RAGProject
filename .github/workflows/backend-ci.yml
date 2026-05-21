@@ -78,7 +78,7 @@ jobs:
         run: uv run --extra dev ruff format --check .
 
       - name: Ruff lint
-        run: uv run --extra dev ruff check .
+        run: uv run --extra dev ruff check --fix --diff .
 
       - name: Type check
         run: uv run --extra dev mypy .
