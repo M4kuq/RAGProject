@@ -66,8 +66,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         McpTool(
             name="list_documents",
             description=(
-                "List document metadata. Archived documents are returned only when "
-                "requested."
+                "List document metadata. Archived documents are returned only when requested."
             ),
             input_schema=_object_schema(
                 {
@@ -105,8 +104,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         McpTool(
             name="get_job_status",
             description=(
-                "Get safe job status and redacted payload/result summaries. "
-                "Retry is not supported."
+                "Get safe job status and redacted payload/result summaries. Retry is not supported."
             ),
             input_schema=_object_schema(
                 {"job_id": {"type": "integer", "minimum": 1}},
@@ -143,8 +141,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
         McpTool(
             name="get_evaluation_result",
             description=(
-                "Get safe evaluation metrics and case summaries without prompts or "
-                "full context."
+                "Get safe evaluation metrics and case summaries without prompts or full context."
             ),
             input_schema=_object_schema(
                 {"evaluation_run_id": {"type": "integer", "minimum": 1}},

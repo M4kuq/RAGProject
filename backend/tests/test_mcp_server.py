@@ -221,13 +221,14 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
     )
     assert response is not None
     assert response["result"]["structuredContent"]["status"] == "succeeded"
-    assert (
-        "RAW_CHUNK_SHOULD_NOT_APPEAR" not in response["result"]["content"][0]["text"]
-    )
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in response["result"]["content"][0]["text"]
     assert "secret_token" not in response["result"]["content"][0]["text"].lower()
-    assert server.handle_message(
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-    ) is None
+    assert (
+        server.handle_message(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        is None
+    )
 
 
 def test_jsonrpc_lists_reads_resources_and_gets_prompts(
