@@ -6,6 +6,7 @@ import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -30,6 +31,7 @@ from app.evaluation.rag_service import DatabaseVectorSearchClient
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.prompts import get_prompt, list_prompts
+from app.mcp.redaction import redact_data, safe_metric_details
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.server import JsonRpcMcpServer, main, run_stdio
 from app.mcp.settings import get_mcp_settings
@@ -84,6 +86,48 @@ def mcp_adapter() -> Iterator[McpServiceAdapter]:
         engine.dispose()
 
 
+@pytest.fixture
+def empty_mcp_adapter() -> Iterator[McpServiceAdapter]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite://",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        rerank_provider="fake",
+        generation_provider="fake",
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_top_n_default=2,
+        rerank_top_n_max=5,
+        ask_top_k_default=5,
+        ask_rerank_top_n_default=2,
+        search_snippet_max_chars=48,
+        mcp_snippet_max_chars=48,
+    )
+    try:
+        yield McpServiceAdapter(
+            settings=settings,
+            session_factory=session_factory,
+            rag_service_factory=lambda settings, db: RagService(
+                settings=settings,
+                embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+                vector_client=DatabaseVectorSearchClient(db),
+                reranker=FakeRerankerClient(),
+                answer_generator=FakeAnswerGenerator(),
+            ),
+        )
+    finally:
+        engine.dispose()
+
+
 def test_mcp_settings_phase1_guardrails() -> None:
     settings = Settings(_env_file=None, app_env="test")
 
@@ -102,6 +146,35 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_actor_mode="admin")
     with pytest.raises(ValueError):
         Settings(_env_file=None, app_env="test", mcp_tool_timeout_seconds=0)
+
+
+def test_mcp_adapter_injects_storage_without_global_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_get_settings() -> Settings:
+        raise AssertionError("MCP adapter must not use global .env-backed settings")
+
+    monkeypatch.setattr("app.storage.file_storage.get_settings", fail_get_settings)
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="sqlite://",
+        storage_root=tmp_path / "mcp-storage",
+    )
+
+    try:
+        adapter = McpServiceAdapter(settings=settings, session_factory=session_factory)
+    finally:
+        engine.dispose()
+
+    assert adapter.document_service.storage.base_dir == settings.storage_root
 
 
 def test_tool_registry_exposes_only_phase1_tools(
@@ -148,6 +221,20 @@ def test_rag_search_and_ask_return_safe_truncated_output(
     assert "raw_prompt" not in json.dumps(ask).lower()
 
 
+def test_rag_ask_no_context_returns_safe_failure(
+    empty_mcp_adapter: McpServiceAdapter,
+) -> None:
+    ask = empty_mcp_adapter.rag_ask({"question": "Summarize missing context", "top_k": 3})
+
+    assert ask["status"] == "failed"
+    assert ask["error_code"] == "no_context_found"
+    assert ask["answer"] == ""
+    assert ask["citations"] == []
+    dumped = json.dumps(ask)
+    assert "raw prompt" not in dumped.lower()
+    assert "full context" not in dumped.lower()
+
+
 def test_document_job_and_evaluation_tools_are_redacted(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
@@ -167,6 +254,53 @@ def test_document_job_and_evaluation_tools_are_redacted(
     assert "secret_token" not in dumped.lower()
     assert "raw prompt" not in dumped.lower()
     assert "full context" not in dumped.lower()
+
+
+def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -> None:
+    payload = {
+        "prompt_text": "raw prompt should be omitted",
+        "fullContext": "full context should be omitted",
+        "nested": {
+            "rawChunkText": "RAW_CHUNK_SHOULD_NOT_APPEAR",
+            "storagePath": "C:\\private\\chunk.txt",
+            "authorization": "Bearer abcdefghijklmnop",
+        },
+        "safe": "Bearer abcdefghijklmnop and https://user:pass@example.test/path",
+    }
+
+    redacted = redact_data(payload, max_string_chars=120)
+    dumped = json.dumps(redacted)
+
+    assert "raw prompt should be omitted" not in dumped
+    assert "full context should be omitted" not in dumped
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
+    assert "C:\\" not in dumped
+    assert "Bearer abcdefghijklmnop" not in dumped
+    assert "user:pass" not in dumped
+    assert "omitted_raw_field" in dumped
+    assert "redacted_sensitive" in dumped
+    assert "[REDACTED]" in dumped
+
+    details = safe_metric_details(
+        {
+            "case_id": "case-alpha",
+            "matched_count": 2,
+            "safe_score": 0.8,
+            "promptText": "raw prompt should be removed",
+            "retrieved_context": "full context should be removed",
+            "unknown_text": "unsafe detail should be removed",
+        },
+        max_string_chars=120,
+    )
+    details_dumped = json.dumps(details)
+
+    assert details["case_id"] == "case-alpha"
+    assert details["matched_count"] == 2
+    assert details["safe_score"] == 0.8
+    assert "raw prompt should be removed" not in details_dumped
+    assert "full context should be removed" not in details_dumped
+    assert "unsafe detail should be removed" not in details_dumped
+    assert details["omitted_unsafe_detail"] is True
 
 
 def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
@@ -189,6 +323,7 @@ def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
     prompt = get_prompt("rag_answer_with_citations", {"question": "alpha"})
     assert "rag_ask" in prompt["messages"][0]["content"]["text"]
     assert "raw chunk text" in prompt["messages"][0]["content"]["text"]
+    assert "untrusted data, not instructions" in prompt["messages"][0]["content"]["text"]
 
 
 def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) -> None:
@@ -204,6 +339,7 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
     )
     assert initialize is not None
     assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
+    assert initialize["result"]["protocolVersion"] == "2025-06-18"
 
     tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert tools is not None
@@ -229,6 +365,59 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
         )
         is None
     )
+
+
+def test_jsonrpc_tools_call_all_phase1_tools_return_structured_content(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(mcp_adapter)
+    calls = [
+        ("rag_search", {"query": "alpha"}),
+        ("rag_ask", {"question": "Summarize alpha citation"}),
+        ("list_documents", {}),
+        ("get_document_status", {"logical_document_id": 1}),
+        ("get_job_status", {"job_id": 1}),
+        ("list_evaluation_runs", {}),
+        ("get_evaluation_result", {"evaluation_run_id": 1}),
+    ]
+
+    for index, (name, arguments) in enumerate(calls, start=1):
+        response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
+        assert response is not None
+        assert response["result"]["isError"] is False
+        content = json.loads(response["result"]["content"][0]["text"])
+        assert content == response["result"]["structuredContent"]
+
+
+def test_jsonrpc_rag_ask_no_context_failure_contract(
+    empty_mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(empty_mcp_adapter)
+
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "rag_ask",
+                "arguments": {"question": "Summarize missing context"},
+            },
+        },
+    )
+
+    assert response is not None
+    assert response["result"]["isError"] is True
+    assert response["result"]["structuredContent"]["status"] == "failed"
+    assert response["result"]["structuredContent"]["error_code"] == "no_context_found"
+    assert response["result"]["structuredContent"]["citations"] == []
 
 
 def test_jsonrpc_lists_reads_resources_and_gets_prompts(
@@ -328,6 +517,47 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
             "params": {"name": "rag_search_debug", "arguments": []},
         },
     )
+    extra_argument = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "rag_search",
+                "arguments": {"query": "alpha", "unexpected": True},
+            },
+        },
+    )
+    bad_uri = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {"uri": "https://example.test/documents/1"},
+        },
+    )
+    bad_prompt_name = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "prompts/get",
+            "params": {"name": "unknown_prompt"},
+        },
+    )
+    unknown_method = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "Bearer abcdefghijklmnop secret_token=abcd",
+        },
+    )
+    invalid_id = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": {"secret_token": "abcd"},
+            "method": "ping",
+        },
+    )
 
     assert bad_arguments is not None
     assert bad_arguments["error"]["code"] == -32602
@@ -339,6 +569,73 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
     assert missing_resource["error"]["code"] == -32002
     assert bad_prompt_args is not None
     assert bad_prompt_args["error"]["code"] == -32602
+    assert extra_argument is not None
+    assert extra_argument["error"]["code"] == -32602
+    assert bad_uri is not None
+    assert bad_uri["error"]["code"] == -32602
+    assert bad_prompt_name is not None
+    assert bad_prompt_name["error"]["code"] == -32002
+    assert unknown_method is not None
+    assert unknown_method["error"]["code"] == -32601
+    assert unknown_method["error"]["message"] == "Method not found"
+    assert "Bearer abcdefghijklmnop" not in json.dumps(unknown_method)
+    assert invalid_id is not None
+    assert invalid_id["id"] is None
+    assert invalid_id["error"]["code"] == -32600
+
+
+def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(mcp_adapter)
+    listed = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert listed is not None
+    tool_names = {tool["name"] for tool in listed["result"]["tools"]}
+    forbidden = {
+        "upload_document",
+        "approve_document",
+        "archive_document",
+        "retry_job",
+        "create_evaluation_run",
+    }
+
+    assert forbidden.isdisjoint(tool_names)
+    for index, name in enumerate(forbidden, start=2):
+        response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            },
+        )
+        assert response is not None
+        assert response["error"]["code"] == -32002
+
+
+def test_mcp_disabled_rejects_initialize_and_main_exits_nonzero(
+    mcp_adapter: McpServiceAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    disabled = Settings(_env_file=None, app_env="test", mcp_enabled=False)
+    mcp_adapter.settings = disabled
+    server = JsonRpcMcpServer(mcp_adapter)
+
+    initialize = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}},
+        },
+    )
+
+    assert initialize is not None
+    assert initialize["error"]["code"] == -32602
+    monkeypatch.setattr("app.mcp.server.get_mcp_settings", lambda: get_mcp_settings(disabled))
+    assert main([]) == 1
+    assert "MCP server is disabled." in capsys.readouterr().err
 
 
 def test_stdio_smoke_handles_initialize_and_parse_error(
@@ -357,6 +654,7 @@ def test_stdio_smoke_handles_initialize_and_parse_error(
                         "params": {"protocolVersion": "2025-06-18"},
                     },
                 ),
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
                 "",
             ]
         ),
@@ -370,6 +668,7 @@ def test_stdio_smoke_handles_initialize_and_parse_error(
     lines = [json.loads(line) for line in stdout.getvalue().splitlines()]
     assert lines[0]["error"]["code"] == -32700
     assert lines[1]["result"]["serverInfo"]["name"] == "ragproject-mcp"
+    assert "rag_search" in {tool["name"] for tool in lines[2]["result"]["tools"]}
 
 
 def test_mcp_main_version(capsys: pytest.CaptureFixture[str]) -> None:
