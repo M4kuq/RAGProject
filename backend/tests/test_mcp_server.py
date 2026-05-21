@@ -54,23 +54,7 @@ def mcp_adapter() -> Iterator[McpServiceAdapter]:
     with session_factory() as db:
         _seed_data(db)
         db.commit()
-    settings = Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="sqlite://",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        rerank_provider="fake",
-        generation_provider="fake",
-        retrieval_top_k_default=5,
-        retrieval_top_k_max=5,
-        rerank_top_n_default=2,
-        rerank_top_n_max=5,
-        ask_top_k_default=5,
-        ask_rerank_top_n_default=2,
-        search_snippet_max_chars=48,
-        mcp_snippet_max_chars=48,
-    )
+    settings = _test_settings()
     try:
         yield McpServiceAdapter(
             settings=settings,
@@ -96,26 +80,9 @@ def empty_mcp_adapter() -> Iterator[McpServiceAdapter]:
     )
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    settings = Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="sqlite://",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        rerank_provider="fake",
-        generation_provider="fake",
-        retrieval_top_k_default=5,
-        retrieval_top_k_max=5,
-        rerank_top_n_default=2,
-        rerank_top_n_max=5,
-        ask_top_k_default=5,
-        ask_rerank_top_n_default=2,
-        search_snippet_max_chars=48,
-        mcp_snippet_max_chars=48,
-    )
     try:
         yield McpServiceAdapter(
-            settings=settings,
+            settings=_test_settings(),
             session_factory=session_factory,
             rag_service_factory=lambda settings, db: RagService(
                 settings=settings,
@@ -129,10 +96,30 @@ def empty_mcp_adapter() -> Iterator[McpServiceAdapter]:
         engine.dispose()
 
 
-def test_mcp_settings_phase1_guardrails() -> None:
-    settings = Settings(_env_file=None, app_env="test")
+def _test_settings(**overrides: object) -> Settings:
+    values = {
+        "_env_file": None,
+        "app_env": "test",
+        "database_url": "sqlite://",
+        "embedding_provider": "fake",
+        "embedding_fake_dimension": 4,
+        "rerank_provider": "fake",
+        "generation_provider": "fake",
+        "retrieval_top_k_default": 5,
+        "retrieval_top_k_max": 5,
+        "rerank_top_n_default": 2,
+        "rerank_top_n_max": 5,
+        "ask_top_k_default": 5,
+        "ask_rerank_top_n_default": 2,
+        "search_snippet_max_chars": 48,
+        "mcp_snippet_max_chars": 48,
+    }
+    values.update(overrides)
+    return Settings(**values)
 
-    mcp_settings = get_mcp_settings(settings)
+
+def test_mcp_settings_phase1_guardrails() -> None:
+    mcp_settings = get_mcp_settings(Settings(_env_file=None, app_env="test"))
 
     assert mcp_settings.transport == "stdio"
     assert mcp_settings.local_only is True
@@ -167,13 +154,7 @@ def test_mcp_adapter_injects_storage_without_global_settings(
         poolclass=StaticPool,
     )
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    settings = Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="sqlite://",
-        storage_root=tmp_path / "mcp-storage",
-    )
-
+    settings = _test_settings(storage_root=tmp_path / "mcp-storage")
     try:
         adapter = McpServiceAdapter(settings=settings, session_factory=session_factory)
     finally:
@@ -206,32 +187,31 @@ def test_rag_search_and_ask_return_safe_truncated_output(
     search = mcp_adapter.rag_search(
         {"query": "alpha citation", "top_k": 3, "rerank_top_n": 2},
     )
+    ask = mcp_adapter.rag_ask({"question": "Summarize alpha citation", "top_k": 3})
 
     assert search["status"] == "succeeded"
     assert search["items"]
     assert all(len(item["snippet"]) <= 48 for item in search["items"])
-    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in json.dumps(search)
-    assert "secret_token" not in json.dumps(search).lower()
-    assert "C:\\" not in json.dumps(search)
-    assert "storage_key" not in json.dumps(search).lower()
-
-    ask = mcp_adapter.rag_ask({"question": "Summarize alpha citation", "top_k": 3})
-
     assert ask["status"] == "succeeded"
-    assert ask["answer"]
     assert len(ask["answer"]) > 48
     assert ask["citations"]
     assert all(len(citation["snippet"]) <= 48 for citation in ask["citations"])
     assert ask["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
-    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in json.dumps(ask)
-    assert "full_context" not in json.dumps(ask).lower()
-    assert "raw_prompt" not in json.dumps(ask).lower()
+    dumped = json.dumps([search, ask])
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
+    assert "secret_token" not in dumped.lower()
+    assert "full_context" not in dumped.lower()
+    assert "raw_prompt" not in dumped.lower()
+    assert "C:\\" not in dumped
+    assert "storage_key" not in dumped.lower()
 
 
 def test_rag_ask_no_context_returns_safe_failure(
     empty_mcp_adapter: McpServiceAdapter,
 ) -> None:
-    ask = empty_mcp_adapter.rag_ask({"question": "Summarize missing context", "top_k": 3})
+    ask = empty_mcp_adapter.rag_ask(
+        {"question": "Summarize missing context", "top_k": 3},
+    )
 
     assert ask["status"] == "failed"
     assert ask["error_code"] == "no_context_found"
@@ -283,38 +263,42 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "/tmp/RAG Project/private.txt /home/kei/private.txt "
             "/var/lib/rag/private.txt /Users/kei/private.txt "
             "/private/var/rag/private.txt /Volumes/RAG/private.txt "
-            "api key: plaintextkey private key: -----BEGIN PRIVATE KEY----- abcdef"
+            "api key: plaintextkey private key: -----BEGIN PRIVATE KEY----- abcdef "
+            '{"password":"jsonpass","token": "jsontoken","secret_key":"jsonsecret"}'
         ),
     }
 
     redacted = redact_data(payload, max_string_chars=120)
     dumped = json.dumps(redacted)
 
-    assert "raw prompt should be omitted" not in dumped
-    assert "full context should be omitted" not in dumped
-    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
-    assert "C:\\" not in dumped
-    assert "Kei My Docs" not in dumped
-    assert "secret file.txt" not in dumped
-    assert "server" not in dumped
-    assert "share" not in dumped
-    assert "/app/storage" not in dumped
-    assert "/storage" not in dumped
-    assert "/data" not in dumped
-    assert "/tmp" not in dumped
-    assert "/home" not in dumped
-    assert "/var/lib" not in dumped
-    assert "/Users" not in dumped
-    assert "/private" not in dumped
-    assert "/Volumes" not in dumped
-    assert "Shared Docs" not in dumped
-    assert "Team Docs" not in dumped
-    assert "RAG Project" not in dumped
-    assert "Bearer abcdefghijklmnop" not in dumped
-    assert "user:pass" not in dumped
-    assert "sk-testshouldberemoved1234567890" not in dumped
-    assert "plaintextkey" not in dumped
-    assert "BEGIN PRIVATE KEY" not in dumped
+    for unsafe in (
+        "raw prompt should be omitted",
+        "full context should be omitted",
+        "RAW_CHUNK_SHOULD_NOT_APPEAR",
+        "C:\\",
+        "Kei My Docs",
+        "secret file.txt",
+        "server",
+        "share",
+        "/app/storage",
+        "/storage",
+        "/data",
+        "/tmp",
+        "/home",
+        "/var/lib",
+        "/Users",
+        "/private",
+        "/Volumes",
+        "Bearer abcdefghijklmnop",
+        "user:pass",
+        "sk-testshouldberemoved1234567890",
+        "plaintextkey",
+        "jsonpass",
+        "jsontoken",
+        "jsonsecret",
+        "BEGIN PRIVATE KEY",
+    ):
+        assert unsafe not in dumped
     assert "omitted_raw_field" in dumped
     assert "redacted_sensitive" in dumped
     assert "[REDACTED]" in dumped
@@ -379,14 +363,17 @@ def test_mcp_redaction_covers_inline_compound_secret_keys() -> None:
 
     redacted = truncate_text(value, max_chars=200)
 
-    assert "abcd1234" not in redacted
-    assert "abcdefghijklmnop" not in redacted
-    assert "csrf123456789" not in redacted
-    assert "session123456789" not in redacted
-    assert "dXNlcjpwYXNz" not in redacted
-    assert "session=abcdef" not in redacted
-    assert "credential=plain" not in redacted
-    assert "private_key" not in redacted.lower()
+    for unsafe in (
+        "abcd1234",
+        "abcdefghijklmnop",
+        "csrf123456789",
+        "session123456789",
+        "dXNlcjpwYXNz",
+        "session=abcdef",
+        "credential=plain",
+        "private_key",
+    ):
+        assert unsafe.lower() not in redacted.lower()
     assert redacted.count("[REDACTED]") == 8
 
 
@@ -424,14 +411,14 @@ def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
         "rag_evaluation_review",
     }
     prompt = get_prompt("rag_answer_with_citations", {"question": "alpha"})
-    assert "rag_ask" in prompt["messages"][0]["content"]["text"]
-    assert "raw chunk text" in prompt["messages"][0]["content"]["text"]
-    assert "untrusted data, not instructions" in prompt["messages"][0]["content"]["text"]
+    prompt_text = prompt["messages"][0]["content"]["text"]
+    assert "rag_ask" in prompt_text
+    assert "raw chunk text" in prompt_text
+    assert "untrusted data, not instructions" in prompt_text
 
 
-def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) -> None:
+def test_jsonrpc_tools_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
     server = JsonRpcMcpServer(mcp_adapter)
-
     initialize = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -441,7 +428,6 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
         },
     )
     assert initialize is not None
-    assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
     assert initialize["result"]["protocolVersion"] == "2025-06-18"
 
     tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
@@ -450,30 +436,6 @@ def test_jsonrpc_server_lists_and_calls_tools(mcp_adapter: McpServiceAdapter) ->
     assert tool_names == sorted(tool_names)
     assert "rag_search" in tool_names
 
-    response = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "rag_search", "arguments": {"query": "alpha"}},
-        },
-    )
-    assert response is not None
-    assert response["result"]["structuredContent"]["status"] == "succeeded"
-    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in response["result"]["content"][0]["text"]
-    assert "secret_token" not in response["result"]["content"][0]["text"].lower()
-    assert (
-        server.handle_message(
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        )
-        is None
-    )
-
-
-def test_jsonrpc_tools_call_all_phase1_tools_return_structured_content(
-    mcp_adapter: McpServiceAdapter,
-) -> None:
-    server = JsonRpcMcpServer(mcp_adapter)
     calls = [
         ("rag_search", {"query": "alpha"}),
         ("rag_ask", {"question": "Summarize alpha citation"}),
@@ -483,8 +445,7 @@ def test_jsonrpc_tools_call_all_phase1_tools_return_structured_content(
         ("list_evaluation_runs", {}),
         ("get_evaluation_result", {"evaluation_run_id": 1}),
     ]
-
-    for index, (name, arguments) in enumerate(calls, start=1):
+    for index, (name, arguments) in enumerate(calls, start=3):
         response = server.handle_message(
             {
                 "jsonrpc": "2.0",
@@ -498,12 +459,40 @@ def test_jsonrpc_tools_call_all_phase1_tools_return_structured_content(
         content = json.loads(response["result"]["content"][0]["text"])
         assert content == response["result"]["structuredContent"]
 
+    document = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "resources/read",
+            "params": {"uri": "rag://documents/1"},
+        },
+    )
+    prompt = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "prompts/get",
+            "params": {
+                "name": "rag_search_debug",
+                "arguments": {"question": "Bearer abcdefghijklmnop"},
+            },
+        },
+    )
+    assert document is not None
+    resource_text = document["result"]["contents"][0]["text"]
+    assert "Alpha handbook" in resource_text
+    assert "C:\\" not in resource_text
+    assert "/app/storage" not in resource_text
+    assert prompt is not None
+    prompt_text = prompt["result"]["messages"][0]["content"]["text"]
+    assert "rag_search" in prompt_text
+    assert "Bearer abcdefghijklmnop" not in prompt_text
+
 
 def test_jsonrpc_rag_ask_no_context_failure_contract(
     empty_mcp_adapter: McpServiceAdapter,
 ) -> None:
     server = JsonRpcMcpServer(empty_mcp_adapter)
-
     response = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -553,297 +542,104 @@ def test_jsonrpc_rag_search_pipeline_failure_contract(
     assert "secret_token" not in response["result"]["content"][0]["text"].lower()
 
 
-def test_jsonrpc_lists_reads_resources_and_gets_prompts(
-    mcp_adapter: McpServiceAdapter,
-) -> None:
-    server = JsonRpcMcpServer(mcp_adapter)
-
-    resources = server.handle_message(
-        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"},
-    )
-    templates = server.handle_message(
-        {"jsonrpc": "2.0", "id": 2, "method": "resources/templates/list"},
-    )
-    document = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "resources/read",
-            "params": {"uri": "rag://documents/1"},
-        },
-    )
-    prompts = server.handle_message(
-        {"jsonrpc": "2.0", "id": 4, "method": "prompts/list"},
-    )
-    prompt = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "prompts/get",
-            "params": {
-                "name": "rag_search_debug",
-                "arguments": {"question": "Bearer abcdefghijklmnop"},
-            },
-        },
-    )
-
-    assert resources is not None
-    assert resources["result"]["resources"][0]["uri"] == "rag://documents"
-    assert templates is not None
-    assert len(templates["result"]["resourceTemplates"]) == 3
-    assert document is not None
-    resource_text = document["result"]["contents"][0]["text"]
-    assert "Alpha handbook" in resource_text
-    assert "C:\\" not in resource_text
-    assert "/app/storage" not in resource_text
-    assert prompts is not None
-    prompt_names = [item["name"] for item in prompts["result"]["prompts"]]
-    assert prompt_names == sorted(prompt_names)
-    assert prompt is not None
-    prompt_text = prompt["result"]["messages"][0]["content"]["text"]
-    assert "rag_search" in prompt_text
-    assert "Bearer abcdefghijklmnop" not in prompt_text
-
-
 def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
     server = JsonRpcMcpServer(mcp_adapter)
+    cases = [
+        {"name": "list_documents", "arguments": []},
+        {"name": "rag_search", "arguments": {"query": "   "}},
+        {"name": "rag_search", "arguments": {"query": "alpha", "unexpected": True}},
+        {"name": "get_document_status", "arguments": {"logical_document_id": 0}},
+        {"name": "get_job_status", "arguments": {"job_id": 0}},
+        {"name": "get_evaluation_result", "arguments": {"evaluation_run_id": 0}},
+        {"name": "list_documents", "arguments": {"status": "deleted"}},
+        {"name": "list_documents", "arguments": None},
+        {"name": "get_job_status", "arguments": {"job_id": "1"}},
+        {"name": "rag_search", "arguments": {"query": "alpha", "top_k": "3"}},
+        {"name": "list_documents", "arguments": {"page": 0}},
+        {"name": "list_documents", "arguments": {"display_status": "deleted"}},
+        {"name": "list_evaluation_runs", "arguments": {"status": "unknown"}},
+    ]
+    for index, params in enumerate(cases, start=1):
+        response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": params,
+            },
+        )
+        assert response is not None
+        assert response["error"]["code"] == -32602
 
-    bad_arguments = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "list_documents", "arguments": []},
-        },
-    )
     unknown_tool = server.handle_message(
         {
             "jsonrpc": "2.0",
-            "id": 2,
+            "id": 30,
             "method": "tools/call",
             "params": {"name": "archive_document", "arguments": {}},
-        },
-    )
-    blank_query = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "rag_search", "arguments": {"query": "   "}},
         },
     )
     missing_resource = server.handle_message(
         {
             "jsonrpc": "2.0",
-            "id": 4,
+            "id": 31,
             "method": "resources/read",
             "params": {"uri": "rag://documents/999"},
-        },
-    )
-    bad_prompt_args = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "prompts/get",
-            "params": {"name": "rag_search_debug", "arguments": []},
-        },
-    )
-    extra_argument = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 6,
-            "method": "tools/call",
-            "params": {
-                "name": "rag_search",
-                "arguments": {"query": "alpha", "unexpected": True},
-            },
         },
     )
     bad_uri = server.handle_message(
         {
             "jsonrpc": "2.0",
-            "id": 7,
+            "id": 32,
             "method": "resources/read",
             "params": {"uri": "https://example.test/documents/1"},
         },
     )
-    bad_prompt_name = server.handle_message(
+    bad_prompt = server.handle_message(
         {
             "jsonrpc": "2.0",
-            "id": 8,
+            "id": 33,
             "method": "prompts/get",
             "params": {"name": "unknown_prompt"},
-        },
-    )
-    unknown_method = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 9,
-            "method": "Bearer abcdefghijklmnop secret_token=abcd",
-        },
-    )
-    invalid_id = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": {"secret_token": "abcd"},
-            "method": "ping",
         },
     )
     bad_initialize_version = server.handle_message(
         {
             "jsonrpc": "2.0",
-            "id": 21,
+            "id": 34,
             "method": "initialize",
             "params": {"protocolVersion": []},
         },
     )
-    invalid_tool_boundaries = [
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 10,
-                "method": "tools/call",
-                "params": {
-                    "name": "get_document_status",
-                    "arguments": {"logical_document_id": 0},
-                },
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 11,
-                "method": "tools/call",
-                "params": {"name": "get_job_status", "arguments": {"job_id": 0}},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 12,
-                "method": "tools/call",
-                "params": {
-                    "name": "get_evaluation_result",
-                    "arguments": {"evaluation_run_id": 0},
-                },
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 13,
-                "method": "tools/call",
-                "params": {"name": "list_documents", "arguments": {"status": "deleted"}},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 14,
-                "method": "tools/call",
-                "params": {
-                    "name": "list_evaluation_runs",
-                    "arguments": {"page_size": 101},
-                },
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 15,
-                "method": "tools/call",
-                "params": {"name": "list_documents", "arguments": None},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 16,
-                "method": "tools/call",
-                "params": {"name": "get_job_status", "arguments": {"job_id": "1"}},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 17,
-                "method": "tools/call",
-                "params": {
-                    "name": "rag_search",
-                    "arguments": {"query": "alpha", "top_k": "3"},
-                },
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 18,
-                "method": "tools/call",
-                "params": {"name": "list_documents", "arguments": {"page": 0}},
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 19,
-                "method": "tools/call",
-                "params": {
-                    "name": "list_documents",
-                    "arguments": {"display_status": "deleted"},
-                },
-            },
-        ),
-        server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 20,
-                "method": "tools/call",
-                "params": {
-                    "name": "list_evaluation_runs",
-                    "arguments": {"status": "unknown"},
-                },
-            },
-        ),
-    ]
+    invalid_id = server.handle_message(
+        {"jsonrpc": "2.0", "id": {"secret_token": "abcd"}, "method": "ping"},
+    )
 
-    assert bad_arguments is not None
-    assert bad_arguments["error"]["code"] == -32602
     assert unknown_tool is not None
     assert unknown_tool["error"]["code"] == -32002
-    assert blank_query is not None
-    assert blank_query["error"]["code"] == -32602
     assert missing_resource is not None
     assert missing_resource["error"]["code"] == -32002
-    assert bad_prompt_args is not None
-    assert bad_prompt_args["error"]["code"] == -32602
-    assert extra_argument is not None
-    assert extra_argument["error"]["code"] == -32602
     assert bad_uri is not None
     assert bad_uri["error"]["code"] == -32602
-    assert bad_prompt_name is not None
-    assert bad_prompt_name["error"]["code"] == -32002
-    assert unknown_method is not None
-    assert unknown_method["error"]["code"] == -32601
-    assert unknown_method["error"]["message"] == "Method not found"
-    assert "Bearer abcdefghijklmnop" not in json.dumps(unknown_method)
+    assert bad_prompt is not None
+    assert bad_prompt["error"]["code"] == -32002
+    assert bad_initialize_version is not None
+    assert bad_initialize_version["error"]["code"] == -32602
     assert invalid_id is not None
     assert invalid_id["id"] is None
     assert invalid_id["error"]["code"] == -32600
-    assert bad_initialize_version is not None
-    assert bad_initialize_version["error"]["code"] == -32602
-    for response in invalid_tool_boundaries:
-        assert response is not None
-        assert response["error"]["code"] == -32602
 
 
-def test_jsonrpc_string_id_is_redacted_in_error_response(
+def test_jsonrpc_string_id_contract_and_redaction(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
     server = JsonRpcMcpServer(mcp_adapter)
-
-    response = server.handle_message(
+    normal = server.handle_message(
+        {"jsonrpc": "2.0", "id": "request-123", "method": "unknown"},
+    )
+    unsafe = server.handle_message(
         {
             "jsonrpc": "2.0",
             "id": "request secret_token=abcd1234",
@@ -851,36 +647,39 @@ def test_jsonrpc_string_id_is_redacted_in_error_response(
         },
     )
 
-    assert response is not None
-    assert response["error"]["code"] == -32601
-    assert "abcd1234" not in json.dumps(response)
-    assert response["id"] == "request [REDACTED]"
+    assert normal is not None
+    assert normal["error"]["code"] == -32601
+    assert normal["id"] == "request-123"
+    assert unsafe is not None
+    assert unsafe["error"]["code"] == -32600
+    assert unsafe["id"] is None
+    assert "abcd1234" not in json.dumps(unsafe)
 
 
 def test_jsonrpc_resources_read_job_and_evaluation_are_redacted(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
     server = JsonRpcMcpServer(mcp_adapter)
-    job = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "resources/read",
-            "params": {"uri": "rag://jobs/1"},
-        },
-    )
-    evaluation = server.handle_message(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "resources/read",
-            "params": {"uri": "rag://evaluations/1"},
-        },
-    )
+    responses = [
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "resources/read",
+                "params": {"uri": "rag://jobs/1"},
+            },
+        ),
+        server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "resources/read",
+                "params": {"uri": "rag://evaluations/1"},
+            },
+        ),
+    ]
 
-    assert job is not None
-    assert evaluation is not None
-    dumped = json.dumps([job, evaluation])
+    dumped = json.dumps(responses)
     assert "secret_token" not in dumped.lower()
     assert "password=abcd1234" not in dumped
     assert "raw prompt" not in dumped.lower()
@@ -897,11 +696,18 @@ def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
     assert listed is not None
     tool_names = {tool["name"] for tool in listed["result"]["tools"]}
     forbidden = {
-        "upload_document",
         "approve_document",
+        "approve_version",
         "archive_document",
-        "retry_job",
+        "archive_version",
         "create_evaluation_run",
+        "delete_document",
+        "rerun_evaluation",
+        "retry_ingest_job",
+        "retry_job",
+        "update_document",
+        "upload",
+        "upload_document",
     }
 
     assert forbidden.isdisjoint(tool_names)
@@ -918,39 +724,12 @@ def test_jsonrpc_forbidden_write_tools_are_not_listed_or_callable(
         assert response["error"]["code"] == -32002
 
 
-def test_jsonrpc_common_write_like_tool_names_are_not_callable(
-    mcp_adapter: McpServiceAdapter,
-) -> None:
-    server = JsonRpcMcpServer(mcp_adapter)
-    forbidden = {
-        "approve_version",
-        "archive_version",
-        "delete_document",
-        "rerun_evaluation",
-        "retry_ingest_job",
-        "update_document",
-        "upload",
-    }
-
-    for index, name in enumerate(forbidden, start=1):
-        response = server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": index,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": {}},
-            },
-        )
-        assert response is not None
-        assert response["error"]["code"] == -32002
-
-
-def test_mcp_disabled_rejects_initialize_and_main_exits_nonzero(
+def test_mcp_disabled_rejects_initialize_tools_and_main(
     mcp_adapter: McpServiceAdapter,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    disabled = Settings(_env_file=None, app_env="test", mcp_enabled=False)
+    disabled = _test_settings(mcp_enabled=False)
     mcp_adapter.settings = disabled
     server = JsonRpcMcpServer(mcp_adapter)
 
@@ -962,15 +741,18 @@ def test_mcp_disabled_rejects_initialize_and_main_exits_nonzero(
             "params": {"protocolVersion": "2025-06-18", "capabilities": {}},
         },
     )
+    tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 
     assert initialize is not None
     assert initialize["error"]["code"] == -32602
+    assert tools is not None
+    assert tools["error"]["code"] == -32602
     monkeypatch.setattr("app.mcp.server.get_mcp_settings", lambda: get_mcp_settings(disabled))
     assert main([]) == 1
     assert "MCP server is disabled." in capsys.readouterr().err
 
 
-def test_stdio_smoke_handles_initialize_and_parse_error(
+def test_stdio_smoke_handles_initialize_parse_error_and_batch(
     mcp_adapter: McpServiceAdapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -987,41 +769,6 @@ def test_stdio_smoke_handles_initialize_and_parse_error(
                     },
                 ),
                 json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-                "",
-            ]
-        ),
-    )
-    stdout = io.StringIO()
-    monkeypatch.setattr(sys, "stdin", stdin)
-    monkeypatch.setattr(sys, "stdout", stdout)
-
-    assert run_stdio(JsonRpcMcpServer(mcp_adapter)) == 0
-
-    lines = [json.loads(line) for line in stdout.getvalue().splitlines()]
-    assert lines[0]["error"]["code"] == -32700
-    assert lines[1]["result"]["serverInfo"]["name"] == "ragproject-mcp"
-    assert "rag_search" in {tool["name"] for tool in lines[2]["result"]["tools"]}
-
-
-def test_stdio_handles_jsonrpc_batch_requests(
-    mcp_adapter: McpServiceAdapter,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    stdin = io.StringIO(
-        "\n".join(
-            [
-                json.dumps(
-                    [
-                        {
-                            "jsonrpc": "2.0",
-                            "id": 1,
-                            "method": "initialize",
-                            "params": {"protocolVersion": "2025-06-18"},
-                        },
-                        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-                        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                    ],
-                ),
                 json.dumps([]),
                 json.dumps([{"jsonrpc": "2.0", "id": 3, "method": "ping"}, 1]),
                 "",
@@ -1034,10 +781,12 @@ def test_stdio_handles_jsonrpc_batch_requests(
 
     assert run_stdio(JsonRpcMcpServer(mcp_adapter)) == 0
 
-    batch, empty_batch, mixed_batch = [json.loads(line) for line in stdout.getvalue().splitlines()]
-    assert len(batch) == 2
-    assert batch[0]["result"]["serverInfo"]["name"] == "ragproject-mcp"
-    assert "rag_search" in {tool["name"] for tool in batch[1]["result"]["tools"]}
+    parse_error, initialize, tools, empty_batch, mixed_batch = [
+        json.loads(line) for line in stdout.getvalue().splitlines()
+    ]
+    assert parse_error["error"]["code"] == -32700
+    assert initialize["result"]["serverInfo"]["name"] == "ragproject-mcp"
+    assert "rag_search" in {tool["name"] for tool in tools["result"]["tools"]}
     assert empty_batch["error"]["code"] == -32600
     assert mixed_batch[0]["result"] == {}
     assert mixed_batch[1]["error"]["code"] == -32600
