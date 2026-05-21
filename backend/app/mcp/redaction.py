@@ -86,10 +86,15 @@ SAFE_METRIC_STATUS_VALUES = {
     "succeeded",
 }
 SECRET_VALUE_RE = re.compile(
-    r"(?i)\b[A-Za-z0-9_-]*"
-    r"(api[\s_-]?key|authorization|cookie|credential|csrf|password|private[\s_-]?key|"
-    r"secret|session|token)"
-    r"[A-Za-z0-9_-]*\s*[:=]\s*(?:(?:basic|bearer)\s+[^\s,;]+|[^\s,;]+)"
+    r"(?i)(?:"
+    r"\b[A-Za-z0-9_-]*(api[\s_-]?key|authorization|cookie|credential|csrf|"
+    r"password|private[\s_-]?key|secret|session|token)[A-Za-z0-9_-]*"
+    r"\s*[:=]\s*(?:(?:basic|bearer)\s+[^\s,;]+|[^\s,;]+)"
+    r"|"
+    r"['\"]?[A-Za-z0-9_-]*(api[\s_-]?key|authorization|cookie|credential|csrf|"
+    r"password|private[\s_-]?key|secret|session|token)[A-Za-z0-9_-]*['\"]?"
+    r"\s*:\s*['\"](?:(?:basic|bearer)\s+[^'\"]+|[^'\"]+)['\"]"
+    r")"
 )
 API_KEY_RE = re.compile(
     r"\b((sk|pk)-[A-Za-z0-9_\-]{12,}|"

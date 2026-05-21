@@ -14,14 +14,12 @@ if __package__ and __package__.startswith("backend."):
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.errors import McpError, McpInvalidRequest, McpMethodNotFound, McpNotFound
 from app.mcp.prompts import get_prompt, list_prompts
-from app.mcp.redaction import truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry, call_tool, list_tools
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {"2025-06-18"}
-RESPONSE_ID_MAX_CHARS = 128
 
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
@@ -41,7 +39,9 @@ class JsonRpcMcpServer:
         raw_request_id = message.get("id")
         if "id" in message and not _is_valid_request_id(raw_request_id):
             return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
-        request_id = _safe_request_id(raw_request_id)
+        if "id" in message and not _is_safe_request_id(raw_request_id):
+            return _error_response(None, JSONRPC_INVALID_REQUEST, "Invalid request")
+        request_id = raw_request_id
         if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
             return _error_response(request_id, JSONRPC_INVALID_REQUEST, "Invalid request")
         method = message["method"]
@@ -55,6 +55,8 @@ class JsonRpcMcpServer:
         if not isinstance(params, dict):
             return _error_response(request_id, JSONRPC_INVALID_PARAMS, "Invalid params")
         try:
+            if not get_mcp_settings(self.adapter.settings).enabled:
+                raise McpInvalidRequest("MCP server is disabled")
             result = self._dispatch(method, params)
         except McpMethodNotFound as exc:
             return _error_response(
@@ -207,10 +209,21 @@ def _is_valid_request_id(value: object) -> bool:
     )
 
 
-def _safe_request_id(value: object) -> object:
-    if isinstance(value, str):
-        return truncate_text(value, max_chars=RESPONSE_ID_MAX_CHARS)
-    return value
+def _is_safe_request_id(value: object) -> bool:
+    if not isinstance(value, str):
+        return True
+    return not (
+        "api" in value.lower()
+        or "authorization" in value.lower()
+        or "cookie" in value.lower()
+        or "credential" in value.lower()
+        or "csrf" in value.lower()
+        or "password" in value.lower()
+        or "private" in value.lower()
+        or "secret" in value.lower()
+        or "session" in value.lower()
+        or "token" in value.lower()
+    )
 
 
 def _error_response(
