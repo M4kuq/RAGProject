@@ -14,6 +14,7 @@ if __package__ and __package__.startswith("backend."):
 from app.mcp.adapters import McpServiceAdapter
 from app.mcp.errors import McpError, McpInvalidRequest, McpMethodNotFound, McpNotFound
 from app.mcp.prompts import get_prompt, list_prompts
+from app.mcp.redaction import truncate_text
 from app.mcp.resources import list_resource_templates, list_resources, read_resource
 from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry, call_tool, list_tools
@@ -212,18 +213,7 @@ def _is_valid_request_id(value: object) -> bool:
 def _is_safe_request_id(value: object) -> bool:
     if not isinstance(value, str):
         return True
-    return not (
-        "api" in value.lower()
-        or "authorization" in value.lower()
-        or "cookie" in value.lower()
-        or "credential" in value.lower()
-        or "csrf" in value.lower()
-        or "password" in value.lower()
-        or "private" in value.lower()
-        or "secret" in value.lower()
-        or "session" in value.lower()
-        or "token" in value.lower()
-    )
+    return truncate_text(value, max_chars=max(len(value) + 1, 128)) == value
 
 
 def _error_response(
