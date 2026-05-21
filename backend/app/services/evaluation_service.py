@@ -107,11 +107,13 @@ class EvaluationService:
         db: Session,
         *,
         pagination: PaginationParams,
+        status: str | None = None,
     ) -> tuple[list[EvaluationRunSummary], PaginationMeta]:
         runs, total = self.repository.list_runs(
             db,
             offset=pagination.offset,
             limit=pagination.page_size,
+            status=status,
         )
         return [self._summary(db, run) for run in runs], pagination_meta(pagination, total)
 
