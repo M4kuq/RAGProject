@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.db import evaluation_models as _evaluation_models  # noqa: F401
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationDatasetCase
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, Role, User
