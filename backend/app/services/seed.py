@@ -29,7 +29,7 @@ DEMO_DOCUMENT_TEXT = (
 )
 SEED_DATA_DIR = Path(__file__).resolve().parents[1] / "seed_data"
 LLM_PAPER_CORPUS_TEXT = (SEED_DATA_DIR / "llm_paper_corpus.md").read_text(
-    encoding="utf-8"
+    encoding="utf-8",
 )
 
 
