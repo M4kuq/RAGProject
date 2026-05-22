@@ -19,6 +19,13 @@ from app.db.models import (
 )
 
 DEMO_PASSWORD = "password"
+DEMO_DOCUMENT_TITLE = "RAGProject Phase1 Seed Document"
+DEMO_DOCUMENT_TEXT = (
+    "RAGProject Phase1 validates a local Docker Compose RAG stack with "
+    "PostgreSQL, Qdrant, deterministic fake adapters for CI, citation-aware "
+    "retrieval traces, confidence labels, evaluation fixtures, and a local-only "
+    "MCP stdio server."
+)
 
 
 @dataclass(frozen=True)
@@ -39,19 +46,14 @@ class DemoDocument:
 
 DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
     DemoDocument(
-        title="RAGProject Phase1 Seed Document",
+        title=DEMO_DOCUMENT_TITLE,
         versions=(
             DemoVersion(
                 version_no=1,
                 file_name="phase1-seed.md",
                 mime_type="text/markdown",
                 section_title="Phase1 seed",
-                text=(
-                    "RAGProject Phase1 validates a local Docker Compose RAG stack with "
-                    "PostgreSQL, Qdrant, deterministic fake adapters for CI, citation-aware "
-                    "retrieval traces, confidence labels, evaluation fixtures, and a local-only "
-                    "MCP stdio server."
-                ),
+                text=DEMO_DOCUMENT_TEXT,
             ),
         ),
     ),
