@@ -251,7 +251,10 @@ def _seed_system_settings(db: Session) -> None:
                     "How did GPT-3 change few-shot learning?",
                     "What is the difference between GPT-3 and InstructGPT?",
                     "Which papers introduced RAG, Self-RAG, and GraphRAG?",
-                    "How do DeepSeek-R1 and Kimi k1.5 use reinforcement learning for reasoning?",
+                    (
+                        "How do DeepSeek-R1 and Kimi k1.5 use reinforcement "
+                        "learning for reasoning?"
+                    ),
                     "What does Qwen2.5-VL focus on?",
                 ]
             },
@@ -414,7 +417,8 @@ def _seed_document_chunks(
 
 
 def _section_title_for_chunk(chunk_text: str, *, fallback: str) -> str:
-    first_line = chunk_text.splitlines()[0].strip() if chunk_text.splitlines() else ""
+    chunk_lines = chunk_text.splitlines()
+    first_line = chunk_lines[0].strip() if chunk_lines else ""
     if first_line.startswith("### "):
         return first_line.removeprefix("### ")[:200]
     return fallback
