@@ -100,11 +100,12 @@ try {
   Write-Step "login with local demo admin"
   $csrf = Invoke-CurlJson @("-fsS", "-c", $cookiePath, "$BackendUrl/api/v1/auth/csrf")
   $csrfToken = $csrf.data.csrf_token
+  $loginBody = @{ email = "admin@example.com"; password = "password" } | ConvertTo-Json -Compress
   $login = Invoke-CurlJson @(
     "-fsS", "-b", $cookiePath, "-c", $cookiePath,
     "-H", "Content-Type: application/json",
     "-H", "X-CSRF-Token: $csrfToken",
-    "-d", '{"email":"admin@example.com","password":"password"}',
+    "-d", $loginBody,
     "$BackendUrl/api/v1/auth/login"
   )
   $csrfToken = $login.data.csrf_token
@@ -145,20 +146,26 @@ try {
   ) | Out-Null
 
   Write-Step "run RAG search"
+  $ragSearchBody = @{
+    query = "What vector database is used by Phase1?"
+    top_k = 5
+    rerank_top_n = 2
+  } | ConvertTo-Json -Compress
   Invoke-CurlJson @(
     "-fsS", "-b", $cookiePath,
     "-H", "Content-Type: application/json",
     "-H", "X-CSRF-Token: $csrfToken",
-    "-d", '{"query":"What vector database is used by Phase1?","top_k":5,"rerank_top_n":2}',
+    "-d", $ragSearchBody,
     "$BackendUrl/api/v1/rag/search"
   ) | Out-Null
 
   Write-Step "create evaluation run"
+  $evaluationBody = @{ dataset_name = "phase1_smoke"; case_limit = 1 } | ConvertTo-Json -Compress
   Invoke-CurlJson @(
     "-fsS", "-b", $cookiePath,
     "-H", "Content-Type: application/json",
     "-H", "X-CSRF-Token: $csrfToken",
-    "-d", '{"dataset_name":"phase1_smoke","case_limit":1}',
+    "-d", $evaluationBody,
     "$BackendUrl/api/v1/evaluations/runs"
   ) | Out-Null
 } finally {
@@ -168,9 +175,24 @@ try {
 
 Write-Step "check MCP server version and tool list"
 Invoke-Compose @("exec", "-T", "backend", "python", "-m", "app.mcp.server", "--version")
-Invoke-McpJson '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | Out-Null
+$toolListRequest = @{ jsonrpc = "2.0"; id = 1; method = "tools/list"; params = @{} } |
+  ConvertTo-Json -Compress -Depth 5
+Invoke-McpJson $toolListRequest | Out-Null
 
 Write-Step "run MCP rag_ask"
-Invoke-McpJson '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | Out-Null
+$ragAskRequest = @{
+  jsonrpc = "2.0"
+  id = 2
+  method = "tools/call"
+  params = @{
+    name = "rag_ask"
+    arguments = @{
+      question = "How does Phase1 keep CI deterministic?"
+      top_k = 5
+      rerank_top_n = 2
+    }
+  }
+} | ConvertTo-Json -Compress -Depth 5
+Invoke-McpJson $ragAskRequest | Out-Null
 
 Write-Step "deep smoke completed"
