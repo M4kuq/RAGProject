@@ -132,7 +132,11 @@ def seed(db: Session) -> None:
     admin = db.scalar(select(User).where(User.email == "admin@example.com"))
     if admin:
         for document in DEMO_DOCUMENTS:
-            _seed_demo_document(db, owner_user_id=admin.user_id, document=document)
+            _seed_demo_document(
+                db,
+                owner_user_id=admin.user_id,
+                document=document,
+            )
 
     db.commit()
 
@@ -146,7 +150,10 @@ def _seed_roles(db: Session) -> dict[str, Role]:
     for name, description in role_descriptions.items():
         role = db.scalar(select(Role).where(Role.role_name == name))
         if not role:
-            role = Role(role_name=name, description=description)
+            role = Role(
+                role_name=name,
+                description=description,
+            )
             db.add(role)
             db.flush()
         roles[name] = role
@@ -184,9 +191,18 @@ def _seed_system_settings(db: Session) -> None:
             {"items": [".pdf", ".docx", ".txt", ".md", ".csv"]},
             "Phase1 upload allowlist.",
         ),
-        "chat.memory_message_limit": ({"value": 8}, "Default recent chat message memory size."),
-        "chat.temporary_ttl_minutes": ({"value": 120}, "Default temporary chat TTL in minutes."),
-        "jobs.retry_max": ({"value": 3}, "Default manual retry upper bound."),
+        "chat.memory_message_limit": (
+            {"value": 8},
+            "Default recent chat message memory size.",
+        ),
+        "chat.temporary_ttl_minutes": (
+            {"value": 120},
+            "Default temporary chat TTL in minutes.",
+        ),
+        "jobs.retry_max": (
+            {"value": 3},
+            "Default manual retry upper bound.",
+        ),
         "rag.confidence_thresholds": (
             {"high": 0.75, "medium": 0.45},
             "Initial display thresholds for confidence labels.",
@@ -209,13 +225,28 @@ def _seed_system_settings(db: Session) -> None:
     }
     for key, (value, description) in defaults.items():
         if not db.get(SystemSetting, key):
-            db.add(SystemSetting(setting_key=key, setting_value=value, description=description))
+            db.add(
+                SystemSetting(
+                    setting_key=key,
+                    setting_value=value,
+                    description=description,
+                )
+            )
 
 
-def _seed_demo_document(db: Session, *, owner_user_id: int, document: DemoDocument) -> None:
+def _seed_demo_document(
+    db: Session,
+    *,
+    owner_user_id: int,
+    document: DemoDocument,
+) -> None:
     logical = db.scalar(select(LogicalDocument).where(LogicalDocument.title == document.title))
     if not logical:
-        logical = LogicalDocument(owner_user_id=owner_user_id, title=document.title, status="active")
+        logical = LogicalDocument(
+            owner_user_id=owner_user_id,
+            title=document.title,
+            status="active",
+        )
         db.add(logical)
         db.flush()
 
@@ -227,7 +258,11 @@ def _seed_demo_document(db: Session, *, owner_user_id: int, document: DemoDocume
             created_by=owner_user_id,
             demo_version=demo_version,
         )
-        _seed_document_chunk(db, version=version, demo_version=demo_version)
+        _seed_document_chunk(
+            db,
+            version=version,
+            demo_version=demo_version,
+        )
         if demo_version.active:
             active_version = version
 
