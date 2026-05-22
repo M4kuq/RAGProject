@@ -28,9 +28,7 @@ DEMO_DOCUMENT_TEXT = (
     "MCP stdio server."
 )
 SEED_DATA_DIR = Path(__file__).resolve().parents[1] / "seed_data"
-LLM_PAPER_CORPUS_TEXT = (SEED_DATA_DIR / "llm_paper_corpus.md").read_text(
-    encoding="utf-8",
-)
+LLM_PAPER_CORPUS_TEXT = (SEED_DATA_DIR / "llm_paper_corpus.md").read_text(encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -251,12 +249,9 @@ def _seed_system_settings(db: Session) -> None:
                     "How did GPT-3 change few-shot learning?",
                     "What is the difference between GPT-3 and InstructGPT?",
                     "Which papers introduced RAG, Self-RAG, and GraphRAG?",
-                    (
-                        "How do DeepSeek-R1 and Kimi k1.5 use reinforcement "
-                        "learning for reasoning?"
-                    ),
+                    "How do DeepSeek-R1 and Kimi k1.5 use reinforcement learning for reasoning?",
                     "What does Qwen2.5-VL focus on?",
-                ]
+                ],
             },
             "Questions aligned with the Phase1 demo documents.",
         ),
