@@ -1,136 +1,204 @@
 # RAGProject
 
-文書アップロードから検索、回答生成、citation、評価、監査ログまでを Docker Compose で再現できる RAG システムです。Phase1 では、ローカル検証環境で主要機能を一通り確認できる構成を目標にします。
+RAGProject は、文書アップロード、抽出、chunking、embedding、Qdrant index、retrieval、rerank、回答生成、citation、confidence、evaluation、MCP stdio server までを Docker Compose のローカル環境で確認する Phase1 RAG ポートフォリオである。
 
-## Phase1 の前提
+Phase1 の目的は、クラウド公開ではなく、第三者が README 通りに起動し、5分デモを実行し、手動テストケースと smoke で受け入れ確認できる状態にすることにある。
 
-- Backend: Python 3.11 / FastAPI / SQLAlchemy 2.x / Pydantic v2 / Alembic
-- Frontend: React / TypeScript / Vite / React Router / TanStack Query / React Hook Form
-- Data: PostgreSQL / Qdrant / local file storage
-- Runtime: Docker Desktop または Docker Compose
-- CI/CD: GitHub Actions で lint、format check、type check、test、Docker build、compose smoke を実行予定
+## Phase1 機能
 
-## Docker Compose 構成
+- Auth / Session / CSRF / RBAC を提供する。
+- Chat Session / History / Tags API を提供する。
+- Document Management / Upload / Version / Approve / Archive API を提供する。
+- Worker / Job Queue / Lease / Retry の基盤を提供する。
+- Extraction / Chunking / Embedding / Qdrant Indexing を提供する。
+- `/api/v1/rag/search` で retrieval / rerank の確認導線を提供する。
+- `/api/v1/rag/ask` で chat persistence、citation、confidence、groundedness を確認する。
+- React UI で chat、citation panel、admin document/job、evaluation を確認する。
+- Evaluation minimal runner と fixture を提供する。
+- MCP stdio server で local-only の read-mostly tools/resources/prompts を提供する。
 
-現時点では、ローカル検証用の Docker/Compose 土台を追加しています。
+## Architecture
 
-- `frontend`: Vite dev server。ブラウザから `http://localhost:5173` でアクセスします。
-- `backend`: FastAPI。`/health` は liveness、`/ready` は DB 接続を含む readiness です。現時点の `/ready` は DB-only で、Qdrant / LLM を含む RAG readiness は後続実装で追加します。
-- `worker`: jobs table polling worker。migration と seed 完了後に起動します。
-- `postgres`: Phase1 の RDB。
-- `qdrant`: vector store。CI では fake adapter 前提で重いモデル download を必須にしません。
-- `ollama`: ローカル LLM 実行候補。CI の最小 compose では起動対象外です。
+```text
+Browser
+  -> React/Vite frontend
+  -> FastAPI backend
+     -> PostgreSQL: users, sessions, documents, jobs, chat, retrieval traces, citations, evaluations
+     -> local upload storage: uploaded demo files
+     -> Qdrant: document chunk vectors
+     -> worker: queued jobs, ingest, evaluation
+     -> MCP stdio server: local client integration
+```
 
-永続 volume は `ragproject_postgres_data`、`ragproject_qdrant_data`、`ragproject_ollama_data`、`ragproject_upload_storage` です。CI 用 compose は `ragproject_ci_*` の別 volume を使います。
+Phase1 は Docker Compose ローカル検証環境を基準にする。AWS deploy、Terraform、remote MCP、OAuth、OCR、GraphRAG、Agentic RAG は Phase2 以降の範囲とする。
 
-`docker-compose.ci.yml` は CI smoke 専用のスタンドアロン構成です。Ollama を起動せず、fake adapter 前提で Docker build、migration、seed、backend readiness、frontend build artifact、worker 起動を確認する入口にしています。worker の実ジョブ投入・完了確認は Worker / Job 実装で追加します。
+## Tech Stack
+
+| Area | Choice | Reason |
+|---|---|---|
+| Backend | FastAPI / Python 3.11 | 型付き schema、依存注入、OpenAPI、非同期 upload との相性がよい。 |
+| ORM / Migration | SQLAlchemy 2.x / Alembic | DB 制約と migration 履歴を明示し、Phase1 の状態遷移を追いやすくする。 |
+| Frontend | React / TypeScript / Vite | 管理 UI と chat UI を小さく保ち、typecheck と build を CI で再現しやすくする。 |
+| RDB | PostgreSQL | session、RBAC、job、retrieval trace、evaluation を制約付きで扱う。 |
+| Vector DB | Qdrant | local compose で起動しやすく、chunk vector の upsert と search を分離できる。 |
+| Runtime | Docker Compose | Windows Docker Desktop と Ubuntu の両方で同じ構成を確認する。 |
+| MCP | stdio server | local-only で外部公開なしに tool/resource/prompt を確認する。 |
+
+## Security Design
+
+- Session cookie は HttpOnly にし、CSRF token を別に扱う。
+- Admin / viewer の RBAC で管理 API と閲覧系導線を分ける。
+- login rate limit、session expiry、CSRF pre-auth flow を使う。
+- upload は拡張子 allowlist と size limit を使う。
+- audit log には action と target の要約だけを残す。
+- UI と MCP は raw token、credential、password_hash、session、csrf、full prompt、full context を表示しない。
+- MCP は `MCP_LOCAL_ONLY=true` と stdio を前提にし、write tools を Phase1 で提供しない。
+- `.env` の値は README や docs に転記しない。必要な変数名は `.env.example` を見る。
+
+## Hallucination Mitigation
+
+- 回答は retrieval result に基づく。
+- citation は selected chunk と retrieval run に紐づける。
+- confidence と groundedness を保存し、UI で確認する。
+- no-context の質問は通常回答と分けて扱う。
+- evaluation fixture で expected keywords と citation coverage を確認する。
+- CI は fake adapter を使い、外部 API や大きな model download を通常確認に含めない。
+
+## Citation / Confidence
+
+`/api/v1/rag/ask` は user message、assistant message、retrieval_run、retrieval_run_items、citations を同じ流れで保存する。citation panel は source label、page、section、snippet preview を表示する。confidence は `High`、`Medium`、`Low` の label と score を返す。
+
+## Evaluation
+
+Phase1 の evaluation は `backend/app/evaluation/fixtures/phase1_smoke.json` を入口にする。default dataset は `phase1_smoke` で、seed 文書と sample questions に合わせた質問を含む。CI と demo では fake generation / fake rerank を使えるため、外部 LLM を必須にしない。
+
+## MCP Support
+
+MCP server は local-only / stdio で起動する。
+
+```bash
+cd backend
+python -m app.mcp.server --transport stdio
+```
+
+主な tools は次の通りである。
+
+- `rag_search`
+- `rag_ask`
+- `list_documents`
+- `get_document_status`
+- `get_job_status`
+- `list_evaluation_runs`
+- `get_evaluation_result`
+
+Claude Desktop / Cursor / Codex などの local MCP client には、secret を含めずに command と working directory だけを設定する。例は [docs/demo/mcp_demo.md](docs/demo/mcp_demo.md) に置く。
+
+## Requirements
+
+- Docker Desktop または Docker Engine + Docker Compose plugin
+- Git
+- Windows: Windows 11 + Docker Desktop Linux containers
+- Ubuntu: Ubuntu 24.04.4 LTS + Docker Engine
+- Optional local development: Python 3.11、uv、Node.js 20
 
 ## Windows Docker Desktop
 
-PowerShell から実行します。
+PowerShell を開き、Linux containers が起動していることを確認する。
 
 ```powershell
+git clone https://github.com/M4kuq/RAGProject.git
+cd RAGProject
 Copy-Item .env.example .env
-.\scripts\dev.ps1
+docker compose config
+docker compose up --build
 ```
 
-起動後の確認例です。
+別 PowerShell で確認する。
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
 Invoke-RestMethod http://localhost:8000/ready
-```
-
-テストは次の入口から実行します。
-
-```powershell
-.\scripts\test.ps1
-```
-
-Compose smoke まで実行する場合は次を使います。
-
-```powershell
-.\scripts\test.ps1 -Smoke
+.\scripts\smoke_phase1.ps1
 ```
 
 ## Ubuntu 24.04.4 LTS
 
-shell から実行します。
+Docker Engine と Compose plugin を使う。
 
 ```bash
+git clone https://github.com/M4kuq/RAGProject.git
+cd RAGProject
 cp .env.example .env
-sh scripts/dev.sh
+docker compose config
+docker compose up --build
 ```
 
-起動後の確認例です。
+別 shell で確認する。
 
 ```bash
 curl -fsS http://localhost:8000/health
 curl -fsS http://localhost:8000/ready
+sh scripts/smoke_phase1.sh
 ```
 
-テストは次の入口から実行します。
+## Quick Start
+
+1. `.env.example` を `.env` にコピーする。
+2. `docker compose up --build` を実行する。
+3. `http://localhost:5173` を開く。
+4. local demo account で login する。`admin@example.com` / `password` はローカルデモ用の dummy credential である。
+5. sample questions は [docs/demo/sample_questions.md](docs/demo/sample_questions.md) を使う。
+
+## Migration / Seed
+
+Compose 起動時に `migrate` と `seed` service が実行される。個別実行する場合は次を使う。
 
 ```bash
-sh scripts/test.sh
+docker compose run --rm migrate
+docker compose run --rm seed
 ```
 
-Compose smoke まで実行する場合は次を使います。
+seed は idempotent に作る。admin / viewer、user_settings、system_settings、demo documents、old/new version pair、sample question metadata、evaluation fixture reference を投入する。
+
+## Start / Stop
 
 ```bash
-sh scripts/test.sh --smoke
+docker compose up --build
 ```
 
-## GitHub Actions CI/CD
+停止だけなら次を使う。
 
-Phase1 の CI/CD 導線として GitHub Actions workflow を追加しています。
+```bash
+docker compose stop
+```
 
-| workflow | 主な対象 | pull_request | main push | 手動実行 |
-| --- | --- | --- | --- | --- |
-| `Backend CI` | Ruff format check / Ruff lint / mypy / pytest | backend / scripts / workflow 変更時 | backend / scripts / workflow 変更時 | 可 |
-| `Frontend CI` | npm install / lint / typecheck / Vitest / production build | frontend / workflow 変更時 | frontend / workflow 変更時 | 可 |
-| `Docker CI` | CI compose config / backend・worker・frontend image build | Dockerfile / compose / dependency manifest・lockfile / `.dockerignore` / workflow 変更時 | 常時 | 可 |
-| `Compose Smoke` | CI compose build / backend-test / frontend-test / backend readiness / worker health / qdrant / postgres / frontend build artifact | backend / frontend / `docker-compose.ci.yml` / Dockerfile / workflow 変更時 | 常時 | 可 |
+初期状態に戻す前に、次の注意を確認する。
 
-pull_request イベントでは軽量な backend / frontend check を優先し、Docker build と compose smoke は関連ファイル変更時に限定しています。`main` push では Docker build と compose smoke まで実行します。
+> docker compose down -v deletes local database, qdrant data, and uploaded files.
 
-`Backend CI` は host runner 上の unit-level check とし、DB 統合確認は `Compose Smoke` に寄せます。`Compose Smoke` は `USE_FAKE_LLM=true`、fake model 名、PostgreSQL、Qdrant、backend、worker、frontend build artifact 確認を前提にしています。外部 LLM / embedding / reranker の本番 API 利用や、Ollama model pull、`BAAI/bge-m3`、`BAAI/bge-reranker-v2-m3` の重い model download は必須にしません。通常CIは GitHub Actions secrets や `.env` を必要としません。
+このコマンドは local volume を消す。必要な demo data や検証結果を残したい場合は使わない。
 
-`Docker CI` は `main` push と手動実行時に、安全な範囲の rendered compose config を短期 artifact として保存します。`.env`、secret、DB dump、prompt全文、chunk本文、PII は artifact 対象にしません。
+## Local Validation Commands
 
-### ローカルでCI相当を再現する
-
-Docker / Compose 系は Windows PowerShell と Ubuntu shell のどちらでも次の scripts を入口にします。
+Windows:
 
 ```powershell
 .\scripts\test.ps1
 .\scripts\test.ps1 -Smoke
+.\scripts\smoke_phase1.ps1
+.\scripts\smoke_phase1.ps1 -Deep
 ```
+
+Ubuntu:
 
 ```bash
 sh scripts/test.sh
 sh scripts/test.sh --smoke
+sh scripts/smoke_phase1.sh
+sh scripts/smoke_phase1.sh --deep
 ```
 
-個別に確認する場合は次を実行します。
-
-```bash
-docker compose -f docker-compose.ci.yml config
-docker compose -f docker-compose.ci.yml build backend worker frontend-build backend-test frontend-test smoke
-docker compose -f docker-compose.ci.yml run --rm backend-test
-docker compose -f docker-compose.ci.yml run --rm frontend-test
-docker compose -f docker-compose.ci.yml run --rm frontend-build
-docker compose -f docker-compose.ci.yml up -d backend worker
-docker compose -f docker-compose.ci.yml run --rm --no-deps smoke
-```
-
-繰り返し実行で状態が残った場合は、対象 volume を削除する操作であることを理解したうえで次を実行します。
-
-```bash
-docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
-```
-
-backend CI の個別コマンドは次です。
+Backend:
 
 ```bash
 cd backend
@@ -140,7 +208,7 @@ uv run --extra dev mypy .
 uv run --extra dev pytest
 ```
 
-frontend CI の個別コマンドは次です。
+Frontend:
 
 ```bash
 cd frontend
@@ -151,60 +219,65 @@ npm test
 npm run build
 ```
 
-Windows Docker Desktop では Linux container engine が起動していることを確認してください。Ubuntu 24.04.4 LTS では Docker Engine と Docker Compose plugin を利用します。
+Compose:
 
-### CI troubleshooting
+```bash
+docker compose config
+docker compose -f docker-compose.ci.yml config
+docker compose -f docker-compose.ci.yml run --rm backend-test
+docker compose -f docker-compose.ci.yml run --rm frontend-test
+docker compose -f docker-compose.ci.yml run --rm --no-deps smoke
+```
 
-- cache が壊れた場合: GitHub Actions の該当 workflow を再実行し、それでも再現する場合は Actions cache を削除して再実行します。uv / npm / Docker layer cache は lockfile または `pyproject.toml` を key に含めます。
-- compose smoke が race する場合: `/health` ではなく `/ready` と compose healthcheck を確認します。現時点の `/ready` は DB-only readiness で、Qdrant / RAG model readiness は後続実装で拡張します。
-- Docker daemon が起動していない場合: Windows では Docker Desktop、Ubuntu では Docker service を起動してから `docker compose -f docker-compose.ci.yml config` を実行します。
-- `/health` と readiness の違い: `/health` は process liveness です。DB 接続を含む起動判定は `/ready` を使います。
-- secrets や `.env`: 通常CIに secrets や `.env` を入れません。外部API key、cookie、private key、DB dump、prompt全文、chunk本文、PII を log / artifact / cache に含めない方針です。
+## CI/CD
 
-### CI 既知課題
+GitHub Actions は次の workflow を使う。
 
-- `backend/uv.lock` は未作成です。backend CI は `pyproject.toml` の version range から解決するため、完全固定の dependency reproducibility は後続実装で `uv.lock` と Dockerfile の frozen install 化により対応します。なお、`passlib[bcrypt]` と新しい `bcrypt` の既知互換性問題で seed が失敗するため、現時点では `bcrypt>=4.0.1,<4.1.0` の制約だけ先に明示しています。
-- 2026-05-01 時点の `npm audit` では frontend 依存に moderate 5件が報告されています。現時点では CI 基盤差分に限定し、破壊的更新を伴う `npm audit fix --force` は実行していません。
+| workflow | Target | Local equivalent |
+|---|---|---|
+| Backend CI | ruff format check、ruff check、mypy、pytest | `cd backend && uv run --extra dev pytest` など |
+| Frontend CI | npm install、lint、typecheck、Vitest、build | `cd frontend && npm run build` など |
+| Docker CI | compose config、image build | `docker compose -f docker-compose.ci.yml build ...` |
+| Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
 
-## 開発基盤の現在地
+CI は `USE_FAKE_LLM=true`、fake embedding、fake reranker、fake generation を前提にできる。通常確認で Ollama model pull、external LLM API、`BAAI/bge-m3`、`BAAI/bge-reranker-v2-m3` の download を必須にしない。
 
-これまでに、以下を追加しています。
+## Demo / Test Docs
 
-- backend の FastAPI / uv / pytest / ruff / mypy 用雛形
-- frontend の Vite / React / TypeScript / Vitest 用雛形
-- `.env.example`
-- Windows / Ubuntu 共通の `scripts/`
-- `.editorconfig` / `.gitattributes`
-- 5分デモ手順とサンプル質問集
-- backend / worker / frontend の Dockerfile
-- `docker-compose.yml` / `docker-compose.dev.yml` / `docker-compose.ci.yml`
-- Docker build context から `.env` や local storage を除外する `.dockerignore`
-- GitHub Actions workflow: backend CI / frontend CI / Docker build / compose smoke
+- [5min demo](docs/demo/5min_demo.md)
+- [UI demo](docs/demo/ui_demo.md)
+- [CLI demo](docs/demo/cli_demo.md)
+- [MCP demo](docs/demo/mcp_demo.md)
+- [sample questions](docs/demo/sample_questions.md)
+- [demo data](docs/demo/demo_data.md)
+- [manual test cases](docs/test-cases/phase1_manual_test_cases.md)
+- [acceptance checklist](docs/test-cases/phase1_acceptance_checklist.md)
+- [troubleshooting](docs/troubleshooting.md)
 
-詳細な DB 制約・各 API の完成実装は次の大単位で進めます。
+## Troubleshooting
 
-後続実装で CI に追加する予定の確認です。
+詳細は [docs/troubleshooting.md](docs/troubleshooting.md) に置く。よく使う確認は次である。
 
-- `/ready` の Qdrant / RAG model readiness 拡張
-- worker 実ジョブ投入から完了までの smoke
-- migration / seed の正式データモデル反映後の integration test
-- RAG ask / citation / evaluation / audit log を含む final smoke
-- backend dependency lockfile の正式化と Dockerfile の frozen install 化
+```bash
+docker compose ps
+docker compose logs backend
+docker compose logs worker
+docker compose -f docker-compose.ci.yml config
+```
 
-## 破壊的操作
+## Known Limitations
 
-`docker compose down -v` は PostgreSQL、Qdrant、Ollama、アップロード済みファイルの volume を削除する可能性があります。対象は主に `ragproject_postgres_data`、`ragproject_qdrant_data`、`ragproject_ollama_data`、`ragproject_upload_storage` です。デモデータや検証データを消す操作なので、必要な場合だけ実行してください。
+- Phase1 は local Docker Compose 検証向けであり、cloud deploy は扱わない。
+- MCP は stdio / local-only であり、remote MCP は扱わない。
+- OCR、GraphRAG、Agentic RAG は扱わない。
+- CI の通常確認は fake adapter を優先する。
+- PDF / DOCX の大きな demo fixture は repository に追加しない。必要な場合は手動 upload 手順で確認する。
+- worker の重い実ジョブ確認は環境差が出るため、最終受け入れでは manual test と optional smoke に分ける。
 
-## PR-11 ingest indexing defaults
+## Phase2 Roadmap
 
-Document ingest now finishes extraction, chunking, deterministic fake embedding, Qdrant
-collection ensure/upsert, and `document_versions.status=ready`. CI keeps
-`EMBEDDING_PROVIDER=fake` and `EMBEDDING_FAKE_DIMENSION=8`, so `BAAI/bge-m3`, GPU, Ollama
-model pull, and external API keys are not required for the default checks. For local
-model experiments, set `EMBEDDING_PROVIDER=local`, keep `EMBEDDING_MODEL=BAAI/bge-m3`,
-and set `EMBEDDING_VECTOR_DIMENSION=1024`.
-
-## デモ
-
-- [5分デモ手順](docs/demo/5-minute-demo.md)
-- [サンプル質問集](docs/demo/sample-questions.md)
+- cloud deploy と secrets management を設計する。
+- real embedding / reranker / generator の検証 profile を追加する。
+- OCR と large document handling を拡張する。
+- evaluation metrics と regression dashboard を拡張する。
+- remote MCP、OAuth、client-specific integration を検討する。

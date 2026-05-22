@@ -18,6 +18,18 @@
       "question": "What retrieval trace capability does the seed document mention?",
       "expected_keywords": ["citation-aware retrieval traces"],
       "required_citation": true
+    },
+    {
+      "case_id": "phase1_design_confidence",
+      "question": "Where are confidence labels stored?",
+      "expected_keywords": ["retrieval runs", "confidence labels"],
+      "required_citation": true
+    },
+    {
+      "case_id": "phase1_mcp_transport",
+      "question": "Which MCP transport is used in Phase1?",
+      "expected_keywords": ["stdio", "local-only"],
+      "required_citation": true
     }
   ]
 }
