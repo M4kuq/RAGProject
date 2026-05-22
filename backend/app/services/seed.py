@@ -18,6 +18,12 @@ from app.db.models import (
     User,
     UserSetting,
 )
+from app.ingest.embedding import EmbeddingAdapterError
+from app.ingest.qdrant import (
+    DocumentIndexingService,
+    QdrantStoreError,
+    create_document_indexing_service,
+)
 
 DEMO_PASSWORD = "password"
 DEMO_DOCUMENT_TITLE = "RAGProject Phase1 Seed Document"
@@ -153,7 +159,8 @@ DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
 
 
 def seed(db: Session) -> None:
-    if get_settings().app_env.lower() not in {"local", "ci", "test"}:
+    settings = get_settings()
+    if settings.app_env.lower() not in {"local", "ci", "test"}:
         raise RuntimeError("Seed is only allowed in local, ci, or test environments.")
 
     roles = _seed_roles(db)
@@ -170,6 +177,10 @@ def seed(db: Session) -> None:
             )
 
     db.commit()
+    _index_seed_documents(
+        db,
+        indexing_service=create_document_indexing_service(settings),
+    )
 
 
 def _seed_roles(db: Session) -> dict[str, Role]:
@@ -409,6 +420,59 @@ def _seed_document_chunks(
                 modality="text",
             )
         )
+
+
+def _index_seed_documents(
+    db: Session,
+    *,
+    indexing_service: DocumentIndexingService,
+) -> None:
+    try:
+        for logical, version, chunks in _iter_indexable_seed_versions(db):
+            indexing_service.index_chunks(
+                logical_document=logical,
+                document_version=version,
+                chunks=chunks,
+            )
+    except (EmbeddingAdapterError, QdrantStoreError) as exc:
+        raise RuntimeError("Seed document indexing failed.") from exc
+
+
+def _iter_indexable_seed_versions(
+    db: Session,
+) -> list[tuple[LogicalDocument, DocumentVersion, list[DocumentChunk]]]:
+    demo_titles = [document.title for document in DEMO_DOCUMENTS]
+    logical_documents = list(
+        db.scalars(
+            select(LogicalDocument)
+            .where(
+                LogicalDocument.title.in_(demo_titles),
+                LogicalDocument.status == "active",
+            )
+            .order_by(LogicalDocument.logical_document_id.asc())
+        )
+    )
+    result: list[tuple[LogicalDocument, DocumentVersion, list[DocumentChunk]]] = []
+    for logical in logical_documents:
+        version = db.scalar(
+            select(DocumentVersion).where(
+                DocumentVersion.logical_document_id == logical.logical_document_id,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+            )
+        )
+        if version is None:
+            continue
+        chunks = list(
+            db.scalars(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_version_id == version.document_version_id)
+                .order_by(DocumentChunk.chunk_index.asc())
+            )
+        )
+        if chunks:
+            result.append((logical, version, chunks))
+    return result
 
 
 def _section_title_for_chunk(chunk_text: str, *, fallback: str) -> str:

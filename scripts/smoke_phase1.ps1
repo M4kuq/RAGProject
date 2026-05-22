@@ -5,6 +5,11 @@ param(
 $ErrorActionPreference = "Stop"
 $BackendUrl = if ($env:BACKEND_URL) { $env:BACKEND_URL } else { "http://localhost:8000" }
 $FrontendUrl = if ($env:FRONTEND_URL) { $env:FRONTEND_URL } else { "http://localhost:5173" }
+$SmokeWorkerEnabledJobTypes = if ($env:SMOKE_WORKER_ENABLED_JOB_TYPES) {
+  $env:SMOKE_WORKER_ENABLED_JOB_TYPES
+} else {
+  "document_ingest,qdrant_mirror_update,evaluation_run"
+}
 
 function Write-Step([string]$Message) {
   Write-Host "[phase1-smoke] $Message"
@@ -80,7 +85,17 @@ Write-Step "build and start Phase1 services"
 Invoke-Compose @("build", "backend", "worker", "frontend", "migrate", "seed")
 Invoke-Compose @("run", "--rm", "migrate")
 Invoke-Compose @("run", "--rm", "seed")
-Invoke-Compose @("up", "-d", "backend", "worker", "frontend")
+$PreviousWorkerEnabledJobTypes = $env:WORKER_ENABLED_JOB_TYPES
+try {
+  $env:WORKER_ENABLED_JOB_TYPES = $SmokeWorkerEnabledJobTypes
+  Invoke-Compose @("up", "-d", "backend", "worker", "frontend")
+} finally {
+  if ($null -eq $PreviousWorkerEnabledJobTypes) {
+    Remove-Item Env:\WORKER_ENABLED_JOB_TYPES -ErrorAction SilentlyContinue
+  } else {
+    $env:WORKER_ENABLED_JOB_TYPES = $PreviousWorkerEnabledJobTypes
+  }
+}
 
 Write-Step "wait for backend readiness"
 $ready = $false

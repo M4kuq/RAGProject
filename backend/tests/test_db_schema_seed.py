@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -165,7 +167,15 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
     assert "created_at desc" in partial_index_defs["ix_audit_logs_target"]
 
 
-def test_seed_can_run_twice_without_duplicates(pg_engine: Engine) -> None:
+def test_seed_can_run_twice_without_duplicates(
+    pg_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    indexing_service = _CapturingIndexingService()
+    monkeypatch.setattr(
+        "app.services.seed.create_document_indexing_service",
+        lambda settings: indexing_service,
+    )
     Session = sessionmaker(bind=pg_engine, autoflush=False, autocommit=False)
     with Session() as db:
         seed(db)
@@ -193,17 +203,15 @@ def test_seed_can_run_twice_without_duplicates(pg_engine: Engine) -> None:
             == 1
         )
         logical = db.query(LogicalDocument).filter_by(title=DEMO_DOCUMENT_TITLE).one()
-        assert (
+        versions = (
             db.query(DocumentVersion)
             .filter_by(logical_document_id=logical.logical_document_id)
-            .count()
-            == 1
+            .all()
         )
-        version = (
-            db.query(DocumentVersion)
-            .filter_by(logical_document_id=logical.logical_document_id)
-            .one()
-        )
+        assert versions
+        active_versions = [version for version in versions if version.is_active]
+        assert len(active_versions) == 1
+        version = active_versions[0]
         assert version.status == "ready"
         assert (
             db.query(DocumentChunk)
@@ -211,6 +219,16 @@ def test_seed_can_run_twice_without_duplicates(pg_engine: Engine) -> None:
             .count()
             == 1
         )
+
+    indexed_titles = {call.title for call in indexing_service.calls}
+    assert DEMO_DOCUMENT_TITLE in indexed_titles
+    assert "LLM Paper Corpus for RAG Demo" in indexed_titles
+    assert all(call.version_status == "ready" for call in indexing_service.calls)
+    assert all(call.is_active is True for call in indexing_service.calls)
+    assert any(
+        call.title == "LLM Paper Corpus for RAG Demo" and call.chunk_count >= 100
+        for call in indexing_service.calls
+    )
 
 
 def test_major_db_constraints_reject_invalid_data(pg_engine: Engine) -> None:
@@ -388,3 +406,34 @@ def test_jobs_message_edit_active_partial_unique_index(pg_engine: Engine) -> Non
             )
         finally:
             transaction.rollback()
+
+
+@dataclass(frozen=True)
+class _IndexCall:
+    title: str
+    version_status: str
+    is_active: bool
+    chunk_count: int
+    chunk_ids: list[int]
+
+
+class _CapturingIndexingService:
+    def __init__(self) -> None:
+        self.calls: list[_IndexCall] = []
+
+    def index_chunks(
+        self,
+        *,
+        logical_document: Any,
+        document_version: Any,
+        chunks: list[Any],
+    ) -> None:
+        self.calls.append(
+            _IndexCall(
+                title=logical_document.title,
+                version_status=document_version.status,
+                is_active=document_version.is_active,
+                chunk_count=len(chunks),
+                chunk_ids=[chunk.document_chunk_id for chunk in chunks],
+            )
+        )
