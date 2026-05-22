@@ -15,6 +15,12 @@ function Invoke-Compose([string[]]$ArgsList) {
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+function Invoke-CurlJson([string[]]$ArgsList) {
+  $output = & curl.exe @ArgsList
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  return ($output | ConvertFrom-Json)
+}
+
 function Test-Url([string]$Url) {
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5 | Out-Null
@@ -62,37 +68,64 @@ if (-not $ready) { throw "backend readiness failed" }
 Write-Step "check qdrant from backend network"
 Invoke-Compose @("exec", "-T", "backend", "python", "-m", "app.scripts.healthcheck", "http://qdrant:6333/healthz")
 
-$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$cookiePath = Join-Path ([System.IO.Path]::GetTempPath()) ("phase1-smoke-{0}.cookies" -f ([guid]::NewGuid()))
 $uploadPath = Join-Path ([System.IO.Path]::GetTempPath()) "phase1-smoke-upload.md"
 Set-Content -Path $uploadPath -Value "# Phase1 smoke upload`nThis local smoke document confirms upload, ingest queue creation, and admin approval paths." -Encoding UTF8
 try {
   Write-Step "login with local demo admin"
-  $csrf = Invoke-RestMethod -WebSession $session -Uri "$BackendUrl/api/v1/auth/csrf"
+  $csrf = Invoke-CurlJson @("-fsS", "-c", $cookiePath, "$BackendUrl/api/v1/auth/csrf")
   $csrfToken = $csrf.data.csrf_token
-  $loginBody = @{ email = "admin@example.com"; password = "password" } | ConvertTo-Json -Compress
-  $login = Invoke-RestMethod -WebSession $session -Method Post -Uri "$BackendUrl/api/v1/auth/login" -ContentType "application/json" -Headers @{ "X-CSRF-Token" = $csrfToken } -Body $loginBody
+  $login = Invoke-CurlJson @(
+    "-fsS", "-b", $cookiePath, "-c", $cookiePath,
+    "-H", "Content-Type: application/json",
+    "-H", "X-CSRF-Token: $csrfToken",
+    "-d", '{"email":"admin@example.com","password":"password"}',
+    "$BackendUrl/api/v1/auth/login"
+  )
   $csrfToken = $login.data.csrf_token
 
   Write-Step "list seeded documents"
-  Invoke-RestMethod -WebSession $session -Uri "$BackendUrl/api/v1/documents?page_size=5" | Out-Null
+  Invoke-CurlJson @("-fsS", "-b", $cookiePath, "$BackendUrl/api/v1/documents?page_size=5") | Out-Null
 
   Write-Step "upload a small smoke document"
-  $upload = Invoke-RestMethod -WebSession $session -Method Post -Uri "$BackendUrl/api/v1/documents" -Headers @{ "X-CSRF-Token" = $csrfToken } -Form @{ title = "Phase1 Smoke Upload"; file = Get-Item $uploadPath }
+  $upload = Invoke-CurlJson @(
+    "-fsS", "-b", $cookiePath, "-c", $cookiePath,
+    "-H", "X-CSRF-Token: $csrfToken",
+    "-F", "title=Phase1 Smoke Upload",
+    "-F", "file=@$uploadPath;type=text/markdown",
+    "$BackendUrl/api/v1/documents"
+  )
   $logicalDocumentId = $upload.data.logical_document_id
   $documentVersionId = $upload.data.document_version_id
 
   Write-Step "approve uploaded document version"
-  Invoke-RestMethod -WebSession $session -Method Post -Uri "$BackendUrl/api/v1/documents/$logicalDocumentId/versions/$documentVersionId/approve" -Headers @{ "X-CSRF-Token" = $csrfToken } | Out-Null
+  Invoke-CurlJson @(
+    "-fsS", "-b", $cookiePath,
+    "-H", "X-CSRF-Token: $csrfToken",
+    "-X", "POST",
+    "$BackendUrl/api/v1/documents/$logicalDocumentId/versions/$documentVersionId/approve"
+  ) | Out-Null
 
   Write-Step "run RAG search"
-  $searchBody = @{ query = "What vector database is used by Phase1?"; top_k = 5; rerank_top_n = 2 } | ConvertTo-Json -Compress
-  Invoke-RestMethod -WebSession $session -Method Post -Uri "$BackendUrl/api/v1/rag/search" -ContentType "application/json" -Headers @{ "X-CSRF-Token" = $csrfToken } -Body $searchBody | Out-Null
+  Invoke-CurlJson @(
+    "-fsS", "-b", $cookiePath,
+    "-H", "Content-Type: application/json",
+    "-H", "X-CSRF-Token: $csrfToken",
+    "-d", '{"query":"What vector database is used by Phase1?","top_k":5,"rerank_top_n":2}',
+    "$BackendUrl/api/v1/rag/search"
+  ) | Out-Null
 
   Write-Step "create evaluation run"
-  $evalBody = @{ dataset_name = "phase1_smoke"; case_limit = 1 } | ConvertTo-Json -Compress
-  Invoke-RestMethod -WebSession $session -Method Post -Uri "$BackendUrl/api/v1/evaluations/runs" -ContentType "application/json" -Headers @{ "X-CSRF-Token" = $csrfToken } -Body $evalBody | Out-Null
+  Invoke-CurlJson @(
+    "-fsS", "-b", $cookiePath,
+    "-H", "Content-Type: application/json",
+    "-H", "X-CSRF-Token: $csrfToken",
+    "-d", '{"dataset_name":"phase1_smoke","case_limit":1}',
+    "$BackendUrl/api/v1/evaluations/runs"
+  ) | Out-Null
 } finally {
   Remove-Item -LiteralPath $uploadPath -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $cookiePath -ErrorAction SilentlyContinue
 }
 
 Write-Step "check MCP server version and tool list"
