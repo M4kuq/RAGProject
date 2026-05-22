@@ -20,7 +20,7 @@ x-backend-env: &backend-env
   WORKER_LEASE_SECONDS: "300"
   WORKER_LEASE_RENEW_INTERVAL_SECONDS: "60"
   WORKER_SHUTDOWN_GRACE_SECONDS: "30"
-  WORKER_ENABLED_JOB_TYPES: none
+  WORKER_ENABLED_JOB_TYPES: ${WORKER_ENABLED_JOB_TYPES:-all}
   INGEST_CHUNK_SIZE_TOKENS: "512"
   INGEST_CHUNK_OVERLAP_TOKENS: "128"
   INGEST_MAX_EXTRACTED_TEXT_CHARS: "5000000"
@@ -124,6 +124,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       seed:
@@ -151,6 +153,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
     restart: "no"
 
   frontend:

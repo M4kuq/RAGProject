@@ -4,6 +4,7 @@ set -eu
 DEEP=0
 BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
 FRONTEND_URL="${FRONTEND_URL:-http://localhost:5173}"
+SMOKE_WORKER_ENABLED_JOB_TYPES="${SMOKE_WORKER_ENABLED_JOB_TYPES:-document_ingest,qdrant_mirror_update,evaluation_run}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -74,7 +75,7 @@ say "build and start Phase1 services"
 docker compose build backend worker frontend migrate seed >/dev/null
 docker compose run --rm migrate >/dev/null
 docker compose run --rm seed >/dev/null
-docker compose up -d backend worker frontend >/dev/null
+WORKER_ENABLED_JOB_TYPES="$SMOKE_WORKER_ENABLED_JOB_TYPES" docker compose up -d backend worker frontend >/dev/null
 
 say "wait for backend readiness"
 attempt=1

@@ -125,6 +125,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
     restart: "no"
 
   backend:
@@ -160,6 +162,8 @@ services:
       - upload_ci_storage:/app/storage/uploads
     depends_on:
       postgres:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
