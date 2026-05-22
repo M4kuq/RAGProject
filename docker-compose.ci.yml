@@ -60,6 +60,19 @@ x-backend-env: &backend-env
   RERANK_SCORE_MAX: "1"
   RERANKER_MODEL: fake-ci-reranker
   SEARCH_SNIPPET_MAX_CHARS: "240"
+  ASK_TOP_K_DEFAULT: "5"
+  ASK_RERANK_TOP_N_DEFAULT: "2"
+  GENERATION_PROVIDER: fake
+  GENERATION_MODEL_NAME: fake-rag-answer
+  GENERATION_MAX_CONTEXT_CHARS: "6000"
+  GENERATION_MAX_OUTPUT_CHARS: "2000"
+  MCP_ENABLED: "true"
+  MCP_TRANSPORT: stdio
+  MCP_LOCAL_ONLY: "true"
+  MCP_ACTOR_MODE: mcp_local
+  MCP_SNIPPET_MAX_CHARS: "240"
+  MCP_TOOL_TIMEOUT_SECONDS: "30"
+  MCP_ALLOW_WRITE_TOOLS: "false"
 
 services:
   postgres:
@@ -171,7 +184,7 @@ services:
       dockerfile: backend/Dockerfile
       target: test
     environment: *backend-env
-    command: ["sh", "-c", "ruff format --check . && ruff check . && mypy . && pytest"]
+    command: ["sh", "-c", "python -m app.mcp.server --version && ruff format --check . && ruff check . && mypy . && pytest"]
     depends_on:
       postgres:
         condition: service_healthy

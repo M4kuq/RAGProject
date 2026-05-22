@@ -4,6 +4,40 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 let csrfToken: string | null = null;
 
+export function resetApiClientStateForTests(): void {
+  if (import.meta.env.MODE === "test") {
+    csrfToken = null;
+  }
+}
+
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  requestId: string | null;
+  details: unknown;
+
+  constructor({
+    code,
+    details = null,
+    message,
+    requestId,
+    status
+  }: {
+    code: string;
+    details?: unknown;
+    message: string;
+    requestId: string | null;
+    status: number;
+  }) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+    this.requestId = requestId;
+    this.details = details;
+  }
+}
+
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") {
     return null;
@@ -34,6 +68,30 @@ function updateCsrfToken(json: unknown): void {
   }
 }
 
+function readError(json: unknown, status: number, fallback: string): ApiError {
+  if (
+    typeof json === "object" &&
+    json !== null &&
+    "error" in json &&
+    typeof json.error === "object" &&
+    json.error !== null
+  ) {
+    const error = json.error as Record<string, unknown>;
+    const meta =
+      "meta" in json && typeof json.meta === "object" && json.meta !== null
+        ? (json.meta as Record<string, unknown>)
+        : {};
+    return new ApiError({
+      code: typeof error.code === "string" ? error.code : "error",
+      details: "details" in error ? error.details : null,
+      message: typeof error.message === "string" ? error.message : fallback,
+      requestId: typeof meta.request_id === "string" ? meta.request_id : null,
+      status
+    });
+  }
+  return new ApiError({ code: "error", message: fallback, requestId: null, status });
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -55,8 +113,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const json = await response.json().catch(() => ({}));
   updateCsrfToken(json);
   if (!response.ok) {
-    const message = json.error?.message ?? response.statusText;
-    throw new Error(message);
+    throw readError(json, response.status, response.statusText);
   }
   return json as T;
 }

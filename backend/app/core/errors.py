@@ -14,6 +14,8 @@ ERROR_MESSAGES: dict[str, str] = {
     "validation_error": "Invalid request.",
     "business_validation_error": "Request cannot be processed.",
     "conflict": "Resource conflict.",
+    "request_in_progress": "Request is already in progress.",
+    "client_message_conflict": "Client message id conflicts with an existing message.",
     "archived_session_readonly": "Archived session is read-only.",
     "document_archived": "Document is archived.",
     "document_version_not_approvable": "Document version is not approvable.",
@@ -45,6 +47,8 @@ ERROR_MESSAGES: dict[str, str] = {
     "qdrant_cleanup_failed": "Qdrant cleanup failed.",
     "retrieval_failed": "Retrieval pipeline failed.",
     "rerank_failed": "Rerank pipeline failed.",
+    "generation_failed": "Answer generation failed.",
+    "citation_build_failed": "Citation validation failed.",
     "document_indexing_failed": "Document indexing failed.",
     "document_ready_update_failed": "Document ready update failed.",
     "payload_too_large": "Payload too large.",
@@ -119,6 +123,16 @@ class ValidationFailed(AppError):
 class ConflictError(AppError):
     def __init__(self, code: str = "conflict", details: object | None = None) -> None:
         super().__init__(code, 409, details=details)
+
+
+class RequestInProgress(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("request_in_progress")
+
+
+class ClientMessageConflict(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("client_message_conflict")
 
 
 class ArchivedSessionReadonly(ConflictError):
