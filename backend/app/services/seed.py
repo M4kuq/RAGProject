@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,6 +27,10 @@ DEMO_DOCUMENT_TEXT = (
     "retrieval traces, confidence labels, evaluation fixtures, and a local-only "
     "MCP stdio server."
 )
+SEED_DATA_DIR = Path(__file__).resolve().parents[1] / "seed_data"
+LLM_PAPER_CORPUS_TEXT = (SEED_DATA_DIR / "llm_paper_corpus.md").read_text(
+    encoding="utf-8"
+)
 
 
 @dataclass(frozen=True)
@@ -36,12 +41,27 @@ class DemoVersion:
     text: str
     section_title: str
     active: bool = True
+    chunks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class DemoDocument:
     title: str
     versions: tuple[DemoVersion, ...]
+
+
+def _split_seed_sections(text: str) -> tuple[str, ...]:
+    sections: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("### P") and current:
+            sections.append("\n".join(current).strip())
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append("\n".join(current).strip())
+    return tuple(section for section in sections if section.startswith("### P"))
 
 
 DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
@@ -115,6 +135,19 @@ DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
                     "required_citation,true,evaluation expects cited answers\n"
                     "mcp_transport,stdio,local-only Phase1 server\n"
                 ),
+            ),
+        ),
+    ),
+    DemoDocument(
+        title="LLM Paper Corpus for RAG Demo",
+        versions=(
+            DemoVersion(
+                version_no=1,
+                file_name="llm-paper-corpus.md",
+                mime_type="text/markdown",
+                section_title="LLM paper corpus",
+                text=LLM_PAPER_CORPUS_TEXT,
+                chunks=_split_seed_sections(LLM_PAPER_CORPUS_TEXT),
             ),
         ),
     ),
@@ -214,6 +247,12 @@ def _seed_system_settings(db: Session) -> None:
                     "How does Phase1 keep CI deterministic?",
                     "Which MCP transport is used in Phase1?",
                     "What can an admin do with documents?",
+                    "What is the core idea of Attention Is All You Need?",
+                    "How did GPT-3 change few-shot learning?",
+                    "What is the difference between GPT-3 and InstructGPT?",
+                    "Which papers introduced RAG, Self-RAG, and GraphRAG?",
+                    "How do DeepSeek-R1 and Kimi k1.5 use reinforcement learning for reasoning?",
+                    "What does Qwen2.5-VL focus on?",
                 ]
             },
             "Questions aligned with the Phase1 demo documents.",
@@ -258,7 +297,7 @@ def _seed_demo_document(
             created_by=owner_user_id,
             demo_version=demo_version,
         )
-        _seed_document_chunk(
+        _seed_document_chunks(
             db,
             version=version,
             demo_version=demo_version,
@@ -339,34 +378,46 @@ def _clear_failed_document_version_fields(version: DocumentVersion) -> None:
     version.error_code = None
 
 
-def _seed_document_chunk(
+def _seed_document_chunks(
     db: Session,
     *,
     version: DocumentVersion,
     demo_version: DemoVersion,
 ) -> None:
-    exists = db.scalar(
-        select(DocumentChunk.document_chunk_id).where(
-            DocumentChunk.document_version_id == version.document_version_id,
-            DocumentChunk.chunk_index == 0,
+    chunks = demo_version.chunks or (demo_version.text,)
+    for chunk_index, chunk_text in enumerate(chunks):
+        exists = db.scalar(
+            select(DocumentChunk.document_chunk_id).where(
+                DocumentChunk.document_version_id == version.document_version_id,
+                DocumentChunk.chunk_index == chunk_index,
+            )
         )
-    )
-    if exists:
-        return
-    db.add(
-        DocumentChunk(
-            document_version_id=version.document_version_id,
-            chunk_index=0,
-            chunk_hash=_content_hash(demo_version.text),
-            content_text=demo_version.text,
-            token_count=len(demo_version.text.split()),
-            char_count=len(demo_version.text),
-            page_from=1,
-            page_to=1,
-            section_title=demo_version.section_title,
-            modality="text",
+        if exists:
+            continue
+        db.add(
+            DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=chunk_index,
+                chunk_hash=_content_hash(chunk_text),
+                content_text=chunk_text,
+                token_count=len(chunk_text.split()),
+                char_count=len(chunk_text),
+                page_from=1,
+                page_to=1,
+                section_title=_section_title_for_chunk(
+                    chunk_text,
+                    fallback=demo_version.section_title,
+                ),
+                modality="text",
+            )
         )
-    )
+
+
+def _section_title_for_chunk(chunk_text: str, *, fallback: str) -> str:
+    first_line = chunk_text.splitlines()[0].strip() if chunk_text.splitlines() else ""
+    if first_line.startswith("### "):
+        return first_line.removeprefix("### ")[:200]
+    return fallback
 
 
 def _content_hash(value: str) -> str:
