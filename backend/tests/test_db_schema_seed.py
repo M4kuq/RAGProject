@@ -229,6 +229,14 @@ def test_seed_can_run_twice_without_duplicates(
         call.title == "LLM Paper Corpus for RAG Demo" and call.chunk_count >= 100
         for call in indexing_service.calls
     )
+    assert any(
+        call.document_version_id > 0 and call.chunk_ids for call in indexing_service.cleanup_calls
+    )
+    assert all(
+        call.document_version_id
+        not in {indexed_call.document_version_id for indexed_call in indexing_service.calls}
+        for call in indexing_service.cleanup_calls
+    )
 
 
 def test_major_db_constraints_reject_invalid_data(pg_engine: Engine) -> None:
@@ -410,6 +418,7 @@ def test_jobs_message_edit_active_partial_unique_index(pg_engine: Engine) -> Non
 
 @dataclass(frozen=True)
 class _IndexCall:
+    document_version_id: int
     title: str
     version_status: str
     is_active: bool
@@ -420,6 +429,7 @@ class _IndexCall:
 class _CapturingIndexingService:
     def __init__(self) -> None:
         self.calls: list[_IndexCall] = []
+        self.cleanup_calls: list[_CleanupCall] = []
 
     def index_chunks(
         self,
@@ -430,6 +440,7 @@ class _CapturingIndexingService:
     ) -> None:
         self.calls.append(
             _IndexCall(
+                document_version_id=document_version.document_version_id,
                 title=logical_document.title,
                 version_status=document_version.status,
                 is_active=document_version.is_active,
@@ -437,3 +448,22 @@ class _CapturingIndexingService:
                 chunk_ids=[chunk.document_chunk_id for chunk in chunks],
             )
         )
+
+    def cleanup_document_points(
+        self,
+        *,
+        document_version_id: int,
+        document_chunk_ids: list[int],
+    ) -> None:
+        self.cleanup_calls.append(
+            _CleanupCall(
+                document_version_id=document_version_id,
+                chunk_ids=document_chunk_ids,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class _CleanupCall:
+    document_version_id: int
+    chunk_ids: list[int]

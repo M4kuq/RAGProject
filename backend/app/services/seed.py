@@ -428,51 +428,59 @@ def _index_seed_documents(
     indexing_service: DocumentIndexingService,
 ) -> None:
     try:
-        for logical, version, chunks in _iter_indexable_seed_versions(db):
-            indexing_service.index_chunks(
-                logical_document=logical,
-                document_version=version,
-                chunks=chunks,
+        seed_versions = _iter_seed_versions(db)
+        for logical, version, chunks in seed_versions:
+            if _is_indexable_seed_version(logical, version) and chunks:
+                indexing_service.index_chunks(
+                    logical_document=logical,
+                    document_version=version,
+                    chunks=chunks,
+                )
+        for logical, version, chunks in seed_versions:
+            if _is_indexable_seed_version(logical, version):
+                continue
+            indexing_service.cleanup_document_points(
+                document_version_id=version.document_version_id,
+                document_chunk_ids=[chunk.document_chunk_id for chunk in chunks],
             )
     except (EmbeddingAdapterError, QdrantStoreError) as exc:
         raise RuntimeError("Seed document indexing failed.") from exc
 
 
-def _iter_indexable_seed_versions(
+def _iter_seed_versions(
     db: Session,
 ) -> list[tuple[LogicalDocument, DocumentVersion, list[DocumentChunk]]]:
     demo_titles = [document.title for document in DEMO_DOCUMENTS]
     logical_documents = list(
         db.scalars(
             select(LogicalDocument)
-            .where(
-                LogicalDocument.title.in_(demo_titles),
-                LogicalDocument.status == "active",
-            )
+            .where(LogicalDocument.title.in_(demo_titles))
             .order_by(LogicalDocument.logical_document_id.asc())
         )
     )
     result: list[tuple[LogicalDocument, DocumentVersion, list[DocumentChunk]]] = []
     for logical in logical_documents:
-        version = db.scalar(
-            select(DocumentVersion).where(
-                DocumentVersion.logical_document_id == logical.logical_document_id,
-                DocumentVersion.status == "ready",
-                DocumentVersion.is_active.is_(True),
-            )
-        )
-        if version is None:
-            continue
-        chunks = list(
+        versions = list(
             db.scalars(
-                select(DocumentChunk)
-                .where(DocumentChunk.document_version_id == version.document_version_id)
-                .order_by(DocumentChunk.chunk_index.asc())
+                select(DocumentVersion)
+                .where(DocumentVersion.logical_document_id == logical.logical_document_id)
+                .order_by(DocumentVersion.version_no.asc())
             )
         )
-        if chunks:
+        for version in versions:
+            chunks = list(
+                db.scalars(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.document_version_id == version.document_version_id)
+                    .order_by(DocumentChunk.chunk_index.asc())
+                )
+            )
             result.append((logical, version, chunks))
     return result
+
+
+def _is_indexable_seed_version(logical: LogicalDocument, version: DocumentVersion) -> bool:
+    return logical.status == "active" and version.status == "ready" and version.is_active
 
 
 def _section_title_for_chunk(chunk_text: str, *, fallback: str) -> str:
