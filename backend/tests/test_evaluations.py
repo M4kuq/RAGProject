@@ -501,6 +501,7 @@ class _FakeEvaluationRagService:
                 selected_count=1,
                 excluded_by_rdb_check_count=0,
             ),
+            context_sources_for_safety=[],
         )
 
 
@@ -533,6 +534,7 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
                 citations=[],
                 confidence=None,
                 retrieval_score_summary=None,
+                context_sources_for_safety=[],
                 error_code="no_context_found",
             )
         return super().evaluate_question(

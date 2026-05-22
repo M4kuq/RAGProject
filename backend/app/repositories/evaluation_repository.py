@@ -63,12 +63,24 @@ class EvaluationRepository:
             statement = statement.with_for_update()
         return db.scalar(statement)
 
-    def list_runs(self, db: Session, *, offset: int, limit: int) -> tuple[list[EvaluationRun], int]:
-        total = int(db.scalar(select(func.count()).select_from(EvaluationRun)) or 0)
+    def list_runs(
+        self,
+        db: Session,
+        *,
+        offset: int,
+        limit: int,
+        status: str | None = None,
+    ) -> tuple[list[EvaluationRun], int]:
+        base = select(EvaluationRun)
+        if status is not None:
+            base = base.where(EvaluationRun.status == status)
+        total = int(db.scalar(select(func.count()).select_from(base.subquery())) or 0)
         rows = list(
             db.scalars(
-                select(EvaluationRun)
-                .order_by(EvaluationRun.created_at.desc(), EvaluationRun.evaluation_run_id.desc())
+                base.order_by(
+                    EvaluationRun.created_at.desc(),
+                    EvaluationRun.evaluation_run_id.desc(),
+                )
                 .offset(offset)
                 .limit(limit)
             ).all()
