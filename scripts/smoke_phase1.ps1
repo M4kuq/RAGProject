@@ -21,6 +21,31 @@ function Invoke-CurlJson([string[]]$ArgsList) {
   return ($output | ConvertFrom-Json)
 }
 
+function Invoke-McpJson([string]$Request) {
+  $output = $Request | docker compose exec -T backend python -m app.mcp.server
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $payload = ($output | Out-String) | ConvertFrom-Json
+  if ($null -ne $payload.error) {
+    throw "MCP JSON-RPC error: $($payload.error | ConvertTo-Json -Compress)"
+  }
+  if ($null -ne $payload.result) {
+    $resultProperties = $payload.result.PSObject.Properties.Name
+    if (($resultProperties -contains "isError") -and $payload.result.isError) {
+      throw "MCP tool error: $($payload.result | ConvertTo-Json -Compress)"
+    }
+    if ($resultProperties -contains "content") {
+      foreach ($item in @($payload.result.content)) {
+        if ($null -eq $item) { continue }
+        $itemProperties = $item.PSObject.Properties.Name
+        if (($itemProperties -contains "isError") -and $item.isError) {
+          throw "MCP content error: $($item | ConvertTo-Json -Compress)"
+        }
+      }
+    }
+  }
+  return $payload
+}
+
 function Test-Url([string]$Url) {
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5 | Out-Null
@@ -98,6 +123,19 @@ try {
   $logicalDocumentId = $upload.data.logical_document_id
   $documentVersionId = $upload.data.document_version_id
 
+  Write-Step "wait for uploaded document ingest"
+  $versionReady = $false
+  for ($attempt = 1; $attempt -le 60; $attempt++) {
+    $version = Invoke-CurlJson @(
+      "-fsS", "-b", $cookiePath,
+      "$BackendUrl/api/v1/documents/$logicalDocumentId/versions/$documentVersionId"
+    )
+    if ($version.data.status -eq "ready") { $versionReady = $true; break }
+    if ($version.data.status -eq "failed") { throw "uploaded document ingest failed" }
+    Start-Sleep -Seconds 2
+  }
+  if (-not $versionReady) { throw "uploaded document ingest did not finish" }
+
   Write-Step "approve uploaded document version"
   Invoke-CurlJson @(
     "-fsS", "-b", $cookiePath,
@@ -130,11 +168,9 @@ try {
 
 Write-Step "check MCP server version and tool list"
 Invoke-Compose @("exec", "-T", "backend", "python", "-m", "app.mcp.server", "--version")
-'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | docker compose exec -T backend python -m app.mcp.server | Out-Null
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-McpJson '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | Out-Null
 
 Write-Step "run MCP rag_ask"
-'{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | docker compose exec -T backend python -m app.mcp.server | Out-Null
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-McpJson '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | Out-Null
 
 Write-Step "deep smoke completed"

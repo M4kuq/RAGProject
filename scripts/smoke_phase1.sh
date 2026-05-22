@@ -14,6 +14,40 @@ done
 
 say() { printf '%s\n' "[phase1-smoke] $*"; }
 check_url() { curl -fsS "$1" >/dev/null; }
+json_data_field() {
+  docker compose exec -T backend python -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+print(payload["data"][sys.argv[1]])
+' "$1"
+}
+validate_mcp_response() {
+  docker compose exec -T backend python -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+error = payload.get("error")
+if error is not None:
+    print(f"MCP JSON-RPC error: {error}", file=sys.stderr)
+    sys.exit(1)
+result = payload.get("result")
+if isinstance(result, dict):
+    if result.get("isError") is True:
+        print(f"MCP tool error: {result}", file=sys.stderr)
+        sys.exit(1)
+    for item in result.get("content", []):
+        if isinstance(item, dict) and item.get("isError") is True:
+            print(f"MCP content error: {item}", file=sys.stderr)
+            sys.exit(1)
+'
+}
+run_mcp_json() {
+  response="$(printf '%s\n' "$1" | docker compose exec -T backend python -m app.mcp.server)"
+  printf '%s' "$response" | validate_mcp_response
+}
 
 say "validate compose files"
 docker compose config >/dev/null
@@ -69,17 +103,37 @@ DOC
 
 say "login with local demo admin"
 csrf_json="$(curl -fsS -c "$cookie_file" "$BACKEND_URL/api/v1/auth/csrf")"
-csrf_token="$(printf '%s' "$csrf_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["csrf_token"])')"
+csrf_token="$(printf '%s' "$csrf_json" | json_data_field csrf_token)"
 login_json="$(curl -fsS -b "$cookie_file" -c "$cookie_file" -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf_token" -d '{"email":"admin@example.com","password":"password"}' "$BACKEND_URL/api/v1/auth/login")"
-csrf_token="$(printf '%s' "$login_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["csrf_token"])')"
+csrf_token="$(printf '%s' "$login_json" | json_data_field csrf_token)"
 
 say "list seeded documents"
 curl -fsS -b "$cookie_file" "$BACKEND_URL/api/v1/documents?page_size=5" >/dev/null
 
 say "upload a small smoke document"
 upload_json="$(curl -fsS -b "$cookie_file" -c "$cookie_file" -H "X-CSRF-Token: $csrf_token" -F "title=Phase1 Smoke Upload" -F "file=@$upload_file;type=text/markdown" "$BACKEND_URL/api/v1/documents")"
-logical_document_id="$(printf '%s' "$upload_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["logical_document_id"])')"
-document_version_id="$(printf '%s' "$upload_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["document_version_id"])')"
+logical_document_id="$(printf '%s' "$upload_json" | json_data_field logical_document_id)"
+document_version_id="$(printf '%s' "$upload_json" | json_data_field document_version_id)"
+
+say "wait for uploaded document ingest"
+attempt=1
+while [ "$attempt" -le 60 ]; do
+  version_json="$(curl -fsS -b "$cookie_file" "$BACKEND_URL/api/v1/documents/$logical_document_id/versions/$document_version_id")"
+  version_status="$(printf '%s' "$version_json" | json_data_field status)"
+  if [ "$version_status" = "ready" ]; then
+    break
+  fi
+  if [ "$version_status" = "failed" ]; then
+    echo "uploaded document ingest failed" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+if [ "$attempt" -gt 60 ]; then
+  echo "uploaded document ingest did not finish" >&2
+  exit 1
+fi
 
 say "approve uploaded document version"
 curl -fsS -b "$cookie_file" -H "X-CSRF-Token: $csrf_token" -X POST "$BACKEND_URL/api/v1/documents/$logical_document_id/versions/$document_version_id/approve" >/dev/null
@@ -92,9 +146,9 @@ curl -fsS -b "$cookie_file" -H "Content-Type: application/json" -H "X-CSRF-Token
 
 say "check MCP server version and tool list"
 docker compose exec -T backend python -m app.mcp.server --version >/dev/null
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | docker compose exec -T backend python -m app.mcp.server >/dev/null
+run_mcp_json '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
 say "run MCP rag_ask"
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | docker compose exec -T backend python -m app.mcp.server >/dev/null
+run_mcp_json '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}'
 
 say "deep smoke completed"

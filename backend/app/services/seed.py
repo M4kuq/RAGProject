@@ -285,10 +285,12 @@ def _seed_demo_document(
     for version in versions:
         version.is_active = False
         if version.document_version_id != active_version.document_version_id:
+            _clear_failed_document_version_fields(version)
             version.status = "archived"
-    db.flush()
+    _clear_failed_document_version_fields(active_version)
     active_version.status = "ready"
     active_version.is_active = True
+    db.flush()
 
 
 def _seed_document_version(
@@ -331,6 +333,10 @@ def _seed_document_version(
         db.add(version)
         db.flush()
     return version
+
+
+def _clear_failed_document_version_fields(version: DocumentVersion) -> None:
+    version.error_code = None
 
 
 def _seed_document_chunk(
