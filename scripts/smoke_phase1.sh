@@ -94,4 +94,7 @@ say "check MCP server version and tool list"
 docker compose exec -T backend python -m app.mcp.server --version >/dev/null
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | docker compose exec -T backend python -m app.mcp.server >/dev/null
 
+say "run MCP rag_ask"
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | docker compose exec -T backend python -m app.mcp.server >/dev/null
+
 say "deep smoke completed"

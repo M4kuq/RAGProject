@@ -30,7 +30,7 @@ Windows では次を使う。
 .\scripts\smoke_phase1.ps1 -Deep
 ```
 
-basic smoke は compose config と起動済み endpoint を確認する。deep smoke は migration、seed、login、upload、approve、RAG search、evaluation 作成、MCP startup を確認する。
+basic smoke は compose config と起動済み endpoint を確認する。deep smoke は migration、seed、login、upload、approve、RAG search、evaluation 作成、MCP startup、MCP rag_ask を確認する。
 
 ## API Login Example
 

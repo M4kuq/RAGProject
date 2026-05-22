@@ -133,4 +133,8 @@ Invoke-Compose @("exec", "-T", "backend", "python", "-m", "app.mcp.server", "--v
 '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | docker compose exec -T backend python -m app.mcp.server | Out-Null
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+Write-Step "run MCP rag_ask"
+'{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ask","arguments":{"question":"How does Phase1 keep CI deterministic?","top_k":5,"rerank_top_n":2}}}' | docker compose exec -T backend python -m app.mcp.server | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Step "deep smoke completed"
