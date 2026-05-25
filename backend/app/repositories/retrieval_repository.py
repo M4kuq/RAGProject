@@ -108,6 +108,18 @@ class RetrievalRepository:
     def get_run(self, db: Session, *, retrieval_run_id: int) -> RetrievalRun | None:
         return db.get(RetrievalRun, retrieval_run_id)
 
+    def get_runs_by_ids(
+        self,
+        db: Session,
+        *,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, RetrievalRun]:
+        run_ids = sorted(set(retrieval_run_ids))
+        if not run_ids:
+            return {}
+        statement = select(RetrievalRun).where(RetrievalRun.retrieval_run_id.in_(run_ids))
+        return {run.retrieval_run_id: run for run in db.scalars(statement).all()}
+
     def get_latest_run_for_request_message(
         self,
         db: Session,
@@ -280,6 +292,21 @@ class RetrievalRepository:
         *,
         retrieval_run_id: int,
     ) -> list[CitationRecord]:
+        return self.list_citations_for_runs(
+            db,
+            retrieval_run_ids=[retrieval_run_id],
+        ).get(retrieval_run_id, [])
+
+    def list_citations_for_runs(
+        self,
+        db: Session,
+        *,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, list[CitationRecord]]:
+        run_ids = sorted(set(retrieval_run_ids))
+        if not run_ids:
+            return {}
+        records_by_run_id: dict[int, list[CitationRecord]] = {run_id: [] for run_id in run_ids}
         statement = (
             select(Citation, DocumentChunk, DocumentVersion, LogicalDocument)
             .join(
@@ -299,17 +326,22 @@ class RetrievalRepository:
                 LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(
-                Citation.retrieval_run_id == retrieval_run_id,
+                Citation.retrieval_run_id.in_(run_ids),
                 RetrievalRunItem.selected_flag.is_(True),
             )
-            .order_by(Citation.rank_order.asc(), Citation.citation_id.asc())
-        )
-        return [
-            CitationRecord(
-                citation=citation,
-                chunk=chunk,
-                document_version=version,
-                logical_document=document,
+            .order_by(
+                Citation.retrieval_run_id.asc(),
+                Citation.rank_order.asc(),
+                Citation.citation_id.asc(),
             )
-            for citation, chunk, version, document in db.execute(statement).all()
-        ]
+        )
+        for citation, chunk, version, document in db.execute(statement).all():
+            records_by_run_id[citation.retrieval_run_id].append(
+                CitationRecord(
+                    citation=citation,
+                    chunk=chunk,
+                    document_version=version,
+                    logical_document=document,
+                )
+            )
+        return records_by_run_id

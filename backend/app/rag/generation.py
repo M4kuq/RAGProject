@@ -307,8 +307,6 @@ def _final_answer_text(value: str) -> str:
         "\nI need to",
         " Actually,",
         "\nActually,",
-        " I will ",
-        "\nI will ",
         " Let's ",
         "\nLet's ",
         "检查",

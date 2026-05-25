@@ -475,6 +475,7 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
     chat_session_id: 10,
     client_message_id: "msg_fixed",
     message: "What is RAG?",
+    model_key: "openai:gpt-5.5",
     top_k: 20,
     rerank_top_n: 5
   });

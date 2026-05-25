@@ -34,6 +34,21 @@ class DraftResponse:
         return {"choices": [{"message": {"content": REASONING_DRAFT_TEXT}}]}
 
 
+class LegitimateWillResponse:
+    status_code = 200
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "I will explain the Phase1 stack using Qdrant for retrieval [1]."
+                    }
+                }
+            ]
+        }
+
+
 def test_lmstudio_generator_uses_openai_compatible_chat_api(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -123,6 +138,36 @@ def test_lmstudio_generator_extracts_final_answer_from_reasoning_draft(monkeypat
     assert result.content == (
         "Phase1 の技術スタックは FastAPI、React、PostgreSQL、Qdrant で構成されています [1]。"
     )
+
+
+def test_lmstudio_generator_keeps_legitimate_i_will_answer(monkeypatch) -> None:
+    def fake_post(url: str, **kwargs: object) -> LegitimateWillResponse:
+        return LegitimateWillResponse()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAICompatibleChatAnswerGenerator(
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen3.5-9b",
+        timeout_seconds=180,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Explain the Phase1 stack.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    text="Phase1 uses Qdrant for retrieval.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=2000,
+        )
+    )
+
+    assert result.content == "I will explain the Phase1 stack using Qdrant for retrieval [1]."
 
 
 def test_lmstudio_generator_drops_incomplete_tail_after_final_answer(monkeypatch) -> None:

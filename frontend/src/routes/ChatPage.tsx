@@ -70,6 +70,9 @@ function safeErrorMessage(error: unknown): string {
     if (error.code === "request_in_progress") {
       return "This question is already being processed. Wait for it to finish, then reload.";
     }
+    if (error.code === "unsupported_model") {
+      return "This model is not available in the current local configuration.";
+    }
     if (error.code === "client_message_conflict") {
       return "The message state conflicted with another request. Reload and try again.";
     }
@@ -540,6 +543,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         chat_session_id: targetSession.chat_session_id,
         client_message_id: clientMessageId,
         message,
+        model_key: selectedModel,
         top_k: DEFAULT_TOP_K,
         rerank_top_n: DEFAULT_RERANK_TOP_N
       });

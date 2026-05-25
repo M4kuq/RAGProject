@@ -464,24 +464,20 @@ class ChatService:
         db: Session,
         retrieval_run_ids: list[int],
     ) -> dict[int, RetrievalRun]:
-        return {
-            run_id: run
-            for run_id in set(retrieval_run_ids)
-            if (run := self.retrieval_repository.get_run(db, retrieval_run_id=run_id)) is not None
-        }
+        return self.retrieval_repository.get_runs_by_ids(
+            db,
+            retrieval_run_ids=retrieval_run_ids,
+        )
 
     def _citations_by_run_id(
         self,
         db: Session,
         retrieval_run_ids: list[int],
     ) -> dict[int, list[CitationRecord]]:
-        records_by_run_id: dict[int, list[CitationRecord]] = {}
-        for run_id in sorted(set(retrieval_run_ids)):
-            records_by_run_id[run_id] = self.retrieval_repository.list_citations_for_run(
-                db,
-                retrieval_run_id=run_id,
-            )
-        return records_by_run_id
+        return self.retrieval_repository.list_citations_for_runs(
+            db,
+            retrieval_run_ids=retrieval_run_ids,
+        )
 
     def _citation_item(self, record: CitationRecord) -> RagAskCitation:
         return RagAskCitation(

@@ -50,6 +50,7 @@ export type RagAskRequest = {
   chat_session_id: number;
   client_message_id: string;
   message: string;
+  model_key?: string;
   top_k?: number;
   rerank_top_n?: number;
 };

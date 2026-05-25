@@ -33,6 +33,7 @@ from app.rag.generation import (
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
+    OpenAICompatibleChatAnswerGenerator,
     create_answer_generator,
 )
 from app.rag.rerank import (
@@ -76,6 +77,7 @@ SENSITIVE_OUTPUT_RE = re.compile(
     r"|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
 )
 CITATION_MARKER_RE = re.compile(r"\[(\d{1,6})\]")
+MODEL_KEY_SEPARATOR = ":"
 
 
 class RagPipelineError(RuntimeError):
@@ -210,6 +212,7 @@ class RagService:
         )
         if existing is not None:
             return self._classify_duplicate(db, payload=payload, existing=existing)
+        answer_generator = self._answer_generator_for_request(payload)
 
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
@@ -278,7 +281,7 @@ class RagService:
                 context_items=context_items,
                 citation_sources=result.citation_sources,
             )
-            generation = self.answer_generator.generate(
+            generation = answer_generator.generate(
                 GenerationRequest(
                     message=payload.message,
                     context_items=context_items,
@@ -589,6 +592,24 @@ class RagService:
             finished_at=datetime.now(UTC),
         )
         db.commit()
+
+    def _answer_generator_for_request(self, payload: RagAskRequest) -> AnswerGenerator:
+        if payload.model_key is None:
+            return self.answer_generator
+        provider, separator, model_name = payload.model_key.partition(MODEL_KEY_SEPARATOR)
+        if provider != "lmstudio" or not separator or not model_name.strip():
+            raise RagAskPipelineError("unsupported_model", 422)
+        if self.settings.generation_provider == "fake":
+            return self.answer_generator
+        if self.settings.generation_provider != "lmstudio":
+            raise RagAskPipelineError("unsupported_model", 422)
+        return OpenAICompatibleChatAnswerGenerator(
+            api_key=self.settings.lmstudio_api_key,
+            base_url=self.settings.lmstudio_base_url,
+            model_name=model_name.strip(),
+            timeout_seconds=self.settings.lmstudio_timeout_seconds,
+            max_output_tokens=self.settings.generation_max_output_tokens,
+        )
 
 
 def create_rag_service(settings: Settings) -> RagService:

@@ -30,6 +30,7 @@ from app.db.models import (
     User,
 )
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.retrieval_repository import CitationRecord, RetrievalRepository
 from app.schemas.common import PaginationParams
 from app.services.chat_service import ChatService
 
@@ -86,6 +87,30 @@ def users(db: Session) -> tuple[User, User]:
     assert admin is not None
     assert viewer is not None
     return admin, viewer
+
+
+class RecordingRetrievalRepository(RetrievalRepository):
+    def __init__(self) -> None:
+        self.run_calls: list[list[int]] = []
+        self.citation_calls: list[list[int]] = []
+
+    def get_runs_by_ids(
+        self,
+        db: Session,
+        *,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, RetrievalRun]:
+        self.run_calls.append(list(retrieval_run_ids))
+        return {}
+
+    def list_citations_for_runs(
+        self,
+        db: Session,
+        *,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, list[CitationRecord]]:
+        self.citation_calls.append(list(retrieval_run_ids))
+        return {}
 
 
 def test_chat_service_create_session_title_ttl_and_validation(
@@ -325,6 +350,87 @@ def test_chat_service_delete_session_removes_messages_memory_and_retrieval_runs(
         assert db.query(SummaryMemory).filter_by(chat_session_id=chat_session_id).count() == 0
         assert db.get(RetrievalRun, retrieval_run.retrieval_run_id) is None
         assert db.query(AuditLog).filter_by(action_type="chat.deleted").count() == 1
+
+
+def test_chat_service_list_messages_batches_retrieval_metadata(
+    session_factory: sessionmaker[Session],
+) -> None:
+    retrieval_repository = RecordingRetrievalRepository()
+    service = ChatService(retrieval_repository=retrieval_repository)
+    with session_factory() as db:
+        _, viewer = users(db)
+        session = service.create_session(
+            db,
+            user=viewer,
+            title="batched metadata",
+            temporary_flag=False,
+            request_id="batch-create",
+        )
+        request_one = ChatMessage(
+            chat_session_id=session.chat_session_id,
+            role="user",
+            content="question one",
+            client_message_id="batch-1",
+        )
+        request_two = ChatMessage(
+            chat_session_id=session.chat_session_id,
+            role="user",
+            content="question two",
+            client_message_id="batch-2",
+        )
+        db.add_all([request_one, request_two])
+        db.flush()
+        now = datetime.now(UTC)
+        run_one = RetrievalRun(
+            chat_session_id=session.chat_session_id,
+            request_message_id=request_one.chat_message_id,
+            status="succeeded",
+            started_at=now,
+            finished_at=now,
+            top_k=1,
+        )
+        run_two = RetrievalRun(
+            chat_session_id=session.chat_session_id,
+            request_message_id=request_two.chat_message_id,
+            status="succeeded",
+            started_at=now,
+            finished_at=now,
+            top_k=1,
+        )
+        db.add_all([run_one, run_two])
+        db.flush()
+        run_one_id = run_one.retrieval_run_id
+        run_two_id = run_two.retrieval_run_id
+        db.add_all(
+            [
+                ChatMessage(
+                    chat_session_id=session.chat_session_id,
+                    role="assistant",
+                    content="answer one",
+                    linked_retrieval_run_id=run_one_id,
+                ),
+                ChatMessage(
+                    chat_session_id=session.chat_session_id,
+                    role="assistant",
+                    content="answer two",
+                    linked_retrieval_run_id=run_two_id,
+                ),
+            ]
+        )
+        db.commit()
+
+        messages, total = service.list_messages(
+            db,
+            user=viewer,
+            chat_session_id=session.chat_session_id,
+            pagination=PaginationParams(page=1, page_size=20),
+        )
+
+    assert total == 4
+    assert [message.role for message in messages] == ["user", "user", "assistant", "assistant"]
+    expected_run_ids = [run_one_id, run_two_id]
+    assert retrieval_repository.run_calls == [expected_run_ids]
+    assert retrieval_repository.citation_calls == [expected_run_ids]
 
 
 def test_chat_repository_filters_pagination_messages_tags_and_archive(

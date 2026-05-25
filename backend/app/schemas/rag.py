@@ -45,6 +45,7 @@ class RagAskRequest(BaseModel):
     chat_session_id: int = Field(ge=1)
     client_message_id: str = Field(min_length=1, max_length=255)
     message: str = Field(min_length=1, max_length=8000)
+    model_key: str | None = Field(default=None, max_length=128)
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     filters: RagSearchFilters | None = None
@@ -63,6 +64,16 @@ class RagAskRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("message must not be blank")
+        return stripped
+
+    @field_validator("model_key")
+    @classmethod
+    def validate_model_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("model_key must not be blank")
         return stripped
 
 

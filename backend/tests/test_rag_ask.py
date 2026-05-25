@@ -131,6 +131,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         "chat_session_id": chat_session_id,
         "client_message_id": "viewer-msg-1",
         "message": "alpha policy summary",
+        "model_key": "lmstudio:qwen3.5-9b",
         "top_k": 2,
         "rerank_top_n": 1,
     }
@@ -303,6 +304,31 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         headers=_unsafe_headers(admin_csrf),
     )
     assert admin.status_code == 200
+
+
+def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="unsupported model")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "unsupported-model-msg",
+            "message": "alpha policy summary",
+            "model_key": "openai:gpt-5.5",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "unsupported_model"
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+        assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
 
 
 def test_rag_ask_persists_and_replays_multiple_citations(
