@@ -25,11 +25,11 @@ const DEFAULT_TOP_K = 20;
 const DEFAULT_RERANK_TOP_N = 5;
 const DEFAULT_MODEL = "lmstudio:qwen3.5-9b";
 const MODEL_OPTIONS = [
-  { value: DEFAULT_MODEL, label: "LM Studio / Qwen3.5" },
+  { value: DEFAULT_MODEL, label: "Local Qwen3.5" },
   { value: "openai:gpt-5.5", label: "GPT 5.5" },
   { value: "openai:gpt-5.4", label: "GPT 5.4" },
-  { value: "anthropic:claude-dummy", label: "Claude (dummy)" },
-  { value: "google:gemini-dummy", label: "Gemini (dummy)" }
+  { value: "anthropic:claude-sonnet-4-20250514", label: "Claude" },
+  { value: "gemini:gemini-2.5-flash", label: "Gemini" }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
 

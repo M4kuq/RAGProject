@@ -33,7 +33,6 @@ from app.rag.generation import (
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
-    OpenAICompatibleChatAnswerGenerator,
     create_answer_generator,
 )
 from app.rag.rerank import (
@@ -614,19 +613,26 @@ class RagService:
         if payload.model_key is None:
             return self.answer_generator
         provider, separator, model_name = payload.model_key.partition(MODEL_KEY_SEPARATOR)
-        if provider != "lmstudio" or not separator or not model_name.strip():
+        provider = provider.lower()
+        model_name = model_name.strip()
+        if provider == "google":
+            provider = "gemini"
+        if (
+            provider not in {"lmstudio", "openai", "anthropic", "gemini"}
+            or not separator
+            or not model_name
+        ):
             raise RagAskPipelineError("unsupported_model", 422)
-        if self.settings.generation_provider == "fake":
+        if provider == "lmstudio" and self.settings.generation_provider == "fake":
             return self.answer_generator
-        if self.settings.generation_provider != "lmstudio":
-            raise RagAskPipelineError("unsupported_model", 422)
-        return OpenAICompatibleChatAnswerGenerator(
-            api_key=self.settings.lmstudio_api_key,
-            base_url=self.settings.lmstudio_base_url,
-            model_name=model_name.strip(),
-            timeout_seconds=self.settings.lmstudio_timeout_seconds,
-            max_output_tokens=self.settings.generation_max_output_tokens,
-        )
+        try:
+            return create_answer_generator(
+                self.settings,
+                provider=provider,
+                model_name=model_name,
+            )
+        except AnswerGenerationError as exc:
+            raise RagAskPipelineError("unsupported_model", 422) from exc
 
 
 def create_rag_service(settings: Settings) -> RagService:
