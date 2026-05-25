@@ -668,9 +668,86 @@ class Citation(Base):
     )
 
 
+class EvaluationDataset(Base, TimestampMixin):
+    __tablename__ = "evaluation_datasets"
+    __table_args__ = (
+        ForeignKeyConstraint(["created_by"], ["users.user_id"], ondelete="RESTRICT"),
+        UniqueConstraint("dataset_name", name="uq_evaluation_datasets_name"),
+        CheckConstraint(
+            "source_type IN ('manual', 'fixture', 'feedback_promoted', 'imported')",
+            name="ck_evaluation_datasets_source_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="ck_evaluation_datasets_status",
+        ),
+        pg_check("btrim(dataset_name) <> ''", "ck_evaluation_datasets_name_not_empty"),
+        pg_check("btrim(version) <> ''", "ck_evaluation_datasets_version_not_empty"),
+    )
+
+    evaluation_dataset_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
+    dataset_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[str] = mapped_column(
+        String(50), server_default=text("'v1'"), default="v1", nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(50), server_default=text("'manual'"), default="manual", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(30), server_default=text("'active'"), default="active", nullable=False
+    )
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    created_by: Mapped[int | None] = mapped_column(big_int())
+
+
+class EvaluationCase(Base, TimestampMixin):
+    __tablename__ = "evaluation_cases"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_dataset_id"],
+            ["evaluation_datasets.evaluation_dataset_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "evaluation_dataset_id",
+            "case_key",
+            name="uq_evaluation_cases_dataset_key",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="ck_evaluation_cases_status",
+        ),
+        pg_check("btrim(case_key) <> ''", "ck_evaluation_cases_key_not_empty"),
+        pg_check("btrim(question) <> ''", "ck_evaluation_cases_question_not_empty"),
+    )
+
+    evaluation_case_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
+    evaluation_dataset_id: Mapped[int] = mapped_column(big_int(), nullable=False)
+    case_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_answer: Mapped[str | None] = mapped_column(Text)
+    expected_keywords: Mapped[list[Any] | None] = mapped_column(jsonb())
+    expected_document_ids: Mapped[list[Any] | None] = mapped_column(jsonb())
+    expected_chunk_ids: Mapped[list[Any] | None] = mapped_column(jsonb())
+    required_citation: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("TRUE"), default=True, nullable=False
+    )
+    tags: Mapped[list[Any] | None] = mapped_column(jsonb())
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    status: Mapped[str] = mapped_column(
+        String(30), server_default=text("'active'"), default="active", nullable=False
+    )
+
+
 class EvaluationRun(Base, TimestampMixin):
     __tablename__ = "evaluation_runs"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_dataset_id"],
+            ["evaluation_datasets.evaluation_dataset_id"],
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(["created_by"], ["users.user_id"], ondelete="RESTRICT"),
         CheckConstraint(
             "status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')",
@@ -692,16 +769,36 @@ class EvaluationRun(Base, TimestampMixin):
             "status <> 'failed' OR error_code IS NOT NULL",
             name="ck_evaluation_runs_failed_error_code",
         ),
+        CheckConstraint(
+            f"strategy_type IN ({sql_literal_list(RETRIEVAL_STRATEGY_VALUES)})",
+            name="ck_evaluation_runs_strategy_type",
+        ),
+        CheckConstraint(
+            "trigger_type IN ('manual', 'ci', 'scheduled', 'post_deploy', 'online_sampled_trace')",
+            name="ck_evaluation_runs_trigger_type",
+        ),
     )
 
     evaluation_run_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
     created_by: Mapped[int] = mapped_column(big_int(), nullable=False)
+    evaluation_dataset_id: Mapped[int | None] = mapped_column(big_int())
     status: Mapped[str] = mapped_column(
         String(30), server_default=text("'queued'"), default="queued", nullable=False
     )
     target_type: Mapped[str | None] = mapped_column(String(80))
     target_id: Mapped[int | None] = mapped_column(big_int())
     metrics_config: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    strategy_type: Mapped[str] = mapped_column(
+        String(50),
+        server_default=text(f"'{DEFAULT_RETRIEVAL_STRATEGY.value}'"),
+        default=DEFAULT_RETRIEVAL_STRATEGY.value,
+        nullable=False,
+    )
+    trigger_type: Mapped[str] = mapped_column(
+        String(50), server_default=text("'manual'"), default="manual", nullable=False
+    )
+    retrieval_settings_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    strategy_metrics_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -713,6 +810,11 @@ class EvaluationRunItem(Base, TimestampMixin):
     __table_args__ = (
         ForeignKeyConstraint(
             ["evaluation_run_id"], ["evaluation_runs.evaluation_run_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["evaluation_case_id"],
+            ["evaluation_cases.evaluation_case_id"],
+            ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
             ["retrieval_run_id"], ["retrieval_runs.retrieval_run_id"], ondelete="RESTRICT"
@@ -737,11 +839,23 @@ class EvaluationRunItem(Base, TimestampMixin):
             "status <> 'failed' OR error_code IS NOT NULL",
             name="ck_evaluation_run_items_failed_error_code",
         ),
+        CheckConstraint(
+            f"strategy_type IN ({sql_literal_list(RETRIEVAL_STRATEGY_VALUES)})",
+            name="ck_evaluation_run_items_strategy_type",
+        ),
     )
 
     evaluation_run_item_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
     evaluation_run_id: Mapped[int] = mapped_column(big_int(), nullable=False)
+    evaluation_case_id: Mapped[int | None] = mapped_column(big_int())
     retrieval_run_id: Mapped[int | None] = mapped_column(big_int())
+    strategy_type: Mapped[str] = mapped_column(
+        String(50),
+        server_default=text(f"'{DEFAULT_RETRIEVAL_STRATEGY.value}'"),
+        default=DEFAULT_RETRIEVAL_STRATEGY.value,
+        nullable=False,
+    )
+    case_key: Mapped[str | None] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(
         String(30), server_default=text("'queued'"), default="queued", nullable=False
     )
@@ -749,6 +863,8 @@ class EvaluationRunItem(Base, TimestampMixin):
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     citation_coverage: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
+    latency_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    metric_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -911,10 +1027,27 @@ Index("ux_citations_run_rank", Citation.retrieval_run_id, Citation.rank_order, u
 Index("ix_citations_chunk", Citation.document_chunk_id)
 Index("ix_evaluation_runs_status_created", EvaluationRun.status, EvaluationRun.created_at.desc())
 Index(
+    "ix_evaluation_runs_dataset_strategy",
+    EvaluationRun.evaluation_dataset_id,
+    EvaluationRun.strategy_type,
+    EvaluationRun.created_at.desc(),
+)
+Index(
     "ix_evaluation_run_items_run_status",
     EvaluationRunItem.evaluation_run_id,
     EvaluationRunItem.status,
 )
+Index(
+    "ix_evaluation_datasets_status_created",
+    EvaluationDataset.status,
+    EvaluationDataset.created_at.desc(),
+)
+Index(
+    "ix_evaluation_cases_dataset_status",
+    EvaluationCase.evaluation_dataset_id,
+    EvaluationCase.status,
+)
+Index("ix_evaluation_run_items_case", EvaluationRunItem.evaluation_case_id)
 Index("ix_audit_logs_created", AuditLog.created_at.desc())
 Index("ix_audit_logs_action_created", AuditLog.action_type, AuditLog.created_at.desc())
 Index("ix_audit_logs_target", AuditLog.target_type, AuditLog.target_id, AuditLog.created_at.desc())

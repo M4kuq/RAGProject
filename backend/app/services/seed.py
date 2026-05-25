@@ -280,6 +280,18 @@ def _seed_system_settings(db: Session) -> None:
             {"dataset_name": "phase1_smoke", "case_limit": 5},
             "Default fixture for Phase1 demo evaluation.",
         ),
+        "rag.evaluation.default_dataset": (
+            {
+                "dataset_name": "phase2_strategy_smoke",
+                "strategy_type": "dense",
+                "case_limit": 5,
+            },
+            "Default Phase2 strategy evaluation fixture metadata.",
+        ),
+        "rag.evaluation.ci_smoke_enabled": (
+            False,
+            "CI retrieval evaluation smoke workflow remains disabled until the Phase2 CI PR.",
+        ),
         **PHASE2_RETRIEVAL_SYSTEM_SETTINGS,
     }
     for key, (value, description) in defaults.items():

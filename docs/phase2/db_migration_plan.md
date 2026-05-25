@@ -1,38 +1,81 @@
 # Phase2 DB Migration Plan
 
-## Migration
+## Migration Chain
 
-PR-20 は `0003_phase2_strategy_trace` を追加する。既存列の削除や意味変更は行わず、追加 column と CHECK constraint のみで構成する。
+- `0003_phase2_strategy_trace`: PR-20 retrieval strategy and trace columns.
+- `0004_eval_dataset_metrics`: PR-22 evaluation dataset and strategy metric schema.
 
-## retrieval_runs
+Both migrations are additive. They do not delete existing Phase1 columns or change existing API contracts.
 
-追加 column:
+## PR-22 New Tables
 
-| column | type | null | default | purpose |
-|---|---|---:|---|---|
-| `strategy_type` | `VARCHAR(50)` | no | `dense` | runの検索戦略 |
-| `query_plan_json` | `JSONB` | yes | none | redacted query plan |
-| `strategy_decision_json` | `JSONB` | yes | none | redacted strategy decision |
-| `latency_breakdown_json` | `JSONB` | yes | none | retrieval/rerank/generation latency |
-| `retrieval_settings_json` | `JSONB` | yes | none | run時点の安全な設定snapshot |
+### evaluation_datasets
 
-`strategy_type` は `dense`, `sparse`, `hybrid`, `multi_query_dense`, `multi_query_hybrid`, `metadata_filtered`, `version_aware`, `agentic_router`, `fallback_dense` のみ許可する。既存 run は DB default により `dense` として扱う。
+| column | type | null | default |
+|---|---|---:|---|
+| `evaluation_dataset_id` | `BIGSERIAL` | no | |
+| `dataset_name` | `VARCHAR(120)` | no | |
+| `description` | `TEXT` | yes | |
+| `version` | `VARCHAR(50)` | no | `v1` |
+| `source_type` | `VARCHAR(50)` | no | `manual` |
+| `status` | `VARCHAR(30)` | no | `active` |
+| `metadata_json` | `JSONB` | yes | |
+| `created_by` | `BIGINT` | yes | |
+| `created_at` / `updated_at` | `TIMESTAMPTZ` | no | `now()` |
 
-## retrieval_run_items
+### evaluation_cases
 
-追加 column:
+| column | type | null | default |
+|---|---|---:|---|
+| `evaluation_case_id` | `BIGSERIAL` | no | |
+| `evaluation_dataset_id` | `BIGINT` | no | |
+| `case_key` | `VARCHAR(120)` | no | |
+| `question` | `TEXT` | no | |
+| `expected_answer` | `TEXT` | yes | |
+| `expected_keywords` | `JSONB` | yes | |
+| `expected_document_ids` | `JSONB` | yes | |
+| `expected_chunk_ids` | `JSONB` | yes | |
+| `required_citation` | `BOOLEAN` | no | `true` |
+| `tags` | `JSONB` | yes | |
+| `metadata_json` | `JSONB` | yes | |
+| `status` | `VARCHAR(30)` | no | `active` |
 
-| column | type | null | default | purpose |
-|---|---|---:|---|---|
-| `retrieval_source` | `VARCHAR(50)` | yes | none | itemの取得元 |
-| `score_breakdown_json` | `JSONB` | yes | none | dense/sparse/fused/rerank scoreの内訳 |
+`UNIQUE(evaluation_dataset_id, case_key)` prevents duplicate fixture import.
 
-`retrieval_source` は `dense`, `sparse`, `hybrid`, `rerank`, `fallback_dense`, `metadata_filter` のみ許可する。PR-20 では dense の保存土台だけを使う。
+## PR-22 Existing Table Extensions
 
-## downgrade
+### evaluation_runs
 
-downgrade は追加 CHECK constraint を削除してから追加 column を削除する。既存 Phase1 schema へ戻せるが、downgrade により Phase2 trace metadata は失われる。
+- `evaluation_dataset_id`
+- `strategy_type`
+- `trigger_type`
+- `retrieval_settings_json`
+- `strategy_metrics_summary_json`
 
-## 保存禁止
+### evaluation_run_items
 
-JSONB column には raw prompt、raw chunk text、full context、PII、secret、token、credential を保存しない。
+- `evaluation_case_id`
+- `strategy_type`
+- `case_key`
+- `latency_breakdown_json`
+- `metric_summary_json`
+
+### evaluation_results
+
+- `metric_value`
+- `metric_detail_json`
+- `strategy_type`
+
+`metric_score` and `details_json` remain for Phase1 compatibility.
+
+## Constraints
+
+`strategy_type` values match PR-20 `RetrievalStrategy`. `trigger_type` accepts `manual`, `ci`, `scheduled`, `post_deploy`, and `online_sampled_trace`. PR-22 stores these values but does not implement CI/scheduled/online execution.
+
+## Downgrade
+
+Downgrade drops PR-22 constraints, indexes, added columns, then `evaluation_cases` and `evaluation_datasets`. This removes PR-22 metadata but returns to the PR-21 schema.
+
+## Security
+
+JSONB columns must not contain raw prompt, full context, raw chunk text, PII, secret, token, credential, API key, or password.

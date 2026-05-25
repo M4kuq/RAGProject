@@ -9,10 +9,197 @@ from app.api.responses import paginate, success_response
 from app.db.models import AuditLog, SystemSetting, User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
-from app.schemas.evaluations import EvaluationRunCreateRequest
+from app.schemas.evaluations import (
+    EvaluationCaseCreateRequest,
+    EvaluationCaseUpdateRequest,
+    EvaluationDatasetCreateRequest,
+    EvaluationDatasetManifest,
+    EvaluationDatasetUpdateRequest,
+    EvaluationRunCreateRequest,
+)
 from app.services.evaluation_service import EvaluationService
 
 router = APIRouter()
+
+
+@router.get("/evaluations/datasets")
+def evaluation_datasets(
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
+) -> dict[str, object]:
+    rows, page_meta = EvaluationService().list_datasets(db, pagination=pagination)
+    return success_response([row.model_dump(mode="json") for row in rows], request, page_meta)
+
+
+@router.post("/evaluations/datasets", status_code=status.HTTP_201_CREATED)
+def create_evaluation_dataset(
+    request: Request,
+    payload: EvaluationDatasetCreateRequest,
+    _: None = Depends(require_csrf),
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().create_dataset(db, payload=payload, user=user)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/evaluations/datasets/import")
+def import_evaluation_dataset(
+    request: Request,
+    manifest: EvaluationDatasetManifest,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().import_dataset_manifest(db, manifest=manifest, user=user)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/datasets/{evaluation_dataset_id}")
+def evaluation_dataset_detail(
+    evaluation_dataset_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_dataset_detail(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.patch("/evaluations/datasets/{evaluation_dataset_id}")
+def update_evaluation_dataset(
+    evaluation_dataset_id: int,
+    request: Request,
+    payload: EvaluationDatasetUpdateRequest,
+    _csrf: None = Depends(require_csrf),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().update_dataset(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        payload=payload,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/evaluations/datasets/{evaluation_dataset_id}/archive")
+def archive_evaluation_dataset(
+    evaluation_dataset_id: int,
+    request: Request,
+    _csrf: None = Depends(require_csrf),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().archive_dataset(db, evaluation_dataset_id=evaluation_dataset_id)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/datasets/{evaluation_dataset_id}/cases")
+def evaluation_cases(
+    evaluation_dataset_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
+) -> dict[str, object]:
+    rows, page_meta = EvaluationService().list_cases(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        pagination=pagination,
+    )
+    return success_response([row.model_dump(mode="json") for row in rows], request, page_meta)
+
+
+@router.post(
+    "/evaluations/datasets/{evaluation_dataset_id}/cases",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_evaluation_case(
+    evaluation_dataset_id: int,
+    request: Request,
+    payload: EvaluationCaseCreateRequest,
+    _csrf: None = Depends(require_csrf),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().create_case(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        payload=payload,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}")
+def evaluation_case_detail(
+    evaluation_dataset_id: int,
+    evaluation_case_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_case_detail(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        evaluation_case_id=evaluation_case_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.patch("/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}")
+def update_evaluation_case(
+    evaluation_dataset_id: int,
+    evaluation_case_id: int,
+    request: Request,
+    payload: EvaluationCaseUpdateRequest,
+    _csrf: None = Depends(require_csrf),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().update_case(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        evaluation_case_id=evaluation_case_id,
+        payload=payload,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}/archive")
+def archive_evaluation_case(
+    evaluation_dataset_id: int,
+    evaluation_case_id: int,
+    request: Request,
+    _csrf: None = Depends(require_csrf),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().archive_case(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        evaluation_case_id=evaluation_case_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/datasets/{evaluation_dataset_id}/export")
+def export_evaluation_dataset(
+    evaluation_dataset_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().export_dataset_manifest(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
 
 
 @router.post("/evaluations/runs", status_code=status.HTTP_202_ACCEPTED)

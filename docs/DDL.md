@@ -577,13 +577,67 @@ ALTER TABLE chat_messages
 -- 6. Evaluation
 -- ============================================================
 
+CREATE TABLE evaluation_datasets (
+    evaluation_dataset_id BIGSERIAL PRIMARY KEY,
+    dataset_name VARCHAR(120) NOT NULL,
+    description TEXT,
+    version VARCHAR(50) NOT NULL DEFAULT 'v1',
+    source_type VARCHAR(50) NOT NULL DEFAULT 'manual',
+    status VARCHAR(30) NOT NULL DEFAULT 'active',
+    metadata_json JSONB,
+    created_by BIGINT REFERENCES users(user_id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_evaluation_datasets_name
+        UNIQUE (dataset_name),
+    CONSTRAINT ck_evaluation_datasets_source_type
+        CHECK (source_type IN ('manual', 'fixture', 'feedback_promoted', 'imported')),
+    CONSTRAINT ck_evaluation_datasets_status
+        CHECK (status IN ('active', 'archived')),
+    CONSTRAINT ck_evaluation_datasets_name_not_empty
+        CHECK (btrim(dataset_name) <> ''),
+    CONSTRAINT ck_evaluation_datasets_version_not_empty
+        CHECK (btrim(version) <> '')
+);
+
+CREATE TABLE evaluation_cases (
+    evaluation_case_id BIGSERIAL PRIMARY KEY,
+    evaluation_dataset_id BIGINT NOT NULL
+        REFERENCES evaluation_datasets(evaluation_dataset_id) ON DELETE RESTRICT,
+    case_key VARCHAR(120) NOT NULL,
+    question TEXT NOT NULL,
+    expected_answer TEXT,
+    expected_keywords JSONB,
+    expected_document_ids JSONB,
+    expected_chunk_ids JSONB,
+    required_citation BOOLEAN NOT NULL DEFAULT TRUE,
+    tags JSONB,
+    metadata_json JSONB,
+    status VARCHAR(30) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_evaluation_cases_dataset_key
+        UNIQUE (evaluation_dataset_id, case_key),
+    CONSTRAINT ck_evaluation_cases_status
+        CHECK (status IN ('active', 'archived')),
+    CONSTRAINT ck_evaluation_cases_key_not_empty
+        CHECK (btrim(case_key) <> ''),
+    CONSTRAINT ck_evaluation_cases_question_not_empty
+        CHECK (btrim(question) <> '')
+);
+
 CREATE TABLE evaluation_runs (
     evaluation_run_id BIGSERIAL PRIMARY KEY,
     created_by BIGINT NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
+    evaluation_dataset_id BIGINT REFERENCES evaluation_datasets(evaluation_dataset_id) ON DELETE RESTRICT,
     status VARCHAR(30) NOT NULL DEFAULT 'queued',
     target_type VARCHAR(80),
     target_id BIGINT,
     metrics_config JSONB,
+    strategy_type VARCHAR(50) NOT NULL DEFAULT 'dense',
+    trigger_type VARCHAR(50) NOT NULL DEFAULT 'manual',
+    retrieval_settings_json JSONB,
+    strategy_metrics_summary_json JSONB,
     error_code VARCHAR(100),
     error_message TEXT,
     started_at TIMESTAMPTZ,
@@ -599,20 +653,39 @@ CREATE TABLE evaluation_runs (
     CONSTRAINT ck_evaluation_runs_terminal_finished
         CHECK (status NOT IN ('succeeded', 'failed', 'canceled') OR finished_at IS NOT NULL),
     CONSTRAINT ck_evaluation_runs_failed_error_code
-        CHECK (status <> 'failed' OR error_code IS NOT NULL)
+        CHECK (status <> 'failed' OR error_code IS NOT NULL),
+    CONSTRAINT ck_evaluation_runs_strategy_type
+        CHECK (strategy_type IN (
+            'dense',
+            'sparse',
+            'hybrid',
+            'multi_query_dense',
+            'multi_query_hybrid',
+            'metadata_filtered',
+            'version_aware',
+            'agentic_router',
+            'fallback_dense'
+        )),
+    CONSTRAINT ck_evaluation_runs_trigger_type
+        CHECK (trigger_type IN ('manual', 'ci', 'scheduled', 'post_deploy', 'online_sampled_trace'))
 );
 
-COMMENT ON TABLE evaluation_runs IS 'Phase1 は admin manual evaluation。canceled は内部中止または将来の管理操作用。公開 cancel endpoint は持たない。';
+COMMENT ON TABLE evaluation_runs IS 'Phase1 は admin manual evaluation。PR-22以降は dataset / strategy / trigger を保存する。';
 
 CREATE TABLE evaluation_run_items (
     evaluation_run_item_id BIGSERIAL PRIMARY KEY,
     evaluation_run_id BIGINT NOT NULL REFERENCES evaluation_runs(evaluation_run_id) ON DELETE RESTRICT,
+    evaluation_case_id BIGINT REFERENCES evaluation_cases(evaluation_case_id) ON DELETE RESTRICT,
     retrieval_run_id BIGINT REFERENCES retrieval_runs(retrieval_run_id) ON DELETE RESTRICT,
+    strategy_type VARCHAR(50) NOT NULL DEFAULT 'dense',
+    case_key VARCHAR(120),
     status VARCHAR(30) NOT NULL DEFAULT 'queued',
     faithfulness_score NUMERIC(10,6),
     groundedness_score NUMERIC(10,6),
     citation_coverage NUMERIC(10,6),
     latency_ms INTEGER,
+    latency_breakdown_json JSONB,
+    metric_summary_json JSONB,
     error_code VARCHAR(100),
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -628,7 +701,51 @@ CREATE TABLE evaluation_run_items (
     CONSTRAINT ck_evaluation_run_items_latency
         CHECK (latency_ms IS NULL OR latency_ms >= 0),
     CONSTRAINT ck_evaluation_run_items_failed_error_code
-        CHECK (status <> 'failed' OR error_code IS NOT NULL)
+        CHECK (status <> 'failed' OR error_code IS NOT NULL),
+    CONSTRAINT ck_evaluation_run_items_strategy_type
+        CHECK (strategy_type IN (
+            'dense',
+            'sparse',
+            'hybrid',
+            'multi_query_dense',
+            'multi_query_hybrid',
+            'metadata_filtered',
+            'version_aware',
+            'agentic_router',
+            'fallback_dense'
+        ))
+);
+
+CREATE TABLE evaluation_results (
+    evaluation_result_id BIGSERIAL PRIMARY KEY,
+    evaluation_run_item_id BIGINT NOT NULL
+        REFERENCES evaluation_run_items(evaluation_run_item_id) ON DELETE RESTRICT,
+    metric_name VARCHAR(100) NOT NULL,
+    metric_score NUMERIC(10,6),
+    metric_value NUMERIC(12,6),
+    metric_label VARCHAR(100),
+    details_json JSONB,
+    metric_detail_json JSONB,
+    strategy_type VARCHAR(50) NOT NULL DEFAULT 'dense',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_evaluation_results_item_metric
+        UNIQUE (evaluation_run_item_id, metric_name),
+    CONSTRAINT ck_evaluation_results_metric_name
+        CHECK (btrim(metric_name) <> ''),
+    CONSTRAINT ck_evaluation_results_score
+        CHECK (metric_score IS NULL OR (metric_score >= 0 AND metric_score <= 1)),
+    CONSTRAINT ck_evaluation_results_strategy_type
+        CHECK (strategy_type IN (
+            'dense',
+            'sparse',
+            'hybrid',
+            'multi_query_dense',
+            'multi_query_hybrid',
+            'metadata_filtered',
+            'version_aware',
+            'agentic_router',
+            'fallback_dense'
+        ))
 );
 
 -- ============================================================
@@ -732,8 +849,20 @@ CREATE INDEX ix_citations_chunk
 
 CREATE INDEX ix_evaluation_runs_status_created
     ON evaluation_runs(status, created_at DESC);
+CREATE INDEX ix_evaluation_runs_dataset_strategy
+    ON evaluation_runs(evaluation_dataset_id, strategy_type, created_at DESC);
 CREATE INDEX ix_evaluation_run_items_run_status
     ON evaluation_run_items(evaluation_run_id, status);
+CREATE INDEX ix_evaluation_datasets_status_created
+    ON evaluation_datasets(status, created_at DESC);
+CREATE INDEX ix_evaluation_cases_dataset_status
+    ON evaluation_cases(evaluation_dataset_id, status);
+CREATE INDEX ix_evaluation_run_items_case
+    ON evaluation_run_items(evaluation_case_id);
+CREATE INDEX ix_evaluation_results_item
+    ON evaluation_results(evaluation_run_item_id);
+CREATE INDEX ix_evaluation_results_metric_score
+    ON evaluation_results(metric_name, metric_score);
 
 CREATE INDEX ix_audit_logs_created
     ON audit_logs(created_at DESC);

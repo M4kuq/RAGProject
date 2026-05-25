@@ -16,6 +16,7 @@ class EvaluationCase:
     question: str
     expected_keywords: tuple[str, ...]
     required_citation: bool
+    expected_answer: str | None = None
 
 
 def load_evaluation_cases(
@@ -54,24 +55,46 @@ def _safe_dataset_name(value: str) -> str:
 def _case_from_payload(value: Any) -> EvaluationCase:
     if not isinstance(value, dict):
         raise EvaluationFixtureError("evaluation_case_invalid")
-    case_id = _required_text(value, "case_id", max_length=100)
+    case_id = _required_text(value, "case_id", max_length=100, fallback_key="case_key")
     question = _required_text(value, "question", max_length=8000)
     raw_keywords = value.get("expected_keywords")
     if not isinstance(raw_keywords, list):
         raise EvaluationFixtureError("evaluation_case_invalid")
     keywords = tuple(_keyword(item) for item in raw_keywords)
-    if not keywords:
+    expected_answer = _optional_text(value, "expected_answer", max_length=8000)
+    if not keywords and expected_answer is None:
         raise EvaluationFixtureError("evaluation_case_invalid")
     return EvaluationCase(
         case_id=case_id,
         question=question,
         expected_keywords=keywords,
         required_citation=bool(value.get("required_citation", True)),
+        expected_answer=expected_answer,
     )
 
 
-def _required_text(value: dict[str, Any], key: str, *, max_length: int) -> str:
+def _required_text(
+    value: dict[str, Any],
+    key: str,
+    *,
+    max_length: int,
+    fallback_key: str | None = None,
+) -> str:
     raw = value.get(key)
+    if raw is None and fallback_key is not None:
+        raw = value.get(fallback_key)
+    if not isinstance(raw, str):
+        raise EvaluationFixtureError("evaluation_case_invalid")
+    text = " ".join(raw.replace("\x00", " ").split())
+    if not text or len(text) > max_length or _contains_sensitive_word(text):
+        raise EvaluationFixtureError("evaluation_case_invalid")
+    return text
+
+
+def _optional_text(value: dict[str, Any], key: str, *, max_length: int) -> str | None:
+    raw = value.get(key)
+    if raw is None:
+        return None
     if not isinstance(raw, str):
         raise EvaluationFixtureError("evaluation_case_invalid")
     text = " ".join(raw.replace("\x00", " ").split())

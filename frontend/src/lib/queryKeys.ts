@@ -28,6 +28,11 @@ export const queryKeys = {
   evaluations: {
     all: ["evaluations"] as const,
     list: (params: { page: number; page_size: number }) => ["evaluations", "list", params] as const,
-    detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const
+    detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const,
+    datasets: (params: { page: number; page_size: number }) =>
+      ["evaluations", "datasets", params] as const,
+    dataset: (evaluationDatasetId: number) => ["evaluations", "dataset", evaluationDatasetId] as const,
+    cases: (evaluationDatasetId: number, params: { page: number; page_size: number }) =>
+      ["evaluations", "dataset", evaluationDatasetId, "cases", params] as const
   }
 };

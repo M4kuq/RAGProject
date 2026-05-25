@@ -54,6 +54,14 @@ export function EvaluationDetailPage() {
             </dd>
           </div>
           <div>
+            <dt>Strategy</dt>
+            <dd>{run.data.strategy_type}</dd>
+          </div>
+          <div>
+            <dt>Trigger</dt>
+            <dd>{run.data.trigger_type}</dd>
+          </div>
+          <div>
             <dt>Job</dt>
             <dd>
               {run.data.job_id ? (
@@ -121,7 +129,7 @@ export function EvaluationDetailPage() {
           <tbody>
             {run.data.items.map((item) => (
               <tr key={item.evaluation_run_item_id}>
-                <td>{item.case_id ?? `item-${item.evaluation_run_item_id}`}</td>
+                <td>{item.case_key ?? item.case_id ?? `item-${item.evaluation_run_item_id}`}</td>
                 <td>
                   <StatusBadge status={item.status} />
                 </td>

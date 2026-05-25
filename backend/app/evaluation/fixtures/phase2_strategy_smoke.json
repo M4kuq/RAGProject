@@ -1,0 +1,81 @@
+{
+  "schema_version": "phase2.evaluation_dataset.v1",
+  "dataset": {
+    "dataset_name": "phase2_strategy_smoke",
+    "description": "Small deterministic dataset for Phase2 strategy metric schema smoke tests.",
+    "version": "v1",
+    "source_type": "fixture",
+    "status": "active",
+    "metadata_json": {
+      "owner": "phase2",
+      "context_included": false
+    }
+  },
+  "cases": [
+    {
+      "case_key": "dense_seed_stack",
+      "question": "What vector database is used by the Phase1 RAG stack?",
+      "expected_keywords": ["Qdrant"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["dense", "baseline"],
+      "metadata_json": {
+        "expected_strategy": "dense"
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "keyword_heavy_ci",
+      "question": "What keeps CI deterministic for embeddings and answer generation?",
+      "expected_keywords": ["deterministic", "fake adapters"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["keyword_heavy"],
+      "metadata_json": {
+        "expected_strategy": "dense"
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "citation_required_confidence",
+      "question": "Where are confidence labels stored after RAG answers?",
+      "expected_keywords": ["retrieval runs", "confidence labels"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["citation_required"],
+      "metadata_json": {
+        "expected_strategy": "dense"
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "no_context_expected",
+      "question": "Which policy describes a deliberately absent Phase2 production-only feature?",
+      "expected_keywords": ["not implemented"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": false,
+      "tags": ["no_context"],
+      "metadata_json": {
+        "expected_outcome": "no_context"
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "future_hybrid_candidate",
+      "question": "Which future retrieval strategy should combine dense and sparse scores?",
+      "expected_keywords": ["hybrid"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["future_hybrid"],
+      "metadata_json": {
+        "expected_strategy": "hybrid"
+      },
+      "status": "active"
+    }
+  ]
+}

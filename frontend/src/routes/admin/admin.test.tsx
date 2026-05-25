@@ -171,6 +171,92 @@ test("keeps the existing admin evaluation page reachable", async () => {
   expect(await screen.findByRole("button", { name: "Run evaluation" })).toBeInTheDocument();
 });
 
+test("admin evaluation dataset detail shows cases and export", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/datasets/10/export")) {
+        return jsonResponse({
+          data: {
+            schema_version: "phase2.evaluation_dataset.v1",
+            dataset: {
+              dataset_name: "phase2_strategy_smoke",
+              description: "Phase2 dataset",
+              version: "v1",
+              source_type: "fixture",
+              status: "active",
+              metadata_json: null
+            },
+            cases: [],
+            metric_specs: []
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets/10/cases")) {
+        return jsonResponse({
+          data: [
+            {
+              evaluation_case_id: 100,
+              evaluation_dataset_id: 10,
+              case_key: "dense_case",
+              question: "What vector database is used?",
+              expected_answer: null,
+              expected_keywords: ["Qdrant"],
+              expected_document_ids: [],
+              expected_chunk_ids: [],
+              required_citation: true,
+              tags: ["dense"],
+              metadata_json: null,
+              status: "active",
+              created_at: "2026-04-30T00:00:00Z",
+              updated_at: "2026-04-30T00:00:00Z"
+            }
+          ],
+          meta: { pagination: { page: 1, page_size: 50, total: 1, has_next: false } }
+        });
+      }
+      if (url.endsWith("/api/v1/evaluations/datasets/10")) {
+        return jsonResponse({
+          data: {
+            evaluation_dataset_id: 10,
+            dataset_name: "phase2_strategy_smoke",
+            description: "Phase2 dataset",
+            version: "v1",
+            source_type: "fixture",
+            status: "active",
+            metadata_json: null,
+            case_count: 1,
+            created_by: 1,
+            created_at: "2026-04-30T00:00:00Z",
+            updated_at: "2026-04-30T00:00:00Z"
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations/datasets/10");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "phase2_strategy_smoke" })).toBeInTheDocument();
+  expect(await screen.findByText("dense_case")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Export" }));
+  expect(await screen.findByText(/phase2.evaluation_dataset.v1/)).toBeInTheDocument();
+});
+
 test("document list renders filters, statuses and safe escaped text", async () => {
   vi.stubGlobal(
     "fetch",

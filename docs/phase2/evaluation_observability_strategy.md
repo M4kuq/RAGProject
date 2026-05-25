@@ -1,52 +1,71 @@
 # Evaluation and Observability Strategy
 
-## 方針
+## Direction
 
-Phase2 では evaluation と observability を補助機能ではなく中核機能として扱う。検索方式を追加する前に、strategy別の結果、score、latency、fallback、失敗理由を比較できる形にする。
+Phase2 treats evaluation and observability as central architecture, not support tooling. Retrieval strategies must be observable and comparable before new retrieval algorithms are added.
 
-## Evaluation metrics
+## Trace Foundation
 
-strategy比較では次の metrics を扱う方針とする。
+PR-21 stores safe retrieval trace for the existing dense flow:
 
-- recall@k
-- MRR
-- citation coverage
-- groundedness
-- faithfulness
-- no_context rate
-- p95 latency
-- strategy selection accuracy
-
-保存先は既存 `evaluation_runs` / `evaluation_run_items` / `evaluation_results` を優先する。PR-20 では `StrategyEvaluationMetricSpec` DTO で metric spec を固定し、dataset/case/run/result の関係は壊さない。
-
-## Observability
-
-PR-20 は DB column と DTO を用意する。実際の trace生成、Debug UI表示、LangSmith export は後続PRで実装する。
-
-保存対象:
-
-- strategy type
-- redacted query plan metadata
-- redacted strategy decision metadata
-- latency breakdown
-- score breakdown
+- query plan hash and counts
+- strategy decision metadata
 - retrieval settings snapshot
+- latency breakdown
+- item source and score breakdown
 
-保存禁止:
+Trace payloads never store raw query, raw prompt, full context, raw chunk text, PII, secrets, credentials, tokens, or external raw request/response bodies.
+
+## Dataset Foundation
+
+PR-22 stores evaluation datasets and cases in DB so the same dataset can be reused across strategies:
+
+- manual datasets
+- imported fixture datasets
+- future feedback-promoted datasets
+- archived datasets retained for auditability
+
+Dataset/case APIs are admin-only. Writes require CSRF. Delete is intentionally not exposed; archive is used instead.
+
+## Strategy Metrics
+
+The Phase2 strategy metric schema includes:
+
+- `recall_at_k`
+- `mrr`
+- `citation_coverage`
+- `groundedness`
+- `faithfulness`
+- `no_context_rate`
+- `p95_latency`
+- `strategy_selection_accuracy`
+
+`evaluation_results.metric_value` stores the canonical metric value. `metric_score` remains for Phase1 ratio metrics. `metric_detail_json` stores safe details such as counts, units, labels, case key, and reason codes.
+
+## Comparison Model
+
+The comparison key is:
+
+```text
+evaluation_dataset_id + strategy_type + metric_name
+```
+
+PR-22 stores this shape but does not run sparse, hybrid, or agentic_router comparisons. PR-25 will add Strategy Evaluation Runner on top of this schema.
+
+## CI Direction
+
+CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-22 validation.
+
+## Redaction Rules
+
+Do not store or display:
 
 - raw prompt
-- raw chunk text
 - full context
+- raw chunk text
 - PII
-- secret、token、credential
-- 外部API raw request / raw response
+- secret, token, credential, API key, password
+- raw external API request/response
+- full trace JSON dumps in logs
 
-## CI方針
-
-CIでは deterministic fixture と fake adapter を基本にする。重い model download、外部API key、LangSmith secret は必須にしない。
-
-## PR-21 trace foundation
-
-PR-21 では observability の最初の実データとして、既存 dense retrieval に対して `phase2.trace.v1` を保存する。保存対象は hash、counts、strategy metadata、provider mode、scores、latency のみである。raw query、raw prompt、raw chunk text、full context、PII、secret は保存しない。
-
-`/rag/search` は retrieval/rerank/persist latency を保存し、generation/citation/confidence latency は保存しない。`/rag/ask` は retrieval に加えて context assembly、generation、citation build、confidence latency を保存する。failed run は取得済み span のみ保存し、confidence fields は NULL のままにする。
+Evaluation case `question` is saved only after validation rejects PII-like and secret-like values.
