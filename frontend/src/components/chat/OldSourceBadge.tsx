@@ -1,3 +1,3 @@
 export function OldSourceBadge() {
-  return <span className="old-source-badge">旧版</span>;
+  return <span className="old-source-badge">old version</span>;
 }

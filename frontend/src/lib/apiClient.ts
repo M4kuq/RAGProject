@@ -92,6 +92,18 @@ function readError(json: unknown, status: number, fallback: string): ApiError {
   return new ApiError({ code: "error", message: fallback, requestId: null, status });
 }
 
+async function refreshCsrfToken(): Promise<string | null> {
+  const response = await fetch(`${API_BASE}/api/v1/auth/csrf`, {
+    credentials: "include"
+  });
+  const json = await response.json().catch(() => ({}));
+  updateCsrfToken(json);
+  if (!response.ok) {
+    throw readError(json, response.status, response.statusText);
+  }
+  return csrfToken;
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -99,7 +111,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set("content-type", "application/json");
   }
   if (UNSAFE_METHODS.has(method) && !headers.has("x-csrf-token")) {
-    const token = csrfToken ?? readCookie(CSRF_COOKIE_NAME);
+    let token = csrfToken ?? readCookie(CSRF_COOKIE_NAME);
+    if (!token) {
+      token = await refreshCsrfToken();
+    }
     if (token) {
       headers.set("x-csrf-token", token);
     }

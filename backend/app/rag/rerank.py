@@ -67,6 +67,23 @@ class FakeRerankerClient:
         ]
 
 
+class NoopRerankerClient:
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: Sequence[RerankCandidate],
+    ) -> list[RerankResult]:
+        return [
+            RerankResult(
+                document_chunk_id=candidate.document_chunk_id,
+                rerank_score=min(1.0, max(0.0, candidate.retrieval_score)),
+                rerank_order=index,
+            )
+            for index, candidate in enumerate(candidates, start=1)
+        ]
+
+
 class LocalRerankerClient:
     def __init__(self, *, model_name: str, score_min: float, score_max: float) -> None:
         self.model_name = model_name
@@ -118,6 +135,8 @@ class LocalRerankerClient:
 
 
 def create_reranker(settings: Settings) -> RerankerClient:
+    if settings.rerank_provider == "none":
+        return NoopRerankerClient()
     if settings.rerank_provider == "fake":
         return FakeRerankerClient()
     if settings.rerank_provider == "local":
@@ -139,7 +158,7 @@ def normalize_rerank_score(value: float, *, score_min: float, score_max: float) 
 
 
 def _fake_rerank_score(query: str, candidate: RerankCandidate) -> float:
-    query_terms = {term for term in query.lower().split() if term}
+    query_terms = _expanded_query_terms(query)
     candidate_text = candidate.text.lower()
     overlap = 0.0
     if query_terms:
@@ -150,6 +169,39 @@ def _fake_rerank_score(query: str, candidate: RerankCandidate) -> float:
     tie_breaker = int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
     retrieval_component = min(1.0, max(0.0, (candidate.retrieval_score + 1.0) / 2.0))
     return round((overlap * 0.65) + (retrieval_component * 0.25) + (tie_breaker * 0.10), 6)
+
+
+def _expanded_query_terms(query: str) -> set[str]:
+    normalized = query.lower()
+    terms = {term for term in normalized.split() if term}
+    if any(term in normalized for term in ("技術スタック", "技術構成", "システム構成")):
+        terms.update(
+            {
+                "phase1",
+                "rag",
+                "qdrant",
+                "vector",
+                "database",
+                "postgresql",
+                "docker",
+                "compose",
+                "fastapi",
+                "react",
+                "backend",
+                "frontend",
+                "worker",
+                "citation",
+                "confidence",
+                "mcp",
+            }
+        )
+    if "ベクトル" in normalized or "vector database" in normalized:
+        terms.update({"qdrant", "vector", "database", "retrieval"})
+    if "引用" in normalized:
+        terms.update({"citation", "citations"})
+    if "信頼度" in normalized or "confidence" in normalized:
+        terms.add("confidence")
+    return terms
 
 
 def _to_score_list(value: object, *, expected_count: int) -> list[float]:

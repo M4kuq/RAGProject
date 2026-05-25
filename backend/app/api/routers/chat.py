@@ -116,6 +116,24 @@ def archive_session(
     return success_response(result.model_dump(mode="json"), request)
 
 
+@router.delete("/sessions/{chat_session_id}")
+def delete_session(
+    chat_session_id: int,
+    request: Request,
+    context: SessionContext = Depends(require_authenticated_session),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: ChatService = Depends(chat_service),
+) -> dict[str, object]:
+    result = service.delete_session(
+        db,
+        user=context.user,
+        chat_session_id=chat_session_id,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
 @router.get("/sessions/{chat_session_id}/messages")
 def list_messages(
     chat_session_id: int,

@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     qdrant_upsert_batch_size: int = Field(default=64, ge=1)
     qdrant_timeout_seconds: float = Field(default=5.0, gt=0)
     ollama_url: str = "http://ollama:11434"
+    ollama_timeout_seconds: float = Field(default=180.0, gt=0)
     use_fake_llm: bool = False
     model_name: str = "llama3.1"
     embedding_provider: str = "fake"
@@ -81,7 +82,11 @@ class Settings(BaseSettings):
     generation_provider: str = "fake"
     generation_model_name: str = "fake-rag-answer"
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
-    generation_max_output_chars: int = Field(default=2000, ge=20, le=20000)
+    generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
+    generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
+    lmstudio_api_key: str = "lm-studio"
+    lmstudio_timeout_seconds: float = Field(default=180.0, gt=0)
     citation_preview_max_chars: int = Field(default=240, ge=20, le=2000)
     confidence_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -128,11 +133,11 @@ class Settings(BaseSettings):
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
             )
         self.embedding_provider = self.embedding_provider.lower()
-        if self.embedding_provider not in {"fake", "local"}:
-            raise ValueError("EMBEDDING_PROVIDER must be fake or local")
+        if self.embedding_provider not in {"fake", "local", "lmstudio"}:
+            raise ValueError("EMBEDDING_PROVIDER must be fake, local, or lmstudio")
         self.rerank_provider = self.rerank_provider.lower()
-        if self.rerank_provider not in {"fake", "local"}:
-            raise ValueError("RERANK_PROVIDER must be fake or local")
+        if self.rerank_provider not in {"none", "fake", "local"}:
+            raise ValueError("RERANK_PROVIDER must be none, fake, or local")
         if self.retrieval_top_k_default > self.retrieval_top_k_max:
             raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
         if self.rerank_top_n_default > self.rerank_top_n_max:
@@ -158,8 +163,10 @@ class Settings(BaseSettings):
         ):
             raise ValueError("ASK_RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         self.generation_provider = self.generation_provider.lower()
-        if self.generation_provider not in {"fake", "ollama"}:
-            raise ValueError("GENERATION_PROVIDER must be fake or ollama")
+        if self.generation_provider not in {"fake", "ollama", "lmstudio"}:
+            raise ValueError("GENERATION_PROVIDER must be fake, ollama, or lmstudio")
+        self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
+        self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
         self.mcp_transport = self.mcp_transport.lower()
         if self.mcp_transport != "stdio":
             raise ValueError("MCP_TRANSPORT must be stdio in Phase1")

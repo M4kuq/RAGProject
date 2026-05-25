@@ -1,23 +1,36 @@
-import { FormEvent } from "react";
+import { FormEvent, KeyboardEvent } from "react";
 
 export function MessageInput({
   disabled,
   disabledReason,
   isSending,
+  modelOptions,
   onChange,
+  onModelChange,
   onSubmit,
+  selectedModel,
   value
 }: {
   disabled: boolean;
   disabledReason: string | null;
   isSending: boolean;
+  modelOptions: { label: string; value: string }[];
   onChange: (value: string) => void;
+  onModelChange: (value: string) => void;
   onSubmit: () => void;
+  selectedModel: string;
   value: string;
 }) {
   function submit(event: FormEvent) {
     event.preventDefault();
     onSubmit();
+  }
+
+  function submitFromKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      onSubmit();
+    }
   }
 
   return (
@@ -26,12 +39,32 @@ export function MessageInput({
         aria-label="message"
         disabled={disabled || isSending}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={submitFromKeyboard}
+        placeholder="Ask anything about your indexed documents..."
+        rows={1}
         value={value}
       />
-      {disabledReason ? <p className="notice">{disabledReason}</p> : null}
-      <button disabled={disabled || isSending || value.trim().length === 0} type="submit">
-        {isSending ? "送信中" : "Send"}
-      </button>
+      <div className="composer-footer">
+        {disabledReason ? <p className="notice">{disabledReason}</p> : <p className="notice">Enter to send, Shift+Enter for a new line.</p>}
+        <div className="composer-controls">
+          <select
+            aria-label="model"
+            className="model-select"
+            disabled={isSending}
+            onChange={(event) => onModelChange(event.target.value)}
+            value={selectedModel}
+          >
+            {modelOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button disabled={disabled || isSending || value.trim().length === 0} type="submit">
+            {isSending ? "Sending..." : "Send"}
+          </button>
+        </div>
+      </div>
     </form>
   );
 }

@@ -22,12 +22,14 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
   }
   return (
     <aside className="citation-panel" aria-label="citations">
-      <h3>根拠</h3>
+      <h3>Citations</h3>
       <ol>
         {citations.map((citation) => (
           <li key={citation.local_citation_id} className="citation-item">
             <div className="citation-title">
-              <span>[{citation.local_citation_id}] {truncate(citation.source_label, 80, "source")}</span>
+              <span>
+                [{citation.local_citation_id}] {truncate(citation.source_label, 80, "source")}
+              </span>
               {citation.old_version_flag ? <OldSourceBadge /> : null}
             </div>
             <div className="citation-meta">

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.rag import RagAskCitation, RagAskConfidence
+
 ChatSessionStatus = Literal["active", "archived"]
 ChatDisplayStatus = Literal["active", "archived", "temporary", "temporary_expired"]
 ChatMode = ChatDisplayStatus
@@ -97,6 +99,8 @@ class ChatMessageItem(BaseModel):
     client_message_id: str | None = None
     linked_retrieval_run_id: int | None = None
     edited_flag: bool
+    citations: list[RagAskCitation] = Field(default_factory=list)
+    confidence: RagAskConfidence | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -105,6 +109,11 @@ class ChatArchiveResponse(BaseModel):
     chat_session_id: int
     status: ChatSessionStatus
     result_code: Literal["archived", "already_archived"]
+
+
+class ChatDeleteResponse(BaseModel):
+    chat_session_id: int
+    result_code: Literal["deleted"]
 
 
 class ChatTagMutationResponse(BaseModel):

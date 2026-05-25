@@ -20,7 +20,10 @@ export type ChatMessage = {
   role: ChatMessageRole;
   content: string;
   client_message_id: string | null;
+  citations?: RagAskCitation[];
+  confidence?: RagAskConfidence | null;
   edited_flag?: boolean;
+  replayed?: boolean;
   created_at: string;
   updated_at?: string;
 };
@@ -47,6 +50,7 @@ export type RagAskRequest = {
   chat_session_id: number;
   client_message_id: string;
   message: string;
+  model_key?: string;
   top_k?: number;
   rerank_top_n?: number;
 };
