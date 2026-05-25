@@ -16,6 +16,10 @@ coverage/
 *.tsbuildinfo
 reports/
 .codex/*.rules
+/.playwright-mcp/
+/.tmp-*/
+/.worktrees/
+/*.png
 
 /storage/
 data/postgres/
@@ -24,3 +28,4 @@ data/ollama/
 
 .DS_Store
 Thumbs.db
+*.log

@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
     lmstudio_timeout_seconds: float = Field(default=180.0, gt=0)
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_timeout_seconds: float = Field(default=30.0, gt=0)
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str = "https://api.anthropic.com"
+    anthropic_version: str = "2023-06-01"
+    anthropic_timeout_seconds: float = Field(default=30.0, gt=0)
+    gemini_api_key: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_timeout_seconds: float = Field(default=30.0, gt=0)
     citation_preview_max_chars: int = Field(default=240, ge=20, le=2000)
     confidence_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -163,10 +173,37 @@ class Settings(BaseSettings):
         ):
             raise ValueError("ASK_RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         self.generation_provider = self.generation_provider.lower()
-        if self.generation_provider not in {"fake", "ollama", "lmstudio"}:
-            raise ValueError("GENERATION_PROVIDER must be fake, ollama, or lmstudio")
+        if self.generation_provider not in {
+            "fake",
+            "ollama",
+            "lmstudio",
+            "openai",
+            "anthropic",
+            "gemini",
+        }:
+            raise ValueError(
+                "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, or gemini"
+            )
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
+        self.openai_api_key = self.openai_api_key.strip() if self.openai_api_key else None
+        self.openai_base_url = self.openai_base_url.rstrip("/")
+        self.anthropic_api_key = self.anthropic_api_key.strip() if self.anthropic_api_key else None
+        self.anthropic_base_url = self.anthropic_base_url.rstrip("/")
+        self.gemini_api_key = self.gemini_api_key.strip() if self.gemini_api_key else None
+        self.gemini_base_url = self.gemini_base_url.rstrip("/")
+        if self.generation_provider == "openai" and not self.openai_base_url:
+            raise ValueError("OPENAI_BASE_URL is required when GENERATION_PROVIDER=openai")
+        if self.generation_provider == "openai" and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required when GENERATION_PROVIDER=openai")
+        if self.generation_provider == "anthropic" and not self.anthropic_base_url:
+            raise ValueError("ANTHROPIC_BASE_URL is required when GENERATION_PROVIDER=anthropic")
+        if self.generation_provider == "anthropic" and not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required when GENERATION_PROVIDER=anthropic")
+        if self.generation_provider == "gemini" and not self.gemini_base_url:
+            raise ValueError("GEMINI_BASE_URL is required when GENERATION_PROVIDER=gemini")
+        if self.generation_provider == "gemini" and not self.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is required when GENERATION_PROVIDER=gemini")
         self.mcp_transport = self.mcp_transport.lower()
         if self.mcp_transport != "stdio":
             raise ValueError("MCP_TRANSPORT must be stdio in Phase1")
