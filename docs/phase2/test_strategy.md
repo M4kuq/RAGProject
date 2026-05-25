@@ -37,3 +37,14 @@
 - `mypy`
 - backend pytest
 - 可能なら空DBに対する Alembic upgrade / downgrade / seed smoke
+
+## PR-21 trace tests
+
+- `LatencyTracker` が monotonic clock で non-negative duration を記録すること。
+- `TraceRedactor` が forbidden key と credential-like value を除外または redacted にすること。
+- default dense `query_plan_json` が raw query を含まず `query_hash` のみ持つこと。
+- default dense `strategy_decision_json` が prompt/context を含まないこと。
+- `retrieval_settings_json` が provider mode と collection name のみを持ち、credential/URL secret を含まないこと。
+- `/rag/search` success / zero result / failure が safe trace を保存し、response に trace JSON を返さないこと。
+- `/rag/ask` success / no_context / generation failure / retrieval failure / rerank failure / citation failure が safe trace を保存すること。
+- `score_breakdown_json` が dense/rerank score と rank metadata のみを持ち、raw chunk text を含まないこと。

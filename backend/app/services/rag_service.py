@@ -49,6 +49,13 @@ from app.rag.retrieval import (
     VectorSearchClient,
 )
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
+from app.rag.trace import (
+    LatencyTracker,
+    build_default_dense_query_plan,
+    build_default_dense_strategy_decision,
+    build_dense_score_breakdown,
+    build_retrieval_settings_snapshot,
+)
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import (
     CheckedRetrievalCandidate,
@@ -69,7 +76,6 @@ from app.schemas.rag import (
     RagSearchResponse,
     RetrievalScoreSummary,
 )
-from app.schemas.rag_strategy import RetrievalSettingsSnapshot, ScoreBreakdown
 from app.services.chat_service import ChatService
 
 SCORE_QUANT = Decimal("0.000001")
@@ -135,18 +141,25 @@ class RagService:
         top_k = self._effective_top_k(payload.top_k)
         rerank_top_n = self._effective_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
+        query_hash = _query_hash(payload.query)
+        latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
+            settings=self.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
             filters=filters,
         )
+        query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
+        strategy_decision = build_default_dense_strategy_decision()
         run = self.repository.create_standalone_run(
             db,
             top_k=top_k,
-            query_hash=_query_hash(payload.query),
+            query_hash=query_hash,
             request_id=request_id,
             started_at=datetime.now(UTC),
             strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+            query_plan_json=query_plan,
+            strategy_decision_json=strategy_decision,
             retrieval_settings_json=retrieval_settings,
         )
         db.commit()
@@ -161,6 +174,7 @@ class RagService:
                 rerank_top_n=rerank_top_n,
                 filters=filters,
                 retrieval_run_id=run_id,
+                latency_tracker=latency_tracker,
             )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
@@ -169,6 +183,7 @@ class RagService:
                 retrieval_score_summary=result.summary.model_dump(mode="json"),
                 rerank_score_top1=_optional_decimal_score(result.summary.top1_rerank_score),
                 finished_at=datetime.now(UTC),
+                latency_breakdown_json=latency_tracker.snapshot(),
             )
             db.commit()
             return RagSearchResponse(
@@ -182,6 +197,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="retrieval_failed",
+                latency_tracker=latency_tracker,
             )
             raise RagSearchPipelineError("retrieval_failed", 503) from None
         except RerankError:
@@ -189,6 +205,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="rerank_failed",
+                latency_tracker=latency_tracker,
             )
             raise RagSearchPipelineError("rerank_failed", 503) from None
         except Exception:
@@ -196,6 +213,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="internal_error",
+                latency_tracker=latency_tracker,
             )
             raise
 
@@ -225,11 +243,16 @@ class RagService:
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
+        query_hash = _query_hash(payload.message)
+        latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
+            settings=self.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
             filters=filters,
         )
+        query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
+        strategy_decision = build_default_dense_strategy_decision()
         now = datetime.now(UTC)
         try:
             user_message = self.chat_repository.create_message(
@@ -244,10 +267,12 @@ class RagService:
                 chat_session_id=payload.chat_session_id,
                 request_message_id=user_message.chat_message_id,
                 top_k=top_k,
-                query_hash=_query_hash(payload.message),
+                query_hash=query_hash,
                 request_id=request_id,
                 started_at=now,
                 strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+                query_plan_json=query_plan,
+                strategy_decision_json=strategy_decision,
                 retrieval_settings_json=retrieval_settings,
             )
             self.chat_repository.touch_session(db, session=session, updated_at=now)
@@ -279,62 +304,68 @@ class RagService:
                 rerank_top_n=rerank_top_n,
                 filters=filters,
                 retrieval_run_id=run_id,
+                latency_tracker=latency_tracker,
             )
             if not result.selected_candidates:
                 self._mark_failed_safely(
                     db,
                     retrieval_run_id=run_id,
                     error_code="no_context_found",
+                    latency_tracker=latency_tracker,
                 )
                 raise RagAskPipelineError("no_context_found", 422)
 
-            context_items = _assemble_context(
-                result.selected_candidates,
-                citation_sources=result.citation_sources,
-                max_context_chars=self.settings.generation_max_context_chars,
-            )
-            prompt_citation_sources = _prompt_citation_sources(
-                context_items=context_items,
-                citation_sources=result.citation_sources,
-            )
-            generation = answer_generator.generate(
-                GenerationRequest(
-                    message=payload.message,
-                    context_items=context_items,
-                    max_output_chars=self.settings.generation_max_output_chars,
+            with latency_tracker.span("context_assembly_ms"):
+                context_items = _assemble_context(
+                    result.selected_candidates,
+                    citation_sources=result.citation_sources,
+                    max_context_chars=self.settings.generation_max_context_chars,
                 )
-            )
-            parsed_generation, cited_sources = _validated_generation_or_fallback(
-                generation.content,
-                context_items=context_items,
-                prompt_citation_sources=prompt_citation_sources,
-            )
-            assistant_message = self.chat_repository.create_message(
-                db,
-                chat_session_id=payload.chat_session_id,
-                role="assistant",
-                content=parsed_generation.answer_text,
-                linked_retrieval_run_id=run_id,
-            )
-            self.repository.save_citations(
-                db,
-                citations=[
-                    _citation_input(source, retrieval_run_id=run_id) for source in cited_sources
-                ],
-            )
-            citation_records = self.repository.list_citations_for_run(
-                db,
-                retrieval_run_id=run_id,
-            )
-            confidence = calculate_confidence(
-                ConfidenceInputs(
-                    retrieval_score_summary=result.summary,
-                    marker_count=len(parsed_generation.markers),
-                    unique_citation_count=len(cited_sources),
-                    selected_count=len(prompt_citation_sources),
-                ),
-                self.settings,
-            )
+                prompt_citation_sources = _prompt_citation_sources(
+                    context_items=context_items,
+                    citation_sources=result.citation_sources,
+                )
+            with latency_tracker.span("generation_ms"):
+                generation = answer_generator.generate(
+                    GenerationRequest(
+                        message=payload.message,
+                        context_items=context_items,
+                        max_output_chars=self.settings.generation_max_output_chars,
+                    )
+                )
+            with latency_tracker.span("citation_build_ms"):
+                parsed_generation, cited_sources = _validated_generation_or_fallback(
+                    generation.content,
+                    context_items=context_items,
+                    prompt_citation_sources=prompt_citation_sources,
+                )
+                assistant_message = self.chat_repository.create_message(
+                    db,
+                    chat_session_id=payload.chat_session_id,
+                    role="assistant",
+                    content=parsed_generation.answer_text,
+                    linked_retrieval_run_id=run_id,
+                )
+                self.repository.save_citations(
+                    db,
+                    citations=[
+                        _citation_input(source, retrieval_run_id=run_id) for source in cited_sources
+                    ],
+                )
+                citation_records = self.repository.list_citations_for_run(
+                    db,
+                    retrieval_run_id=run_id,
+                )
+            with latency_tracker.span("confidence_ms"):
+                confidence = calculate_confidence(
+                    ConfidenceInputs(
+                        retrieval_score_summary=result.summary,
+                        marker_count=len(parsed_generation.markers),
+                        unique_citation_count=len(cited_sources),
+                        selected_count=len(prompt_citation_sources),
+                    ),
+                    self.settings,
+                )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
                 db,
@@ -345,6 +376,7 @@ class RagService:
                 groundedness_score=_decimal_score(confidence.groundedness_score),
                 confidence_label=confidence.confidence_label,
                 finished_at=datetime.now(UTC),
+                latency_breakdown_json=latency_tracker.snapshot(),
             )
             self.chat_repository.touch_session(
                 db,
@@ -367,6 +399,8 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="citation_build_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
             )
             raise RagAskPipelineError("citation_build_failed", 500) from None
         except RagAskPipelineError:
@@ -376,6 +410,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="retrieval_failed",
+                latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("retrieval_failed", 503) from None
         except RerankError:
@@ -383,6 +418,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="rerank_failed",
+                latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("rerank_failed", 503) from None
         except AnswerGenerationError:
@@ -390,6 +426,8 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="generation_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
             )
             raise RagAskPipelineError("generation_failed", 503) from None
         except Exception:
@@ -397,6 +435,7 @@ class RagService:
                 db,
                 retrieval_run_id=run_id,
                 error_code="internal_error",
+                latency_tracker=latency_tracker,
             )
             raise
 
@@ -409,19 +448,25 @@ class RagService:
         rerank_top_n: int,
         filters: RetrievalFilters,
         retrieval_run_id: int,
+        latency_tracker: LatencyTracker | None = None,
     ) -> RetrievalPipelineResult:
-        query_vector = self._embed_query(query)
-        vector_candidates = self.vector_client.search(
-            collection_name=self.settings.qdrant_collection_name,
-            query_vector=query_vector,
-            limit=top_k,
-            filters=filters,
-        )
-        checked_candidates = self.repository.final_check_candidates(
-            db,
-            candidates=vector_candidates,
-            filters=filters,
-        )
+        if latency_tracker is None:
+            latency_tracker = LatencyTracker()
+        with latency_tracker.span("query_embedding_ms"):
+            query_vector = self._embed_query(query)
+        with latency_tracker.span("qdrant_search_ms"):
+            vector_candidates = self.vector_client.search(
+                collection_name=self.settings.qdrant_collection_name,
+                query_vector=query_vector,
+                limit=top_k,
+                filters=filters,
+            )
+        with latency_tracker.span("rdb_final_check_ms"):
+            checked_candidates = self.repository.final_check_candidates(
+                db,
+                candidates=vector_candidates,
+                filters=filters,
+            )
         if not checked_candidates:
             summary = _score_summary(
                 requested_top_k=top_k,
@@ -437,21 +482,22 @@ class RagService:
                 citation_sources=[],
             )
 
-        rerank_results = self.reranker.rerank(
-            query=query,
-            candidates=[
-                RerankCandidate(
-                    document_chunk_id=candidate.chunk.document_chunk_id,
-                    text=candidate.chunk.content_text,
-                    retrieval_score=candidate.retrieval_score,
-                )
-                for candidate in checked_candidates
-            ],
-        )
-        rerank_by_chunk_id = _validated_rerank_results(
-            rerank_results,
-            checked_candidates=checked_candidates,
-        )
+        with latency_tracker.span("rerank_ms"):
+            rerank_results = self.reranker.rerank(
+                query=query,
+                candidates=[
+                    RerankCandidate(
+                        document_chunk_id=candidate.chunk.document_chunk_id,
+                        text=candidate.chunk.content_text,
+                        retrieval_score=candidate.retrieval_score,
+                    )
+                    for candidate in checked_candidates
+                ],
+            )
+            rerank_by_chunk_id = _validated_rerank_results(
+                rerank_results,
+                checked_candidates=checked_candidates,
+            )
 
         ordered_candidates = sorted(
             checked_candidates,
@@ -465,15 +511,17 @@ class RagService:
                 candidate,
                 rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
                 rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                final_rank=index,
                 selected_flag=index <= selected_count,
             )
             for index, candidate in enumerate(ordered_candidates, start=1)
         ]
-        saved_items = self.repository.save_items(
-            db,
-            retrieval_run_id=retrieval_run_id,
-            items=item_inputs,
-        )
+        with latency_tracker.span("retrieval_items_persist_ms"):
+            saved_items = self.repository.save_items(
+                db,
+                retrieval_run_id=retrieval_run_id,
+                items=item_inputs,
+            )
         top1_rerank_score = rerank_by_chunk_id[
             ordered_candidates[0].chunk.document_chunk_id
         ].rerank_score
@@ -596,8 +644,11 @@ class RagService:
         *,
         retrieval_run_id: int,
         error_code: str,
+        latency_tracker: LatencyTracker | None = None,
+        rollback: bool = True,
     ) -> None:
-        db.rollback()
+        if rollback:
+            db.rollback()
         run = self.repository.get_run(db, retrieval_run_id=retrieval_run_id)
         if run is None:
             return
@@ -606,6 +657,9 @@ class RagService:
             run=run,
             error_code=error_code,
             finished_at=datetime.now(UTC),
+            latency_breakdown_json=(
+                latency_tracker.snapshot() if latency_tracker is not None else None
+            ),
         )
         db.commit()
 
@@ -740,6 +794,7 @@ def _run_item_input(
     *,
     rerank_score: float,
     rerank_order: int,
+    final_rank: int,
     selected_flag: bool,
 ) -> RetrievalRunItemInput:
     return RetrievalRunItemInput(
@@ -755,6 +810,7 @@ def _run_item_input(
             candidate,
             rerank_score=rerank_score,
             rerank_order=rerank_order,
+            final_rank=final_rank,
             selected_flag=selected_flag,
         ),
     )
@@ -832,22 +888,17 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
 
 def _retrieval_settings_snapshot(
     *,
+    settings: Settings,
     top_k: int,
     rerank_top_n: int,
     filters: RetrievalFilters,
 ) -> dict[str, object]:
-    snapshot = RetrievalSettingsSnapshot(
-        strategy_type=DEFAULT_RETRIEVAL_STRATEGY,
-        default_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+    return build_retrieval_settings_snapshot(
+        settings=settings,
         top_k=top_k,
         rerank_top_n=rerank_top_n,
-        modality=filters.modality,
-        logical_document_filter_count=len(filters.logical_document_ids or []),
-        hybrid_enabled=False,
-        router_enabled=False,
-        trace_enabled=True,
+        filters=filters,
     )
-    return snapshot.model_dump(mode="json")
 
 
 def _score_breakdown(
@@ -855,17 +906,17 @@ def _score_breakdown(
     *,
     rerank_score: float,
     rerank_order: int,
+    final_rank: int,
     selected_flag: bool,
 ) -> dict[str, object]:
-    breakdown = ScoreBreakdown(
-        retrieval_source=RetrievalSource.DENSE,
-        dense_score=_round_score(candidate.retrieval_score),
-        rerank_score=_round_score(rerank_score),
+    return build_dense_score_breakdown(
+        dense_score=candidate.retrieval_score,
         rank_order=candidate.rank_order,
+        rerank_score=rerank_score,
         rerank_order=rerank_order,
+        final_rank=final_rank,
         selected_flag=selected_flag,
     )
-    return breakdown.model_dump(mode="json", exclude_none=True)
 
 
 def _source_label(candidate: CheckedRetrievalCandidate) -> str:

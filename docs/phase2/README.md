@@ -34,6 +34,15 @@ PR-20 は Phase2 の最初のPRとして、後続PRが依存する strategy enum
 | PR-36 | Document Diff / Citation Navigation / Version Compare |
 | PR-37 | Phase2 Final Hardening / Demo / Docs |
 
+## PR-21 Retrieval Trace Foundation
+
+PR-21 では、PR-20 で追加した `retrieval_runs` / `retrieval_run_items` の trace columns に、既存 dense retrieval の safe trace を保存する。詳細は [retrieval_trace_foundation.md](./retrieval_trace_foundation.md) を参照する。
+
+- `/rag/search` と `/rag/ask` は default `dense` の query plan / strategy decision / settings / latency を保存する。
+- item ごとに `retrieval_source = dense` と score breakdown を保存する。
+- failed run でも取得済み latency と safe metadata を保存する。
+- Sparse / Hybrid / Router / Debug UI / LangSmith / external trace export は PR-21 では実装しない。
+
 ## PR-20で実装すること
 
 - `RetrievalStrategy` / `RetrievalSource` / `FusionMethod` / `RouterFallbackStrategy`
