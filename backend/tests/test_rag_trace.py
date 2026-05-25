@@ -45,8 +45,8 @@ def test_trace_redactor_removes_forbidden_fields_and_sensitive_values() -> None:
             "nested": {"api_key": "secret", "mode": "dense"},
             "provider": "fake",
             "operator": "person@example.com",
-            "env_secret": "OPENAI_API_KEY=sk-test",
-            "db_secret": "DATABASE_PASSWORD=hunter2",
+            "env_assignment": "OPENAI_API_KEY=sk-test",
+            "db_assignment": "DATABASE_PASSWORD=hunter2",
             "internal_url": "http://qdrant:6333",
         }
     )
@@ -56,8 +56,8 @@ def test_trace_redactor_removes_forbidden_fields_and_sensitive_values() -> None:
         "nested": {"mode": "dense"},
         "provider": "fake",
         "operator": "redacted",
-        "env_secret": "redacted",
-        "db_secret": "redacted",
+        "env_assignment": "redacted",
+        "db_assignment": "redacted",
         "internal_url": "redacted",
     }
 
