@@ -178,7 +178,7 @@ def create_answer_generator(settings: Settings) -> AnswerGenerator:
         return OllamaAnswerGenerator(
             url=settings.ollama_url,
             model_name=settings.generation_model_name,
-            timeout_seconds=settings.qdrant_timeout_seconds,
+            timeout_seconds=settings.ollama_timeout_seconds,
         )
     if settings.generation_provider == "lmstudio":
         return OpenAICompatibleChatAnswerGenerator(

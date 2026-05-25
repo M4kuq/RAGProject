@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     qdrant_upsert_batch_size: int = Field(default=64, ge=1)
     qdrant_timeout_seconds: float = Field(default=5.0, gt=0)
     ollama_url: str = "http://ollama:11434"
+    ollama_timeout_seconds: float = Field(default=180.0, gt=0)
     use_fake_llm: bool = False
     model_name: str = "llama3.1"
     embedding_provider: str = "fake"

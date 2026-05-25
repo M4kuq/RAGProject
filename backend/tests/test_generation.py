@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.rag.generation import (
     GenerationContextItem,
     GenerationRequest,
+    OllamaAnswerGenerator,
     OpenAICompatibleChatAnswerGenerator,
     create_answer_generator,
 )
@@ -106,6 +107,20 @@ def test_create_answer_generator_supports_lmstudio() -> None:
     generator = create_answer_generator(settings)
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
+
+
+def test_create_answer_generator_uses_ollama_generation_timeout() -> None:
+    settings = Settings(
+        generation_provider="ollama",
+        generation_model_name="llama3.1",
+        qdrant_timeout_seconds=3,
+        ollama_timeout_seconds=123,
+    )
+
+    generator = create_answer_generator(settings)
+
+    assert isinstance(generator, OllamaAnswerGenerator)
+    assert generator.timeout_seconds == 123
 
 
 def test_lmstudio_generator_extracts_final_answer_from_reasoning_draft(monkeypatch) -> None:
