@@ -5,15 +5,23 @@ import { LoginPage } from "../routes/LoginPage";
 import { SettingsPage } from "../routes/SettingsPage";
 import { AdminLayout } from "../routes/admin/AdminLayout";
 
+function userInitial(displayName: string | null): string {
+  const normalized = (displayName ?? "").trim();
+  return normalized ? normalized.slice(0, 1).toUpperCase() : "U";
+}
+
 function TopNav() {
   const currentUser = useCurrentUser();
-  const isAdmin = currentUser.data?.role === "admin";
+  const displayName = currentUser.data?.display_name ?? null;
 
   return (
     <nav className="topnav">
       <Link to="/chat">Chat</Link>
-      <Link to="/settings">Settings</Link>
-      {isAdmin ? <Link to="/admin/documents">Admin</Link> : null}
+      {currentUser.data ? (
+        <Link aria-label="User settings" className="user-settings-button" title="User settings" to="/settings">
+          {userInitial(displayName)}
+        </Link>
+      ) : null}
     </nav>
   );
 }

@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMessage, ChatSession, ChatTag, SystemSetting
+from app.db.models import (
+    ChatMessage,
+    ChatSession,
+    ChatTag,
+    Citation,
+    EvaluationRunItem,
+    RetrievalRun,
+    RetrievalRunItem,
+    SummaryMemory,
+    SystemSetting,
+)
 from app.schemas.common import PaginationParams
 
 
@@ -198,6 +208,49 @@ class ChatRepository:
         session.updated_at = archived_at
         db.flush()
         return session
+
+    def delete_session(self, db: Session, *, session: ChatSession) -> None:
+        chat_session_id = session.chat_session_id
+        retrieval_run_ids = list(
+            db.scalars(
+                select(RetrievalRun.retrieval_run_id).where(
+                    RetrievalRun.chat_session_id == chat_session_id
+                )
+            ).all()
+        )
+
+        if retrieval_run_ids:
+            db.execute(delete(Citation).where(Citation.retrieval_run_id.in_(retrieval_run_ids)))
+            db.execute(
+                update(EvaluationRunItem)
+                .where(EvaluationRunItem.retrieval_run_id.in_(retrieval_run_ids))
+                .values(retrieval_run_id=None)
+            )
+            db.execute(
+                delete(RetrievalRunItem).where(
+                    RetrievalRunItem.retrieval_run_id.in_(retrieval_run_ids)
+                )
+            )
+            db.execute(
+                update(ChatMessage)
+                .where(ChatMessage.chat_session_id == chat_session_id)
+                .values(linked_retrieval_run_id=None)
+            )
+            db.execute(
+                update(RetrievalRun)
+                .where(RetrievalRun.retrieval_run_id.in_(retrieval_run_ids))
+                .values(chat_session_id=None, request_message_id=None)
+            )
+
+        db.execute(delete(SummaryMemory).where(SummaryMemory.chat_session_id == chat_session_id))
+        db.execute(delete(ChatTag).where(ChatTag.chat_session_id == chat_session_id))
+        db.execute(delete(ChatMessage).where(ChatMessage.chat_session_id == chat_session_id))
+        if retrieval_run_ids:
+            db.execute(
+                delete(RetrievalRun).where(RetrievalRun.retrieval_run_id.in_(retrieval_run_ids))
+            )
+        db.delete(session)
+        db.flush()
 
     def touch_session(
         self,

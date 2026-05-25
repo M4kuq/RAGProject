@@ -20,7 +20,10 @@ export type ChatMessage = {
   role: ChatMessageRole;
   content: string;
   client_message_id: string | null;
+  citations?: RagAskCitation[];
+  confidence?: RagAskConfidence | null;
   edited_flag?: boolean;
+  replayed?: boolean;
   created_at: string;
   updated_at?: string;
 };

@@ -39,7 +39,7 @@ class ParsedGenerationOutput:
 
 
 def parse_generation_output(content: str) -> ParsedGenerationOutput:
-    answer_text = " ".join(content.replace("\x00", " ").split())
+    answer_text = _normalize_answer_text(content)
     markers: list[CitationMarker] = []
     for match in MARKER_RE.finditer(answer_text):
         raw_marker = match.group(1)
@@ -102,3 +102,8 @@ def _unique_in_order(values: Iterable[int]) -> list[int]:
             seen.add(value)
             unique.append(value)
     return unique
+
+
+def _normalize_answer_text(content: str) -> str:
+    lines = [" ".join(line.split()) for line in content.replace("\x00", " ").splitlines()]
+    return "\n".join(line for line in lines if line)

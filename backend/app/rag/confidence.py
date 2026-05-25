@@ -23,7 +23,13 @@ class ConfidenceInputs:
 
 def calculate_confidence(inputs: ConfidenceInputs, settings: Settings) -> ConfidenceScores:
     selected_count = max(0, inputs.selected_count)
-    citation_coverage = _safe_ratio(inputs.unique_citation_count, selected_count)
+    citation_coverage = _safe_ratio(
+        inputs.unique_citation_count,
+        _required_citation_count(
+            selected_count=selected_count,
+            unique_citation_count=inputs.unique_citation_count,
+        ),
+    )
     marker_presence = 1.0 if inputs.marker_count > 0 else 0.0
 
     groundedness = _clamp((0.75 * citation_coverage) + (0.25 * marker_presence))
@@ -77,6 +83,14 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return _clamp(numerator / denominator)
+
+
+def _required_citation_count(*, selected_count: int, unique_citation_count: int) -> int:
+    if selected_count <= 0 or unique_citation_count <= 0:
+        return max(1, selected_count)
+    # selected_count is the retrieval pool size, not the number of claims in the answer.
+    # A concise answer can be fully grounded by one strong cited source.
+    return min(selected_count, unique_citation_count)
 
 
 def _clamp(value: float) -> float:

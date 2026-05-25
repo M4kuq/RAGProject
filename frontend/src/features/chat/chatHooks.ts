@@ -4,9 +4,11 @@ import {
   archiveSession,
   askRag,
   createChatSession,
+  deleteSession,
   fetchChatHistory,
   fetchChatMessages,
-  fetchChatSession
+  fetchChatSession,
+  updateChatSessionTitle
 } from "./chatApi";
 import { ChatSession, CreateChatSessionRequest, RagAskRequest, RagAskResult } from "./chatTypes";
 
@@ -64,12 +66,47 @@ export function useCreateTemporaryChat() {
   return useCreateChatSession();
 }
 
+export function useUpdateChatSessionTitle() {
+  const queryClient = useQueryClient();
+  return useMutation<ChatSession, Error, { chatSessionId: number; title: string }>({
+    mutationFn: ({ chatSessionId, title }) => updateChatSessionTitle(chatSessionId, title),
+    onSuccess: (session) => {
+      queryClient.setQueryData(queryKeys.chatSession(session.chat_session_id), session);
+      queryClient.setQueryData(queryKeys.chatHistory, (current: ChatSession[] | undefined) =>
+        current
+          ? current.map((item) => (item.chat_session_id === session.chat_session_id ? { ...item, ...session } : item))
+          : current
+      );
+      queryClient.invalidateQueries({ queryKey: queryKeys.chatHistory });
+    }
+  });
+}
+
 export function useArchiveSession() {
   const queryClient = useQueryClient();
   return useMutation<void, Error, number>({
     mutationFn: archiveSession,
     onSuccess: (_, chatSessionId) => {
+      queryClient.setQueryData(queryKeys.chatHistory, (current: ChatSession[] | undefined) =>
+        current ? current.filter((session) => session.chat_session_id !== chatSessionId) : current
+      );
       queryClient.invalidateQueries({ queryKey: queryKeys.chatSession(chatSessionId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.chatMessages(chatSessionId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.chatHistory });
+    }
+  });
+}
+
+export function useDeleteSession() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, number>({
+    mutationFn: deleteSession,
+    onSuccess: (_, chatSessionId) => {
+      queryClient.setQueryData(queryKeys.chatHistory, (current: ChatSession[] | undefined) =>
+        current ? current.filter((session) => session.chat_session_id !== chatSessionId) : current
+      );
+      queryClient.removeQueries({ queryKey: queryKeys.chatSession(chatSessionId) });
+      queryClient.removeQueries({ queryKey: queryKeys.chatMessages(chatSessionId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.chatHistory });
     }
   });

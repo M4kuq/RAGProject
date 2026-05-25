@@ -28,10 +28,19 @@ from app.ingest.qdrant import (
 DEMO_PASSWORD = "password"
 DEMO_DOCUMENT_TITLE = "RAGProject Phase1 Seed Document"
 DEMO_DOCUMENT_TEXT = (
-    "RAGProject Phase1 validates a local Docker Compose RAG stack with "
-    "PostgreSQL, Qdrant, deterministic fake adapters for CI, citation-aware "
-    "retrieval traces, confidence labels, evaluation fixtures, and a local-only "
-    "MCP stdio server."
+    "RAGProject Phase1 validates a local Docker Compose RAG stack. "
+    "The backend API is implemented with FastAPI, the frontend chat and admin UI are "
+    "implemented with React, and PostgreSQL stores users, sessions, chat history, "
+    "documents, jobs, retrieval runs, citations, confidence labels, and evaluation results. "
+    "Qdrant is the vector database used for document chunk retrieval. "
+    "A worker process handles document ingest, extraction, chunking, embedding, Qdrant "
+    "indexing, and evaluation jobs. "
+    "For local real-model testing, Phase1 can use LM Studio through OpenAI-compatible "
+    "chat and embeddings endpoints. "
+    "CI keeps deterministic CI adapters so GitHub Actions does not require API keys, "
+    "large model downloads, or a local model server. "
+    "The Phase1 demo also includes citation-aware answers, confidence labels, evaluation "
+    "fixtures, and a local-only MCP stdio server."
 )
 SEED_DATA_DIR = Path(__file__).resolve().parents[1] / "seed_data"
 LLM_PAPER_CORPUS_TEXT = (SEED_DATA_DIR / "llm_paper_corpus.md").read_text(encoding="utf-8")
@@ -332,6 +341,9 @@ def _seed_demo_document(
     )
     for version in versions:
         version.is_active = False
+    db.flush()
+
+    for version in versions:
         if version.document_version_id != active_version.document_version_id:
             _clear_failed_document_version_fields(version)
             version.status = "archived"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,10 +17,12 @@ from app.core.errors import (
     ValidationFailed,
 )
 from app.core.security import hash_identifier
-from app.db.models import ChatMessage, ChatSession, ChatTag, User
+from app.db.models import ChatMessage, ChatSession, ChatTag, RetrievalRun, User
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.retrieval_repository import CitationRecord, RetrievalRepository
 from app.schemas.chat import (
     ChatArchiveResponse,
+    ChatDeleteResponse,
     ChatMessageItem,
     ChatMode,
     ChatSessionDetail,
@@ -31,14 +33,20 @@ from app.schemas.chat import (
     normalize_title,
 )
 from app.schemas.common import PaginationMeta, PaginationParams
+from app.schemas.rag import RagAskCitation, RagAskConfidence
 from app.services.audit_service import audit
 
 SessionStatus = Literal["active", "archived"]
 
 
 class ChatService:
-    def __init__(self, repository: ChatRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: ChatRepository | None = None,
+        retrieval_repository: RetrievalRepository | None = None,
+    ) -> None:
         self.repository = repository or ChatRepository()
+        self.retrieval_repository = retrieval_repository or RetrievalRepository()
 
     def create_session(
         self,
@@ -180,6 +188,30 @@ class ChatService:
             result_code=result_code,
         )
 
+    def delete_session(
+        self,
+        db: Session,
+        *,
+        user: User,
+        chat_session_id: int,
+        request_id: str | None = None,
+    ) -> ChatDeleteResponse:
+        session = self._get_owned_session(
+            db, user=user, chat_session_id=chat_session_id, for_update=True
+        )
+        self.repository.delete_session(db, session=session)
+        audit(
+            db,
+            action="chat.deleted",
+            actor_user_id=user.user_id,
+            request_id=request_id,
+            target_type="chat_session",
+            target_id=chat_session_id,
+            metadata={"result": "deleted"},
+        )
+        db.commit()
+        return ChatDeleteResponse(chat_session_id=chat_session_id, result_code="deleted")
+
     def list_messages(
         self,
         db: Session,
@@ -196,7 +228,29 @@ class ChatService:
         rows, total = self.repository.list_messages(
             db, chat_session_id=chat_session_id, pagination=pagination
         )
-        return [self._message_item(row) for row in rows], pagination_meta(pagination, total)
+        retrieval_run_ids = [
+            row.linked_retrieval_run_id
+            for row in rows
+            if row.role == "assistant" and row.linked_retrieval_run_id is not None
+        ]
+        run_by_id = self._retrieval_runs_by_id(db, retrieval_run_ids)
+        citations_by_run_id = self._citations_by_run_id(db, retrieval_run_ids)
+        return [
+            self._message_item(
+                row,
+                retrieval_run=(
+                    run_by_id.get(row.linked_retrieval_run_id)
+                    if row.linked_retrieval_run_id is not None
+                    else None
+                ),
+                citation_records=(
+                    citations_by_run_id.get(row.linked_retrieval_run_id, [])
+                    if row.linked_retrieval_run_id is not None
+                    else []
+                ),
+            )
+            for row in rows
+        ], pagination_meta(pagination, total)
 
     def ensure_session_can_append_messages(
         self,
@@ -376,7 +430,13 @@ class ChatService:
             tags=[self._tag_item(tag) for tag in tags],
         )
 
-    def _message_item(self, message: ChatMessage) -> ChatMessageItem:
+    def _message_item(
+        self,
+        message: ChatMessage,
+        *,
+        retrieval_run: RetrievalRun | None = None,
+        citation_records: list[CitationRecord] | None = None,
+    ) -> ChatMessageItem:
         return ChatMessageItem(
             chat_message_id=message.chat_message_id,
             chat_session_id=message.chat_session_id,
@@ -385,9 +445,83 @@ class ChatService:
             client_message_id=message.client_message_id,
             linked_retrieval_run_id=message.linked_retrieval_run_id,
             edited_flag=message.edited_flag,
+            citations=[
+                self._citation_item(record)
+                for record in (citation_records or [])
+                if message.role == "assistant"
+            ],
+            confidence=(
+                self._confidence_item(retrieval_run)
+                if message.role == "assistant" and retrieval_run is not None
+                else None
+            ),
             created_at=self._aware_utc(message.created_at),
             updated_at=self._aware_utc(message.updated_at),
         )
+
+    def _retrieval_runs_by_id(
+        self,
+        db: Session,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, RetrievalRun]:
+        return {
+            run_id: run
+            for run_id in set(retrieval_run_ids)
+            if (run := self.retrieval_repository.get_run(db, retrieval_run_id=run_id)) is not None
+        }
+
+    def _citations_by_run_id(
+        self,
+        db: Session,
+        retrieval_run_ids: list[int],
+    ) -> dict[int, list[CitationRecord]]:
+        records_by_run_id: dict[int, list[CitationRecord]] = {}
+        for run_id in sorted(set(retrieval_run_ids)):
+            records_by_run_id[run_id] = self.retrieval_repository.list_citations_for_run(
+                db,
+                retrieval_run_id=run_id,
+            )
+        return records_by_run_id
+
+    def _citation_item(self, record: CitationRecord) -> RagAskCitation:
+        return RagAskCitation(
+            citation_id=record.citation.citation_id,
+            local_citation_id=record.citation.rank_order,
+            document_chunk_id=record.citation.document_chunk_id,
+            source_label=record.citation.display_label,
+            snippet=record.citation.snippet,
+            page_from=record.citation.page_from,
+            page_to=record.citation.page_to,
+            section_title=self._safe_display_text(record.chunk.section_title),
+            old_version_flag=self._old_version_flag(record),
+        )
+
+    def _confidence_item(self, run: RetrievalRun) -> RagAskConfidence | None:
+        if (
+            run.answer_confidence is None
+            or run.groundedness_score is None
+            or run.confidence_label not in {"High", "Medium", "Low"}
+        ):
+            return None
+        label = cast(Literal["High", "Medium", "Low"], run.confidence_label)
+        return RagAskConfidence(
+            answer_confidence=round(float(run.answer_confidence), 6),
+            groundedness_score=round(float(run.groundedness_score), 6),
+            confidence_label=label,
+        )
+
+    def _old_version_flag(self, record: CitationRecord) -> bool:
+        return (
+            record.document_version.status != "ready"
+            or not record.document_version.is_active
+            or record.logical_document.status != "active"
+        )
+
+    def _safe_display_text(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        sanitized = " ".join(value.replace("\x00", " ").split())
+        return sanitized[:255] if sanitized else None
 
     def _tag_item(self, tag: ChatTag) -> ChatTagItem:
         return ChatTagItem(

@@ -23,6 +23,7 @@ from app.ingest.embedding import (
 from app.rag.citations import (
     CitationBuildError,
     CitationSource,
+    ParsedGenerationOutput,
     parse_generation_output,
     validate_generation_citations,
 )
@@ -74,6 +75,7 @@ SENSITIVE_OUTPUT_RE = re.compile(
     r"(?i)\b(api[_-]?key|secret|password|token)\b\s*[:=]\s*\S{8,}"
     r"|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
 )
+CITATION_MARKER_RE = re.compile(r"\[(\d{1,6})\]")
 
 
 class RagPipelineError(RuntimeError):
@@ -283,14 +285,10 @@ class RagService:
                     max_output_chars=self.settings.generation_max_output_chars,
                 )
             )
-            parsed_generation = parse_generation_output(generation.content)
-            _validate_generation_output_safety(
-                parsed_generation.answer_text,
+            parsed_generation, cited_sources = _validated_generation_or_fallback(
+                generation.content,
                 context_items=context_items,
-            )
-            cited_sources = validate_generation_citations(
-                parsed_generation,
-                source_map=prompt_citation_sources,
+                prompt_citation_sources=prompt_citation_sources,
             )
             assistant_message = self.chat_repository.create_message(
                 db,
@@ -842,6 +840,79 @@ def _validate_generation_output_safety(
         context_text = _clean_context_text(item.text)
         if len(context_text) >= 80 and context_text in normalized_answer:
             raise CitationBuildError("citation_build_failed")
+
+
+def _validated_generation_or_fallback(
+    content: str,
+    *,
+    context_items: list[GenerationContextItem],
+    prompt_citation_sources: list[CitationSource],
+) -> tuple[ParsedGenerationOutput, list[CitationSource]]:
+    parsed_generation = parse_generation_output(content)
+    _validate_generation_output_safety(
+        parsed_generation.answer_text,
+        context_items=context_items,
+    )
+    try:
+        cited_sources = validate_generation_citations(
+            parsed_generation,
+            source_map=prompt_citation_sources,
+        )
+    except CitationBuildError:
+        return _repair_generation_citations(
+            parsed_generation,
+            prompt_citation_sources=prompt_citation_sources,
+        )
+    return parsed_generation, cited_sources
+
+
+def _repair_generation_citations(
+    parsed_generation: ParsedGenerationOutput,
+    *,
+    prompt_citation_sources: list[CitationSource],
+) -> tuple[ParsedGenerationOutput, list[CitationSource]]:
+    if not prompt_citation_sources:
+        raise CitationBuildError("citation_build_failed")
+    first_source = prompt_citation_sources[0]
+    answer_without_markers = CITATION_MARKER_RE.sub(
+        "",
+        parsed_generation.answer_text,
+    ).strip()
+    if not answer_without_markers:
+        return _insufficient_citation_fallback(prompt_citation_sources)
+    valid_ids = {source.local_citation_id for source in prompt_citation_sources}
+    fallback_marker = f"[{first_source.local_citation_id}]"
+    if parsed_generation.markers:
+        repaired_text = CITATION_MARKER_RE.sub(
+            lambda match: match.group(0) if int(match.group(1)) in valid_ids else fallback_marker,
+            parsed_generation.answer_text,
+        )
+    else:
+        repaired_text = f"{parsed_generation.answer_text} {fallback_marker}"
+    repaired_generation = parse_generation_output(repaired_text)
+    cited_sources = validate_generation_citations(
+        repaired_generation,
+        source_map=prompt_citation_sources,
+    )
+    return repaired_generation, cited_sources
+
+
+def _insufficient_citation_fallback(
+    prompt_citation_sources: list[CitationSource],
+) -> tuple[ParsedGenerationOutput, list[CitationSource]]:
+    if not prompt_citation_sources:
+        raise CitationBuildError("citation_build_failed")
+    first_source = prompt_citation_sources[0]
+    fallback = (
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません "
+        f"[{first_source.local_citation_id}]。"
+    )
+    parsed_generation = parse_generation_output(fallback)
+    cited_sources = validate_generation_citations(
+        parsed_generation,
+        source_map=prompt_citation_sources,
+    )
+    return parsed_generation, cited_sources
 
 
 def _ask_response(

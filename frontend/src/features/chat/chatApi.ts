@@ -14,7 +14,7 @@ type ApiResponse<T> = {
 };
 
 export async function fetchChatHistory(): Promise<ChatSession[]> {
-  const response = await apiFetch<ChatHistoryResponse>("/api/v1/chat/sessions?page=1&page_size=20");
+  const response = await apiFetch<ChatHistoryResponse>("/api/v1/chat/sessions?page=1&page_size=50");
   return response.data;
 }
 
@@ -38,9 +38,23 @@ export async function createChatSession(payload: CreateChatSessionRequest): Prom
   return response.data;
 }
 
+export async function updateChatSessionTitle(chatSessionId: number, title: string): Promise<ChatSession> {
+  const response = await apiFetch<ApiResponse<ChatSession>>(`/api/v1/chat/sessions/${chatSessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title })
+  });
+  return response.data;
+}
+
 export async function archiveSession(chatSessionId: number): Promise<void> {
   await apiFetch<ApiResponse<{ result_code: string }>>(`/api/v1/chat/sessions/${chatSessionId}/archive`, {
     method: "POST"
+  });
+}
+
+export async function deleteSession(chatSessionId: number): Promise<void> {
+  await apiFetch<ApiResponse<{ result_code: string }>>(`/api/v1/chat/sessions/${chatSessionId}`, {
+    method: "DELETE"
   });
 }
 
