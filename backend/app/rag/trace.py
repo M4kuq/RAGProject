@@ -28,9 +28,11 @@ _RETRIEVAL_LATENCY_KEYS = (
     "retrieval_items_persist_ms",
 )
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(api[_-]?key|secret|password|token|credential)\b\s*[:=]\s*\S+"
+    r"(?i)(?:^|\s)(?:export\s+)?"
+    r"([A-Z0-9_.-]*(?:api[_-]?key|secret|password|token|credential)[A-Z0-9_.-]*)"
+    r"\s*[:=]\s*\S+"
 )
-_URL_USERINFO_RE = re.compile(r"://[^/\s:@]+:[^/\s:@]+@")
+_URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
@@ -63,7 +65,7 @@ class TraceRedactor:
         normalized = " ".join(value.replace("\x00", " ").split())
         if (
             _SECRET_ASSIGNMENT_RE.search(normalized)
-            or _URL_USERINFO_RE.search(normalized)
+            or _URL_RE.search(normalized)
             or _EMAIL_RE.search(normalized)
         ):
             return "redacted"

@@ -315,7 +315,6 @@ class RagService:
                 )
                 raise RagAskPipelineError("no_context_found", 422)
 
-            db.commit()
             with latency_tracker.span("context_assembly_ms"):
                 context_items = _assemble_context(
                     result.selected_candidates,
@@ -401,6 +400,7 @@ class RagService:
                 retrieval_run_id=run_id,
                 error_code="citation_build_failed",
                 latency_tracker=latency_tracker,
+                rollback=False,
             )
             raise RagAskPipelineError("citation_build_failed", 500) from None
         except RagAskPipelineError:
@@ -427,6 +427,7 @@ class RagService:
                 retrieval_run_id=run_id,
                 error_code="generation_failed",
                 latency_tracker=latency_tracker,
+                rollback=False,
             )
             raise RagAskPipelineError("generation_failed", 503) from None
         except Exception:
@@ -644,8 +645,10 @@ class RagService:
         retrieval_run_id: int,
         error_code: str,
         latency_tracker: LatencyTracker | None = None,
+        rollback: bool = True,
     ) -> None:
-        db.rollback()
+        if rollback:
+            db.rollback()
         run = self.repository.get_run(db, retrieval_run_id=retrieval_run_id)
         if run is None:
             return
