@@ -419,14 +419,14 @@ def test_chat_service_list_messages_batches_retrieval_metadata(
         )
         db.commit()
 
-        messages, total = service.list_messages(
+        messages, meta = service.list_messages(
             db,
             user=viewer,
             chat_session_id=session.chat_session_id,
             pagination=PaginationParams(page=1, page_size=20),
         )
 
-    assert total == 4
+    assert meta.total == 4
     assert [message.role for message in messages] == ["user", "user", "assistant", "assistant"]
     expected_run_ids = [run_one_id, run_two_id]
     assert retrieval_repository.run_calls == [expected_run_ids]
