@@ -38,6 +38,14 @@
 - Prefer clear names over clever abstractions.
 - Avoid premature generalization.
 
+## Review guidelines
+
+When performing code review, including `/review` in Codex CLI and `@codex review` on GitHub, read and follow `docs/code_review.md`.
+
+The review should focus on actionable issues introduced by the current diff.
+
+Do not prioritize style-only comments unless they affect correctness, maintainability, documented standards, or user-facing behavior.
+
 ## Verification
 
 After code changes, run the smallest relevant checks first.
