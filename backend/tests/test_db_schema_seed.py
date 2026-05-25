@@ -14,9 +14,14 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
 from app.db.base import Base
+from app.db.evaluation_models import EvaluationResult
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
+    EvaluationCase,
+    EvaluationDataset,
+    EvaluationRun,
+    EvaluationRunItem,
     LogicalDocument,
     RetrievalRun,
     RetrievalRunItem,
@@ -63,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0003_phase2_strategy_trace"
+    assert version == "0004_eval_dataset_metrics"
 
     expected_tables = {
         "roles",
@@ -81,6 +86,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "retrieval_runs",
         "retrieval_run_items",
         "citations",
+        "evaluation_datasets",
+        "evaluation_cases",
         "evaluation_runs",
         "evaluation_run_items",
         "evaluation_results",
@@ -112,6 +119,11 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_audit_logs_request_id_not_empty",
         "ck_retrieval_runs_strategy_type",
         "ck_retrieval_run_items_source",
+        "uq_evaluation_datasets_name",
+        "uq_evaluation_cases_dataset_key",
+        "ck_evaluation_runs_strategy_type",
+        "ck_evaluation_run_items_strategy_type",
+        "ck_evaluation_results_strategy_type",
     }
     actual_constraints = scalar_set(
         pg_engine,
@@ -133,6 +145,10 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ux_jobs_active_message_edit",
         "ux_retrieval_run_items_run_rerank_order",
         "ix_evaluation_results_metric_score",
+        "ix_evaluation_datasets_status_created",
+        "ix_evaluation_cases_dataset_status",
+        "ix_evaluation_runs_dataset_strategy",
+        "ix_evaluation_run_items_case",
     }
     actual_indexes = scalar_set(
         pg_engine,
@@ -311,6 +327,132 @@ def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> No
             transaction.rollback()
 
 
+def test_phase2_evaluation_dataset_strategy_columns_and_constraints(pg_engine: Engine) -> None:
+    suffix = uuid.uuid4().hex
+    with pg_engine.connect() as conn:
+        transaction = conn.begin()
+        try:
+            role_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO roles (role_name, description)
+                    VALUES (:role_name, 'Phase2 evaluation constraint test')
+                    RETURNING role_id
+                    """
+                ),
+                {"role_name": f"eval-{suffix}"},
+            ).scalar_one()
+            user_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO users (role_id, email, display_name, status)
+                    VALUES (:role_id, :email, 'Eval', 'active')
+                    RETURNING user_id
+                    """
+                ),
+                {"role_id": role_id, "email": f"eval-{suffix}@example.com"},
+            ).scalar_one()
+            dataset_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_datasets (
+                        dataset_name, description, source_type, created_by
+                    )
+                    VALUES (:dataset_name, 'Phase2 evaluation dataset', 'manual', :created_by)
+                    RETURNING evaluation_dataset_id
+                    """
+                ),
+                {"dataset_name": f"phase2_eval_{suffix[:8]}", "created_by": user_id},
+            ).scalar_one()
+            case_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_cases (
+                        evaluation_dataset_id, case_key, question, expected_keywords
+                    )
+                    VALUES (
+                        :evaluation_dataset_id, 'case_a', 'What uses Qdrant?',
+                        '["Qdrant"]'::jsonb
+                    )
+                    RETURNING evaluation_case_id
+                    """
+                ),
+                {"evaluation_dataset_id": dataset_id},
+            ).scalar_one()
+            run = conn.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_runs (
+                        created_by, evaluation_dataset_id, status, strategy_type,
+                        retrieval_settings_json
+                    )
+                    VALUES (
+                        :created_by, :evaluation_dataset_id, 'queued', 'hybrid',
+                        '{"strategy_type": "hybrid"}'::jsonb
+                    )
+                    RETURNING evaluation_run_id, strategy_type, trigger_type
+                    """
+                ),
+                {"created_by": user_id, "evaluation_dataset_id": dataset_id},
+            ).one()
+            assert run.strategy_type == "hybrid"
+            assert run.trigger_type == "manual"
+            item_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_run_items (
+                        evaluation_run_id, evaluation_case_id, strategy_type, case_key,
+                        status, latency_ms, latency_breakdown_json, metric_summary_json
+                    )
+                    VALUES (
+                        :evaluation_run_id, :evaluation_case_id, 'hybrid', 'case_a',
+                        'succeeded', 12, '{"total_ms": 12}'::jsonb,
+                        '{"metrics": {"recall_at_k": 1.0}}'::jsonb
+                    )
+                    RETURNING evaluation_run_item_id
+                    """
+                ),
+                {"evaluation_run_id": run.evaluation_run_id, "evaluation_case_id": case_id},
+            ).scalar_one()
+            result = conn.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_results (
+                        evaluation_run_item_id, metric_name, metric_value,
+                        metric_detail_json, strategy_type
+                    )
+                    VALUES (
+                        :evaluation_run_item_id, 'p95_latency', 12.0,
+                        '{"unit": "ms"}'::jsonb, 'hybrid'
+                    )
+                    RETURNING metric_name, metric_value, strategy_type
+                    """
+                ),
+                {"evaluation_run_item_id": item_id},
+            ).one()
+            assert result.metric_name == "p95_latency"
+            assert result.strategy_type == "hybrid"
+
+            savepoint = conn.begin_nested()
+            try:
+                with pytest.raises(IntegrityError):
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO evaluation_runs (
+                                created_by, evaluation_dataset_id, status, strategy_type
+                            )
+                            VALUES (:created_by, :evaluation_dataset_id, 'queued', 'graph_rag')
+                            """
+                        ),
+                        {"created_by": user_id, "evaluation_dataset_id": dataset_id},
+                    )
+            finally:
+                savepoint.rollback()
+        finally:
+            transaction.rollback()
+
+
 def test_phase2_orm_fields_match_strategy_schema() -> None:
     run_columns = RetrievalRun.__table__.columns
     item_columns = RetrievalRunItem.__table__.columns
@@ -335,6 +477,54 @@ def test_phase2_orm_fields_match_strategy_schema() -> None:
     assert {"retrieval_source", "score_breakdown_json"} <= set(item_columns.keys())
     assert all(value in run_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
     assert all(value in item_constraint_sql for value in RETRIEVAL_SOURCE_VALUES)
+
+
+def test_phase2_evaluation_dataset_strategy_orm_fields() -> None:
+    dataset_columns = EvaluationDataset.__table__.columns
+    case_columns = EvaluationCase.__table__.columns
+    run_columns = EvaluationRun.__table__.columns
+    item_columns = EvaluationRunItem.__table__.columns
+    result_columns = EvaluationResult.__table__.columns
+    run_constraint_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in cast(Any, EvaluationRun.__table__).constraints
+        if constraint.name == "ck_evaluation_runs_strategy_type"
+    )
+    item_constraint_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in cast(Any, EvaluationRunItem.__table__).constraints
+        if constraint.name == "ck_evaluation_run_items_strategy_type"
+    )
+    result_constraint_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in cast(Any, EvaluationResult.__table__).constraints
+        if constraint.name == "ck_evaluation_results_strategy_type"
+    )
+
+    assert {"evaluation_dataset_id", "dataset_name", "source_type", "status"} <= set(
+        dataset_columns.keys()
+    )
+    assert {"evaluation_case_id", "evaluation_dataset_id", "case_key", "question"} <= set(
+        case_columns.keys()
+    )
+    assert {
+        "evaluation_dataset_id",
+        "strategy_type",
+        "trigger_type",
+        "retrieval_settings_json",
+        "strategy_metrics_summary_json",
+    } <= set(run_columns.keys())
+    assert {
+        "evaluation_case_id",
+        "strategy_type",
+        "case_key",
+        "latency_breakdown_json",
+        "metric_summary_json",
+    } <= set(item_columns.keys())
+    assert {"metric_value", "metric_detail_json", "strategy_type"} <= set(result_columns.keys())
+    assert all(value in run_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
+    assert all(value in item_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
+    assert all(value in result_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
 
 
 def test_seed_can_run_twice_without_duplicates(
@@ -382,6 +572,12 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.hybrid.enabled") is False
         assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
         assert _setting_value(db, "rag.trace.enabled") is True
+        assert _setting_value(db, "rag.evaluation.default_dataset") == {
+            "dataset_name": "phase2_strategy_smoke",
+            "strategy_type": "dense",
+            "case_limit": 5,
+        }
+        assert _setting_value(db, "rag.evaluation.ci_smoke_enabled") is False
         logical = db.query(LogicalDocument).filter_by(title=DEMO_DOCUMENT_TITLE).one()
         versions = (
             db.query(DocumentVersion)
@@ -454,6 +650,11 @@ def test_seed_preserves_existing_phase2_strategy_setting(
             assert _setting_value(db, "rag.default_strategy") == "hybrid"
             assert _setting_value(db, "rag.hybrid.enabled") is False
             assert _setting_value(db, "rag.router.enabled") is False
+            assert _setting_value(db, "rag.evaluation.default_dataset") == {
+                "dataset_name": "phase2_strategy_smoke",
+                "strategy_type": "dense",
+                "case_limit": 5,
+            }
     finally:
         engine.dispose()
 

@@ -3,7 +3,12 @@ import { Link, useSearchParams } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
-import { useCreateEvaluationRun, useEvaluationRuns } from "../../../features/evaluations/evaluationHooks";
+import {
+  useCreateEvaluationRun,
+  useEvaluationDatasets,
+  useEvaluationRuns
+} from "../../../features/evaluations/evaluationHooks";
+import type { RetrievalStrategy } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
@@ -11,7 +16,9 @@ const PAGE_SIZE = 20;
 export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [datasetName, setDatasetName] = useState("phase1_smoke");
+  const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
+  const [strategyType, setStrategyType] = useState<RetrievalStrategy>("dense");
   const [message, setMessage] = useState<string | null>(null);
   const params = useMemo(
     () => ({
@@ -21,6 +28,7 @@ export function EvaluationListPage() {
     [searchParams]
   );
   const runs = useEvaluationRuns(params);
+  const datasets = useEvaluationDatasets({ page: 1, page_size: 50 });
   const createRun = useCreateEvaluationRun();
 
   function updatePage(page: number) {
@@ -32,9 +40,15 @@ export function EvaluationListPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const safeCaseLimit = Number.isFinite(caseLimit) ? Math.min(50, Math.max(1, caseLimit)) : 10;
+    const selectedDataset = datasets.data?.items.find(
+      (dataset) => dataset.evaluation_dataset_id === evaluationDatasetId
+    );
     const result = await createRun.mutateAsync({
-      dataset_name: datasetName.trim() || "phase1_smoke",
-      case_limit: safeCaseLimit
+      dataset_name: selectedDataset?.dataset_name ?? (datasetName.trim() || "phase1_smoke"),
+      evaluation_dataset_id: evaluationDatasetId,
+      case_limit: safeCaseLimit,
+      strategy_type: strategyType,
+      trigger_type: "manual"
     });
     setMessage(`Evaluation run #${result.evaluation_run_id} queued as job #${result.job_id}.`);
   }
@@ -53,8 +67,36 @@ export function EvaluationListPage() {
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
         <label>
-          dataset
+          fixture
           <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
+        </label>
+        <label>
+          dataset
+          <select
+            value={evaluationDatasetId ?? ""}
+            onChange={(event) =>
+              setEvaluationDatasetId(event.target.value ? Number(event.target.value) : null)
+            }
+          >
+            <option value="">fixture only</option>
+            {datasets.data?.items.map((dataset) => (
+              <option key={dataset.evaluation_dataset_id} value={dataset.evaluation_dataset_id}>
+                {dataset.dataset_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          strategy
+          <select
+            value={strategyType}
+            onChange={(event) => setStrategyType(event.target.value as RetrievalStrategy)}
+          >
+            <option value="dense">dense</option>
+            <option value="sparse">sparse</option>
+            <option value="hybrid">hybrid</option>
+            <option value="agentic_router">agentic_router</option>
+          </select>
         </label>
         <label>
           case_limit
@@ -85,6 +127,7 @@ export function EvaluationListPage() {
               <tr>
                 <th>Run</th>
                 <th>Dataset</th>
+                <th>Strategy</th>
                 <th>Status</th>
                 <th>Cases</th>
                 <th>Metrics</th>
@@ -100,6 +143,7 @@ export function EvaluationListPage() {
                     <Link to={`/admin/evaluations/${run.evaluation_run_id}`}>#{run.evaluation_run_id}</Link>
                   </td>
                   <td>{truncateText(run.dataset_name, 32)}</td>
+                  <td>{run.strategy_type}</td>
                   <td>
                     <StatusBadge status={run.status} />
                   </td>
@@ -118,6 +162,42 @@ export function EvaluationListPage() {
           <Pagination meta={runs.data.pagination} onPageChange={updatePage} />
         </>
       ) : null}
+
+      <section className="admin-section">
+        <h2>Datasets</h2>
+        {datasets.isLoading ? <LoadingState /> : null}
+        {datasets.error ? <ErrorState error={datasets.error} /> : null}
+        {datasets.data && datasets.data.items.length > 0 ? (
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Dataset</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Cases</th>
+                <th>Version</th>
+              </tr>
+            </thead>
+            <tbody>
+              {datasets.data.items.map((dataset) => (
+                <tr key={dataset.evaluation_dataset_id}>
+                  <td>
+                    <Link to={`/admin/evaluations/datasets/${dataset.evaluation_dataset_id}`}>
+                      {truncateText(dataset.dataset_name, 40)}
+                    </Link>
+                  </td>
+                  <td>
+                    <StatusBadge status={dataset.status} />
+                  </td>
+                  <td>{dataset.source_type}</td>
+                  <td>{dataset.case_count}</td>
+                  <td>{dataset.version}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
+      </section>
     </main>
   );
 }

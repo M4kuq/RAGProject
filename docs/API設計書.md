@@ -3294,6 +3294,57 @@ OpenAPI 化する際は以下を守る。
 - `jobs` response では `scheduled_at` を使わず `created_at` を使う
 - Phase1 の評価 API では `evaluation_dataset_id` / `evaluation_case_id` を必須にしない
 
+## Phase2 PR-22 評価 dataset / case API
+
+PR-22 では strategy 比較評価のため、以下の admin-only API を追加する。GET は CSRF 不要、POST/PATCH は CSRF 必須。viewer は 403、未認証は 401。
+
+### Dataset
+
+- `GET /api/v1/evaluations/datasets`
+- `POST /api/v1/evaluations/datasets`
+- `GET /api/v1/evaluations/datasets/{evaluation_dataset_id}`
+- `PATCH /api/v1/evaluations/datasets/{evaluation_dataset_id}`
+- `POST /api/v1/evaluations/datasets/{evaluation_dataset_id}/archive`
+
+削除 API は持たない。archive は冪等な lifecycle 操作として扱う。
+
+### Case
+
+- `GET /api/v1/evaluations/datasets/{evaluation_dataset_id}/cases`
+- `POST /api/v1/evaluations/datasets/{evaluation_dataset_id}/cases`
+- `GET /api/v1/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}`
+- `PATCH /api/v1/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}`
+- `POST /api/v1/evaluations/datasets/{evaluation_dataset_id}/cases/{evaluation_case_id}/archive`
+
+case は親 dataset と整合しない場合 404 を返す。
+
+### Import / Export
+
+- `POST /api/v1/evaluations/datasets/import`
+- `GET /api/v1/evaluations/datasets/{evaluation_dataset_id}/export`
+
+manifest schema は `phase2.evaluation_dataset.v1`。import は `dataset_name` と `case_key` で冪等に upsert する。export は safe manifest のみを返す。
+
+### Evaluation run request extension
+
+既存 `POST /api/v1/evaluations/runs` は後方互換を維持しつつ、以下を受け取れる。
+
+```json
+{
+  "evaluation_dataset_id": 1,
+  "dataset_name": "phase2_strategy_smoke",
+  "strategy_type": "dense",
+  "case_limit": 20,
+  "trigger_type": "manual"
+}
+```
+
+PR-22 では non-dense strategy runner は実装しない。既存 runner は default `dense` のまま維持する。
+
+### Security
+
+dataset / case / metric / response には raw prompt、full context、raw chunk text、PII、secret、token、credential、API key、password を保存・表示しない。case の `question` は safe evaluation input として保存できるが、full prompt ではない。
+
 ---
 
 ## 23. 実装優先順位

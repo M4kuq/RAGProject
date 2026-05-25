@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from app.db.evaluation_models import EvaluationResult
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
+    EvaluationDataset,
     EvaluationRun,
     EvaluationRunItem,
     Job,
@@ -26,6 +29,9 @@ from app.db.models import (
     Role,
     User,
 )
+from app.db.models import (
+    EvaluationCase as EvaluationCaseModel,
+)
 from app.db.session import get_db
 from app.evaluation.fixtures import load_evaluation_cases
 from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
@@ -33,9 +39,14 @@ from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluation
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
-from app.schemas.evaluations import EvaluationRunCreateRequest
+from app.schemas.evaluations import (
+    EvaluationCaseCreateRequest,
+    EvaluationDatasetCreateRequest,
+    EvaluationDatasetManifest,
+    EvaluationRunCreateRequest,
+)
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
-from app.services.evaluation_service import EvaluationService
+from app.services.evaluation_service import STRATEGY_METRIC_SPECS, EvaluationService
 from app.workers.handlers.base import JobExecutionContext
 from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
 
@@ -130,6 +141,44 @@ def test_fixture_loader_and_metric_clamp() -> None:
     assert by_name["citation_coverage"].metric_score == 1.0
     assert by_name["context_precision"].metric_score == 1.0
     assert "Qdrant" not in str(by_name["faithfulness"].details)
+
+
+def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
+    cases = load_evaluation_cases("phase2_strategy_smoke", case_limit=5)
+    assert [case.case_id for case in cases] == [
+        "dense_seed_stack",
+        "keyword_heavy_ci",
+        "citation_required_confidence",
+        "no_context_expected",
+        "future_hybrid_candidate",
+    ]
+
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "evaluation"
+        / "fixtures"
+        / "phase2_strategy_smoke.json"
+    )
+    manifest = EvaluationDatasetManifest.model_validate_json(
+        fixture_path.read_text(encoding="utf-8")
+    )
+    assert manifest.dataset.dataset_name == "phase2_strategy_smoke"
+    assert {spec.metric_name.value for spec in STRATEGY_METRIC_SPECS} >= {
+        "recall_at_k",
+        "mrr",
+        "citation_coverage",
+        "groundedness",
+        "faithfulness",
+        "no_context_rate",
+        "p95_latency",
+        "strategy_selection_accuracy",
+    }
+    dumped = manifest.model_dump_json()
+    assert "raw prompt" not in dumped.lower()
+    assert "full context" not in dumped.lower()
+    assert "raw chunk" not in dumped.lower()
+    assert "secret" not in dumped.lower()
 
 
 def test_database_vector_search_client_uses_ready_active_chunks() -> None:
@@ -262,6 +311,170 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
         assert job.target_id == run.evaluation_run_id
 
 
+def test_evaluation_dataset_case_api_import_export_and_safe_validation(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+
+    assert client.get("/api/v1/evaluations/datasets").status_code == 401
+
+    _login_as(client, "viewer@example.com")
+    viewer_csrf = _session_csrf(client)
+    viewer_create = client.post(
+        "/api/v1/evaluations/datasets",
+        json={"dataset_name": "viewer_dataset", "description": "viewer should fail"},
+        headers={"X-CSRF-Token": viewer_csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert viewer_create.status_code == 403
+
+    _logout(client)
+    _login_as(client, "admin@example.com")
+    csrf = _session_csrf(client)
+    dataset_response = client.post(
+        "/api/v1/evaluations/datasets",
+        json={
+            "dataset_name": "phase2_manual",
+            "description": "Manual Phase2 strategy dataset.",
+            "version": "v1",
+            "source_type": "manual",
+            "metadata_json": {"owner": "phase2"},
+        },
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert dataset_response.status_code == 201
+    dataset_id = dataset_response.json()["data"]["evaluation_dataset_id"]
+
+    case_response = client.post(
+        f"/api/v1/evaluations/datasets/{dataset_id}/cases",
+        json={
+            "case_key": "dense_case",
+            "question": "What vector database is used by the Phase1 RAG stack?",
+            "expected_keywords": ["Qdrant"],
+            "expected_document_ids": [],
+            "expected_chunk_ids": [],
+            "required_citation": True,
+            "tags": ["dense"],
+            "metadata_json": {"expected_strategy": "dense"},
+        },
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert case_response.status_code == 201
+    case_id = case_response.json()["data"]["evaluation_case_id"]
+
+    listing = client.get("/api/v1/evaluations/datasets")
+    dataset_detail = client.get(f"/api/v1/evaluations/datasets/{dataset_id}")
+    cases = client.get(f"/api/v1/evaluations/datasets/{dataset_id}/cases")
+    case_detail = client.get(f"/api/v1/evaluations/datasets/{dataset_id}/cases/{case_id}")
+    nested_mismatch = client.get(f"/api/v1/evaluations/datasets/999/cases/{case_id}")
+
+    assert listing.status_code == 200
+    assert dataset_detail.status_code == 200
+    assert dataset_detail.json()["data"]["case_count"] == 1
+    assert cases.status_code == 200
+    assert cases.json()["data"][0]["case_key"] == "dense_case"
+    assert case_detail.status_code == 200
+    assert nested_mismatch.status_code == 404
+
+    run_response = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "evaluation_dataset_id": dataset_id,
+            "strategy_type": "dense",
+            "case_limit": 1,
+            "trigger_type": "manual",
+        },
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert run_response.status_code == 202
+    run_detail = client.get(
+        f"/api/v1/evaluations/runs/{run_response.json()['data']['evaluation_run_id']}"
+    )
+    assert run_detail.status_code == 200
+    assert run_detail.json()["data"]["evaluation_dataset_id"] == dataset_id
+    assert run_detail.json()["data"]["strategy_type"] == "dense"
+    assert run_detail.json()["data"]["case_count"] == 1
+
+    with session_factory() as db:
+        run = db.get(EvaluationRun, run_response.json()["data"]["evaluation_run_id"])
+        assert run is not None
+        assert run.evaluation_dataset_id == dataset_id
+        assert run.strategy_type == "dense"
+        assert run.trigger_type == "manual"
+        assert run.retrieval_settings_json == {
+            "schema_version": "phase2.evaluation.v1",
+            "strategy_type": "dense",
+            "case_limit": 1,
+            "runner_implementation": "phase1_dense_fixture",
+            "strategy_runner_enabled": True,
+        }
+
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "evaluation"
+        / "fixtures"
+        / "phase2_strategy_smoke.json"
+    )
+    manifest = json.loads(fixture_path.read_text(encoding="utf-8"))
+    imported = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=manifest,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    imported_again = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=manifest,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert imported.status_code == 200
+    assert imported_again.status_code == 200
+    assert imported.json()["data"]["case_count"] == 5
+    assert imported_again.json()["data"]["case_count"] == 5
+
+    imported_dataset_id = imported.json()["data"]["evaluation_dataset_id"]
+    exported = client.get(f"/api/v1/evaluations/datasets/{imported_dataset_id}/export")
+    assert exported.status_code == 200
+    exported_text = exported.text.lower()
+    assert "phase2_strategy_smoke" in exported_text
+    assert "raw prompt" not in exported_text
+    assert "full context" not in exported_text
+    assert "raw chunk" not in exported_text
+    assert "secret" not in exported_text
+
+    unsafe_manifest = dict(manifest)
+    unsafe_manifest["cases"] = [
+        dict(manifest["cases"][0]) | {"question": "Use OPENAI_API_KEY=sk-test here"}
+    ]
+    unsafe = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=unsafe_manifest,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert unsafe.status_code == 422
+
+    archived_case = client.post(
+        f"/api/v1/evaluations/datasets/{dataset_id}/cases/{case_id}/archive",
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    archived_dataset = client.post(
+        f"/api/v1/evaluations/datasets/{dataset_id}/archive",
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert archived_case.status_code == 200
+    assert archived_case.json()["data"]["status"] == "archived"
+    assert archived_dataset.status_code == 200
+    assert archived_dataset.json()["data"]["status"] == "archived"
+
+    with session_factory() as db:
+        assert db.query(EvaluationDataset).filter_by(dataset_name="phase2_strategy_smoke").count()
+        assert (
+            db.query(EvaluationCaseModel)
+            .filter_by(evaluation_dataset_id=imported_dataset_id)
+            .count()
+            == 5
+        )
+
+
 def test_evaluation_summary_uses_planned_case_count_while_running() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -324,21 +537,98 @@ def test_evaluation_service_runner_persists_items_results_and_safe_details() -> 
             run = db.get(EvaluationRun, created.evaluation_run_id)
             assert run is not None
             assert run.status == "succeeded"
+            assert run.strategy_type == "dense"
+            assert run.strategy_metrics_summary_json is not None
             items = db.scalars(select(EvaluationRunItem)).all()
             results = db.scalars(select(EvaluationResult)).all()
             assert len(items) == 2
             assert all(item.status == "succeeded" for item in items)
+            assert all(item.strategy_type == "dense" for item in items)
+            assert all(item.metric_summary_json for item in items)
             assert {result.metric_name for result in results} >= {
                 "faithfulness",
                 "groundedness",
                 "citation_coverage",
                 "context_precision",
             }
+            assert all(result.strategy_type == "dense" for result in results)
+            assert all(
+                result.metric_detail_json == result.details_json
+                for result in results
+                if result.metric_name != "case_metadata"
+            )
             response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
             assert response.case_count == 2
             assert response.items[0].case_id == "phase1_seed_stack"
+            assert response.items[0].strategy_type == "dense"
             assert "raw prompt" not in response.model_dump_json().lower()
             assert "full context" not in response.model_dump_json().lower()
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runs_persistent_dataset_cases() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="persistent_strategy",
+                    description="Persistent strategy dataset.",
+                    version="v1",
+                    source_type="manual",
+                    metadata_json={"owner": "phase2"},
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="persistent_dense",
+                    question="What vector database is used by the Phase1 RAG stack?",
+                    expected_keywords=["Qdrant"],
+                    required_citation=True,
+                    tags=["dense"],
+                    metadata_json={"expected_strategy": "dense"},
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    dataset_name="persistent_strategy",
+                    case_limit=1,
+                    strategy_type="dense",
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-persistent-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            item = db.scalar(select(EvaluationRunItem))
+            assert item is not None
+            assert item.evaluation_case_id is not None
+            assert item.case_key == "persistent_dense"
+            assert item.strategy_type == "dense"
+            assert item.latency_breakdown_json is not None
     finally:
         engine.dispose()
 

@@ -1,10 +1,15 @@
 import { apiFetch } from "../../lib/apiClient";
 import type { ApiResponse } from "../../types/api";
 import type {
+  EvaluationCase,
+  EvaluationDataset,
+  EvaluationDatasetManifest,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
   EvaluationRunDetail,
   EvaluationRunSummary,
+  PagedEvaluationCases,
+  PagedEvaluationDatasets,
   PagedEvaluationRuns
 } from "./evaluationTypes";
 
@@ -43,5 +48,53 @@ export async function getEvaluationRunDetail(evaluationRunId: number): Promise<E
   const response = await apiFetch<ApiResponse<EvaluationRunDetail>>(
     `/api/v1/evaluations/runs/${evaluationRunId}`
   );
+  return response.data;
+}
+
+export async function listEvaluationDatasets(params: {
+  page: number;
+  page_size: number;
+}): Promise<PagedEvaluationDatasets> {
+  const response = await apiFetch<ApiResponse<EvaluationDataset[]>>(
+    `/api/v1/evaluations/datasets${toQuery(params)}`
+  );
+  return { items: response.data, pagination: response.meta?.pagination };
+}
+
+export async function getEvaluationDataset(evaluationDatasetId: number): Promise<EvaluationDataset> {
+  const response = await apiFetch<ApiResponse<EvaluationDataset>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}`
+  );
+  return response.data;
+}
+
+export async function listEvaluationCases(
+  evaluationDatasetId: number,
+  params: { page: number; page_size: number }
+): Promise<PagedEvaluationCases> {
+  const response = await apiFetch<ApiResponse<EvaluationCase[]>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/cases${toQuery(params)}`
+  );
+  return { items: response.data, pagination: response.meta?.pagination };
+}
+
+export async function exportEvaluationDataset(
+  evaluationDatasetId: number
+): Promise<EvaluationDatasetManifest> {
+  const response = await apiFetch<ApiResponse<EvaluationDatasetManifest>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/export`
+  );
+  return response.data;
+}
+
+export async function importEvaluationDataset(
+  manifest: EvaluationDatasetManifest
+): Promise<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }> {
+  const response = await apiFetch<
+    ApiResponse<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }>
+  >("/api/v1/evaluations/datasets/import", {
+    method: "POST",
+    body: JSON.stringify(manifest)
+  });
   return response.data;
 }

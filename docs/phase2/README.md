@@ -1,19 +1,19 @@
-# Phase2 Design Baseline
+# Phase2 README
 
-## 目的
+## Purpose
 
-Phase2 は Phase1 の Core RAG を、検索戦略を比較・制御・観測できる RAG に拡張するフェーズである。中心方針は次の4点とする。
+Phase2 extends the Phase1 dense RAG baseline with four central themes:
 
 - Advanced Retrieval
 - Agentic Control
 - Evaluation
 - Observability
 
-PR-20 は Phase2 の最初のPRとして、後続PRが依存する strategy enum、trace schema、system_settings、evaluation/observability 方針を固定する。検索方式や UI の本体実装は行わない。
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset.
 
-## PR計画
+## PR Plan
 
-| PR | 目的 |
+| PR | Scope |
 |---:|---|
 | PR-20 | Phase2 Design Baseline / Strategy & Evaluation Schema |
 | PR-21 | Retrieval Trace Foundation / Observability Schema |
@@ -34,30 +34,48 @@ PR-20 は Phase2 の最初のPRとして、後続PRが依存する strategy enum
 | PR-36 | Document Diff / Citation Navigation / Version Compare |
 | PR-37 | Phase2 Final Hardening / Demo / Docs |
 
-## PR-21 Retrieval Trace Foundation
+## PR-20 Baseline
 
-PR-21 では、PR-20 で追加した `retrieval_runs` / `retrieval_run_items` の trace columns に、既存 dense retrieval の safe trace を保存する。詳細は [retrieval_trace_foundation.md](./retrieval_trace_foundation.md) を参照する。
-
-- `/rag/search` と `/rag/ask` は default `dense` の query plan / strategy decision / settings / latency を保存する。
-- item ごとに `retrieval_source = dense` と score breakdown を保存する。
-- failed run でも取得済み latency と safe metadata を保存する。
-- Sparse / Hybrid / Router / Debug UI / LangSmith / external trace export は PR-21 では実装しない。
-
-## PR-20で実装すること
+PR-20 adds:
 
 - `RetrievalStrategy` / `RetrievalSource` / `FusionMethod` / `RouterFallbackStrategy`
-- `retrieval_runs` の strategy/trace 用 column
-- `retrieval_run_items` の source/score breakdown 用 column
-- redacted trace DTO
-- retrieval settings snapshot DTO
-- strategy evaluation metric DTO
-- Phase2 retrieval strategy system settings seed
-- Phase2 docs と受け入れ基準
+- retrieval trace columns on `retrieval_runs`
+- source and score breakdown columns on `retrieval_run_items`
+- redacted trace DTOs and retrieval settings DTOs
+- Phase2 retrieval system settings
 
-## PR-20で実装しないこと
+The default strategy remains `dense`.
 
-Sparse Retrieval、Hybrid fusion、QueryAnalyzer、QueryPlanner、StrategyRouter、Agentic Retrieval Loop、Retrieval Debug UI、LangSmith adapter、Graph-RAG、OCR、AWS/OIDC は実装しない。
+## PR-21 Trace Foundation
 
-## 安全方針
+PR-21 stores `phase2.trace.v1` safe trace metadata for existing dense retrieval:
 
-trace、DTO、DB、docs のいずれでも raw prompt、raw chunk text、full context、PII、secret、token、credential を保存・表示しない。Phase1 の `/rag/search` と `/rag/ask` は default strategy `dense` として維持する。
+- query plan hash and safe counts
+- default dense strategy decision
+- retrieval settings snapshot
+- latency breakdown
+- item source and score breakdown
+
+Raw query, raw prompt, full context, raw chunk text, PII, and secrets are not stored or returned.
+
+## PR-22 Evaluation Dataset Management
+
+PR-22 adds:
+
+- `evaluation_datasets`
+- `evaluation_cases`
+- strategy-aware fields on `evaluation_runs`, `evaluation_run_items`, and `evaluation_results`
+- strategy metric specs
+- JSON manifest import/export
+- admin-only dataset/case API
+- minimal Evaluation UI connection for dataset selection, case listing, strategy display, and export
+
+PR-22 keeps the existing minimal evaluation runner default dense. Non-dense strategy execution is left for PR-25.
+
+## Non-goals
+
+PR-22 does not implement Sparse Retrieval, Hybrid Retrieval, Strategy Evaluation Runner, Agentic Router, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+
+## Security
+
+Phase2 docs, DB schema, DTOs, API responses, and UI must not store or display raw prompt, full context, raw chunk text, PII, secret, token, credential, API key, or password. Dataset import validation rejects secret-like and PII-like values.

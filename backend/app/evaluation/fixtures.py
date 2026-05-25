@@ -54,13 +54,14 @@ def _safe_dataset_name(value: str) -> str:
 def _case_from_payload(value: Any) -> EvaluationCase:
     if not isinstance(value, dict):
         raise EvaluationFixtureError("evaluation_case_invalid")
-    case_id = _required_text(value, "case_id", max_length=100)
+    case_id = _required_text(value, "case_id", max_length=100, fallback_key="case_key")
     question = _required_text(value, "question", max_length=8000)
     raw_keywords = value.get("expected_keywords")
     if not isinstance(raw_keywords, list):
         raise EvaluationFixtureError("evaluation_case_invalid")
     keywords = tuple(_keyword(item) for item in raw_keywords)
-    if not keywords:
+    expected_answer = value.get("expected_answer")
+    if not keywords and not isinstance(expected_answer, str):
         raise EvaluationFixtureError("evaluation_case_invalid")
     return EvaluationCase(
         case_id=case_id,
@@ -70,8 +71,16 @@ def _case_from_payload(value: Any) -> EvaluationCase:
     )
 
 
-def _required_text(value: dict[str, Any], key: str, *, max_length: int) -> str:
+def _required_text(
+    value: dict[str, Any],
+    key: str,
+    *,
+    max_length: int,
+    fallback_key: str | None = None,
+) -> str:
     raw = value.get(key)
+    if raw is None and fallback_key is not None:
+        raw = value.get(fallback_key)
     if not isinstance(raw, str):
         raise EvaluationFixtureError("evaluation_case_invalid")
     text = " ".join(raw.replace("\x00", " ").split())

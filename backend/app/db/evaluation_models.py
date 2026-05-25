@@ -13,11 +13,17 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.db.models import big_int, jsonb, pg_check
+from app.rag.strategy import (
+    DEFAULT_RETRIEVAL_STRATEGY,
+    RETRIEVAL_STRATEGY_VALUES,
+    sql_literal_list,
+)
 
 
 class EvaluationResult(Base):
@@ -38,14 +44,26 @@ class EvaluationResult(Base):
             "metric_score IS NULL OR (metric_score >= 0 AND metric_score <= 1)",
             name="ck_evaluation_results_score",
         ),
+        CheckConstraint(
+            f"strategy_type IN ({sql_literal_list(RETRIEVAL_STRATEGY_VALUES)})",
+            name="ck_evaluation_results_strategy_type",
+        ),
     )
 
     evaluation_result_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
     evaluation_run_item_id: Mapped[int] = mapped_column(big_int(), nullable=False)
     metric_name: Mapped[str] = mapped_column(String(100), nullable=False)
     metric_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    metric_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
     metric_label: Mapped[str | None] = mapped_column(String(100))
     details_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    metric_detail_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    strategy_type: Mapped[str] = mapped_column(
+        String(50),
+        server_default=text(f"'{DEFAULT_RETRIEVAL_STRATEGY.value}'"),
+        default=DEFAULT_RETRIEVAL_STRATEGY.value,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
