@@ -5,6 +5,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -107,6 +108,57 @@ class OllamaAnswerGenerator:
         )
 
 
+class OpenAIResponsesAnswerGenerator:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.timeout_seconds = timeout_seconds
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        try:
+            response = httpx.post(
+                f"{self.base_url}/responses",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model_name,
+                    "instructions": RAG_GENERATION_INSTRUCTIONS,
+                    "input": _openai_input(request),
+                    "store": False,
+                    "max_output_tokens": _max_output_tokens_for_chars(request.max_output_chars),
+                },
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as exc:
+            raise AnswerGenerationError() from exc
+        if response.status_code >= 400:
+            raise AnswerGenerationError()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AnswerGenerationError() from exc
+        if not isinstance(payload, dict):
+            raise AnswerGenerationError()
+        raw_content = _extract_openai_output_text(payload)
+        if not raw_content:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+        )
+
+
 class OpenAICompatibleChatAnswerGenerator:
     def __init__(
         self,
@@ -171,22 +223,163 @@ class OpenAICompatibleChatAnswerGenerator:
         )
 
 
-def create_answer_generator(settings: Settings) -> AnswerGenerator:
-    if settings.generation_provider == "fake":
+class AnthropicMessagesAnswerGenerator:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        api_version: str,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.api_version = api_version
+        self.model_name = model_name
+        self.timeout_seconds = timeout_seconds
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        try:
+            response = httpx.post(
+                f"{self.base_url}/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": self.api_version,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model_name,
+                    "system": RAG_GENERATION_INSTRUCTIONS,
+                    "messages": [{"role": "user", "content": _openai_input(request)}],
+                    "max_tokens": _max_output_tokens_for_chars(request.max_output_chars),
+                },
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as exc:
+            raise AnswerGenerationError() from exc
+        if response.status_code >= 400:
+            raise AnswerGenerationError()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AnswerGenerationError() from exc
+        if not isinstance(payload, dict):
+            raise AnswerGenerationError()
+        raw_content = _extract_anthropic_output_text(payload)
+        if not raw_content:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+        )
+
+
+class GeminiAnswerGenerator:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.timeout_seconds = timeout_seconds
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        model_name = quote(self.model_name, safe="")
+        try:
+            response = httpx.post(
+                f"{self.base_url}/models/{model_name}:generateContent",
+                headers={
+                    "x-goog-api-key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "systemInstruction": {
+                        "parts": [{"text": RAG_GENERATION_INSTRUCTIONS}],
+                    },
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": _openai_input(request)}],
+                        }
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": _max_output_tokens_for_chars(request.max_output_chars),
+                    },
+                },
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as exc:
+            raise AnswerGenerationError() from exc
+        if response.status_code >= 400:
+            raise AnswerGenerationError()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AnswerGenerationError() from exc
+        if not isinstance(payload, dict):
+            raise AnswerGenerationError()
+        raw_content = _extract_gemini_output_text(payload)
+        if not raw_content:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+        )
+
+
+def create_answer_generator(
+    settings: Settings,
+    *,
+    provider: str | None = None,
+    model_name: str | None = None,
+) -> AnswerGenerator:
+    generation_provider = (provider or settings.generation_provider).lower()
+    generation_model_name = model_name or settings.generation_model_name
+    if generation_provider == "fake":
         return FakeAnswerGenerator()
-    if settings.generation_provider == "ollama":
+    if generation_provider == "ollama":
         return OllamaAnswerGenerator(
             url=settings.ollama_url,
-            model_name=settings.generation_model_name,
+            model_name=generation_model_name,
             timeout_seconds=settings.ollama_timeout_seconds,
         )
-    if settings.generation_provider == "lmstudio":
+    if generation_provider == "lmstudio":
         return OpenAICompatibleChatAnswerGenerator(
             api_key=settings.lmstudio_api_key,
             base_url=settings.lmstudio_base_url,
-            model_name=settings.generation_model_name,
+            model_name=_lmstudio_model_name(generation_model_name),
             timeout_seconds=settings.lmstudio_timeout_seconds,
             max_output_tokens=settings.generation_max_output_tokens,
+        )
+    if generation_provider == "openai" and settings.openai_api_key:
+        return OpenAIResponsesAnswerGenerator(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model_name=generation_model_name,
+            timeout_seconds=settings.openai_timeout_seconds,
+        )
+    if generation_provider == "anthropic" and settings.anthropic_api_key:
+        return AnthropicMessagesAnswerGenerator(
+            api_key=settings.anthropic_api_key,
+            base_url=settings.anthropic_base_url,
+            api_version=settings.anthropic_version,
+            model_name=generation_model_name,
+            timeout_seconds=settings.anthropic_timeout_seconds,
+        )
+    if generation_provider == "gemini" and settings.gemini_api_key:
+        return GeminiAnswerGenerator(
+            api_key=settings.gemini_api_key,
+            base_url=settings.gemini_base_url,
+            model_name=generation_model_name,
+            timeout_seconds=settings.gemini_timeout_seconds,
         )
     raise AnswerGenerationError()
 
@@ -250,6 +443,31 @@ def _context_block(request: GenerationRequest) -> str:
     return "\n\n".join(context_lines)
 
 
+def _extract_openai_output_text(payload: dict[str, Any]) -> str:
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    parts: list[str] = []
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") not in {"output_text", "text"}:
+                    continue
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
 def _extract_chat_completion_output_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
     if not isinstance(choices, list):
@@ -267,8 +485,57 @@ def _extract_chat_completion_output_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _extract_anthropic_output_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    content = payload.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+def _extract_gemini_output_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            blocks = content.get("parts")
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
 def _max_output_tokens(max_output_tokens: int) -> int:
     return max(128, min(8192, max_output_tokens))
+
+
+def _max_output_tokens_for_chars(max_output_chars: int) -> int:
+    return max(1, min(8192, max_output_chars // 4))
+
+
+def _lmstudio_model_name(value: str) -> str:
+    normalized = value.strip()
+    lower = normalized.lower()
+    if lower.startswith("https://huggingface.co/lmstudio-community/qwen3.5-9b-gguf"):
+        return "qwen3.5-9b"
+    if lower.startswith("lmstudio-community/qwen3.5-9b-gguf"):
+        return "qwen3.5-9b"
+    return normalized
 
 
 def _final_answer_text(value: str) -> str:
