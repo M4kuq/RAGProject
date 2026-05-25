@@ -94,6 +94,7 @@ def test_score_breakdown_does_not_allow_raw_text_fields() -> None:
     dumped = breakdown.model_dump(mode="json", exclude_none=True)
 
     assert dumped == {
+        "schema_version": "phase2.trace.v1",
         "retrieval_source": "dense",
         "dense_score": 0.91,
         "rerank_score": 0.88,

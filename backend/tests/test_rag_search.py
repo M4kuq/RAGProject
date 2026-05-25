@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -271,11 +272,39 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert run.request_message_id is None
         assert run.status == "succeeded"
         assert run.strategy_type == "dense"
+        assert run.query_plan_json == {
+            "schema_version": "phase2.trace.v1",
+            "strategy_type": "dense",
+            "query_mode": "single_query",
+            "query_hash": hashlib.sha256(b"alpha policy").hexdigest(),
+            "rewrite_applied": False,
+            "sub_query_count": 0,
+            "metadata_filter_applied": False,
+            "metadata_filter_count": 0,
+            "logical_document_filter_count": 0,
+            "reason_codes": ["phase1_compat_default_dense"],
+        }
+        assert run.strategy_decision_json == {
+            "schema_version": "phase2.trace.v1",
+            "selected_strategy": "dense",
+            "fallback_strategy": "dense",
+            "fallback_used": False,
+            "router_enabled": False,
+            "decision_source": "default",
+            "decision_policy": "static_dense",
+            "reason_codes": ["phase1_compat_default_dense"],
+        }
         assert run.retrieval_settings_json == {
+            "schema_version": "phase2.trace.v1",
             "strategy_type": "dense",
             "default_strategy": "dense",
             "top_k": 5,
             "rerank_top_n": 1,
+            "embedding_provider": "fake",
+            "rerank_provider": "fake",
+            "generation_provider": "fake",
+            "qdrant_collection": "document_chunks",
+            "rdb_final_check_enabled": True,
             "modality": "text",
             "logical_document_filter_count": 0,
             "hybrid_enabled": False,
@@ -283,6 +312,18 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             "trace_enabled": True,
             "fusion_method": "rrf",
         }
+        assert run.latency_breakdown_json is not None
+        latency = run.latency_breakdown_json
+        assert latency["schema_version"] == "phase2.trace.v1"
+        assert latency["total_ms"] >= 0
+        assert latency["query_embedding_ms"] >= 0
+        assert latency["qdrant_search_ms"] >= 0
+        assert latency["rdb_final_check_ms"] >= 0
+        assert latency["rerank_ms"] >= 0
+        assert latency["retrieval_items_persist_ms"] >= 0
+        assert "generation_ms" not in latency
+        assert "alpha policy" not in str(run.query_plan_json)
+        assert "query_plan_json" not in str(data)
         assert run.answer_confidence is None
         assert run.groundedness_score is None
         assert run.confidence_label is None
@@ -301,11 +342,13 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         first_score_breakdown = items[0].score_breakdown_json
         assert first_score_breakdown is not None
         assert first_score_breakdown == {
+            "schema_version": "phase2.trace.v1",
             "retrieval_source": "dense",
             "dense_score": 0.91,
             "rerank_score": first_score_breakdown["rerank_score"],
             "rank_order": 1,
             "rerank_order": 1,
+            "final_rank": 1,
             "selected_flag": True,
         }
         snapshots = [item.payload_snapshot for item in items]
@@ -340,6 +383,13 @@ def test_rag_search_zero_result_succeeds_without_items(
         assert run is not None
         assert run.status == "succeeded"
         assert run.strategy_type == "dense"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["query_hash"] == hashlib.sha256(b"missing").hexdigest()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "dense"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["total_ms"] >= 0
+        assert "generation_ms" not in run.latency_breakdown_json
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
@@ -397,6 +447,7 @@ def test_rag_search_retrieval_failure_marks_run_failed(
         assert run.status == "failed"
         assert run.error_code == "retrieval_failed"
         assert run.answer_confidence is None
+        _assert_safe_run_trace(run, raw_query="alpha secret-token")
 
 
 def test_rag_search_rerank_failure_marks_run_failed_without_items(
@@ -434,6 +485,7 @@ def test_rag_search_rerank_failure_marks_run_failed_without_items(
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
+        _assert_safe_run_trace(run, raw_query="alpha")
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
@@ -508,6 +560,7 @@ def test_rag_search_malformed_rerank_results_mark_run_failed(
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
+        _assert_safe_run_trace(run, raw_query="alpha")
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
@@ -548,6 +601,7 @@ def test_rag_search_invalid_rerank_order_type_marks_run_failed(
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
+        _assert_safe_run_trace(run, raw_query="alpha")
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
@@ -602,6 +656,12 @@ def test_rag_ask_viewer_and_admin_success_persists_messages_run_items_with_citat
         assert run.chat_session_id == viewer_session_id
         assert run.request_message_id == data["user_message"]["chat_message_id"]
         assert run.status == "succeeded"
+        assert run.strategy_type == "dense"
+        _assert_safe_run_trace(run, raw_query="alpha policy summary")
+        assert run.latency_breakdown_json is not None
+        assert "generation_ms" in run.latency_breakdown_json
+        assert "citation_build_ms" in run.latency_breakdown_json
+        assert "confidence_ms" in run.latency_breakdown_json
         assert run.answer_confidence is not None
         assert run.groundedness_score is not None
         assert run.confidence_label in {"High", "Medium", "Low"}
@@ -803,6 +863,7 @@ def test_rag_ask_no_context_marks_run_failed_without_assistant(
         assert run.status == "failed"
         assert run.error_code == "no_context_found"
         assert run.request_message_id == messages[0].chat_message_id
+        _assert_safe_run_trace(run, raw_query="missing context")
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
@@ -853,6 +914,14 @@ def test_rag_ask_generation_failure_keeps_user_message_without_placeholder(
         assert run.status == "failed"
         assert run.error_code == "generation_failed"
         assert run.request_message_id == messages[0].chat_message_id
+        _assert_safe_run_trace(run, raw_query="alpha policy generation failure")
+        assert run.latency_breakdown_json is not None
+        assert "generation_ms" in run.latency_breakdown_json
+        run_items = (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        )
+        assert run_items
+        assert all(item.score_breakdown_json is not None for item in run_items)
         assert db.query(Citation).count() == 0
 
 
@@ -884,6 +953,7 @@ def test_rag_ask_retrieval_failure_marks_run_failed_without_assistant(
         assert run.status == "failed"
         assert run.error_code == "retrieval_failed"
         assert run.request_message_id == messages[0].chat_message_id
+        _assert_safe_run_trace(run, raw_query="alpha policy retrieval failure")
         assert db.query(Citation).count() == 0
 
 
@@ -930,6 +1000,7 @@ def test_rag_ask_rerank_failure_marks_run_failed_without_assistant(
         assert run.status == "failed"
         assert run.error_code == "rerank_failed"
         assert run.request_message_id == messages[0].chat_message_id
+        _assert_safe_run_trace(run, raw_query="alpha policy rerank failure")
         assert db.query(Citation).count() == 0
 
 
@@ -1239,3 +1310,33 @@ def _create_chat_session(client: TestClient, csrf_token: str, *, title: str) -> 
 
 def _unsafe_headers(csrf_token: str) -> dict[str, str]:
     return {"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN}
+
+
+def _assert_safe_run_trace(run: RetrievalRun, *, raw_query: str) -> None:
+    assert run.query_plan_json is not None
+    assert run.query_plan_json["schema_version"] == "phase2.trace.v1"
+    assert run.query_plan_json["strategy_type"] == "dense"
+    assert (
+        run.query_plan_json["query_hash"] == hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
+    )
+    assert run.strategy_decision_json is not None
+    assert run.strategy_decision_json["selected_strategy"] == "dense"
+    assert run.strategy_decision_json["router_enabled"] is False
+    assert run.retrieval_settings_json is not None
+    assert run.retrieval_settings_json["strategy_type"] == "dense"
+    assert run.latency_breakdown_json is not None
+    assert run.latency_breakdown_json["schema_version"] == "phase2.trace.v1"
+    assert run.latency_breakdown_json["total_ms"] >= 0
+    dumped = str(
+        {
+            "query_plan": run.query_plan_json,
+            "strategy_decision": run.strategy_decision_json,
+            "settings": run.retrieval_settings_json,
+            "latency": run.latency_breakdown_json,
+        }
+    )
+    assert raw_query not in dumped
+    assert "raw_prompt" not in dumped
+    assert "raw_chunk" not in dumped
+    assert "content_text" not in dumped
+    assert "secret-token" not in dumped

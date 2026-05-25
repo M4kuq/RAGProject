@@ -51,3 +51,15 @@ Phase1互換実行では、`retrieval_settings_json` に以下のような安全
 ```
 
 query文字列、prompt本文、chunk本文、context本文は含めない。
+
+## PR-21 trace payload
+
+PR-21 では `phase2.trace.v1` として、既存 dense retrieval から次の payload を保存する。
+
+- `query_plan_json`: raw query ではなく `query_hash`、query mode、rewrite/sub-query/filter counts を保存する。
+- `strategy_decision_json`: `selected_strategy=dense`、`decision_source=default`、`router_enabled=false`、`fallback_used=false` を保存する。
+- `latency_breakdown_json`: `total_ms`、`query_embedding_ms`、`qdrant_search_ms`、`rdb_final_check_ms`、`rerank_ms`、`retrieval_items_persist_ms`、`/rag/ask` の `generation_ms` / `citation_build_ms` / `confidence_ms` を保存する。
+- `retrieval_settings_json`: provider mode、top_k、rerank_top_n、safe collection name、feature flags を保存する。
+- `score_breakdown_json`: `dense_score`、`rerank_score`、`rank_order`、`rerank_order`、`final_rank`、`selected_flag` を保存する。
+
+いずれも raw query、raw prompt、raw chunk text、full context、PII、secret、token、credential は保存しない。

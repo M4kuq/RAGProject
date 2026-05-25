@@ -71,6 +71,9 @@ class RetrievalRepository:
         request_id: str | None,
         started_at: datetime,
         strategy_type: str = DEFAULT_RETRIEVAL_STRATEGY.value,
+        query_plan_json: dict[str, object] | None = None,
+        strategy_decision_json: dict[str, object] | None = None,
+        latency_breakdown_json: dict[str, object] | None = None,
         retrieval_settings_json: dict[str, object] | None = None,
     ) -> RetrievalRun:
         run = RetrievalRun(
@@ -82,6 +85,9 @@ class RetrievalRepository:
             strategy_type=strategy_type,
             query_hash=query_hash,
             request_id=request_id,
+            query_plan_json=query_plan_json,
+            strategy_decision_json=strategy_decision_json,
+            latency_breakdown_json=latency_breakdown_json,
             retrieval_settings_json=retrieval_settings_json,
         )
         db.add(run)
@@ -99,6 +105,9 @@ class RetrievalRepository:
         request_id: str | None,
         started_at: datetime,
         strategy_type: str = DEFAULT_RETRIEVAL_STRATEGY.value,
+        query_plan_json: dict[str, object] | None = None,
+        strategy_decision_json: dict[str, object] | None = None,
+        latency_breakdown_json: dict[str, object] | None = None,
         retrieval_settings_json: dict[str, object] | None = None,
     ) -> RetrievalRun:
         run = RetrievalRun(
@@ -110,6 +119,9 @@ class RetrievalRepository:
             strategy_type=strategy_type,
             query_hash=query_hash,
             request_id=request_id,
+            query_plan_json=query_plan_json,
+            strategy_decision_json=strategy_decision_json,
+            latency_breakdown_json=latency_breakdown_json,
             retrieval_settings_json=retrieval_settings_json,
         )
         db.add(run)
@@ -162,6 +174,7 @@ class RetrievalRepository:
         answer_confidence: Decimal | None = None,
         groundedness_score: Decimal | None = None,
         confidence_label: str | None = None,
+        latency_breakdown_json: dict[str, object] | None = None,
     ) -> None:
         run.status = "succeeded"
         run.error_code = None
@@ -170,6 +183,8 @@ class RetrievalRepository:
         run.answer_confidence = answer_confidence
         run.groundedness_score = groundedness_score
         run.confidence_label = confidence_label
+        if latency_breakdown_json is not None:
+            run.latency_breakdown_json = latency_breakdown_json
         run.finished_at = finished_at
         db.flush()
 
@@ -180,13 +195,36 @@ class RetrievalRepository:
         run: RetrievalRun,
         error_code: str,
         finished_at: datetime,
+        latency_breakdown_json: dict[str, object] | None = None,
     ) -> None:
         run.status = "failed"
         run.error_code = error_code
         run.finished_at = finished_at
+        if latency_breakdown_json is not None:
+            run.latency_breakdown_json = latency_breakdown_json
         run.answer_confidence = None
         run.groundedness_score = None
         run.confidence_label = None
+        db.flush()
+
+    def update_retrieval_run_trace(
+        self,
+        db: Session,
+        *,
+        run: RetrievalRun,
+        query_plan_json: dict[str, object] | None = None,
+        strategy_decision_json: dict[str, object] | None = None,
+        latency_breakdown_json: dict[str, object] | None = None,
+        retrieval_settings_json: dict[str, object] | None = None,
+    ) -> None:
+        if query_plan_json is not None:
+            run.query_plan_json = query_plan_json
+        if strategy_decision_json is not None:
+            run.strategy_decision_json = strategy_decision_json
+        if latency_breakdown_json is not None:
+            run.latency_breakdown_json = latency_breakdown_json
+        if retrieval_settings_json is not None:
+            run.retrieval_settings_json = retrieval_settings_json
         db.flush()
 
     def final_check_candidates(

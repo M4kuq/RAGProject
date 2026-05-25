@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import re
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from typing import Any
+
+from app.core.config import Settings
+from app.rag.retrieval import RetrievalFilters
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
+from app.schemas.rag_strategy import (
+    SENSITIVE_TRACE_KEY_PARTS,
+    LatencyBreakdown,
+    QueryPlanTrace,
+    RetrievalSettingsSnapshot,
+    ScoreBreakdown,
+    StrategyDecisionTrace,
+)
+
+TRACE_SCHEMA_VERSION = "phase2.trace.v1"
+
+_RETRIEVAL_LATENCY_KEYS = (
+    "query_embedding_ms",
+    "qdrant_search_ms",
+    "rdb_final_check_ms",
+    "rerank_ms",
+    "retrieval_items_persist_ms",
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|secret|password|token|credential)\b\s*[:=]\s*\S+"
+)
+_URL_USERINFO_RE = re.compile(r"://[^/\s:@]+:[^/\s:@]+@")
+_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+
+
+class TraceRedactor:
+    @classmethod
+    def safe_dict(cls, payload: Mapping[str, Any]) -> dict[str, object]:
+        redacted = cls.redact(payload)
+        if not isinstance(redacted, dict):
+            return {}
+        return redacted
+
+    @classmethod
+    def redact(cls, value: Any) -> object:
+        if isinstance(value, Mapping):
+            safe: dict[str, object] = {}
+            for key, nested in value.items():
+                key_text = str(key)
+                if cls.is_sensitive_key(key_text):
+                    continue
+                safe[key_text] = cls.redact(nested)
+            return safe
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+            return [cls.redact(item) for item in value]
+        if isinstance(value, str):
+            return cls.safe_string(value)
+        return value
+
+    @classmethod
+    def safe_string(cls, value: str, *, max_length: int = 255) -> str:
+        normalized = " ".join(value.replace("\x00", " ").split())
+        if (
+            _SECRET_ASSIGNMENT_RE.search(normalized)
+            or _URL_USERINFO_RE.search(normalized)
+            or _EMAIL_RE.search(normalized)
+        ):
+            return "redacted"
+        return normalized[:max_length]
+
+    @staticmethod
+    def is_sensitive_key(key: str) -> bool:
+        key_text = key.lower()
+        return any(part in key_text for part in SENSITIVE_TRACE_KEY_PARTS)
+
+
+class LatencyTracker:
+    def __init__(self, clock: Callable[[], float] = time.perf_counter) -> None:
+        self._clock = clock
+        self._started_at = clock()
+        self._spans_ms: dict[str, int] = {}
+
+    @contextmanager
+    def span(self, name: str) -> Iterator[None]:
+        started_at = self._clock()
+        try:
+            yield
+        finally:
+            self.record_ms(name, _elapsed_ms(started_at, self._clock()))
+
+    def record_ms(self, name: str, duration_ms: int) -> None:
+        safe_duration = max(0, int(duration_ms))
+        self._spans_ms[name] = self._spans_ms.get(name, 0) + safe_duration
+
+    def snapshot(self) -> dict[str, object]:
+        spans: dict[str, int] = dict(self._spans_ms)
+        retrieval_ms = sum(spans[key] for key in _RETRIEVAL_LATENCY_KEYS if key in spans)
+        if retrieval_ms > 0:
+            spans["retrieval_ms"] = retrieval_ms
+        spans["total_ms"] = _elapsed_ms(self._started_at, self._clock())
+        return build_latency_breakdown(**spans)
+
+
+def build_default_dense_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+) -> dict[str, object]:
+    logical_document_filter_count = len(filters.logical_document_ids or ())
+    metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
+    trace = QueryPlanTrace(
+        strategy_type=DEFAULT_RETRIEVAL_STRATEGY,
+        query_mode="single_query",
+        query_hash=query_hash,
+        rewrite_applied=False,
+        sub_query_count=0,
+        metadata_filter_applied=metadata_filter_applied,
+        metadata_filter_count=logical_document_filter_count,
+        logical_document_filter_count=logical_document_filter_count,
+        reason_codes=["phase1_compat_default_dense"],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
+def build_default_dense_strategy_decision() -> dict[str, object]:
+    trace = StrategyDecisionTrace(
+        selected_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+        fallback_used=False,
+        router_enabled=False,
+        decision_source="default",
+        decision_policy="static_dense",
+        reason_codes=["phase1_compat_default_dense"],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
+def build_retrieval_settings_snapshot(
+    *,
+    settings: Settings,
+    top_k: int,
+    rerank_top_n: int,
+    filters: RetrievalFilters,
+) -> dict[str, object]:
+    snapshot = RetrievalSettingsSnapshot(
+        strategy_type=DEFAULT_RETRIEVAL_STRATEGY,
+        default_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+        top_k=top_k,
+        rerank_top_n=rerank_top_n,
+        embedding_provider=TraceRedactor.safe_string(settings.embedding_provider, max_length=100),
+        rerank_provider=TraceRedactor.safe_string(settings.rerank_provider, max_length=100),
+        generation_provider=TraceRedactor.safe_string(
+            settings.generation_provider,
+            max_length=100,
+        ),
+        qdrant_collection=TraceRedactor.safe_string(
+            settings.qdrant_collection_name,
+            max_length=255,
+        ),
+        rdb_final_check_enabled=True,
+        modality=filters.modality,
+        logical_document_filter_count=len(filters.logical_document_ids or []),
+        hybrid_enabled=False,
+        router_enabled=False,
+        trace_enabled=True,
+    )
+    return TraceRedactor.safe_dict(snapshot.model_dump(mode="json", exclude_none=True))
+
+
+def build_latency_breakdown(**spans_ms: int | None) -> dict[str, object]:
+    trace = LatencyBreakdown(**{key: value for key, value in spans_ms.items() if value is not None})
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
+def build_dense_score_breakdown(
+    *,
+    dense_score: float,
+    rank_order: int,
+    rerank_score: float | None,
+    rerank_order: int | None,
+    final_rank: int,
+    selected_flag: bool,
+) -> dict[str, object]:
+    breakdown = ScoreBreakdown(
+        retrieval_source=RetrievalSource.DENSE,
+        dense_score=round(float(dense_score), 6),
+        rerank_score=round(float(rerank_score), 6) if rerank_score is not None else None,
+        rank_order=rank_order,
+        rerank_order=rerank_order,
+        final_rank=final_rank,
+        selected_flag=selected_flag,
+    )
+    return TraceRedactor.safe_dict(breakdown.model_dump(mode="json", exclude_none=True))
+
+
+def _elapsed_ms(started_at: float, finished_at: float) -> int:
+    return max(0, int(round((finished_at - started_at) * 1000)))
