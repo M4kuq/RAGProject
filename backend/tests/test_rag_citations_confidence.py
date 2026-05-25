@@ -100,6 +100,30 @@ def test_confidence_scores_are_clamped_and_label_rules_are_deterministic() -> No
     assert low.confidence_label == "Low"
 
 
+def test_confidence_does_not_penalize_concise_single_source_answers() -> None:
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=20,
+                qdrant_candidate_count=20,
+                post_filter_candidate_count=20,
+                selected_count=5,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.65,
+                top3_avg_retrieval_score=0.62,
+                top1_rerank_score=0.65,
+            ),
+            marker_count=1,
+            unique_citation_count=1,
+            selected_count=5,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score == 1.0
+    assert result.confidence_label == "High"
+
+
 def _source(local_citation_id: int) -> CitationSource:
     return CitationSource(
         local_citation_id=local_citation_id,

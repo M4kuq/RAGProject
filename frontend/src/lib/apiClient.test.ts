@@ -54,6 +54,24 @@ test("updates csrf header from login response body", async () => {
   expect(new Headers(init.headers).get("x-csrf-token")).toBe("session-token");
 });
 
+test("refreshes csrf token before unsafe requests when page state was reloaded", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: { csrf_token: "refreshed-token" } }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await apiFetch("/api/v1/rag/ask", {
+    method: "POST",
+    body: JSON.stringify({ question: "What is RAG?" })
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/auth/csrf");
+  const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+  expect(new Headers(init.headers).get("x-csrf-token")).toBe("refreshed-token");
+});
+
 test("keeps form data content type unset", async () => {
   const fetchMock = vi
     .fn()

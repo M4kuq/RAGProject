@@ -437,15 +437,18 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         headers=_unsafe_headers(csrf_token),
     )
 
-    assert no_marker.status_code == 500
-    assert no_marker.json()["error"]["code"] == "citation_build_failed"
+    assert no_marker.status_code == 200
+    no_marker_data = no_marker.json()["data"]
+    assert no_marker_data["assistant_message"]["content"] == ("answer without citation marker [1]")
+    assert no_marker_data["citations"][0]["local_citation_id"] == 1
+    assert no_marker_data["citations"][0]["document_chunk_id"] == 100
     with session_factory() as db:
         messages = db.query(ChatMessage).filter_by(chat_session_id=no_marker_session_id).all()
-        assert [message.role for message in messages] == ["user"]
+        assert [message.role for message in messages] == ["user", "assistant"]
         run = db.query(RetrievalRun).filter_by(chat_session_id=no_marker_session_id).one()
-        assert run.status == "failed"
-        assert run.error_code == "citation_build_failed"
-        assert db.query(Citation).count() == 0
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
     unknown_marker_service = RagService(
         settings=_settings(),
@@ -467,15 +470,53 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         headers=_unsafe_headers(csrf_token),
     )
 
-    assert unknown_marker.status_code == 500
-    assert unknown_marker.json()["error"]["code"] == "citation_build_failed"
+    assert unknown_marker.status_code == 200
+    unknown_marker_data = unknown_marker.json()["data"]
+    assert unknown_marker_data["assistant_message"]["content"] == ("answer with unknown marker [1]")
+    assert unknown_marker_data["citations"][0]["local_citation_id"] == 1
+    assert unknown_marker_data["citations"][0]["document_chunk_id"] == 100
     with session_factory() as db:
         messages = db.query(ChatMessage).filter_by(chat_session_id=unknown_marker_session_id).all()
-        assert [message.role for message in messages] == ["user"]
+        assert [message.role for message in messages] == ["user", "assistant"]
         run = db.query(RetrievalRun).filter_by(chat_session_id=unknown_marker_session_id).one()
-        assert run.status == "failed"
-        assert run.error_code == "citation_build_failed"
-        assert db.query(Citation).count() == 0
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+
+    marker_only_service = RagService(
+        settings=_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("[9]"),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: marker_only_service
+    marker_only_session_id = _create_chat_session(client, csrf_token, title="marker only")
+
+    marker_only = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": marker_only_session_id,
+            "client_message_id": "marker-only-msg",
+            "message": "alpha policy marker only",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert marker_only.status_code == 200
+    marker_only_data = marker_only.json()["data"]
+    assert marker_only_data["assistant_message"]["content"] == (
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+    )
+    assert marker_only_data["citations"][0]["local_citation_id"] == 1
+    assert marker_only_data["citations"][0]["document_chunk_id"] == 100
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=marker_only_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=marker_only_session_id).one()
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
     sensitive_output_service = RagService(
         settings=_settings(),
@@ -514,7 +555,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         run = db.query(RetrievalRun).filter_by(chat_session_id=sensitive_output_session_id).one()
         assert run.status == "failed"
         assert run.error_code == "citation_build_failed"
-        assert db.query(Citation).count() == 0
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
 
 
 def test_rag_ask_retrieval_and_rerank_failures_keep_only_user_message(

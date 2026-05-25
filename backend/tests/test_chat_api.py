@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -12,7 +13,20 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.models import ChatMessage, ChatSession, Role, SystemSetting, User
+from app.db.models import (
+    ChatMessage,
+    ChatSession,
+    ChatTag,
+    Citation,
+    DocumentChunk,
+    DocumentVersion,
+    LogicalDocument,
+    RetrievalRun,
+    RetrievalRunItem,
+    Role,
+    SystemSetting,
+    User,
+)
 from app.db.session import get_db
 from app.main import create_app
 
@@ -145,6 +159,7 @@ def test_chat_api_csrf_required_for_all_mutating_routes(
     requests = [
         client.patch(f"/api/v1/chat/sessions/{session_id}", json={"title": "missing"}),
         client.post(f"/api/v1/chat/sessions/{session_id}/archive"),
+        client.delete(f"/api/v1/chat/sessions/{session_id}"),
         client.post(f"/api/v1/chat/sessions/{session_id}/tags", json={"tag_name": "x"}),
         client.delete(f"/api/v1/chat/sessions/{session_id}/tags/x"),
     ]
@@ -186,6 +201,10 @@ def test_chat_api_owner_mismatch_rejects_mutating_and_message_routes(
         ),
         client.post(
             f"/api/v1/chat/sessions/{other_id}/archive",
+            headers=unsafe_headers(issue_csrf(client)),
+        ),
+        client.delete(
+            f"/api/v1/chat/sessions/{other_id}",
             headers=unsafe_headers(issue_csrf(client)),
         ),
         client.post(
@@ -425,6 +444,154 @@ def test_chat_api_sessions_messages_tags_archive_contract(
     )
     assert temp_archive.status_code == 409
     assert temp_archive.json()["error"]["code"] == "temporary_session_not_archivable"
+
+
+def test_chat_api_delete_session_removes_owned_chat_from_postgres(
+    chat_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = chat_client
+    csrf_token = login(client, email="viewer@example.com")
+    created = client.post(
+        "/api/v1/chat/sessions",
+        json={"title": "delete target"},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert created.status_code == 201
+    session_id = int(created.json()["data"]["chat_session_id"])
+
+    with session_factory() as db:
+        db.add_all(
+            [
+                ChatMessage(chat_session_id=session_id, role="user", content="remove me"),
+                ChatTag(chat_session_id=session_id, tag_name="delete-test"),
+            ]
+        )
+        db.commit()
+
+    deleted = client.delete(
+        f"/api/v1/chat/sessions/{session_id}",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["result_code"] == "deleted"
+
+    missing = client.get(f"/api/v1/chat/sessions/{session_id}")
+    assert missing.status_code == 404
+    with session_factory() as db:
+        assert db.get(ChatSession, session_id) is None
+        assert db.query(ChatMessage).filter_by(chat_session_id=session_id).count() == 0
+        assert db.query(ChatTag).filter_by(chat_session_id=session_id).count() == 0
+
+
+def test_chat_messages_include_persisted_rag_citations_and_confidence(
+    chat_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = chat_client
+    csrf_token = login(client, email="viewer@example.com")
+    created = client.post(
+        "/api/v1/chat/sessions",
+        json={"title": "citation history"},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert created.status_code == 201
+    session_id = int(created.json()["data"]["chat_session_id"])
+
+    with session_factory() as db:
+        viewer = db.scalar(select(User).where(User.email == "viewer@example.com"))
+        assert viewer is not None
+        document = LogicalDocument(
+            owner_user_id=viewer.user_id,
+            title="Phase1 seed",
+            status="active",
+        )
+        db.add(document)
+        db.flush()
+        version = DocumentVersion(
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="a" * 64,
+            status="ready",
+            is_active=True,
+            file_name="phase1-seed.md",
+            mime_type="text/markdown",
+            file_size_bytes=128,
+            created_by=viewer.user_id,
+        )
+        db.add(version)
+        db.flush()
+        chunk = DocumentChunk(
+            document_version_id=version.document_version_id,
+            chunk_index=0,
+            chunk_hash="b" * 64,
+            content_text="Phase1 uses Qdrant as the vector database.",
+            section_title="Architecture",
+            modality="text",
+        )
+        db.add(chunk)
+        db.flush()
+        user_message = ChatMessage(
+            chat_session_id=session_id,
+            role="user",
+            content="What vector database is used?",
+            client_message_id="msg-citation-history",
+        )
+        db.add(user_message)
+        db.flush()
+        now = datetime.now(UTC)
+        run = RetrievalRun(
+            chat_session_id=session_id,
+            request_message_id=user_message.chat_message_id,
+            status="succeeded",
+            started_at=now,
+            finished_at=now,
+            top_k=1,
+            answer_confidence=Decimal("0.810000"),
+            groundedness_score=Decimal("0.920000"),
+            confidence_label="High",
+        )
+        db.add(run)
+        db.flush()
+        db.add(
+            RetrievalRunItem(
+                retrieval_run_id=run.retrieval_run_id,
+                document_chunk_id=chunk.document_chunk_id,
+                retrieval_score=Decimal("0.900000"),
+                rerank_score=Decimal("0.950000"),
+                rank_order=1,
+                rerank_order=1,
+                selected_flag=True,
+                payload_snapshot={"source_label": "phase1-seed.md"},
+            )
+        )
+        db.add(
+            ChatMessage(
+                chat_session_id=session_id,
+                role="assistant",
+                content="Phase1 uses Qdrant [1].",
+                linked_retrieval_run_id=run.retrieval_run_id,
+            )
+        )
+        db.add(
+            Citation(
+                retrieval_run_id=run.retrieval_run_id,
+                document_chunk_id=chunk.document_chunk_id,
+                snippet="Phase1 uses Qdrant as the vector database.",
+                display_label="phase1-seed.md",
+                rank_order=1,
+            )
+        )
+        db.commit()
+
+    messages = client.get(f"/api/v1/chat/sessions/{session_id}/messages")
+
+    assert messages.status_code == 200
+    body = messages.json()
+    assistant = body["data"][1]
+    assert "linked_retrieval_run_id" not in assistant
+    assert assistant["confidence"]["confidence_label"] == "High"
+    assert assistant["citations"][0]["source_label"] == "phase1-seed.md"
+    assert assistant["citations"][0]["section_title"] == "Architecture"
+    assert assistant["citations"][0]["old_version_flag"] is False
 
 
 def test_chat_api_temporary_expired_readonly_and_admin_lineage(
