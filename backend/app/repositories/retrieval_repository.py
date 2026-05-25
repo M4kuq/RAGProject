@@ -17,6 +17,7 @@ from app.db.models import (
     RetrievalRunItem,
 )
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class RetrievalRunItemInput:
     rerank_order: int
     selected_flag: bool
     payload_snapshot: dict[str, object]
+    retrieval_source: str | None = None
+    score_breakdown_json: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,8 @@ class RetrievalRepository:
         query_hash: str,
         request_id: str | None,
         started_at: datetime,
+        strategy_type: str = DEFAULT_RETRIEVAL_STRATEGY.value,
+        retrieval_settings_json: dict[str, object] | None = None,
     ) -> RetrievalRun:
         run = RetrievalRun(
             chat_session_id=None,
@@ -74,8 +79,10 @@ class RetrievalRepository:
             status="running",
             started_at=started_at,
             top_k=top_k,
+            strategy_type=strategy_type,
             query_hash=query_hash,
             request_id=request_id,
+            retrieval_settings_json=retrieval_settings_json,
         )
         db.add(run)
         db.flush()
@@ -91,6 +98,8 @@ class RetrievalRepository:
         query_hash: str,
         request_id: str | None,
         started_at: datetime,
+        strategy_type: str = DEFAULT_RETRIEVAL_STRATEGY.value,
+        retrieval_settings_json: dict[str, object] | None = None,
     ) -> RetrievalRun:
         run = RetrievalRun(
             chat_session_id=chat_session_id,
@@ -98,8 +107,10 @@ class RetrievalRepository:
             status="running",
             started_at=started_at,
             top_k=top_k,
+            strategy_type=strategy_type,
             query_hash=query_hash,
             request_id=request_id,
+            retrieval_settings_json=retrieval_settings_json,
         )
         db.add(run)
         db.flush()
@@ -257,6 +268,8 @@ class RetrievalRepository:
                 rerank_order=item.rerank_order,
                 selected_flag=item.selected_flag,
                 payload_snapshot=item.payload_snapshot,
+                retrieval_source=item.retrieval_source or RetrievalSource.DENSE.value,
+                score_breakdown_json=item.score_breakdown_json,
             )
             for item in items
         ]

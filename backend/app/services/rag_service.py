@@ -49,6 +49,7 @@ from app.rag.retrieval import (
     RetrievalFilters,
     VectorSearchClient,
 )
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import (
     CheckedRetrievalCandidate,
@@ -69,6 +70,7 @@ from app.schemas.rag import (
     RagSearchResponse,
     RetrievalScoreSummary,
 )
+from app.schemas.rag_strategy import RetrievalSettingsSnapshot, ScoreBreakdown
 from app.services.chat_service import ChatService
 
 SCORE_QUANT = Decimal("0.000001")
@@ -134,12 +136,19 @@ class RagService:
         top_k = self._effective_top_k(payload.top_k)
         rerank_top_n = self._effective_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
+        retrieval_settings = _retrieval_settings_snapshot(
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            filters=filters,
+        )
         run = self.repository.create_standalone_run(
             db,
             top_k=top_k,
             query_hash=_query_hash(payload.query),
             request_id=request_id,
             started_at=datetime.now(UTC),
+            strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+            retrieval_settings_json=retrieval_settings,
         )
         db.commit()
         db.refresh(run)
@@ -216,6 +225,12 @@ class RagService:
 
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
+        filters = _retrieval_filters(payload)
+        retrieval_settings = _retrieval_settings_snapshot(
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            filters=filters,
+        )
         now = datetime.now(UTC)
         try:
             user_message = self.chat_repository.create_message(
@@ -233,6 +248,8 @@ class RagService:
                 query_hash=_query_hash(payload.message),
                 request_id=request_id,
                 started_at=now,
+                strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+                retrieval_settings_json=retrieval_settings,
             )
             self.chat_repository.touch_session(db, session=session, updated_at=now)
             db.commit()
@@ -261,7 +278,7 @@ class RagService:
                 query=payload.message,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
-                filters=_retrieval_filters(payload),
+                filters=filters,
                 retrieval_run_id=run_id,
             )
             if not result.selected_candidates:
@@ -727,6 +744,13 @@ def _run_item_input(
         rerank_order=rerank_order,
         selected_flag=selected_flag,
         payload_snapshot=_payload_snapshot(candidate),
+        retrieval_source=RetrievalSource.DENSE.value,
+        score_breakdown_json=_score_breakdown(
+            candidate,
+            rerank_score=rerank_score,
+            rerank_order=rerank_order,
+            selected_flag=selected_flag,
+        ),
     )
 
 
@@ -798,6 +822,44 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
     _add_optional(snapshot, "page_to", candidate.chunk.page_to)
     _add_optional(snapshot, "section_title", _safe_display_text(candidate.chunk.section_title))
     return snapshot
+
+
+def _retrieval_settings_snapshot(
+    *,
+    top_k: int,
+    rerank_top_n: int,
+    filters: RetrievalFilters,
+) -> dict[str, object]:
+    snapshot = RetrievalSettingsSnapshot(
+        strategy_type=DEFAULT_RETRIEVAL_STRATEGY,
+        default_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+        top_k=top_k,
+        rerank_top_n=rerank_top_n,
+        modality=filters.modality,
+        logical_document_filter_count=len(filters.logical_document_ids or []),
+        hybrid_enabled=False,
+        router_enabled=False,
+        trace_enabled=True,
+    )
+    return snapshot.model_dump(mode="json")
+
+
+def _score_breakdown(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    rerank_score: float,
+    rerank_order: int,
+    selected_flag: bool,
+) -> dict[str, object]:
+    breakdown = ScoreBreakdown(
+        retrieval_source=RetrievalSource.DENSE,
+        dense_score=_round_score(candidate.retrieval_score),
+        rerank_score=_round_score(rerank_score),
+        rank_order=candidate.rank_order,
+        rerank_order=rerank_order,
+        selected_flag=selected_flag,
+    )
+    return breakdown.model_dump(mode="json", exclude_none=True)
 
 
 def _source_label(candidate: CheckedRetrievalCandidate) -> str:

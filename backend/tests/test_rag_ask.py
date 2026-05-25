@@ -170,13 +170,27 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert run.chat_session_id == chat_session_id
         assert run.request_message_id == data["user_message"]["chat_message_id"]
         assert run.status == "succeeded"
+        assert run.strategy_type == "dense"
+        retrieval_settings = run.retrieval_settings_json
+        assert retrieval_settings is not None
+        assert retrieval_settings["strategy_type"] == "dense"
+        assert retrieval_settings["top_k"] == 2
+        assert retrieval_settings["rerank_top_n"] == 1
         assert run.answer_confidence is not None
         assert run.groundedness_score is not None
         assert run.confidence_label in {"High", "Medium", "Low"}
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
-        assert (
-            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
+        run_items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
         )
+        assert len(run_items) == 2
+        assert all(item.retrieval_source == "dense" for item in run_items)
+        assert all(item.score_breakdown_json is not None for item in run_items)
+        assert "content_text" not in str(run_items[0].score_breakdown_json)
+        assert "raw_chunk_text" not in str(run_items[0].score_breakdown_json)
         citation = db.query(Citation).one()
         assert citation.retrieval_run_id == run.retrieval_run_id
         assert citation.document_chunk_id == 100

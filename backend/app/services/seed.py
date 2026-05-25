@@ -24,6 +24,7 @@ from app.ingest.qdrant import (
     QdrantStoreError,
     create_document_indexing_service,
 )
+from app.rag.strategy import PHASE2_RETRIEVAL_SYSTEM_SETTINGS
 
 DEMO_PASSWORD = "password"
 DEMO_DOCUMENT_TITLE = "RAGProject Phase1 Seed Document"
@@ -279,6 +280,7 @@ def _seed_system_settings(db: Session) -> None:
             {"dataset_name": "phase1_smoke", "case_limit": 5},
             "Default fixture for Phase1 demo evaluation.",
         ),
+        **PHASE2_RETRIEVAL_SYSTEM_SETTINGS,
     }
     for key, (value, description) in defaults.items():
         if not db.get(SystemSetting, key):
