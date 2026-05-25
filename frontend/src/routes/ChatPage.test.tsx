@@ -227,7 +227,7 @@ test("keeps saved chats visible while viewing the temporary chat entry", async (
   renderChat("/chat/temp", "temporary");
 
   expect(await screen.findByRole("heading", { name: "New chat" })).toBeInTheDocument();
-  const savedChat = screen.getByRole("link", { name: /Demo chat/ });
+  const savedChat = await screen.findByRole("link", { name: /Demo chat/ });
   expect(savedChat).toHaveAttribute("href", "/chat/10");
 
   fireEvent.click(savedChat);
