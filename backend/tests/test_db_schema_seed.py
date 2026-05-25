@@ -3,24 +3,29 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
+from app.db.base import Base
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
     LogicalDocument,
+    RetrievalRun,
+    RetrievalRunItem,
     Role,
     SystemSetting,
     User,
     UserSetting,
 )
+from app.rag.strategy import RETRIEVAL_SOURCE_VALUES, RETRIEVAL_STRATEGY_VALUES
 from app.services.seed import DEMO_DOCUMENT_TITLE, seed
 
 
@@ -58,7 +63,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0002_evaluation_results"
+    assert version == "0003_phase2_strategy_trace"
 
     expected_tables = {
         "roles",
@@ -105,6 +110,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "uq_evaluation_results_item_metric",
         "fk_chat_messages_linked_retrieval_run_same_session",
         "ck_audit_logs_request_id_not_empty",
+        "ck_retrieval_runs_strategy_type",
+        "ck_retrieval_run_items_source",
     }
     actual_constraints = scalar_set(
         pg_engine,
@@ -167,6 +174,169 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
     assert "created_at desc" in partial_index_defs["ix_audit_logs_target"]
 
 
+def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> None:
+    suffix = uuid.uuid4().hex
+    with pg_engine.connect() as conn:
+        transaction = conn.begin()
+        try:
+            default_strategy = conn.execute(
+                text(
+                    """
+                    INSERT INTO retrieval_runs (status, top_k)
+                    VALUES ('running', 5)
+                    RETURNING retrieval_run_id, strategy_type, query_plan_json
+                    """
+                )
+            ).one()
+            assert default_strategy.strategy_type == "dense"
+            assert default_strategy.query_plan_json is None
+
+            assert_rejected(
+                pg_engine,
+                """
+                INSERT INTO retrieval_runs (status, top_k, strategy_type)
+                VALUES ('running', 5, 'graph_rag')
+                """,
+            )
+
+            role_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO roles (role_name, description)
+                    VALUES (:role_name, 'Phase2 constraint test')
+                    RETURNING role_id
+                    """
+                ),
+                {"role_name": f"phase2-{suffix}"},
+            ).scalar_one()
+            user_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO users (role_id, email, display_name, status)
+                    VALUES (:role_id, :email, 'Phase2', 'active')
+                    RETURNING user_id
+                    """
+                ),
+                {"role_id": role_id, "email": f"phase2-{suffix}@example.com"},
+            ).scalar_one()
+            logical_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO logical_documents (owner_user_id, title, status)
+                    VALUES (:owner_user_id, :title, 'active')
+                    RETURNING logical_document_id
+                    """
+                ),
+                {"owner_user_id": user_id, "title": f"Phase2 {suffix}"},
+            ).scalar_one()
+            version_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO document_versions (
+                        logical_document_id, version_no, content_hash, status, is_active,
+                        file_name, mime_type, file_size_bytes, created_by
+                    )
+                    VALUES (
+                        :logical_document_id, 1, :content_hash, 'ready', TRUE,
+                        'phase2.txt', 'text/plain', 12, :created_by
+                    )
+                    RETURNING document_version_id
+                    """
+                ),
+                {
+                    "logical_document_id": logical_id,
+                    "content_hash": suffix[:32].ljust(64, "a"),
+                    "created_by": user_id,
+                },
+            ).scalar_one()
+            chunk_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO document_chunks (
+                        document_version_id, chunk_index, chunk_hash, content_text, modality
+                    )
+                    VALUES (:document_version_id, 0, :chunk_hash, 'phase2 chunk', 'text')
+                    RETURNING document_chunk_id
+                    """
+                ),
+                {
+                    "document_version_id": version_id,
+                    "chunk_hash": suffix[:32].ljust(64, "b"),
+                },
+            ).scalar_one()
+            item = conn.execute(
+                text(
+                    """
+                    INSERT INTO retrieval_run_items (
+                        retrieval_run_id, document_chunk_id, retrieval_score, rerank_score,
+                        rank_order, rerank_order, selected_flag, retrieval_source,
+                        score_breakdown_json
+                    )
+                    VALUES (
+                        :retrieval_run_id, :document_chunk_id, 0.9, 0.8,
+                        1, 1, TRUE, 'dense', '{"dense_score": 0.9}'::jsonb
+                    )
+                    RETURNING retrieval_source, score_breakdown_json
+                    """
+                ),
+                {
+                    "retrieval_run_id": default_strategy.retrieval_run_id,
+                    "document_chunk_id": chunk_id,
+                },
+            ).one()
+            assert item.retrieval_source == "dense"
+            assert item.score_breakdown_json == {"dense_score": 0.9}
+
+            savepoint = conn.begin_nested()
+            try:
+                with pytest.raises(IntegrityError):
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO retrieval_run_items (
+                                retrieval_run_id, document_chunk_id, retrieval_score, rank_order,
+                                retrieval_source
+                            )
+                            VALUES (:retrieval_run_id, :document_chunk_id, 0.9, 2, 'graph')
+                            """
+                        ),
+                        {
+                            "retrieval_run_id": default_strategy.retrieval_run_id,
+                            "document_chunk_id": chunk_id,
+                        },
+                    )
+            finally:
+                savepoint.rollback()
+        finally:
+            transaction.rollback()
+
+
+def test_phase2_orm_fields_match_strategy_schema() -> None:
+    run_columns = RetrievalRun.__table__.columns
+    item_columns = RetrievalRunItem.__table__.columns
+    run_constraint_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in cast(Any, RetrievalRun.__table__).constraints
+        if constraint.name == "ck_retrieval_runs_strategy_type"
+    )
+    item_constraint_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in cast(Any, RetrievalRunItem.__table__).constraints
+        if constraint.name == "ck_retrieval_run_items_source"
+    )
+
+    assert {
+        "strategy_type",
+        "query_plan_json",
+        "strategy_decision_json",
+        "latency_breakdown_json",
+        "retrieval_settings_json",
+    } <= set(run_columns.keys())
+    assert {"retrieval_source", "score_breakdown_json"} <= set(item_columns.keys())
+    assert all(value in run_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
+    assert all(value in item_constraint_sql for value in RETRIEVAL_SOURCE_VALUES)
+
+
 def test_seed_can_run_twice_without_duplicates(
     pg_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -202,6 +372,16 @@ def test_seed_can_run_twice_without_duplicates(
             db.query(SystemSetting).filter(SystemSetting.setting_key == "jobs.retry_max").count()
             == 1
         )
+        assert (
+            db.query(SystemSetting)
+            .filter(SystemSetting.setting_key == "rag.default_strategy")
+            .count()
+            == 1
+        )
+        assert _setting_value(db, "rag.default_strategy") == "dense"
+        assert _setting_value(db, "rag.hybrid.enabled") is False
+        assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
+        assert _setting_value(db, "rag.trace.enabled") is True
         logical = db.query(LogicalDocument).filter_by(title=DEMO_DOCUMENT_TITLE).one()
         versions = (
             db.query(DocumentVersion)
@@ -237,6 +417,51 @@ def test_seed_can_run_twice_without_duplicates(
         not in {indexed_call.document_version_id for indexed_call in indexing_service.calls}
         for call in indexing_service.cleanup_calls
     )
+
+
+def test_seed_preserves_existing_phase2_strategy_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    indexing_service = _CapturingIndexingService()
+    monkeypatch.setattr(
+        "app.services.seed.create_document_indexing_service",
+        lambda settings: indexing_service,
+    )
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    try:
+        Base.metadata.create_all(engine)
+        with Session() as db:
+            db.add(
+                SystemSetting(
+                    setting_key="rag.default_strategy",
+                    setting_value="hybrid",
+                    description="Operator override",
+                )
+            )
+            db.commit()
+
+        with Session() as db:
+            seed(db)
+        with Session() as db:
+            seed(db)
+
+        with Session() as db:
+            assert _setting_value(db, "rag.default_strategy") == "hybrid"
+            assert _setting_value(db, "rag.hybrid.enabled") is False
+            assert _setting_value(db, "rag.router.enabled") is False
+    finally:
+        engine.dispose()
+
+
+def _setting_value(db: Any, key: str) -> object:
+    setting = db.get(SystemSetting, key)
+    assert setting is not None
+    return setting.setting_value
 
 
 def test_major_db_constraints_reject_invalid_data(pg_engine: Engine) -> None:

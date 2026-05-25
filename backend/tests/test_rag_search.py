@@ -270,6 +270,19 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert run.chat_session_id is None
         assert run.request_message_id is None
         assert run.status == "succeeded"
+        assert run.strategy_type == "dense"
+        assert run.retrieval_settings_json == {
+            "strategy_type": "dense",
+            "default_strategy": "dense",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "modality": "text",
+            "logical_document_filter_count": 0,
+            "hybrid_enabled": False,
+            "router_enabled": False,
+            "trace_enabled": True,
+            "fusion_method": "rrf",
+        }
         assert run.answer_confidence is None
         assert run.groundedness_score is None
         assert run.confidence_label is None
@@ -278,16 +291,30 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 2
         )
         assert db.query(Citation).count() == 0
-        snapshots = [
-            item.payload_snapshot
-            for item in db.query(RetrievalRunItem)
+        items = (
+            db.query(RetrievalRunItem)
             .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
             .all()
-        ]
+        )
+        assert [item.retrieval_source for item in items] == ["dense", "dense"]
+        first_score_breakdown = items[0].score_breakdown_json
+        assert first_score_breakdown is not None
+        assert first_score_breakdown == {
+            "retrieval_source": "dense",
+            "dense_score": 0.91,
+            "rerank_score": first_score_breakdown["rerank_score"],
+            "rank_order": 1,
+            "rerank_order": 1,
+            "selected_flag": True,
+        }
+        snapshots = [item.payload_snapshot for item in items]
         for snapshot in snapshots:
             assert snapshot is not None
             assert "content_text" not in str(snapshot)
             assert "document_name" not in snapshot
+        assert "content_text" not in str(first_score_breakdown)
+        assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
 def test_rag_search_zero_result_succeeds_without_items(
@@ -312,6 +339,7 @@ def test_rag_search_zero_result_succeeds_without_items(
         run = db.get(RetrievalRun, data["retrieval_run_id"])
         assert run is not None
         assert run.status == "succeeded"
+        assert run.strategy_type == "dense"
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )

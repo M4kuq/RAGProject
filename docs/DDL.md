@@ -397,8 +397,13 @@ CREATE TABLE retrieval_runs (
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at TIMESTAMPTZ,
     top_k INTEGER,
+    strategy_type VARCHAR(50) NOT NULL DEFAULT 'dense',
     query_hash CHAR(64),
     retrieval_score_summary JSONB,
+    query_plan_json JSONB,
+    strategy_decision_json JSONB,
+    latency_breakdown_json JSONB,
+    retrieval_settings_json JSONB,
     rerank_score_top1 NUMERIC(10,6),
     answer_confidence NUMERIC(10,6),
     groundedness_score NUMERIC(10,6),
@@ -457,6 +462,20 @@ CREATE TABLE retrieval_runs (
         CHECK (confidence_label IS NULL OR confidence_label IN ('High', 'Medium', 'Low')),
     CONSTRAINT ck_retrieval_runs_top_k
         CHECK (top_k IS NULL OR (top_k BETWEEN 1 AND 20)),
+    CONSTRAINT ck_retrieval_runs_strategy_type
+        CHECK (
+            strategy_type IN (
+                'dense',
+                'sparse',
+                'hybrid',
+                'multi_query_dense',
+                'multi_query_hybrid',
+                'metadata_filtered',
+                'version_aware',
+                'agentic_router',
+                'fallback_dense'
+            )
+        ),
     CONSTRAINT ck_retrieval_runs_query_hash_format
         CHECK (query_hash IS NULL OR query_hash ~ '^[0-9a-f]{64}$'),
     CONSTRAINT ck_retrieval_runs_request_id_not_empty
@@ -465,6 +484,11 @@ CREATE TABLE retrieval_runs (
 
 COMMENT ON TABLE retrieval_runs IS 'chat 起源 run と /rag/search 起源 standalone run の両方を表す。standalone は chat_session_id/request_message_id が両方 NULL。';
 COMMENT ON COLUMN retrieval_runs.retrieval_score_summary IS 'RAG v1.4 に合わせ JSONB。top1/top3/count/excluded/selected など複合 summary を保存する。';
+COMMENT ON COLUMN retrieval_runs.strategy_type IS 'Phase2 retrieval strategy。既存Phase1 runは dense として扱う。';
+COMMENT ON COLUMN retrieval_runs.query_plan_json IS 'Phase2 trace用のredacted query plan。raw prompt/full context/PII/secretは保存しない。';
+COMMENT ON COLUMN retrieval_runs.strategy_decision_json IS 'Phase2 trace用のredacted strategy decision。router判断理由のみを保存し、raw prompt/full contextは保存しない。';
+COMMENT ON COLUMN retrieval_runs.latency_breakdown_json IS 'Phase2 trace用のlatency breakdown。raw request/responseは保存しない。';
+COMMENT ON COLUMN retrieval_runs.retrieval_settings_json IS 'run時点のretrieval設定snapshot。secret、raw prompt、raw chunk textは保存しない。';
 COMMENT ON COLUMN retrieval_runs.answer_confidence IS '成功 run のみ保存。failed run では NULL。正解確率ではなく補助指標。';
 COMMENT ON COLUMN retrieval_runs.started_at IS 'retrieval_run 作成時刻。status は running/succeeded/failed のみであり、DDL上も NOT NULL DEFAULT now() とする。';
 COMMENT ON COLUMN retrieval_runs.error_code IS 'running/succeeded では NULL、failed では NOT NULL。';
@@ -479,18 +503,34 @@ CREATE TABLE retrieval_run_items (
     rerank_order INTEGER,
     selected_flag BOOLEAN NOT NULL DEFAULT FALSE,
     payload_snapshot JSONB,
+    retrieval_source VARCHAR(50),
+    score_breakdown_json JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_retrieval_run_items_run_chunk
         UNIQUE (retrieval_run_id, document_chunk_id),
     CONSTRAINT ck_retrieval_run_items_rank_order
         CHECK (rank_order >= 1),
     CONSTRAINT ck_retrieval_run_items_rerank_order
-        CHECK (rerank_order IS NULL OR rerank_order >= 1)
+        CHECK (rerank_order IS NULL OR rerank_order >= 1),
+    CONSTRAINT ck_retrieval_run_items_source
+        CHECK (
+            retrieval_source IS NULL
+            OR retrieval_source IN (
+                'dense',
+                'sparse',
+                'hybrid',
+                'rerank',
+                'fallback_dense',
+                'metadata_filter'
+            )
+        )
 );
 
 COMMENT ON TABLE retrieval_run_items IS 'RDB final check を通過した post-final-check candidates。Qdrant raw candidates は保存しない。';
 COMMENT ON COLUMN retrieval_run_items.retrieval_score IS 'vector search score。initial_score という列名は使用しない。';
 COMMENT ON COLUMN retrieval_run_items.payload_snapshot IS 'source_label, page_from, page_to, modality 等の表示用 snapshot。raw chunk text は保存しない。';
+COMMENT ON COLUMN retrieval_run_items.retrieval_source IS 'Phase2 retrieval source。PR-20ではdense保存の土台のみを作る。';
+COMMENT ON COLUMN retrieval_run_items.score_breakdown_json IS 'Phase2 score breakdown。dense/sparse/fused/rerank等のscoreのみを保存し、raw chunk text/prompt/PII/secretは保存しない。';
 
 CREATE TABLE citations (
     citation_id BIGSERIAL PRIMARY KEY,

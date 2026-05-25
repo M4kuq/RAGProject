@@ -27,6 +27,12 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.rag.strategy import (
+    DEFAULT_RETRIEVAL_STRATEGY,
+    RETRIEVAL_SOURCE_VALUES,
+    RETRIEVAL_STRATEGY_VALUES,
+    sql_literal_list,
+)
 
 
 def big_int() -> BigInteger:
@@ -530,6 +536,10 @@ class RetrievalRun(Base):
         CheckConstraint(
             "top_k IS NULL OR (top_k BETWEEN 1 AND 20)", name="ck_retrieval_runs_top_k"
         ),
+        CheckConstraint(
+            f"strategy_type IN ({sql_literal_list(RETRIEVAL_STRATEGY_VALUES)})",
+            name="ck_retrieval_runs_strategy_type",
+        ),
         pg_check(
             "query_hash IS NULL OR query_hash ~ '^[0-9a-f]{64}$'",
             "ck_retrieval_runs_query_hash_format",
@@ -552,8 +562,18 @@ class RetrievalRun(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     top_k: Mapped[int | None] = mapped_column(Integer)
+    strategy_type: Mapped[str] = mapped_column(
+        String(50),
+        server_default=text(f"'{DEFAULT_RETRIEVAL_STRATEGY.value}'"),
+        default=DEFAULT_RETRIEVAL_STRATEGY.value,
+        nullable=False,
+    )
     query_hash: Mapped[str | None] = mapped_column(String(64))
     retrieval_score_summary: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    query_plan_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    strategy_decision_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    latency_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    retrieval_settings_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     rerank_score_top1: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     answer_confidence: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
@@ -581,6 +601,11 @@ class RetrievalRunItem(Base):
             "rerank_order IS NULL OR rerank_order >= 1",
             name="ck_retrieval_run_items_rerank_order",
         ),
+        CheckConstraint(
+            f"retrieval_source IS NULL OR "
+            f"retrieval_source IN ({sql_literal_list(RETRIEVAL_SOURCE_VALUES)})",
+            name="ck_retrieval_run_items_source",
+        ),
     )
 
     retrieval_run_item_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
@@ -594,6 +619,8 @@ class RetrievalRunItem(Base):
         Boolean, server_default=text("FALSE"), default=False, nullable=False
     )
     payload_snapshot: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    retrieval_source: Mapped[str | None] = mapped_column(String(50))
+    score_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -757,7 +784,7 @@ class SystemSetting(Base, TimestampMixin):
     )
 
     setting_key: Mapped[str] = mapped_column(String(100), primary_key=True)
-    setting_value: Mapped[dict[str, Any]] = mapped_column(jsonb(), nullable=False)
+    setting_value: Mapped[Any] = mapped_column(jsonb(), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     updated_by: Mapped[int | None] = mapped_column(big_int())
 
