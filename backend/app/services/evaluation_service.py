@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Protocol, cast
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.responses import pagination_meta
@@ -231,17 +232,21 @@ class EvaluationService:
     ) -> EvaluationDatasetResponse:
         if self.repository.get_dataset_by_name(db, dataset_name=payload.dataset_name):
             raise ConflictError()
-        dataset = self.repository.create_dataset(
-            db,
-            dataset_name=payload.dataset_name,
-            description=payload.description,
-            version=payload.version,
-            source_type=payload.source_type.value,
-            status=payload.status.value,
-            metadata_json=payload.metadata_json,
-            created_by=user.user_id,
-        )
-        db.commit()
+        try:
+            dataset = self.repository.create_dataset(
+                db,
+                dataset_name=payload.dataset_name,
+                description=payload.description,
+                version=payload.version,
+                source_type=payload.source_type.value,
+                status=payload.status.value,
+                metadata_json=payload.metadata_json,
+                created_by=user.user_id,
+            )
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ConflictError() from exc
         db.refresh(dataset)
         return self._dataset_response(db, dataset)
 
@@ -283,6 +288,7 @@ class EvaluationService:
         dataset = self.repository.get_dataset(db, evaluation_dataset_id=evaluation_dataset_id)
         if dataset is None:
             raise ResourceNotFound()
+        fields_set = payload.model_fields_set
         self.repository.update_dataset(
             db,
             dataset=dataset,
@@ -290,6 +296,8 @@ class EvaluationService:
             version=payload.version,
             metadata_json=payload.metadata_json,
             updated_at=datetime.now(UTC),
+            description_provided="description" in fields_set,
+            metadata_json_provided="metadata_json" in fields_set,
         )
         db.commit()
         db.refresh(dataset)
@@ -325,21 +333,25 @@ class EvaluationService:
             case_key=payload.case_key,
         ):
             raise ConflictError()
-        case = self.repository.create_case(
-            db,
-            evaluation_dataset_id=evaluation_dataset_id,
-            case_key=payload.case_key,
-            question=payload.question,
-            expected_answer=payload.expected_answer,
-            expected_keywords=payload.expected_keywords,
-            expected_document_ids=payload.expected_document_ids,
-            expected_chunk_ids=payload.expected_chunk_ids,
-            required_citation=payload.required_citation,
-            tags=payload.tags,
-            metadata_json=payload.metadata_json,
-            status=payload.status.value,
-        )
-        db.commit()
+        try:
+            case = self.repository.create_case(
+                db,
+                evaluation_dataset_id=evaluation_dataset_id,
+                case_key=payload.case_key,
+                question=payload.question,
+                expected_answer=payload.expected_answer,
+                expected_keywords=payload.expected_keywords,
+                expected_document_ids=payload.expected_document_ids,
+                expected_chunk_ids=payload.expected_chunk_ids,
+                required_citation=payload.required_citation,
+                tags=payload.tags,
+                metadata_json=payload.metadata_json,
+                status=payload.status.value,
+            )
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ConflictError() from exc
         db.refresh(case)
         return self._case_response(case)
 
@@ -395,6 +407,7 @@ class EvaluationService:
             raise ResourceNotFound()
         values = payload.model_dump(exclude_unset=True)
         if values:
+            _assert_case_expected_signal(case, values)
             self.repository.update_case(
                 db,
                 case=case,
@@ -456,6 +469,8 @@ class EvaluationService:
                 version=manifest.dataset.version,
                 metadata_json=manifest.dataset.metadata_json,
                 updated_at=datetime.now(UTC),
+                description_provided=True,
+                metadata_json_provided=True,
             )
             dataset.source_type = manifest.dataset.source_type.value
             dataset.status = manifest.dataset.status.value
@@ -621,12 +636,7 @@ class EvaluationService:
                 finished_at=datetime.now(UTC),
             )
             db.commit()
-            return {
-                "status": "failed",
-                "evaluation_run_id": evaluation_run_id,
-                "error_code": "strategy_runner_not_implemented",
-                "strategy_type": run.strategy_type,
-            }
+            raise EvaluationFixtureError("strategy_runner_not_implemented")
 
         succeeded_count = 0
         failed_count = 0
@@ -1148,10 +1158,22 @@ def _loaded_case_from_model(case: EvaluationCaseModel) -> LoadedEvaluationCase:
             question=case.question,
             expected_keywords=tuple(_string_list(case.expected_keywords)),
             required_citation=case.required_citation,
+            expected_answer=case.expected_answer,
         ),
         evaluation_case_id=case.evaluation_case_id,
         case_key=case.case_key,
     )
+
+
+def _assert_case_expected_signal(
+    case: EvaluationCaseModel,
+    values: dict[str, object],
+) -> None:
+    expected_answer = values.get("expected_answer", case.expected_answer)
+    expected_keywords = values.get("expected_keywords", case.expected_keywords)
+    if _string_list(expected_keywords) or (isinstance(expected_answer, str) and expected_answer):
+        return
+    raise ValidationFailed({"expected_signal": "expected_keywords or expected_answer is required"})
 
 
 def _string_list(value: object) -> list[str]:

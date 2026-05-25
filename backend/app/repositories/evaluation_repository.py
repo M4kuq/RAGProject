@@ -140,12 +140,14 @@ class EvaluationRepository:
         version: str | None = None,
         metadata_json: dict[str, object] | None = None,
         updated_at: datetime,
+        description_provided: bool = False,
+        metadata_json_provided: bool = False,
     ) -> None:
-        if description is not None:
+        if description_provided:
             dataset.description = description
         if version is not None:
             dataset.version = version
-        if metadata_json is not None:
+        if metadata_json_provided:
             dataset.metadata_json = metadata_json
         dataset.updated_at = updated_at
         db.flush()

@@ -29,7 +29,12 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         [inputs.answer_text, *[citation.snippet for citation in inputs.citations]]
     )
     keyword_hits = _keyword_hits(evidence_text, inputs.case.expected_keywords)
-    faithfulness = _ratio(keyword_hits, len(inputs.case.expected_keywords))
+    answer_hit = _expected_answer_hit(evidence_text, inputs.case)
+    expected_signal_count = len(inputs.case.expected_keywords) + (
+        1 if inputs.case.expected_answer and not inputs.case.expected_keywords else 0
+    )
+    matched_signal_count = keyword_hits + answer_hit
+    faithfulness = _ratio(matched_signal_count, expected_signal_count)
     citation_coverage = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
     groundedness = inputs.confidence.groundedness_score if inputs.confidence else 0.0
     context_precision = _context_precision(
@@ -37,7 +42,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         selected_count=(
             inputs.retrieval_summary.selected_count if inputs.retrieval_summary is not None else 0
         ),
-        keyword_hits=keyword_hits,
+        keyword_hits=matched_signal_count,
     )
     metadata_details: dict[str, object] = {
         "case_id": inputs.case.case_id,
@@ -59,7 +64,9 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metric_label=_label(faithfulness),
             details={
                 "matched_expected_keywords": keyword_hits,
+                "matched_expected_answer": bool(answer_hit),
                 "expected_keyword_count": len(inputs.case.expected_keywords),
+                "expected_signal_count": expected_signal_count,
             },
         ),
         MetricValue(
@@ -91,6 +98,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                     else 0
                 ),
                 "matched_expected_keywords": keyword_hits,
+                "matched_expected_answer": bool(answer_hit),
             },
         ),
     ]
@@ -112,6 +120,12 @@ def failure_metrics(case: EvaluationCase, *, error_code: str) -> list[MetricValu
 def _keyword_hits(text: str, expected_keywords: tuple[str, ...]) -> int:
     haystack = text.casefold()
     return sum(1 for keyword in expected_keywords if keyword.casefold() in haystack)
+
+
+def _expected_answer_hit(text: str, case: EvaluationCase) -> int:
+    if case.expected_keywords or not case.expected_answer:
+        return 0
+    return 1 if case.expected_answer.casefold() in text.casefold() else 0
 
 
 def _ratio(numerator: int, denominator: int) -> float:

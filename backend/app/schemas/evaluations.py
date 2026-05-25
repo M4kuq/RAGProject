@@ -17,6 +17,7 @@ DATASET_MANIFEST_SCHEMA_VERSION: Literal["phase2.evaluation_dataset.v1"] = (
 )
 
 _SAFE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
+_SAFE_FIXTURE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,119}$")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_VALUE_RE = re.compile(
     r"(?i)(api[_-]?key|secret|password|credential|token)\s*[:=]|bearer\s+|sk-[A-Za-z0-9]"
@@ -320,6 +321,16 @@ class EvaluationRunCreateRequest(BaseModel):
     @classmethod
     def validate_dataset_name(cls, value: str) -> str:
         return _safe_key(value, field_name="dataset_name")
+
+    @model_validator(mode="after")
+    def validate_fixture_dataset_name(self) -> EvaluationRunCreateRequest:
+        if self.evaluation_dataset_id is None and not _SAFE_FIXTURE_KEY_RE.fullmatch(
+            self.dataset_name
+        ):
+            raise ValueError(
+                "dataset_name must use lowercase letters, digits, underscore or hyphen"
+            )
+        return self
 
 
 class EvaluationRunCreateResponse(BaseModel):

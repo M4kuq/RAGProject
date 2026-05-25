@@ -10,10 +10,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
+from app.core.errors import ConflictError
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
@@ -33,12 +35,13 @@ from app.db.models import (
     EvaluationCase as EvaluationCaseModel,
 )
 from app.db.session import get_db
-from app.evaluation.fixtures import load_evaluation_cases
+from app.evaluation.fixtures import EvaluationCase, load_evaluation_cases
 from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
 from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
+from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import (
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
@@ -141,6 +144,35 @@ def test_fixture_loader_and_metric_clamp() -> None:
     assert by_name["citation_coverage"].metric_score == 1.0
     assert by_name["context_precision"].metric_score == 1.0
     assert "Qdrant" not in str(by_name["faithfulness"].details)
+
+    answer_only_metrics = calculate_metrics(
+        EvaluationMetricInputs(
+            case=EvaluationCase(
+                case_id="answer_only",
+                question="What is the canonical answer?",
+                expected_keywords=(),
+                required_citation=False,
+                expected_answer="canonical answer",
+            ),
+            answer_text="The canonical answer is present.",
+            citations=[],
+            confidence=None,
+            retrieval_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+        )
+    )
+    answer_only_by_name = {metric.metric_name: metric for metric in answer_only_metrics}
+    assert answer_only_by_name["faithfulness"].metric_score == 1.0
+    assert answer_only_by_name["context_precision"].metric_score == 1.0
+    assert "canonical answer" not in str(answer_only_by_name["faithfulness"].details)
+
+    with pytest.raises(ValueError):
+        EvaluationRunCreateRequest(dataset_name="phase1.smoke", case_limit=1)
 
 
 def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
@@ -375,6 +407,22 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
     assert case_detail.status_code == 200
     assert nested_mismatch.status_code == 404
 
+    clear_dataset_fields = client.patch(
+        f"/api/v1/evaluations/datasets/{dataset_id}",
+        json={"description": None, "metadata_json": None},
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    invalid_case_update = client.patch(
+        f"/api/v1/evaluations/datasets/{dataset_id}/cases/{case_id}",
+        json={"expected_keywords": [], "expected_answer": None},
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert clear_dataset_fields.status_code == 200
+    assert clear_dataset_fields.json()["data"]["description"] is None
+    assert clear_dataset_fields.json()["data"]["metadata_json"] is None
+    assert invalid_case_update.status_code == 422
+    assert invalid_case_update.json()["error"]["code"] == "validation_error"
+
     run_response = client.post(
         "/api/v1/evaluations/runs",
         json={
@@ -593,7 +641,10 @@ def test_evaluation_service_runs_persistent_dataset_cases() -> None:
                 payload=EvaluationCaseCreateRequest(
                     case_key="persistent_dense",
                     question="What vector database is used by the Phase1 RAG stack?",
-                    expected_keywords=["Qdrant"],
+                    expected_answer=(
+                        "Qdrant and deterministic fake adapters support "
+                        "citation-aware retrieval traces."
+                    ),
                     required_citation=True,
                     tags=["dense"],
                     metadata_json={"expected_strategy": "dense"},
@@ -629,6 +680,13 @@ def test_evaluation_service_runs_persistent_dataset_cases() -> None:
             assert item.case_key == "persistent_dense"
             assert item.strategy_type == "dense"
             assert item.latency_breakdown_json is not None
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            faithfulness = next(
+                metric
+                for metric in response.items[0].metrics
+                if metric.metric_name == "faithfulness"
+            )
+            assert faithfulness.metric_score == 1.0
     finally:
         engine.dispose()
 
@@ -694,6 +752,48 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
+def test_evaluation_handler_fails_job_for_unsupported_strategy() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategy_type="hybrid",
+                ),
+                user=user,
+            )
+
+        handler = EvaluationRunHandler(
+            session_factory=session_factory,
+            service_factory=lambda: EvaluationService(settings=Settings(app_env="test")),
+        )
+        result = handler.handle(
+            JobExecutionContext(
+                job_id=11,
+                job_type="evaluation_run",
+                target_type="evaluation_run",
+                target_id=created.evaluation_run_id,
+                payload={"evaluation_run_id": created.evaluation_run_id},
+                worker_instance_id="worker-1",
+            )
+        )
+
+        assert result.status == "failed"
+        assert result.error_code == "strategy_runner_not_implemented"
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "failed"
+            assert run.error_code == "strategy_runner_not_implemented"
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_service_marks_run_failed_when_setup_fails() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -729,6 +829,58 @@ def test_evaluation_service_marks_run_failed_when_setup_fails() -> None:
             assert run.finished_at is not None
     finally:
         engine.dispose()
+
+
+def test_evaluation_service_translates_unique_integrity_errors_to_conflict() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                repository=_IntegrityErrorEvaluationRepository(),
+                settings=Settings(app_env="test"),
+            )
+
+            with pytest.raises(ConflictError):
+                service.create_dataset(
+                    db,
+                    payload=EvaluationDatasetCreateRequest(
+                        dataset_name="race_dataset",
+                        description="Concurrent create race.",
+                    ),
+                    user=user,
+                )
+
+            dataset = EvaluationDataset(
+                dataset_name="race_dataset",
+                description="Existing dataset.",
+                version="v1",
+                source_type="manual",
+                status="active",
+                created_by=user.user_id,
+            )
+            db.add(dataset)
+            db.commit()
+            with pytest.raises(ConflictError):
+                service.create_case(
+                    db,
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    payload=EvaluationCaseCreateRequest(
+                        case_key="race_case",
+                        question="What should conflict?",
+                        expected_keywords=["conflict"],
+                    ),
+                )
+    finally:
+        engine.dispose()
+
+
+class _IntegrityErrorEvaluationRepository(EvaluationRepository):
+    def create_dataset(self, *args: Any, **kwargs: Any) -> EvaluationDataset:
+        raise IntegrityError("insert evaluation dataset", {}, Exception("unique"))
+
+    def create_case(self, *args: Any, **kwargs: Any) -> EvaluationCaseModel:
+        raise IntegrityError("insert evaluation case", {}, Exception("unique"))
 
 
 class _FakeVectorClient(VectorSearchClient):
