@@ -4,6 +4,7 @@
 
 - `0003_phase2_strategy_trace`: PR-20 retrieval strategy and trace columns.
 - `0004_eval_dataset_metrics`: PR-22 evaluation dataset and strategy metric schema.
+- `0005_sparse_retrieval_fts`: PR-23 PostgreSQL full-text expression index for sparse retrieval.
 
 Both migrations are additive. They do not delete existing Phase1 columns or change existing API contracts.
 
@@ -74,7 +75,19 @@ Both migrations are additive. They do not delete existing Phase1 columns or chan
 
 ## Downgrade
 
-Downgrade drops PR-22 constraints, indexes, added columns, then `evaluation_cases` and `evaluation_datasets`. This removes PR-22 metadata but returns to the PR-21 schema.
+`0005_sparse_retrieval_fts` downgrade drops only `ix_document_chunks_content_fts` and leaves `document_chunks` data unchanged. `0004_eval_dataset_metrics` downgrade drops PR-22 constraints, indexes, added columns, then `evaluation_cases` and `evaluation_datasets`. This removes PR-22 metadata but returns to the PR-21 schema.
+
+## PR-23 Sparse Index
+
+PR-23 adds this PostgreSQL index:
+
+```sql
+CREATE INDEX IF NOT EXISTS ix_document_chunks_content_fts
+ON document_chunks
+USING GIN (to_tsvector('simple', content_text));
+```
+
+No generated column is added. The index uses existing `document_chunks.content_text` for search only. Raw chunk text is not copied into trace JSON, score breakdown JSON, logs, or API payload snapshots.
 
 ## Security
 

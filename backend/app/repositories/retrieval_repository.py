@@ -33,9 +33,9 @@ class CheckedRetrievalCandidate:
 class RetrievalRunItemInput:
     document_chunk_id: int
     retrieval_score: Decimal
-    rerank_score: Decimal
+    rerank_score: Decimal | None
     rank_order: int
-    rerank_order: int
+    rerank_order: int | None
     selected_flag: bool
     payload_snapshot: dict[str, object]
     retrieval_source: str | None = None

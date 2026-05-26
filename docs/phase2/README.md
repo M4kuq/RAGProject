@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`.
 
 ## PR Plan
 
@@ -72,9 +72,22 @@ PR-22 adds:
 
 PR-22 keeps the existing minimal evaluation runner default dense. Non-dense strategy execution is left for PR-25.
 
+## PR-23 Sparse Retrieval
+
+PR-23 adds:
+
+- `SparseRetrievalStrategy`
+- PostgreSQL full-text search over `document_chunks`
+- `ix_document_chunks_content_fts` GIN expression index
+- SQLite deterministic BM25 fallback for tests
+- `/api/v1/rag/search` `strategy=sparse`
+- sparse retrieval trace and score breakdown persistence
+
+`/rag/ask` remains default dense in PR-23. Hybrid fusion is left for PR-24.
+
 ## Non-goals
 
-PR-22 does not implement Sparse Retrieval, Hybrid Retrieval, Strategy Evaluation Runner, Agentic Router, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-23 does not implement Hybrid Retrieval, RRF/weighted fusion, QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, Retrieval Debug UI v2, Strategy Evaluation Runner, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

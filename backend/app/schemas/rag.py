@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
+
 
 class RagSearchFilters(BaseModel):
     logical_document_ids: list[int] | None = Field(default=None, min_length=1)
@@ -30,6 +32,7 @@ class RagSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
+    strategy: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
     filters: RagSearchFilters | None = None
 
     @field_validator("query")
@@ -80,6 +83,7 @@ class RagAskRequest(BaseModel):
 class RetrievalScoreSummary(BaseModel):
     requested_top_k: int
     qdrant_candidate_count: int
+    sparse_candidate_count: int | None = None
     post_filter_candidate_count: int
     selected_count: int
     excluded_by_rdb_check_count: int
@@ -96,9 +100,9 @@ class RagSearchItem(BaseModel):
     page_from: int | None = None
     page_to: int | None = None
     retrieval_score: float
-    rerank_score: float
+    rerank_score: float | None = None
     rank_order: int
-    rerank_order: int
+    rerank_order: int | None = None
     selected_flag: bool
     payload_snapshot: dict[str, object]
 

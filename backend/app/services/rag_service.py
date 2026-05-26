@@ -48,13 +48,17 @@ from app.rag.retrieval import (
     RetrievalFilters,
     VectorSearchClient,
 )
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
+from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource, RetrievalStrategy
 from app.rag.trace import (
     LatencyTracker,
     build_default_dense_query_plan,
     build_default_dense_strategy_decision,
     build_dense_score_breakdown,
     build_retrieval_settings_snapshot,
+    build_sparse_query_plan,
+    build_sparse_score_breakdown,
+    build_sparse_strategy_decision,
 )
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import (
@@ -121,6 +125,7 @@ class RagService:
         answer_generator: AnswerGenerator | None = None,
         repository: RetrievalRepository | None = None,
         chat_repository: ChatRepository | None = None,
+        sparse_strategy: SparseRetrievalStrategy | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -129,6 +134,7 @@ class RagService:
         self.answer_generator = answer_generator or create_answer_generator(settings)
         self.repository = repository or RetrievalRepository()
         self.chat_repository = chat_repository or ChatRepository()
+        self.sparse_strategy = sparse_strategy or SparseRetrievalStrategy()
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -141,6 +147,11 @@ class RagService:
         top_k = self._effective_top_k(payload.top_k)
         rerank_top_n = self._effective_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
+        strategy_type = payload.strategy
+        if strategy_type not in {RetrievalStrategy.DENSE, RetrievalStrategy.SPARSE}:
+            raise RagSearchPipelineError("strategy_not_enabled", 409)
+        if strategy_type == RetrievalStrategy.SPARSE and not self.settings.sparse_enabled:
+            raise RagSearchPipelineError("strategy_not_enabled", 409)
         query_hash = _query_hash(payload.query)
         latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
@@ -148,16 +159,29 @@ class RagService:
             top_k=top_k,
             rerank_top_n=rerank_top_n,
             filters=filters,
+            strategy_type=strategy_type,
         )
-        query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
-        strategy_decision = build_default_dense_strategy_decision()
+        if strategy_type == RetrievalStrategy.SPARSE:
+            normalized_sparse_query = normalize_sparse_query(
+                payload.query,
+                max_terms=self.settings.sparse_max_query_terms,
+            )
+            query_plan = build_sparse_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                normalized_term_count=len(normalized_sparse_query.terms),
+            )
+            strategy_decision = build_sparse_strategy_decision()
+        else:
+            query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
+            strategy_decision = build_default_dense_strategy_decision()
         run = self.repository.create_standalone_run(
             db,
             top_k=top_k,
             query_hash=query_hash,
             request_id=request_id,
             started_at=datetime.now(UTC),
-            strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+            strategy_type=strategy_type.value,
             query_plan_json=query_plan,
             strategy_decision_json=strategy_decision,
             retrieval_settings_json=retrieval_settings,
@@ -167,15 +191,26 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_and_rerank(
-                db,
-                query=payload.query,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
-                filters=filters,
-                retrieval_run_id=run_id,
-                latency_tracker=latency_tracker,
-            )
+            if strategy_type == RetrievalStrategy.SPARSE:
+                result = self._retrieve_sparse(
+                    db,
+                    query=payload.query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
+            else:
+                result = self._retrieve_and_rerank(
+                    db,
+                    query=payload.query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
                 db,
@@ -567,6 +602,107 @@ class RagService:
             ],
         )
 
+    def _retrieve_sparse(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        latency_tracker: LatencyTracker | None = None,
+    ) -> RetrievalPipelineResult:
+        if latency_tracker is None:
+            latency_tracker = LatencyTracker()
+        with latency_tracker.span("sparse_search_ms"):
+            sparse_candidates = self.sparse_strategy.search(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                settings=self.settings,
+            )
+        with latency_tracker.span("rdb_final_check_ms"):
+            checked_candidates = self.repository.final_check_candidates(
+                db,
+                candidates=sparse_candidates,
+                filters=filters,
+            )
+        if not checked_candidates:
+            summary = _score_summary(
+                requested_top_k=top_k,
+                qdrant_candidate_count=0,
+                sparse_candidate_count=len(sparse_candidates),
+                checked_candidates=[],
+                selected_count=0,
+                top1_rerank_score=None,
+            )
+            return RetrievalPipelineResult(
+                summary=summary,
+                items=[],
+                selected_candidates=[],
+                citation_sources=[],
+            )
+
+        selected_count = min(rerank_top_n, len(checked_candidates))
+        item_inputs = [
+            _sparse_run_item_input(
+                candidate,
+                final_rank=index,
+                selected_flag=index <= selected_count,
+            )
+            for index, candidate in enumerate(checked_candidates, start=1)
+        ]
+        with latency_tracker.span("retrieval_items_persist_ms"):
+            saved_items = self.repository.save_items(
+                db,
+                retrieval_run_id=retrieval_run_id,
+                items=item_inputs,
+            )
+        summary = _score_summary(
+            requested_top_k=top_k,
+            qdrant_candidate_count=0,
+            sparse_candidate_count=len(sparse_candidates),
+            checked_candidates=checked_candidates,
+            selected_count=selected_count,
+            top1_rerank_score=None,
+        )
+        return RetrievalPipelineResult(
+            summary=summary,
+            items=[
+                _response_item(
+                    candidate,
+                    saved_item_id=saved_item.retrieval_run_item_id,
+                    rerank_score=None,
+                    rerank_order=None,
+                    selected_flag=index <= selected_count,
+                    snippet_max_chars=self.settings.search_snippet_max_chars,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(checked_candidates, saved_items, strict=True),
+                    start=1,
+                )
+            ],
+            selected_candidates=checked_candidates[:selected_count],
+            citation_sources=[
+                _citation_source(
+                    candidate,
+                    saved_item=saved_item,
+                    local_citation_id=local_id,
+                    snippet_max_chars=self.settings.citation_preview_max_chars,
+                )
+                for local_id, (candidate, saved_item) in enumerate(
+                    zip(
+                        checked_candidates[:selected_count],
+                        saved_items[:selected_count],
+                        strict=True,
+                    ),
+                    start=1,
+                )
+            ],
+        )
+
     def _classify_duplicate(
         self,
         db: Session,
@@ -719,17 +855,22 @@ def _score_summary(
     *,
     requested_top_k: int,
     qdrant_candidate_count: int,
+    sparse_candidate_count: int | None = None,
     checked_candidates: list[CheckedRetrievalCandidate],
     selected_count: int,
     top1_rerank_score: float | None,
 ) -> RetrievalScoreSummary:
+    source_candidate_count = (
+        sparse_candidate_count if sparse_candidate_count is not None else qdrant_candidate_count
+    )
     retrieval_scores = [candidate.retrieval_score for candidate in checked_candidates]
     return RetrievalScoreSummary(
         requested_top_k=requested_top_k,
         qdrant_candidate_count=qdrant_candidate_count,
+        sparse_candidate_count=sparse_candidate_count,
         post_filter_candidate_count=len(checked_candidates),
         selected_count=selected_count,
-        excluded_by_rdb_check_count=qdrant_candidate_count - len(checked_candidates),
+        excluded_by_rdb_check_count=source_candidate_count - len(checked_candidates),
         top1_retrieval_score=_round_score(retrieval_scores[0]) if retrieval_scores else None,
         top3_avg_retrieval_score=(
             _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
@@ -816,12 +957,35 @@ def _run_item_input(
     )
 
 
+def _sparse_run_item_input(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    final_rank: int,
+    selected_flag: bool,
+) -> RetrievalRunItemInput:
+    return RetrievalRunItemInput(
+        document_chunk_id=candidate.chunk.document_chunk_id,
+        retrieval_score=_decimal_score(candidate.retrieval_score),
+        rerank_score=None,
+        rank_order=candidate.rank_order,
+        rerank_order=None,
+        selected_flag=selected_flag,
+        payload_snapshot=_payload_snapshot(candidate),
+        retrieval_source=RetrievalSource.SPARSE.value,
+        score_breakdown_json=_sparse_score_breakdown(
+            candidate,
+            final_rank=final_rank,
+            selected_flag=selected_flag,
+        ),
+    )
+
+
 def _response_item(
     candidate: CheckedRetrievalCandidate,
     *,
     saved_item_id: int,
-    rerank_score: float,
-    rerank_order: int,
+    rerank_score: float | None,
+    rerank_order: int | None,
     selected_flag: bool,
     snippet_max_chars: int,
 ) -> RagSearchItem:
@@ -833,7 +997,7 @@ def _response_item(
         page_from=candidate.chunk.page_from,
         page_to=candidate.chunk.page_to,
         retrieval_score=_round_score(candidate.retrieval_score),
-        rerank_score=_round_score(rerank_score),
+        rerank_score=_round_score(rerank_score) if rerank_score is not None else None,
         rank_order=candidate.rank_order,
         rerank_order=rerank_order,
         selected_flag=selected_flag,
@@ -892,12 +1056,14 @@ def _retrieval_settings_snapshot(
     top_k: int,
     rerank_top_n: int,
     filters: RetrievalFilters,
+    strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
 ) -> dict[str, object]:
     return build_retrieval_settings_snapshot(
         settings=settings,
         top_k=top_k,
         rerank_top_n=rerank_top_n,
         filters=filters,
+        strategy_type=strategy_type,
     )
 
 
@@ -914,6 +1080,20 @@ def _score_breakdown(
         rank_order=candidate.rank_order,
         rerank_score=rerank_score,
         rerank_order=rerank_order,
+        final_rank=final_rank,
+        selected_flag=selected_flag,
+    )
+
+
+def _sparse_score_breakdown(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    final_rank: int,
+    selected_flag: bool,
+) -> dict[str, object]:
+    return build_sparse_score_breakdown(
+        sparse_score=candidate.retrieval_score,
+        rank_order=candidate.rank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
     )

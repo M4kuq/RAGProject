@@ -87,6 +87,30 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         True,
         "Allow storing redacted latency breakdown metadata.",
     ),
+    "rag.sparse.enabled": (
+        True,
+        "Enable standalone sparse lexical retrieval for Phase2 PR-23.",
+    ),
+    "rag.sparse.provider": (
+        "postgres_fts",
+        "Sparse retrieval provider. PR-23 uses PostgreSQL full-text search.",
+    ),
+    "rag.sparse.language": (
+        "simple",
+        "PostgreSQL text search configuration for sparse retrieval.",
+    ),
+    "rag.sparse.min_query_terms": (
+        1,
+        "Minimum normalized lexical terms required for sparse retrieval.",
+    ),
+    "rag.sparse.max_query_terms": (
+        32,
+        "Maximum normalized lexical terms retained for sparse retrieval.",
+    ),
+    "rag.sparse.score_normalization": (
+        "max",
+        "Sparse score normalization method.",
+    ),
 }
 
 

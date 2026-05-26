@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.rag.retrieval import RetrievalFilters
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource, RetrievalStrategy
 from app.schemas.rag_strategy import (
     SENSITIVE_TRACE_KEY_PARTS,
     LatencyBreakdown,
@@ -23,6 +23,7 @@ TRACE_SCHEMA_VERSION = "phase2.trace.v1"
 _RETRIEVAL_LATENCY_KEYS = (
     "query_embedding_ms",
     "qdrant_search_ms",
+    "sparse_search_ms",
     "rdb_final_check_ms",
     "rerank_ms",
     "retrieval_items_persist_ms",
@@ -137,15 +138,53 @@ def build_default_dense_strategy_decision() -> dict[str, object]:
     return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
 
 
+def build_sparse_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+    normalized_term_count: int,
+) -> dict[str, object]:
+    logical_document_filter_count = len(filters.logical_document_ids or ())
+    metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
+    trace = QueryPlanTrace(
+        strategy_type=RetrievalStrategy.SPARSE,
+        query_mode="single_query",
+        query_hash=query_hash,
+        rewrite_applied=False,
+        sub_query_count=0,
+        metadata_filter_applied=metadata_filter_applied,
+        metadata_filter_count=logical_document_filter_count,
+        logical_document_filter_count=logical_document_filter_count,
+        reason_codes=[
+            "phase2_sparse_lexical",
+            f"normalized_terms:{normalized_term_count}",
+        ],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
+def build_sparse_strategy_decision() -> dict[str, object]:
+    trace = StrategyDecisionTrace(
+        selected_strategy=RetrievalStrategy.SPARSE,
+        fallback_used=False,
+        router_enabled=False,
+        decision_source="request",
+        decision_policy="explicit_sparse",
+        reason_codes=["explicit_strategy_sparse"],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
 def build_retrieval_settings_snapshot(
     *,
     settings: Settings,
     top_k: int,
     rerank_top_n: int,
     filters: RetrievalFilters,
+    strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
 ) -> dict[str, object]:
     snapshot = RetrievalSettingsSnapshot(
-        strategy_type=DEFAULT_RETRIEVAL_STRATEGY,
+        strategy_type=strategy_type,
         default_strategy=DEFAULT_RETRIEVAL_STRATEGY,
         top_k=top_k,
         rerank_top_n=rerank_top_n,
@@ -165,6 +204,21 @@ def build_retrieval_settings_snapshot(
         hybrid_enabled=False,
         router_enabled=False,
         trace_enabled=True,
+        sparse_provider=(
+            TraceRedactor.safe_string(settings.sparse_provider, max_length=100)
+            if strategy_type == RetrievalStrategy.SPARSE
+            else None
+        ),
+        sparse_language=(
+            TraceRedactor.safe_string(settings.sparse_language, max_length=30)
+            if strategy_type == RetrievalStrategy.SPARSE
+            else None
+        ),
+        sparse_score_normalization=(
+            TraceRedactor.safe_string(settings.sparse_score_normalization, max_length=30)
+            if strategy_type == RetrievalStrategy.SPARSE
+            else None
+        ),
     )
     return TraceRedactor.safe_dict(snapshot.model_dump(mode="json", exclude_none=True))
 
@@ -189,6 +243,23 @@ def build_dense_score_breakdown(
         rerank_score=round(float(rerank_score), 6) if rerank_score is not None else None,
         rank_order=rank_order,
         rerank_order=rerank_order,
+        final_rank=final_rank,
+        selected_flag=selected_flag,
+    )
+    return TraceRedactor.safe_dict(breakdown.model_dump(mode="json", exclude_none=True))
+
+
+def build_sparse_score_breakdown(
+    *,
+    sparse_score: float,
+    rank_order: int,
+    final_rank: int,
+    selected_flag: bool,
+) -> dict[str, object]:
+    breakdown = ScoreBreakdown(
+        retrieval_source=RetrievalSource.SPARSE,
+        sparse_score=round(float(sparse_score), 6),
+        rank_order=rank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
     )
