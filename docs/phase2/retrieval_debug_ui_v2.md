@@ -51,7 +51,7 @@ The debug page displays:
 - RDB final check exclusion count
 - latest available strategy evaluation summary
 
-Rewritten query, sub-query, router decision, and fallback fields are shown as empty, `N/A`, default, or false until PR-27 and PR-28 provide real values.
+Query analysis, rewritten-query preview, planned sub-query preview, metadata filter candidates, and candidate strategy proposals are populated by PR-27. Router decision and fallback fields remain empty, `N/A`, default, or false until PR-28 provides real router decisions.
 
 ## Redaction Rules
 
@@ -66,6 +66,19 @@ The backend endpoint and frontend renderer both redact defensively. The UI must 
 
 The UI renders text through React text nodes and does not inject HTML. Snippets and source labels are truncated for display. Trace JSON is summarized first, with a collapsible safe-field view for unknown future fields.
 
-## PR-27 Handoff
+## PR-27 Integration
 
-PR-27 can populate query rewrite and sub-query fields in `query_plan_json`. PR-28 can populate router decision metadata in `strategy_decision_json`. The PR-26 UI is intentionally tolerant of missing fields so those additions should not require a route redesign.
+The Query Plan panel displays:
+
+- intent
+- ambiguity score and flags
+- keyword-heavy score
+- version-specific flag
+- rewritten query preview
+- planned sub-query previews
+- metadata filter candidates
+- candidate strategies
+- recommended strategy
+- `planned_only` safety flags
+
+These fields are for inspection only in PR-27. PR-28 can populate router decision metadata in `strategy_decision_json` and decide whether to execute the recommended strategy.

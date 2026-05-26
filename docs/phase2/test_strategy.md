@@ -98,6 +98,19 @@
 - The page displays run summary, query plan, strategy decision, retrieval settings, latency breakdown, score summary, score breakdown, retrieval run items, and latest strategy evaluation summary.
 - Frontend redaction helpers remove forbidden trace keys and secret-like assignment values before rendering.
 
+## PR-27 Query Analyzer / Query Planner Tests
+
+- `QueryAnalyzer` intent classification is deterministic.
+- Ambiguity, keyword-heavy, temporal, and version-specific signals are deterministic.
+- `QueryPlanner` rewrite metadata is deterministic and does not apply to retrieval by default.
+- Planned sub-query count respects `rag.query_planner.max_sub_queries`.
+- Metadata filter candidates are structured and not raw SQL/Qdrant filter strings.
+- Candidate strategies are proposals only; StrategyRouter is not executed.
+- `/rag/search strategy=dense`, `sparse`, and `hybrid` write safe analyzer/planner fields to `query_plan_json`.
+- `/rag/ask` writes safe analyzer/planner fields while preserving default dense behavior.
+- The original user query preview is not persisted; derived query previews are redacted/truncated and do not expose raw prompt, full context, raw chunk text, PII, or secrets.
+- Retrieval Debug UI renders analysis/planning summary and tolerates missing fields.
+
 ## Checks
 
 - `ruff format --check .`

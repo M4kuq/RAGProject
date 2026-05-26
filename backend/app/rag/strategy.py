@@ -36,6 +36,17 @@ class RouterFallbackStrategy(StrEnum):
     FALLBACK_DENSE = "fallback_dense"
 
 
+class QueryIntent(StrEnum):
+    FACTUAL_LOOKUP = "factual_lookup"
+    PROCEDURAL = "procedural"
+    COMPARISON = "comparison"
+    SUMMARIZATION = "summarization"
+    TROUBLESHOOTING = "troubleshooting"
+    DEFINITION = "definition"
+    VERSION_SPECIFIC = "version_specific"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class StrategyTraceSettings:
     enabled: bool = True
@@ -126,6 +137,34 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     "rag.sparse.score_normalization": (
         "max",
         "Sparse score normalization method.",
+    ),
+    "rag.query_analyzer.enabled": (
+        True,
+        "Enable deterministic rule-based query analysis for Phase2 PR-27.",
+    ),
+    "rag.query_planner.enabled": (
+        True,
+        "Enable deterministic rule-based query planning for Phase2 PR-27.",
+    ),
+    "rag.query_planner.apply_rewrite_to_retrieval": (
+        False,
+        "Keep retrieval behavior unchanged unless query rewrite application is explicitly enabled.",
+    ),
+    "rag.query_planner.max_sub_queries": (
+        3,
+        "Maximum planned sub-query previews stored in safe query plan trace.",
+    ),
+    "rag.query_planner.max_preview_chars": (
+        160,
+        "Maximum safe query preview characters stored in query plan trace.",
+    ),
+    "rag.query_planner.store_query_preview": (
+        True,
+        "Store bounded and redacted query previews for admin debug only.",
+    ),
+    "rag.query_planner.redact_pii": (
+        True,
+        "Enable PII-redacted derived query previews; false disables preview persistence.",
     ),
 }
 

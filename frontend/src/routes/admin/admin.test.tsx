@@ -332,6 +332,43 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
                 strategy_type: "hybrid",
                 query_mode: "dense_sparse_single_query",
                 query_hash: "a".repeat(64),
+                intent: "comparison",
+                ambiguity_score: 0.1,
+                ambiguity_flags: [],
+                keyword_heavy_score: 0.65,
+                keyword_signals: ["api_endpoint"],
+                version_specific_flag: false,
+                rewritten_query_preview: "hybrid retrieval",
+                sub_query_count: 2,
+                sub_queries: [
+                  {
+                    query_hash: "b".repeat(64),
+                    query_preview: "hybrid",
+                    intent: "comparison",
+                    reason_code: "comparison_component"
+                  }
+                ],
+                metadata_filter_candidates: [
+                  {
+                    filter_type: "file_extension",
+                    field: "source_label",
+                    operator: "ends_with",
+                    value_preview: ".md",
+                    value_hash: "c".repeat(64),
+                    confidence: 0.7,
+                    reason_code: "file_extension_signal"
+                  }
+                ],
+                candidate_strategies: ["multi_query_hybrid", "hybrid", "dense"],
+                recommended_strategy: "multi_query_hybrid",
+                safety_flags: ["planned_only"],
+                analysis: {
+                  schema_version: "phase2.query_plan.v1",
+                  intent: "comparison",
+                  query_hash: "a".repeat(64),
+                  ambiguity_score: 0.1,
+                  keyword_heavy_score: 0.65
+                },
                 raw_prompt: "raw prompt must not appear",
                 safe_value: "OPENAI_API_KEY=sk-secret"
               },
@@ -467,6 +504,10 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(JSON.parse(String(searchRequests[0].body)).strategy).toBe("hybrid");
   expect(await screen.findByText("#600")).toBeInTheDocument();
   expect((await screen.findAllByText("dense_sparse_single_query")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("comparison")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("multi_query_hybrid")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/planned_only/)).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/file_extension/)).length).toBeGreaterThan(0);
   expect((await screen.findAllByText(/explicit_strategy_hybrid/)).length).toBeGreaterThan(0);
   expect(await screen.findByText("42 ms")).toBeInTheDocument();
   expect((await screen.findAllByText("0.730")).length).toBeGreaterThan(0);

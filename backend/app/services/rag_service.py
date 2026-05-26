@@ -41,6 +41,7 @@ from app.rag.generation import (
     create_answer_generator,
 )
 from app.rag.hybrid import HybridRetrievalStrategy
+from app.rag.query_planner import QueryPlanBuilder
 from app.rag.rerank import (
     RerankCandidate,
     RerankerClient,
@@ -146,6 +147,7 @@ class RagService:
         chat_repository: ChatRepository | None = None,
         sparse_strategy: SparseRetrievalStrategy | None = None,
         hybrid_strategy: HybridRetrievalStrategy | None = None,
+        query_plan_builder: QueryPlanBuilder | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -156,6 +158,7 @@ class RagService:
         self.chat_repository = chat_repository or ChatRepository()
         self.sparse_strategy = sparse_strategy or SparseRetrievalStrategy()
         self.hybrid_strategy = hybrid_strategy or HybridRetrievalStrategy()
+        self.query_plan_builder = query_plan_builder or QueryPlanBuilder(settings)
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -185,6 +188,12 @@ class RagService:
             if _hybrid_uses_sparse(self.settings) and not self.settings.sparse_enabled:
                 raise RagSearchPipelineError("strategy_not_enabled", 409)
         query_hash = _query_hash(payload.query)
+        query_plan_build = self.query_plan_builder.build(
+            payload.query,
+            filters=filters,
+            requested_strategy=strategy_type,
+        )
+        retrieval_query = query_plan_build.retrieval_query
         latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
             settings=self.settings,
@@ -195,18 +204,19 @@ class RagService:
         )
         if strategy_type == RetrievalStrategy.SPARSE:
             normalized_sparse_query = normalize_sparse_query(
-                payload.query,
+                retrieval_query,
                 max_terms=self.settings.sparse_max_query_terms,
             )
             query_plan = build_sparse_query_plan(
                 query_hash=query_hash,
                 filters=filters,
                 normalized_term_count=len(normalized_sparse_query.terms),
+                plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_sparse_strategy_decision()
         elif strategy_type == RetrievalStrategy.HYBRID:
             normalized_sparse_query = normalize_sparse_query(
-                payload.query,
+                retrieval_query,
                 max_terms=self.settings.sparse_max_query_terms,
             )
             fusion_method = _fusion_method(self.settings)
@@ -215,10 +225,15 @@ class RagService:
                 filters=filters,
                 normalized_term_count=len(normalized_sparse_query.terms),
                 fusion_method=fusion_method,
+                plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_hybrid_strategy_decision(fusion_method=fusion_method)
         else:
-            query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
+            query_plan = build_default_dense_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
             strategy_decision = build_default_dense_strategy_decision()
         run = self.repository.create_standalone_run(
             db,
@@ -239,7 +254,7 @@ class RagService:
             if strategy_type == RetrievalStrategy.SPARSE:
                 result = self._retrieve_sparse(
                     db,
-                    query=payload.query,
+                    query=retrieval_query,
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     filters=filters,
@@ -249,7 +264,7 @@ class RagService:
             elif strategy_type == RetrievalStrategy.HYBRID:
                 result = self._retrieve_hybrid(
                     db,
-                    query=payload.query,
+                    query=retrieval_query,
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     filters=filters,
@@ -259,7 +274,7 @@ class RagService:
             else:
                 result = self._retrieve_and_rerank(
                     db,
-                    query=payload.query,
+                    query=retrieval_query,
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     filters=filters,
@@ -349,6 +364,12 @@ class RagService:
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
         query_hash = _query_hash(payload.message)
+        query_plan_build = self.query_plan_builder.build(
+            payload.message,
+            filters=filters,
+            requested_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+        )
+        retrieval_query = query_plan_build.retrieval_query
         latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
             settings=self.settings,
@@ -356,7 +377,11 @@ class RagService:
             rerank_top_n=rerank_top_n,
             filters=filters,
         )
-        query_plan = build_default_dense_query_plan(query_hash=query_hash, filters=filters)
+        query_plan = build_default_dense_query_plan(
+            query_hash=query_hash,
+            filters=filters,
+            plan_metadata=query_plan_build.trace_metadata,
+        )
         strategy_decision = build_default_dense_strategy_decision()
         now = datetime.now(UTC)
         try:
@@ -404,7 +429,7 @@ class RagService:
         try:
             result = self._retrieve_and_rerank(
                 db,
-                query=payload.message,
+                query=retrieval_query,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
                 filters=filters,

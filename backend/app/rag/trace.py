@@ -115,6 +115,7 @@ def build_default_dense_query_plan(
     *,
     query_hash: str,
     filters: RetrievalFilters,
+    plan_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     logical_document_filter_count = len(filters.logical_document_ids or ())
     metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
@@ -129,7 +130,7 @@ def build_default_dense_query_plan(
         logical_document_filter_count=logical_document_filter_count,
         reason_codes=["phase1_compat_default_dense"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    return _safe_query_plan(trace, plan_metadata=plan_metadata)
 
 
 def build_default_dense_strategy_decision() -> dict[str, object]:
@@ -149,6 +150,7 @@ def build_sparse_query_plan(
     query_hash: str,
     filters: RetrievalFilters,
     normalized_term_count: int,
+    plan_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     logical_document_filter_count = len(filters.logical_document_ids or ())
     metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
@@ -166,7 +168,7 @@ def build_sparse_query_plan(
             f"normalized_terms:{normalized_term_count}",
         ],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    return _safe_query_plan(trace, plan_metadata=plan_metadata)
 
 
 def build_sparse_strategy_decision() -> dict[str, object]:
@@ -187,6 +189,7 @@ def build_hybrid_query_plan(
     filters: RetrievalFilters,
     normalized_term_count: int,
     fusion_method: FusionMethod,
+    plan_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     logical_document_filter_count = len(filters.logical_document_ids or ())
     metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
@@ -205,7 +208,7 @@ def build_hybrid_query_plan(
             f"normalized_terms:{normalized_term_count}",
         ],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    return _safe_query_plan(trace, plan_metadata=plan_metadata)
 
 
 def build_hybrid_strategy_decision(*, fusion_method: FusionMethod) -> dict[str, object]:
@@ -345,3 +348,14 @@ def build_hybrid_score_breakdown(
 
 def _elapsed_ms(started_at: float, finished_at: float) -> int:
     return max(0, int(round((finished_at - started_at) * 1000)))
+
+
+def _safe_query_plan(
+    trace: QueryPlanTrace,
+    *,
+    plan_metadata: Mapping[str, Any] | None,
+) -> dict[str, object]:
+    payload: dict[str, Any] = trace.model_dump(mode="json", exclude_none=True)
+    if plan_metadata:
+        payload.update(plan_metadata)
+    return TraceRedactor.safe_dict(payload)

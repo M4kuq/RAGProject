@@ -2523,7 +2523,7 @@ retrieval trace を取得する。
 
 ### origin_type 導出規則
 
-PR-26 では同じ endpoint を Retrieval Debug UI v2 が利用する。`retrieval_run` には `strategy_type`, `query_plan_json`, `strategy_decision_json`, `latency_breakdown_json`, `retrieval_settings_json` を含めてよい。`items` には `retrieval_source` と `score_breakdown_json` を含めてよい。ただし raw prompt / full context / raw chunk text / PII / secret-like value は backend response と frontend display の両方で redaction する。
+PR-26 では同じ endpoint を Retrieval Debug UI v2 が利用する。`retrieval_run` には `strategy_type`, `query_plan_json`, `strategy_decision_json`, `latency_breakdown_json`, `retrieval_settings_json` を含めてよい。PR-27 以降の `query_plan_json` には `analysis` / `planner` / `intent` / `candidate_strategies` / `recommended_strategy` などの safe query-plan metadata を含めてよい。`items` には `retrieval_source` と `score_breakdown_json` を含めてよい。ただし raw prompt / full context / raw chunk text / PII / secret-like value は backend response と frontend display の両方で redaction する。
 
 | 条件 | origin_type |
 |---|---|

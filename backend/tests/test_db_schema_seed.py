@@ -591,6 +591,13 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.sparse.min_query_terms") == 1
         assert _setting_value(db, "rag.sparse.max_query_terms") == 32
         assert _setting_value(db, "rag.sparse.score_normalization") == "max"
+        assert _setting_value(db, "rag.query_analyzer.enabled") is True
+        assert _setting_value(db, "rag.query_planner.enabled") is True
+        assert _setting_value(db, "rag.query_planner.apply_rewrite_to_retrieval") is False
+        assert _setting_value(db, "rag.query_planner.max_sub_queries") == 3
+        assert _setting_value(db, "rag.query_planner.max_preview_chars") == 160
+        assert _setting_value(db, "rag.query_planner.store_query_preview") is True
+        assert _setting_value(db, "rag.query_planner.redact_pii") is True
         assert _setting_value(db, "rag.evaluation.default_dataset") == {
             "dataset_name": "phase2_strategy_smoke",
             "strategy_type": "dense",
@@ -672,6 +679,8 @@ def test_seed_preserves_existing_phase2_strategy_setting(
             assert _setting_value(db, "rag.router.enabled") is False
             assert _setting_value(db, "rag.sparse.enabled") is True
             assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
+            assert _setting_value(db, "rag.query_analyzer.enabled") is True
+            assert _setting_value(db, "rag.query_planner.enabled") is True
             assert _setting_value(db, "rag.evaluation.default_dataset") == {
                 "dataset_name": "phase2_strategy_smoke",
                 "strategy_type": "dense",

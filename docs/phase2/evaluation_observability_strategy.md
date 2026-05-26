@@ -40,6 +40,19 @@ PR-24 extends this foundation to standalone hybrid retrieval:
 
 Hybrid trace does not expose the raw query, raw chunk text, full context, Qdrant raw payload, or full PostgreSQL result payload.
 
+PR-27 extends `query_plan_json` with deterministic analyzer/planner metadata:
+
+- intent
+- ambiguity score and flags
+- keyword-heavy score and signals
+- version-specific and temporal signals
+- safe rewrite hash/preview
+- planned sub-query previews
+- metadata filter candidates
+- candidate strategies and recommended strategy
+
+These fields are observability and future-router inputs only. They do not change the executed strategy in PR-27.
+
 ## Dataset Foundation
 
 PR-22 stores evaluation datasets and cases in DB so the same dataset can be reused across strategies:
