@@ -28,7 +28,8 @@ _DROP_ENGLISH_FTS_INDEX_SQL = (
     "ix_document_chunks_content_fts_english"
 )
 _DROP_SIMPLE_FTS_INDEX_SQL = (
-    "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts"
+    "DROP INDEX CONCURRENTLY IF EXISTS "
+    "ix_document_chunks_content_fts"
 )
 
 
