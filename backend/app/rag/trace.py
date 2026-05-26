@@ -8,7 +8,12 @@ from typing import Any
 
 from app.core.config import Settings
 from app.rag.retrieval import RetrievalFilters
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalSource, RetrievalStrategy
+from app.rag.strategy import (
+    DEFAULT_RETRIEVAL_STRATEGY,
+    FusionMethod,
+    RetrievalSource,
+    RetrievalStrategy,
+)
 from app.schemas.rag_strategy import (
     SENSITIVE_TRACE_KEY_PARTS,
     LatencyBreakdown,
@@ -24,6 +29,7 @@ _RETRIEVAL_LATENCY_KEYS = (
     "query_embedding_ms",
     "qdrant_search_ms",
     "sparse_search_ms",
+    "fusion_ms",
     "rdb_final_check_ms",
     "rerank_ms",
     "retrieval_items_persist_ms",
@@ -175,6 +181,45 @@ def build_sparse_strategy_decision() -> dict[str, object]:
     return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
 
 
+def build_hybrid_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+    normalized_term_count: int,
+    fusion_method: FusionMethod,
+) -> dict[str, object]:
+    logical_document_filter_count = len(filters.logical_document_ids or ())
+    metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
+    trace = QueryPlanTrace(
+        strategy_type=RetrievalStrategy.HYBRID,
+        query_mode="dense_sparse_single_query",
+        query_hash=query_hash,
+        rewrite_applied=False,
+        sub_query_count=0,
+        metadata_filter_applied=metadata_filter_applied,
+        metadata_filter_count=logical_document_filter_count,
+        logical_document_filter_count=logical_document_filter_count,
+        reason_codes=[
+            "phase2_hybrid_dense_sparse",
+            f"fusion_method:{fusion_method.value}",
+            f"normalized_terms:{normalized_term_count}",
+        ],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
+def build_hybrid_strategy_decision(*, fusion_method: FusionMethod) -> dict[str, object]:
+    trace = StrategyDecisionTrace(
+        selected_strategy=RetrievalStrategy.HYBRID,
+        fallback_used=False,
+        router_enabled=False,
+        decision_source="request",
+        decision_policy=f"explicit_hybrid_{fusion_method.value}",
+        reason_codes=["explicit_strategy_hybrid", f"fusion_method:{fusion_method.value}"],
+    )
+    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+
+
 def build_retrieval_settings_snapshot(
     *,
     settings: Settings,
@@ -201,22 +246,27 @@ def build_retrieval_settings_snapshot(
         rdb_final_check_enabled=True,
         modality=filters.modality,
         logical_document_filter_count=len(filters.logical_document_ids or []),
-        hybrid_enabled=False,
+        hybrid_enabled=bool(settings.hybrid_enabled),
         router_enabled=False,
         trace_enabled=True,
+        fusion_method=FusionMethod(settings.hybrid_fusion_method),
+        hybrid_rrf_k=settings.hybrid_rrf_k,
+        hybrid_dense_weight=round(float(settings.hybrid_dense_weight), 6),
+        hybrid_sparse_weight=round(float(settings.hybrid_sparse_weight), 6),
+        hybrid_candidate_multiplier=settings.hybrid_candidate_multiplier,
         sparse_provider=(
             TraceRedactor.safe_string(settings.sparse_provider, max_length=100)
-            if strategy_type == RetrievalStrategy.SPARSE
+            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
             else None
         ),
         sparse_language=(
             TraceRedactor.safe_string(settings.sparse_language, max_length=30)
-            if strategy_type == RetrievalStrategy.SPARSE
+            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
             else None
         ),
         sparse_score_normalization=(
             TraceRedactor.safe_string(settings.sparse_score_normalization, max_length=30)
-            if strategy_type == RetrievalStrategy.SPARSE
+            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
             else None
         ),
     )
@@ -262,6 +312,33 @@ def build_sparse_score_breakdown(
         rank_order=rank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
+    )
+    return TraceRedactor.safe_dict(breakdown.model_dump(mode="json", exclude_none=True))
+
+
+def build_hybrid_score_breakdown(
+    *,
+    dense_score: float | None,
+    sparse_score: float | None,
+    fused_score: float,
+    rank_order: int,
+    final_rank: int,
+    selected_flag: bool,
+    fusion_method: FusionMethod,
+    dense_rank: int | None,
+    sparse_rank: int | None,
+) -> dict[str, object]:
+    breakdown = ScoreBreakdown(
+        retrieval_source=RetrievalSource.HYBRID,
+        dense_score=round(float(dense_score), 6) if dense_score is not None else None,
+        sparse_score=round(float(sparse_score), 6) if sparse_score is not None else None,
+        fused_score=round(float(fused_score), 6),
+        rank_order=rank_order,
+        final_rank=final_rank,
+        selected_flag=selected_flag,
+        fusion_method=fusion_method.value,
+        dense_rank=dense_rank,
+        sparse_rank=sparse_rank,
     )
     return TraceRedactor.safe_dict(breakdown.model_dump(mode="json", exclude_none=True))
 

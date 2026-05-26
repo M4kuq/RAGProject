@@ -577,7 +577,12 @@ def test_seed_can_run_twice_without_duplicates(
             == 1
         )
         assert _setting_value(db, "rag.default_strategy") == "dense"
-        assert _setting_value(db, "rag.hybrid.enabled") is False
+        assert _setting_value(db, "rag.hybrid.enabled") is True
+        assert _setting_value(db, "rag.hybrid.fusion_method") == "rrf"
+        assert _setting_value(db, "rag.hybrid.rrf_k") == 60
+        assert _setting_value(db, "rag.hybrid.dense_weight") == 0.5
+        assert _setting_value(db, "rag.hybrid.sparse_weight") == 0.5
+        assert _setting_value(db, "rag.hybrid.candidate_multiplier") == 2
         assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
         assert _setting_value(db, "rag.trace.enabled") is True
         assert _setting_value(db, "rag.sparse.enabled") is True
@@ -662,7 +667,8 @@ def test_seed_preserves_existing_phase2_strategy_setting(
 
         with Session() as db:
             assert _setting_value(db, "rag.default_strategy") == "hybrid"
-            assert _setting_value(db, "rag.hybrid.enabled") is False
+            assert _setting_value(db, "rag.hybrid.enabled") is True
+            assert _setting_value(db, "rag.hybrid.fusion_method") == "rrf"
             assert _setting_value(db, "rag.router.enabled") is False
             assert _setting_value(db, "rag.sparse.enabled") is True
             assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"

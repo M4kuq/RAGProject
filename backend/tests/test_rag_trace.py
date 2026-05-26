@@ -11,13 +11,16 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.base import Base
 from app.rag.retrieval import RetrievalFilters
-from app.rag.strategy import RetrievalStrategy
+from app.rag.strategy import FusionMethod, RetrievalStrategy
 from app.rag.trace import (
     LatencyTracker,
     TraceRedactor,
     build_default_dense_query_plan,
     build_default_dense_strategy_decision,
     build_dense_score_breakdown,
+    build_hybrid_query_plan,
+    build_hybrid_score_breakdown,
+    build_hybrid_strategy_decision,
     build_retrieval_settings_snapshot,
     build_sparse_query_plan,
     build_sparse_score_breakdown,
@@ -128,6 +131,50 @@ def test_sparse_trace_builders_keep_only_safe_metadata() -> None:
     assert "content_text" not in dumped
 
 
+def test_hybrid_trace_builders_keep_only_safe_metadata() -> None:
+    raw_query = "alpha secondary DATABASE_PASSWORD=hunter2"
+    query_hash = hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
+
+    plan = build_hybrid_query_plan(
+        query_hash=query_hash,
+        filters=RetrievalFilters(logical_document_ids=(10,), modality="text"),
+        normalized_term_count=2,
+        fusion_method=FusionMethod.RRF,
+    )
+    decision = build_hybrid_strategy_decision(fusion_method=FusionMethod.RRF)
+    score = build_hybrid_score_breakdown(
+        dense_score=0.91,
+        sparse_score=0.82,
+        fused_score=0.95,
+        rank_order=1,
+        final_rank=1,
+        selected_flag=True,
+        fusion_method=FusionMethod.RRF,
+        dense_rank=1,
+        sparse_rank=2,
+    )
+    dumped = json.dumps({"plan": plan, "decision": decision, "score": score})
+
+    assert plan["strategy_type"] == "hybrid"
+    assert plan["query_hash"] == query_hash
+    assert plan["query_mode"] == "dense_sparse_single_query"
+    assert plan["reason_codes"] == [
+        "phase2_hybrid_dense_sparse",
+        "fusion_method:rrf",
+        "normalized_terms:2",
+    ]
+    assert decision["selected_strategy"] == "hybrid"
+    assert decision["decision_policy"] == "explicit_hybrid_rrf"
+    assert score["retrieval_source"] == "hybrid"
+    assert score["dense_score"] == 0.91
+    assert score["sparse_score"] == 0.82
+    assert score["fused_score"] == 0.95
+    assert score["fusion_method"] == "rrf"
+    assert raw_query not in dumped
+    assert "hunter2" not in dumped
+    assert "content_text" not in dumped
+
+
 def test_retrieval_settings_snapshot_has_safe_provider_metadata_only() -> None:
     settings = Settings(
         app_env="test",
@@ -163,6 +210,19 @@ def test_retrieval_settings_snapshot_has_safe_provider_metadata_only() -> None:
     assert sparse_snapshot["sparse_provider"] == "postgres_fts"
     assert sparse_snapshot["sparse_language"] == "simple"
     assert sparse_snapshot["sparse_score_normalization"] == "max"
+
+    hybrid_snapshot = build_retrieval_settings_snapshot(
+        settings=settings,
+        top_k=5,
+        rerank_top_n=2,
+        filters=RetrievalFilters(),
+        strategy_type=RetrievalStrategy.HYBRID,
+    )
+    assert hybrid_snapshot["strategy_type"] == "hybrid"
+    assert hybrid_snapshot["hybrid_enabled"] is True
+    assert hybrid_snapshot["fusion_method"] == "rrf"
+    assert hybrid_snapshot["hybrid_rrf_k"] == 60
+    assert hybrid_snapshot["sparse_provider"] == "postgres_fts"
 
 
 def test_score_breakdown_has_scores_without_chunk_text() -> None:

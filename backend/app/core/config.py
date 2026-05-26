@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=32, ge=1)
     retrieval_top_k_default: int = Field(default=20, ge=1, le=20)
     retrieval_top_k_max: int = Field(default=20, ge=1, le=20)
+    hybrid_enabled: bool = True
+    hybrid_fusion_method: str = "rrf"
+    hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
+    hybrid_dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    hybrid_sparse_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    hybrid_candidate_multiplier: int = Field(default=2, ge=1, le=5)
     sparse_enabled: bool = True
     sparse_provider: str = "postgres_fts"
     sparse_language: str = "simple"
@@ -156,6 +162,11 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_PROVIDER must be none, fake, or local")
         if self.retrieval_top_k_default > self.retrieval_top_k_max:
             raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
+        self.hybrid_fusion_method = self.hybrid_fusion_method.lower()
+        if self.hybrid_fusion_method not in {"rrf", "weighted"}:
+            raise ValueError("HYBRID_FUSION_METHOD must be rrf or weighted")
+        if self.hybrid_dense_weight + self.hybrid_sparse_weight <= 0:
+            raise ValueError("At least one hybrid fusion weight must be positive")
         self.sparse_provider = self.sparse_provider.lower()
         if self.sparse_provider != "postgres_fts":
             raise ValueError("SPARSE_PROVIDER must be postgres_fts")

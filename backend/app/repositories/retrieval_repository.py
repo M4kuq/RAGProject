@@ -27,6 +27,7 @@ class CheckedRetrievalCandidate:
     logical_document: LogicalDocument
     retrieval_score: float
     rank_order: int
+    payload: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -285,6 +286,7 @@ class RetrievalRepository:
                     logical_document=document,
                     retrieval_score=candidate_by_chunk_id[document_chunk_id].retrieval_score,
                     rank_order=len(checked) + 1,
+                    payload=candidate_by_chunk_id[document_chunk_id].payload,
                 )
             )
         return checked

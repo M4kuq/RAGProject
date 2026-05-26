@@ -30,6 +30,7 @@ from app.db.session import get_db
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.ingest.qdrant import InMemoryQdrantClient, QdrantCollectionConfig, QdrantPoint
 from app.main import create_app
+from app.rag.fusion import fuse_candidates
 from app.rag.generation import (
     AnswerGenerationError,
     FakeAnswerGenerator,
@@ -51,6 +52,7 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
 )
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query, normalize_sparse_scores
+from app.rag.strategy import FusionMethod
 from app.services.rag_service import RagService
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -213,8 +215,75 @@ def test_sparse_query_normalization_and_score_order_are_deterministic() -> None:
     assert rounded_tie_ranked[0].sparse_score == rounded_tie_ranked[1].sparse_score
 
 
+def test_hybrid_fusion_dedupes_and_supports_rrf_and_weighted() -> None:
+    dense_candidates = [
+        _candidate(1, 0.9, 1),
+        _candidate(2, 0.6, 2),
+        _candidate(1, 0.8, 3),
+    ]
+    sparse_candidates = [
+        _candidate(2, 1.0, 1),
+        _candidate(3, 0.7, 2),
+    ]
+
+    rrf_ranked = fuse_candidates(
+        dense_candidates=dense_candidates,
+        sparse_candidates=sparse_candidates,
+        method=FusionMethod.RRF,
+        limit=5,
+        rrf_k=60,
+        dense_weight=0.5,
+        sparse_weight=0.5,
+    )
+    weighted_ranked = fuse_candidates(
+        dense_candidates=dense_candidates,
+        sparse_candidates=sparse_candidates,
+        method=FusionMethod.WEIGHTED,
+        limit=5,
+        rrf_k=60,
+        dense_weight=0.4,
+        sparse_weight=0.6,
+    )
+
+    assert [candidate.document_chunk_id for candidate in rrf_ranked] == [2, 1, 3]
+    assert [candidate.qdrant_order for candidate in rrf_ranked] == [1, 2, 3]
+    assert rrf_ranked[0].payload["retrieval_source"] == "hybrid"
+    assert rrf_ranked[0].payload["fusion_method"] == "rrf"
+    assert rrf_ranked[0].payload["dense_score"] == 0.6
+    assert rrf_ranked[0].payload["sparse_score"] == 1.0
+    assert weighted_ranked[0].document_chunk_id == 2
+    assert weighted_ranked[0].payload["fusion_method"] == "weighted"
+
+
+def test_weighted_hybrid_fusion_preserves_non_positive_scores() -> None:
+    ranked = fuse_candidates(
+        dense_candidates=[
+            _candidate(1, -0.2, 1),
+            _candidate(2, -0.4, 2),
+            _candidate(3, 0.0, 3),
+        ],
+        sparse_candidates=[],
+        method=FusionMethod.WEIGHTED,
+        limit=5,
+        rrf_k=60,
+        dense_weight=1.0,
+        sparse_weight=0.0,
+    )
+
+    assert [candidate.document_chunk_id for candidate in ranked] == [3, 1, 2]
+    assert [candidate.payload["dense_score"] for candidate in ranked] == [
+        0.0,
+        -0.2,
+        -0.4,
+    ]
+    assert [candidate.retrieval_score for candidate in ranked] == [1.0, 0.5, 0.0]
+
+
 def test_sparse_settings_validation() -> None:
     settings = Settings(
+        hybrid_fusion_method="weighted",
+        hybrid_dense_weight=0.4,
+        hybrid_sparse_weight=0.6,
         sparse_provider="postgres_fts",
         sparse_language="english",
         sparse_min_query_terms=2,
@@ -224,7 +293,12 @@ def test_sparse_settings_validation() -> None:
 
     assert settings.sparse_provider == "postgres_fts"
     assert settings.sparse_language == "english"
+    assert settings.hybrid_fusion_method == "weighted"
 
+    with pytest.raises(ValueError):
+        Settings(hybrid_fusion_method="invalid")
+    with pytest.raises(ValueError):
+        Settings(hybrid_dense_weight=0.0, hybrid_sparse_weight=0.0)
     with pytest.raises(ValueError):
         Settings(sparse_provider="external")
     with pytest.raises(ValueError):
@@ -353,10 +427,14 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             "rdb_final_check_enabled": True,
             "modality": "text",
             "logical_document_filter_count": 0,
-            "hybrid_enabled": False,
+            "hybrid_enabled": True,
             "router_enabled": False,
             "trace_enabled": True,
             "fusion_method": "rrf",
+            "hybrid_rrf_k": 60,
+            "hybrid_dense_weight": 0.5,
+            "hybrid_sparse_weight": 0.5,
+            "hybrid_candidate_multiplier": 2,
         }
         assert run.latency_breakdown_json is not None
         latency = run.latency_breakdown_json
@@ -559,10 +637,256 @@ def test_rag_search_sparse_no_result_succeeds_without_items(
         )
 
 
+def test_rag_search_hybrid_success_persists_fusion_trace_and_score_breakdown(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "alpha secondary material",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "strategy": "hybrid",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert len(vector_client.query_vectors) == 1
+    summary = data["retrieval_score_summary"]
+    assert summary["qdrant_candidate_count"] == 5
+    assert summary["sparse_candidate_count"] == 2
+    assert summary["hybrid_candidate_count"] == 5
+    assert summary["fusion_method"] == "rrf"
+    assert summary["post_filter_candidate_count"] == 2
+    assert summary["excluded_by_rdb_check_count"] == 3
+    assert summary["selected_count"] == 1
+    assert len(data["items"]) == 2
+    assert [item["document_chunk_id"] for item in data["items"]] == [100, 101]
+    assert all(item["rerank_score"] is None for item in data["items"])
+    assert all(item["rerank_order"] is None for item in data["items"])
+    assert "content_text" not in str(data)
+    assert "full active chunk text should not be returned whole" not in str(data)
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "hybrid"
+        _assert_safe_run_trace(run, raw_query="alpha secondary material", strategy="hybrid")
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["query_mode"] == "dense_sparse_single_query"
+        assert run.query_plan_json["reason_codes"] == [
+            "phase2_hybrid_dense_sparse",
+            "fusion_method:rrf",
+            "normalized_terms:3",
+        ]
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "hybrid"
+        assert run.strategy_decision_json["decision_source"] == "request"
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["strategy_type"] == "hybrid"
+        assert run.retrieval_settings_json["hybrid_enabled"] is True
+        assert run.retrieval_settings_json["fusion_method"] == "rrf"
+        assert run.retrieval_settings_json["sparse_provider"] == "postgres_fts"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["query_embedding_ms"] >= 0
+        assert run.latency_breakdown_json["qdrant_search_ms"] >= 0
+        assert run.latency_breakdown_json["sparse_search_ms"] >= 0
+        assert run.latency_breakdown_json["fusion_ms"] >= 0
+        assert run.latency_breakdown_json["rdb_final_check_ms"] >= 0
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert [item.retrieval_source for item in items] == ["hybrid", "hybrid"]
+        first_score_breakdown = items[0].score_breakdown_json
+        assert first_score_breakdown is not None
+        assert first_score_breakdown["retrieval_source"] == "hybrid"
+        assert first_score_breakdown["dense_score"] == 0.91
+        assert first_score_breakdown["sparse_score"] is not None
+        assert 0.0 <= first_score_breakdown["fused_score"] <= 1.0
+        assert first_score_breakdown["fusion_method"] == "rrf"
+        assert first_score_breakdown["dense_rank"] == 1
+        assert first_score_breakdown["sparse_rank"] == 2
+        assert first_score_breakdown["rank_order"] == 1
+        assert first_score_breakdown["final_rank"] == 1
+        assert first_score_breakdown["selected_flag"] is True
+        assert "content_text" not in str(first_score_breakdown)
+        assert "raw_chunk_text" not in str(first_score_breakdown)
+
+
+def test_rag_search_hybrid_reports_post_filter_count_before_top_k_truncation(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, _, _ = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "alpha secondary material",
+            "top_k": 1,
+            "rerank_top_n": 1,
+            "strategy": "hybrid",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert len(data["items"]) == 1
+    summary = data["retrieval_score_summary"]
+    assert summary["hybrid_candidate_count"] == 2
+    assert summary["post_filter_candidate_count"] == 2
+    assert summary["excluded_by_rdb_check_count"] == 0
+
+
+def test_rag_search_hybrid_zero_sparse_weight_does_not_require_sparse_backend(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        hybrid_dense_weight=1.0,
+        hybrid_sparse_weight=0.0,
+        sparse_enabled=False,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    dense_only_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        sparse_strategy=_FailingSparseStrategy(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: dense_only_service
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha secondary material", "strategy": "hybrid"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert len(vector_client.query_vectors) == 1
+    summary = data["retrieval_score_summary"]
+    assert summary["qdrant_candidate_count"] == 5
+    assert summary["sparse_candidate_count"] == 0
+    assert summary["fusion_method"] == "rrf"
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "hybrid"
+        assert run.latency_breakdown_json is not None
+        assert "qdrant_search_ms" in run.latency_breakdown_json
+        assert "sparse_search_ms" not in run.latency_breakdown_json
+
+
+def test_rag_search_hybrid_zero_dense_weight_skips_vector_backend(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    vector_client.fail = True
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        hybrid_dense_weight=0.0,
+        hybrid_sparse_weight=1.0,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    sparse_only_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: sparse_only_service
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha secondary material", "strategy": "hybrid"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert vector_client.query_vectors == []
+    summary = data["retrieval_score_summary"]
+    assert summary["qdrant_candidate_count"] == 0
+    assert summary["sparse_candidate_count"] == 2
+    assert summary["fusion_method"] == "rrf"
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "hybrid"
+        assert run.latency_breakdown_json is not None
+        assert "query_embedding_ms" not in run.latency_breakdown_json
+        assert "qdrant_search_ms" not in run.latency_breakdown_json
+        assert "sparse_search_ms" in run.latency_breakdown_json
+
+
 def test_rag_search_unsupported_strategy_returns_safe_error(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha secret-token", "strategy": "agentic_router"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "strategy_not_enabled"
+    assert "secret-token" not in str(body)
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(RetrievalRun).count() == 0
+
+
+def test_rag_search_hybrid_disabled_returns_safe_error(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        hybrid_enabled=False,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    disabled_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: disabled_service
     csrf_token = _login(client)
 
     response = client.post(
