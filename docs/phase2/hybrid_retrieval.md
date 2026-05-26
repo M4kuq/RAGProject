@@ -47,7 +47,7 @@ Default settings:
 - `rag.hybrid.sparse_weight = 0.5`
 - `rag.hybrid.candidate_multiplier = 2`
 
-RRF uses source rank positions and normalizes the fused score to `0.0..1.0` within the candidate set. Weighted fusion uses max-normalized dense and sparse scores. Ties are deterministic: fused score desc, dense rank asc, sparse rank asc, `document_chunk_id` asc.
+RRF uses source rank positions and normalizes the fused score to `0.0..1.0` within the candidate set. Weighted fusion keeps finite dense and sparse scores, including zero or negative values, and shift/range-normalizes them within each source before final fused-score normalization. Ties are deterministic: fused score desc, dense rank asc, sparse rank asc, `document_chunk_id` asc.
 
 ## Trace
 

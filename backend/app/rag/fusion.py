@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Final
 
@@ -94,9 +95,9 @@ def _dedupe_candidates(
             continue
         existing = by_chunk_id.get(document_chunk_id)
         dense_rank = min(existing.dense_rank, index) if existing and existing.dense_rank else index
-        dense_score = max(
-            existing.dense_score if existing and existing.dense_score is not None else 0.0,
-            _finite_positive_score(candidate.retrieval_score),
+        dense_score = _max_optional_score(
+            existing.dense_score if existing else None,
+            _finite_score(candidate.retrieval_score),
         )
         by_chunk_id[document_chunk_id] = FusionInput(
             document_chunk_id=document_chunk_id,
@@ -114,9 +115,9 @@ def _dedupe_candidates(
         sparse_rank = (
             min(existing.sparse_rank, index) if existing and existing.sparse_rank else index
         )
-        sparse_score = max(
-            existing.sparse_score if existing and existing.sparse_score is not None else 0.0,
-            _finite_positive_score(candidate.retrieval_score),
+        sparse_score = _max_optional_score(
+            existing.sparse_score if existing else None,
+            _finite_score(candidate.retrieval_score),
         )
         by_chunk_id[document_chunk_id] = FusionInput(
             document_chunk_id=document_chunk_id,
@@ -153,21 +154,37 @@ def _weighted_fusion(
     dense_weight: float,
     sparse_weight: float,
 ) -> list[tuple[FusionInput, float]]:
-    dense_max = max((item.dense_score or 0.0 for item in inputs), default=0.0)
-    sparse_max = max((item.sparse_score or 0.0 for item in inputs), default=0.0)
     total_weight = dense_weight + sparse_weight
+    if total_weight <= 0:
+        return []
+    dense_bounds = _score_bounds(item.dense_score for item in inputs if item.dense_rank is not None)
+    sparse_bounds = _score_bounds(
+        item.sparse_score for item in inputs if item.sparse_rank is not None
+    )
     raw_scores: list[tuple[FusionInput, float]] = []
     for input_item in inputs:
+        if not _has_positive_weighted_source(
+            input_item,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
+        ):
+            continue
         dense_component = (
-            ((input_item.dense_score or 0.0) / dense_max) * dense_weight if dense_max > 0 else 0.0
+            _normalized_source_score(
+                input_item.dense_score,
+                dense_bounds,
+            )
+            * dense_weight
         )
         sparse_component = (
-            ((input_item.sparse_score or 0.0) / sparse_max) * sparse_weight
-            if sparse_max > 0
-            else 0.0
+            _normalized_source_score(
+                input_item.sparse_score,
+                sparse_bounds,
+            )
+            * sparse_weight
         )
         raw_scores.append((input_item, (dense_component + sparse_component) / total_weight))
-    return _normalize_fused_scores(raw_scores)
+    return _normalize_shifted_scores(raw_scores)
 
 
 def _normalize_fused_scores(
@@ -183,10 +200,69 @@ def _normalize_fused_scores(
     ]
 
 
-def _finite_positive_score(value: float) -> float:
-    score = float(value)
-    if not math.isfinite(score) or score <= 0:
+def _normalize_shifted_scores(
+    raw_scores: list[tuple[FusionInput, float]],
+) -> list[tuple[FusionInput, float]]:
+    finite_scores = [
+        (input_item, score) for input_item, score in raw_scores if math.isfinite(score)
+    ]
+    if not finite_scores:
+        return []
+    min_score = min(score for _, score in finite_scores)
+    max_score = max(score for _, score in finite_scores)
+    if max_score == min_score:
+        return [(input_item, MAX_FUSED_SCORE) for input_item, _ in finite_scores]
+    score_range = max_score - min_score
+    return [
+        (input_item, min(MAX_FUSED_SCORE, max(0.0, (score - min_score) / score_range)))
+        for input_item, score in finite_scores
+    ]
+
+
+def _normalized_source_score(
+    score: float | None,
+    bounds: tuple[float, float] | None,
+) -> float:
+    if score is None or bounds is None:
         return 0.0
+    min_score, max_score = bounds
+    if max_score == min_score:
+        return MAX_FUSED_SCORE
+    return min(MAX_FUSED_SCORE, max(0.0, (score - min_score) / (max_score - min_score)))
+
+
+def _score_bounds(scores: Iterable[float | None]) -> tuple[float, float] | None:
+    finite_scores = [
+        float(score) for score in scores if score is not None and math.isfinite(float(score))
+    ]
+    if not finite_scores:
+        return None
+    return min(finite_scores), max(finite_scores)
+
+
+def _has_positive_weighted_source(
+    input_item: FusionInput,
+    *,
+    dense_weight: float,
+    sparse_weight: float,
+) -> bool:
+    return (dense_weight > 0 and input_item.dense_score is not None) or (
+        sparse_weight > 0 and input_item.sparse_score is not None
+    )
+
+
+def _max_optional_score(left: float | None, right: float | None) -> float | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
+
+
+def _finite_score(value: float) -> float | None:
+    score = float(value)
+    if not math.isfinite(score):
+        return None
     return score
 
 

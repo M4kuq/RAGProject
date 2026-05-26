@@ -47,6 +47,7 @@ from app.rag.retrieval import (
     HttpQdrantSearchClient,
     RetrievalError,
     RetrievalFilters,
+    VectorSearchCandidate,
     VectorSearchClient,
 )
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query
@@ -166,11 +167,14 @@ class RagService:
         }
         if strategy_type not in supported_strategies:
             raise RagSearchPipelineError("strategy_not_enabled", 409)
-        if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}:
-            if not self.settings.sparse_enabled:
-                raise RagSearchPipelineError("strategy_not_enabled", 409)
         if strategy_type == RetrievalStrategy.HYBRID and not self.settings.hybrid_enabled:
             raise RagSearchPipelineError("strategy_not_enabled", 409)
+        if strategy_type == RetrievalStrategy.SPARSE:
+            if not self.settings.sparse_enabled:
+                raise RagSearchPipelineError("strategy_not_enabled", 409)
+        if strategy_type == RetrievalStrategy.HYBRID:
+            if _hybrid_uses_sparse(self.settings) and not self.settings.sparse_enabled:
+                raise RagSearchPipelineError("strategy_not_enabled", 409)
         query_hash = _query_hash(payload.query)
         latency_tracker = LatencyTracker()
         retrieval_settings = _retrieval_settings_snapshot(
@@ -760,23 +764,27 @@ class RagService:
             latency_tracker = LatencyTracker()
         candidate_limit = _hybrid_candidate_limit(top_k, self.settings)
         fusion_method = _fusion_method(self.settings)
-        with latency_tracker.span("query_embedding_ms"):
-            query_vector = self._embed_query(query)
-        with latency_tracker.span("qdrant_search_ms"):
-            dense_candidates = self.vector_client.search(
-                collection_name=self.settings.qdrant_collection_name,
-                query_vector=query_vector,
-                limit=candidate_limit,
-                filters=filters,
-            )
-        with latency_tracker.span("sparse_search_ms"):
-            sparse_candidates = self.sparse_strategy.search(
-                db,
-                query=query,
-                top_k=candidate_limit,
-                filters=filters,
-                settings=self.settings,
-            )
+        dense_candidates: list[VectorSearchCandidate] = []
+        sparse_candidates: list[VectorSearchCandidate] = []
+        if _hybrid_uses_dense(self.settings):
+            with latency_tracker.span("query_embedding_ms"):
+                query_vector = self._embed_query(query)
+            with latency_tracker.span("qdrant_search_ms"):
+                dense_candidates = self.vector_client.search(
+                    collection_name=self.settings.qdrant_collection_name,
+                    query_vector=query_vector,
+                    limit=candidate_limit,
+                    filters=filters,
+                )
+        if _hybrid_uses_sparse(self.settings):
+            with latency_tracker.span("sparse_search_ms"):
+                sparse_candidates = self.sparse_strategy.search(
+                    db,
+                    query=query,
+                    top_k=candidate_limit,
+                    filters=filters,
+                    settings=self.settings,
+                )
         with latency_tracker.span("fusion_ms"):
             fused_candidates = self.hybrid_strategy.fuse(
                 dense_candidates=dense_candidates,
@@ -834,7 +842,7 @@ class RagService:
             qdrant_candidate_count=len(dense_candidates),
             sparse_candidate_count=len(sparse_candidates),
             hybrid_candidate_count=len(fused_candidates),
-            checked_candidates=visible_candidates,
+            checked_candidates=checked_candidates,
             selected_count=selected_count,
             top1_rerank_score=None,
             fusion_method=fusion_method.value,
@@ -1282,6 +1290,14 @@ def _retrieval_settings_snapshot(
 
 def _fusion_method(settings: Settings) -> FusionMethod:
     return FusionMethod(settings.hybrid_fusion_method)
+
+
+def _hybrid_uses_dense(settings: Settings) -> bool:
+    return settings.hybrid_dense_weight > 0
+
+
+def _hybrid_uses_sparse(settings: Settings) -> bool:
+    return settings.hybrid_sparse_weight > 0
 
 
 def _hybrid_candidate_limit(top_k: int, settings: Settings) -> int:
