@@ -6,7 +6,7 @@ PR-27 adds a deterministic rule-based query analysis and planning layer before f
 
 The analyzer and planner produce safe metadata for `retrieval_runs.query_plan_json` so PR-28 Strategy Router and PR-29 Agentic Retrieval Loop can decide how to route or expand retrieval without changing the existing PR-27 execution path.
 
-PR-27 does not implement automatic strategy routing. Explicit `/api/v1/rag/search` `strategy` values still determine the executed retrieval strategy, and `/api/v1/rag/ask` remains default dense.
+PR-27 does not implement automatic strategy routing. PR-28 consumes this output when callers explicitly request `strategy=agentic_router`; otherwise explicit `/api/v1/rag/search` `strategy` values still determine the executed retrieval strategy, and `/api/v1/rag/ask` remains default dense.
 
 ## Analyzer Signals
 
@@ -93,6 +93,6 @@ The seed remains idempotent and does not overwrite existing values.
 
 ## PR-28 / PR-29 Handoff
 
-PR-28 can consume `candidate_strategies`, `recommended_strategy`, `intent`, `keyword_heavy_score`, `version_specific_flag`, and `metadata_filter_candidates` to implement Strategy Router.
+PR-28 consumes `candidate_strategies`, `recommended_strategy`, `intent`, `keyword_heavy_score`, `version_specific_flag`, and `metadata_filter_candidates` to implement one-call Strategy Router execution for `dense`, `sparse`, `hybrid`, and `fallback_dense`.
 
 PR-29 can consume planned `sub_queries`, ambiguity flags, and `needs_clarification_candidate` for agentic retrieval loop and context sufficiency handling.

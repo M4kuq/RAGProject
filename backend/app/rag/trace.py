@@ -19,6 +19,7 @@ from app.schemas.rag_strategy import (
     LatencyBreakdown,
     QueryPlanTrace,
     RetrievalSettingsSnapshot,
+    RouterDecisionTrace,
     ScoreBreakdown,
     StrategyDecisionTrace,
 )
@@ -26,6 +27,7 @@ from app.schemas.rag_strategy import (
 TRACE_SCHEMA_VERSION = "phase2.trace.v1"
 
 _RETRIEVAL_LATENCY_KEYS = (
+    "strategy_router_ms",
     "query_embedding_ms",
     "qdrant_search_ms",
     "sparse_search_ms",
@@ -223,6 +225,39 @@ def build_hybrid_strategy_decision(*, fusion_method: FusionMethod) -> dict[str, 
     return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
 
 
+def build_router_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+    execution_strategy: RetrievalStrategy,
+    plan_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, object]:
+    logical_document_filter_count = len(filters.logical_document_ids or ())
+    metadata_filter_applied = logical_document_filter_count > 0 or filters.modality != "text"
+    trace = QueryPlanTrace(
+        strategy_type=RetrievalStrategy.AGENTIC_ROUTER,
+        query_mode="router_single_strategy",
+        query_hash=query_hash,
+        rewrite_applied=False,
+        sub_query_count=0,
+        metadata_filter_applied=metadata_filter_applied,
+        metadata_filter_count=logical_document_filter_count,
+        logical_document_filter_count=logical_document_filter_count,
+        reason_codes=[
+            "phase2_agentic_router",
+            f"execution_strategy:{execution_strategy.value}",
+        ],
+    )
+    return _safe_query_plan(
+        trace,
+        plan_metadata=_router_plan_metadata(plan_metadata),
+    )
+
+
+def build_router_strategy_decision(*, decision: RouterDecisionTrace) -> dict[str, object]:
+    return TraceRedactor.safe_dict(decision.model_dump(mode="json", exclude_none=True))
+
+
 def build_retrieval_settings_snapshot(
     *,
     settings: Settings,
@@ -250,26 +285,65 @@ def build_retrieval_settings_snapshot(
         modality=filters.modality,
         logical_document_filter_count=len(filters.logical_document_ids or []),
         hybrid_enabled=bool(settings.hybrid_enabled),
-        router_enabled=False,
+        router_enabled=bool(
+            strategy_type == RetrievalStrategy.AGENTIC_ROUTER and settings.router_enabled
+        ),
         trace_enabled=True,
         fusion_method=FusionMethod(settings.hybrid_fusion_method),
         hybrid_rrf_k=settings.hybrid_rrf_k,
         hybrid_dense_weight=round(float(settings.hybrid_dense_weight), 6),
         hybrid_sparse_weight=round(float(settings.hybrid_sparse_weight), 6),
         hybrid_candidate_multiplier=settings.hybrid_candidate_multiplier,
+        router_mode=(
+            TraceRedactor.safe_string(settings.router_mode, max_length=30)
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        router_fallback_strategy=(
+            RetrievalStrategy.FALLBACK_DENSE
+            if settings.router_fallback_strategy == RetrievalStrategy.FALLBACK_DENSE.value
+            else RetrievalStrategy.DENSE
+        )
+        if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+        else None,
+        router_allow_agentic_search=(
+            bool(settings.router_allow_agentic_search)
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        router_allow_agentic_ask=(
+            bool(settings.router_allow_agentic_ask)
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
         sparse_provider=(
             TraceRedactor.safe_string(settings.sparse_provider, max_length=100)
-            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
+            if strategy_type
+            in {
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+                RetrievalStrategy.AGENTIC_ROUTER,
+            }
             else None
         ),
         sparse_language=(
             TraceRedactor.safe_string(settings.sparse_language, max_length=30)
-            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
+            if strategy_type
+            in {
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+                RetrievalStrategy.AGENTIC_ROUTER,
+            }
             else None
         ),
         sparse_score_normalization=(
             TraceRedactor.safe_string(settings.sparse_score_normalization, max_length=30)
-            if strategy_type in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
+            if strategy_type
+            in {
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+                RetrievalStrategy.AGENTIC_ROUTER,
+            }
             else None
         ),
     )
@@ -289,9 +363,10 @@ def build_dense_score_breakdown(
     rerank_order: int | None,
     final_rank: int,
     selected_flag: bool,
+    retrieval_source: RetrievalSource = RetrievalSource.DENSE,
 ) -> dict[str, object]:
     breakdown = ScoreBreakdown(
-        retrieval_source=RetrievalSource.DENSE,
+        retrieval_source=retrieval_source,
         dense_score=round(float(dense_score), 6),
         rerank_score=round(float(rerank_score), 6) if rerank_score is not None else None,
         rank_order=rank_order,
@@ -359,3 +434,40 @@ def _safe_query_plan(
     if plan_metadata:
         payload.update(plan_metadata)
     return TraceRedactor.safe_dict(payload)
+
+
+def _router_plan_metadata(plan_metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not plan_metadata:
+        return None
+    metadata = _clean_router_plan_value(plan_metadata)
+    if not isinstance(metadata, dict):
+        return None
+    return metadata
+
+
+def _clean_router_plan_value(value: Any) -> object:
+    if isinstance(value, Mapping):
+        cleaned: dict[str, object] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            if key_text == "disabled_reason" and nested == "strategy_router_not_implemented":
+                continue
+            cleaned[key_text] = _clean_router_plan_value(nested)
+        safety_flags = cleaned.get("safety_flags")
+        if isinstance(safety_flags, Sequence) and not isinstance(
+            safety_flags, str | bytes | bytearray
+        ):
+            cleaned["safety_flags"] = _router_executed_safety_flags(safety_flags)
+        return cleaned
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_clean_router_plan_value(item) for item in value]
+    return value
+
+
+def _router_executed_safety_flags(safety_flags: Sequence[Any]) -> list[object]:
+    normalized = [
+        flag for flag in safety_flags if flag not in {"planned_only", "router_not_executed"}
+    ]
+    if "router_executed" not in safety_flags:
+        normalized.append("router_executed")
+    return normalized

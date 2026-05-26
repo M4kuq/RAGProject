@@ -17,6 +17,7 @@ from app.schemas.rag_strategy import (
     LatencyBreakdown,
     QueryPlanTrace,
     RetrievalSettingsSnapshot,
+    RouterDecisionTrace,
     ScoreBreakdown,
     StrategyDecisionTrace,
     StrategyEvaluationMetricSpec,
@@ -62,6 +63,13 @@ def test_phase2_trace_dtos_are_json_serializable_and_redacted() -> None:
             reason_codes=["phase1_default_dense"],
         ).model_dump(mode="json"),
         StrategyDecisionTrace(reason_codes=["router_disabled"]).model_dump(mode="json"),
+        RouterDecisionTrace(
+            requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
+            selected_strategy=RetrievalStrategy.HYBRID,
+            execution_strategy=RetrievalStrategy.HYBRID,
+            confidence=0.72,
+            reason_codes=["keyword_heavy"],
+        ).model_dump(mode="json"),
         LatencyBreakdown(retrieval_ms=10, rerank_ms=5, total_ms=15).model_dump(mode="json"),
         RetrievalSettingsSnapshot(
             top_k=5,

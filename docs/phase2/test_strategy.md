@@ -111,6 +111,20 @@
 - The original user query preview is not persisted; derived query previews are redacted/truncated and do not expose raw prompt, full context, raw chunk text, PII, or secrets.
 - Retrieval Debug UI renders analysis/planning summary and tolerates missing fields.
 
+## PR-28 Strategy Router Tests
+
+- `StrategyRouter` disabled or failing returns `fallback_dense`.
+- Keyword-heavy and comparison queries select `hybrid` when available.
+- Normal factual queries select `dense`.
+- Version-specific queries record disabled `version_aware` candidates and execute an implemented strategy.
+- Sparse/hybrid unavailable states fall back to `dense`.
+- `/rag/search strategy=agentic_router` persists `retrieval_runs.strategy_type = agentic_router`.
+- Router decisions persist requested, selected, and execution strategies in `strategy_decision_json`.
+- Router latency is recorded as `strategy_router_ms`.
+- `/rag/ask strategy=agentic_router` is explicit opt-in; default ask remains dense.
+- Retrieval Debug UI renders router decision, fallback, confidence, reason codes, disabled candidates, and safety flags.
+- Router decision JSON does not contain raw query, raw prompt, full context, raw chunk text, PII, secrets, or raw exception messages.
+
 ## Checks
 
 - `ruff format --check .`

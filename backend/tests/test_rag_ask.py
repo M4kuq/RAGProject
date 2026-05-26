@@ -335,6 +335,62 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert admin.status_code == 200
 
 
+def test_rag_ask_agentic_router_opt_in_persists_router_decision(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic ask")
+    message = "HTTP 500 API_ERROR SQL_ERROR alpha secondary"
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-msg-1",
+            "message": message,
+            "strategy": "agentic_router",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["retrieval_run_id"] == data["assistant_message"]["linked_retrieval_run_id"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "agentic_router"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "agentic_router"
+        assert (
+            run.query_plan_json["query_hash"] == hashlib.sha256(message.encode("utf-8")).hexdigest()
+        )
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["requested_strategy"] == "agentic_router"
+        assert run.strategy_decision_json["selected_strategy"] == "hybrid"
+        assert run.strategy_decision_json["execution_strategy"] == "hybrid"
+        assert run.strategy_decision_json["fallback_used"] is False
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["strategy_router_ms"] >= 0
+        assert "generation_ms" in run.latency_breakdown_json
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        dumped = str({"query_plan": run.query_plan_json, "decision": run.strategy_decision_json})
+        assert message not in dumped
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+
+
 def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

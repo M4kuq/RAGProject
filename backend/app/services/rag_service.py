@@ -56,6 +56,7 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
     VectorSearchClient,
 )
+from app.rag.router import StrategyRouter
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query
 from app.rag.strategy import (
     DEFAULT_RETRIEVAL_STRATEGY,
@@ -73,6 +74,8 @@ from app.rag.trace import (
     build_hybrid_score_breakdown,
     build_hybrid_strategy_decision,
     build_retrieval_settings_snapshot,
+    build_router_query_plan,
+    build_router_strategy_decision,
     build_sparse_query_plan,
     build_sparse_score_breakdown,
     build_sparse_strategy_decision,
@@ -148,6 +151,7 @@ class RagService:
         sparse_strategy: SparseRetrievalStrategy | None = None,
         hybrid_strategy: HybridRetrievalStrategy | None = None,
         query_plan_builder: QueryPlanBuilder | None = None,
+        strategy_router: StrategyRouter | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -159,6 +163,7 @@ class RagService:
         self.sparse_strategy = sparse_strategy or SparseRetrievalStrategy()
         self.hybrid_strategy = hybrid_strategy or HybridRetrievalStrategy()
         self.query_plan_builder = query_plan_builder or QueryPlanBuilder(settings)
+        self.strategy_router = strategy_router or StrategyRouter(settings)
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -171,38 +176,59 @@ class RagService:
         top_k = self._effective_top_k(payload.top_k)
         rerank_top_n = self._effective_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
-        strategy_type = payload.strategy
+        requested_strategy = payload.strategy
         supported_strategies = {
             RetrievalStrategy.DENSE,
             RetrievalStrategy.SPARSE,
             RetrievalStrategy.HYBRID,
+            RetrievalStrategy.AGENTIC_ROUTER,
         }
-        if strategy_type not in supported_strategies:
+        if requested_strategy not in supported_strategies:
             raise RagSearchPipelineError("strategy_not_enabled", 409)
-        if strategy_type == RetrievalStrategy.HYBRID and not self.settings.hybrid_enabled:
-            raise RagSearchPipelineError("strategy_not_enabled", 409)
-        if strategy_type == RetrievalStrategy.SPARSE:
-            if not self.settings.sparse_enabled:
-                raise RagSearchPipelineError("strategy_not_enabled", 409)
-        if strategy_type == RetrievalStrategy.HYBRID:
-            if _hybrid_uses_sparse(self.settings) and not self.settings.sparse_enabled:
-                raise RagSearchPipelineError("strategy_not_enabled", 409)
         query_hash = _query_hash(payload.query)
         query_plan_build = self.query_plan_builder.build(
             payload.query,
             filters=filters,
-            requested_strategy=strategy_type,
+            requested_strategy=requested_strategy,
         )
         retrieval_query = query_plan_build.retrieval_query
         latency_tracker = LatencyTracker()
+        router_decision = None
+        execution_strategy = requested_strategy
+        if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            with latency_tracker.span("strategy_router_ms"):
+                router_decision = self.strategy_router.route(
+                    query_plan=query_plan_build,
+                    requested_strategy=requested_strategy,
+                    request_kind="search",
+                )
+            execution_strategy = router_decision.execution_strategy
+            if not _is_executable_router_strategy(execution_strategy):
+                router_decision = self.strategy_router.fallback_decision(
+                    requested_strategy=requested_strategy,
+                    fallback_reason="execution_strategy_unavailable",
+                    reason_codes=["execution_strategy_unavailable", "fallback_dense"],
+                )
+                execution_strategy = router_decision.execution_strategy
+        else:
+            self._ensure_direct_strategy_enabled(requested_strategy)
         retrieval_settings = _retrieval_settings_snapshot(
             settings=self.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
             filters=filters,
-            strategy_type=strategy_type,
+            strategy_type=requested_strategy,
         )
-        if strategy_type == RetrievalStrategy.SPARSE:
+        if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            assert router_decision is not None
+            query_plan = build_router_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                execution_strategy=execution_strategy,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_router_strategy_decision(decision=router_decision)
+        elif requested_strategy == RetrievalStrategy.SPARSE:
             normalized_sparse_query = normalize_sparse_query(
                 retrieval_query,
                 max_terms=self.settings.sparse_max_query_terms,
@@ -214,7 +240,7 @@ class RagService:
                 plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_sparse_strategy_decision()
-        elif strategy_type == RetrievalStrategy.HYBRID:
+        elif requested_strategy == RetrievalStrategy.HYBRID:
             normalized_sparse_query = normalize_sparse_query(
                 retrieval_query,
                 max_terms=self.settings.sparse_max_query_terms,
@@ -241,7 +267,7 @@ class RagService:
             query_hash=query_hash,
             request_id=request_id,
             started_at=datetime.now(UTC),
-            strategy_type=strategy_type.value,
+            strategy_type=requested_strategy.value,
             query_plan_json=query_plan,
             strategy_decision_json=strategy_decision,
             retrieval_settings_json=retrieval_settings,
@@ -251,7 +277,8 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            if strategy_type == RetrievalStrategy.SPARSE:
+            retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
+            if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
                 result = self._retrieve_sparse(
                     db,
                     query=retrieval_query,
@@ -261,7 +288,7 @@ class RagService:
                     retrieval_run_id=run_id,
                     latency_tracker=latency_tracker,
                 )
-            elif strategy_type == RetrievalStrategy.HYBRID:
+            elif retrieval_execution_strategy == RetrievalStrategy.HYBRID:
                 result = self._retrieve_hybrid(
                     db,
                     query=retrieval_query,
@@ -280,6 +307,9 @@ class RagService:
                     filters=filters,
                     retrieval_run_id=run_id,
                     latency_tracker=latency_tracker,
+                    retrieval_source=RetrievalSource.FALLBACK_DENSE
+                    if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
+                    else RetrievalSource.DENSE,
                 )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
@@ -363,26 +393,60 @@ class RagService:
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
+        requested_strategy = payload.strategy
+        if requested_strategy not in {
+            RetrievalStrategy.DENSE,
+            RetrievalStrategy.AGENTIC_ROUTER,
+        }:
+            raise RagAskPipelineError("strategy_not_enabled", 409)
         query_hash = _query_hash(payload.message)
         query_plan_build = self.query_plan_builder.build(
             payload.message,
             filters=filters,
-            requested_strategy=DEFAULT_RETRIEVAL_STRATEGY,
+            requested_strategy=requested_strategy,
         )
         retrieval_query = query_plan_build.retrieval_query
         latency_tracker = LatencyTracker()
+        router_decision = None
+        execution_strategy = requested_strategy
+        if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            with latency_tracker.span("strategy_router_ms"):
+                router_decision = self.strategy_router.route(
+                    query_plan=query_plan_build,
+                    requested_strategy=requested_strategy,
+                    request_kind="ask",
+                )
+            execution_strategy = router_decision.execution_strategy
+            if not _is_executable_router_strategy(execution_strategy):
+                router_decision = self.strategy_router.fallback_decision(
+                    requested_strategy=requested_strategy,
+                    fallback_reason="execution_strategy_unavailable",
+                    reason_codes=["execution_strategy_unavailable", "fallback_dense"],
+                )
+                execution_strategy = router_decision.execution_strategy
         retrieval_settings = _retrieval_settings_snapshot(
             settings=self.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
             filters=filters,
+            strategy_type=requested_strategy,
         )
-        query_plan = build_default_dense_query_plan(
-            query_hash=query_hash,
-            filters=filters,
-            plan_metadata=query_plan_build.trace_metadata,
-        )
-        strategy_decision = build_default_dense_strategy_decision()
+        if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            assert router_decision is not None
+            query_plan = build_router_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                execution_strategy=execution_strategy,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_router_strategy_decision(decision=router_decision)
+        else:
+            query_plan = build_default_dense_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_default_dense_strategy_decision()
         now = datetime.now(UTC)
         try:
             user_message = self.chat_repository.create_message(
@@ -400,7 +464,7 @@ class RagService:
                 query_hash=query_hash,
                 request_id=request_id,
                 started_at=now,
-                strategy_type=DEFAULT_RETRIEVAL_STRATEGY.value,
+                strategy_type=requested_strategy.value,
                 query_plan_json=query_plan,
                 strategy_decision_json=strategy_decision,
                 retrieval_settings_json=retrieval_settings,
@@ -427,15 +491,40 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_and_rerank(
-                db,
-                query=retrieval_query,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
-                filters=filters,
-                retrieval_run_id=run_id,
-                latency_tracker=latency_tracker,
-            )
+            retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
+            if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
+                result = self._retrieve_sparse(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
+            elif retrieval_execution_strategy == RetrievalStrategy.HYBRID:
+                result = self._retrieve_hybrid(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
+            else:
+                result = self._retrieve_and_rerank(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                    retrieval_source=RetrievalSource.FALLBACK_DENSE
+                    if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
+                    else RetrievalSource.DENSE,
+                )
             if not result.selected_candidates:
                 self._mark_failed_safely(
                     db,
@@ -579,6 +668,7 @@ class RagService:
         filters: RetrievalFilters,
         retrieval_run_id: int,
         latency_tracker: LatencyTracker | None = None,
+        retrieval_source: RetrievalSource = RetrievalSource.DENSE,
     ) -> RetrievalPipelineResult:
         if latency_tracker is None:
             latency_tracker = LatencyTracker()
@@ -643,6 +733,7 @@ class RagService:
                 rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
                 final_rank=index,
                 selected_flag=index <= selected_count,
+                retrieval_source=retrieval_source,
             )
             for index, candidate in enumerate(ordered_candidates, start=1)
         ]
@@ -1003,6 +1094,20 @@ class RagService:
             raise RuntimeError("retrieval_run_missing")
         return run
 
+    def _ensure_direct_strategy_enabled(self, strategy_type: RetrievalStrategy) -> None:
+        if strategy_type == RetrievalStrategy.HYBRID:
+            if not self.settings.hybrid_enabled:
+                raise RagSearchPipelineError("strategy_not_enabled", 409)
+            if _hybrid_uses_sparse(self.settings) and not self.settings.sparse_enabled:
+                raise RagSearchPipelineError("strategy_not_enabled", 409)
+            return
+        if strategy_type == RetrievalStrategy.SPARSE:
+            if not self.settings.sparse_enabled:
+                raise RagSearchPipelineError("strategy_not_enabled", 409)
+            return
+        if strategy_type != RetrievalStrategy.DENSE:
+            raise RagSearchPipelineError("strategy_not_enabled", 409)
+
     def _mark_failed_safely(
         self,
         db: Session,
@@ -1074,6 +1179,23 @@ def _retrieval_filters(payload: RagSearchRequest | RagAskRequest) -> RetrievalFi
         logical_document_ids=tuple(payload.filters.logical_document_ids or ()),
         modality=payload.filters.modality,
     )
+
+
+def _retrieval_execution_strategy(strategy: RetrievalStrategy) -> RetrievalStrategy:
+    if strategy == RetrievalStrategy.FALLBACK_DENSE:
+        return RetrievalStrategy.DENSE
+    if strategy in {RetrievalStrategy.DENSE, RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}:
+        return strategy
+    return RetrievalStrategy.DENSE
+
+
+def _is_executable_router_strategy(strategy: RetrievalStrategy) -> bool:
+    return strategy in {
+        RetrievalStrategy.DENSE,
+        RetrievalStrategy.SPARSE,
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.FALLBACK_DENSE,
+    }
 
 
 def _query_hash(query: str) -> str:
@@ -1182,6 +1304,7 @@ def _run_item_input(
     rerank_order: int,
     final_rank: int,
     selected_flag: bool,
+    retrieval_source: RetrievalSource = RetrievalSource.DENSE,
 ) -> RetrievalRunItemInput:
     return RetrievalRunItemInput(
         document_chunk_id=candidate.chunk.document_chunk_id,
@@ -1191,13 +1314,14 @@ def _run_item_input(
         rerank_order=rerank_order,
         selected_flag=selected_flag,
         payload_snapshot=_payload_snapshot(candidate),
-        retrieval_source=RetrievalSource.DENSE.value,
+        retrieval_source=retrieval_source.value,
         score_breakdown_json=_score_breakdown(
             candidate,
             rerank_score=rerank_score,
             rerank_order=rerank_order,
             final_rank=final_rank,
             selected_flag=selected_flag,
+            retrieval_source=retrieval_source,
         ),
     )
 
@@ -1411,6 +1535,7 @@ def _score_breakdown(
     rerank_order: int,
     final_rank: int,
     selected_flag: bool,
+    retrieval_source: RetrievalSource = RetrievalSource.DENSE,
 ) -> dict[str, object]:
     return build_dense_score_breakdown(
         dense_score=candidate.retrieval_score,
@@ -1419,6 +1544,7 @@ def _score_breakdown(
         rerank_order=rerank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
+        retrieval_source=retrieval_source,
     )
 
 

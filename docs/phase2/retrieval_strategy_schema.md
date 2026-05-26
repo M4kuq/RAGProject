@@ -2,7 +2,7 @@
 
 ## RetrievalStrategy
 
-| value | PR-24 behavior | future owner |
+| value | PR-28 behavior | future owner |
 |---|---|---|
 | `dense` | default dense retrieval and `/rag/ask` strategy | PR-20/21/22 |
 | `sparse` | implemented for `/rag/search` standalone lexical retrieval | PR-23/25 |
@@ -11,14 +11,14 @@
 | `multi_query_hybrid` | schema-only value | PR-27+ |
 | `metadata_filtered` | schema-only value | PR-27+ |
 | `version_aware` | schema-only value | PR-27+ |
-| `agentic_router` | schema-only value | PR-28+ |
-| `fallback_dense` | schema-only value | PR-28+ |
+| `agentic_router` | explicit router request strategy for `/rag/search` and `/rag/ask` | PR-28 |
+| `fallback_dense` | safe dense fallback execution strategy for router failures/unavailable candidates | PR-28 |
 
 Python enum values and DB CHECK constraints must stay aligned.
 
 ## RetrievalSource
 
-`retrieval_run_items.retrieval_source` is item-level provenance. PR-21 stores `dense` metadata for the existing dense flow. PR-23 stores `sparse` for standalone lexical retrieval. PR-24 stores `hybrid` for dense+sparse fused retrieval. `fallback_dense` and `metadata_filter` are reserved for later PRs.
+`retrieval_run_items.retrieval_source` is item-level provenance. PR-21 stores `dense` metadata for the existing dense flow. PR-23 stores `sparse` for standalone lexical retrieval. PR-24 stores `hybrid` for dense+sparse fused retrieval. PR-28 stores `fallback_dense` when the router falls back to dense. `metadata_filter` remains reserved for later PRs.
 
 ## Trace DTO
 
@@ -29,6 +29,7 @@ The trace DTOs use `phase2.trace.v1`:
 - `LatencyBreakdown`
 - `RetrievalSettingsSnapshot`
 - `ScoreBreakdown`
+- `RouterDecisionTrace`
 
 They are JSON serializable and must not carry raw prompt, raw query, full context, raw chunk text, PII, secrets, tokens, or credentials.
 
@@ -48,6 +49,22 @@ PR-27 query analysis and planning extends `QueryPlanTrace` with safe planned-onl
 - `planner.safety_flags`
 
 Top-level summary copies are stored for Retrieval Debug UI rendering. The original user query preview is not persisted; derived previews are redacted and truncated. Candidate strategies are not executed until the Strategy Router PR.
+
+PR-28 router trace adds `phase2.router.v1` in `strategy_decision_json`:
+
+- `requested_strategy`
+- `selected_strategy`
+- `execution_strategy`
+- `decision_source`
+- `fallback_used`
+- `fallback_reason`
+- `router_enabled`
+- `confidence`
+- `reason_codes`
+- `disabled_candidates`
+- `safety_flags`
+
+For router-triggered runs, `retrieval_runs.strategy_type = "agentic_router"` and the executed strategy is read from `strategy_decision_json.execution_strategy`.
 
 PR-23 sparse trace adds:
 
@@ -89,4 +106,4 @@ These DTOs are strategy-aware and redaction-aware. Metric detail is limited to s
 
 ## Strategy Evaluation Boundary
 
-PR-22 stores strategy metadata but does not implement non-dense evaluation execution. PR-23 and PR-24 make sparse and hybrid executable for `/rag/search`; PR-25 owns dataset-wide Strategy Evaluation Runner execution.
+PR-22 stores strategy metadata but does not implement non-dense evaluation execution. PR-23 and PR-24 make sparse and hybrid executable for `/rag/search`; PR-25 owns dataset-wide Strategy Evaluation Runner execution. PR-28 does not add `agentic_router` to the evaluation runner; PR-30 owns agentic strategy evaluation.
