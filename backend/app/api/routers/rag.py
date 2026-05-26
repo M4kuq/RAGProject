@@ -20,14 +20,14 @@ from app.services.rag_service import (
     create_rag_service,
 )
 
-router = APIRouter(dependencies=[Depends(require_csrf)])
+router = APIRouter()
 
 
 def rag_search_service() -> RagService:
     return create_rag_service(get_settings())
 
 
-@router.post("/ask")
+@router.post("/ask", dependencies=[Depends(require_csrf)])
 def ask(
     payload: dict[str, Any],
     request: Request,
@@ -69,7 +69,7 @@ def ask(
     }
 
 
-@router.post("/search")
+@router.post("/search", dependencies=[Depends(require_csrf)])
 def search(
     payload: RagSearchRequest,
     request: Request,
@@ -81,6 +81,18 @@ def search(
         result = service.search(db, payload=payload, request_id=get_request_id(request))
     except RagSearchPipelineError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/retrieval-runs/{retrieval_run_id}")
+def retrieval_run_detail(
+    retrieval_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: RagService = Depends(rag_search_service),
+) -> dict[str, object]:
+    result = service.get_retrieval_run_detail(db, retrieval_run_id=retrieval_run_id)
     return success_response(result.model_dump(mode="json"), request)
 
 

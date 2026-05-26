@@ -13,6 +13,7 @@ import { EvaluationDetailPage } from "./evaluations/EvaluationDetailPage";
 import { EvaluationListPage } from "./evaluations/EvaluationListPage";
 import { JobDetailPage } from "./jobs/JobDetailPage";
 import { JobListPage } from "./jobs/JobListPage";
+import { RetrievalDebugPage } from "./retrieval-debug/RetrievalDebugPage";
 
 export function AdminLayout() {
   return (
@@ -47,6 +48,7 @@ function AdminShell() {
             element={<EvaluationDatasetDetailPage />}
           />
           <Route path="evaluations/:evaluationRunId" element={<EvaluationDetailPage />} />
+          <Route path="retrieval-debug" element={<RetrievalDebugPage />} />
           <Route path="documents" element={<DocumentListPage />} />
           <Route path="documents/review" element={<DocumentReviewPage />} />
           <Route path="documents/:logicalDocumentId" element={<DocumentDetailPage />} />

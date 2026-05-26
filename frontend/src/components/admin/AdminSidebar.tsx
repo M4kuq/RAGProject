@@ -4,6 +4,7 @@ const links = [
   { to: "/admin/documents", label: "Documents" },
   { to: "/admin/documents/review", label: "Review" },
   { to: "/admin/evaluations", label: "Evaluations" },
+  { to: "/admin/retrieval-debug", label: "Retrieval Debug" },
   { to: "/admin/jobs", label: "Jobs" }
 ];
 

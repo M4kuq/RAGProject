@@ -114,9 +114,23 @@ PR-25 adds:
 
 PR-25 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, or full dashboard charts.
 
+## PR-26 Retrieval Debug UI v2
+
+PR-26 adds:
+
+- admin route `/admin/retrieval-debug`
+- strategy selector for `dense`, `sparse`, and `hybrid`
+- disabled coming-soon display for router and multi-query strategies
+- safe trace display for query plan, strategy decision, retrieval settings, latency, and score summary
+- score breakdown and retrieval-run item tables with dense / sparse / fused / rerank scores
+- minimal strategy evaluation summary display from recent evaluation runs
+- backend read-only retrieval run detail endpoint for safe admin trace inspection
+
+PR-26 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+
 ## Non-goals
 
-PR-25 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, Retrieval Debug UI v2, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-26 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

@@ -94,6 +94,53 @@ class RetrievalScoreSummary(BaseModel):
     top1_rerank_score: float | None = None
 
 
+class RetrievalRunDebugSummary(BaseModel):
+    retrieval_run_id: int
+    origin_type: Literal["chat", "standalone"]
+    chat_session_id: int | None = None
+    request_message_id: int | None = None
+    status: Literal["running", "succeeded", "failed"]
+    strategy_type: RetrievalStrategy
+    error_code: str | None = None
+    query_hash: str | None = None
+    top_k: int | None = None
+    retrieval_score_summary: dict[str, object] | None = None
+    query_plan_json: dict[str, object] | None = None
+    strategy_decision_json: dict[str, object] | None = None
+    latency_breakdown_json: dict[str, object] | None = None
+    retrieval_settings_json: dict[str, object] | None = None
+    rerank_score_top1: float | None = None
+    answer_confidence: float | None = None
+    groundedness_score: float | None = None
+    confidence_label: Literal["High", "Medium", "Low"] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
+class RetrievalRunDebugItem(BaseModel):
+    retrieval_run_item_id: int
+    document_chunk_id: int
+    retrieval_score: float
+    rerank_score: float | None = None
+    rank_order: int
+    rerank_order: int | None = None
+    selected_flag: bool
+    retrieval_source: str | None = None
+    payload_snapshot: dict[str, object] | None = None
+    score_breakdown_json: dict[str, object] | None = None
+    source_label: str | None = None
+    page_from: int | None = None
+    page_to: int | None = None
+    old_version_flag: bool | None = None
+    created_at: datetime
+
+
+class RetrievalRunDebugResponse(BaseModel):
+    retrieval_run: RetrievalRunDebugSummary
+    items: list[RetrievalRunDebugItem]
+
+
 class RagSearchItem(BaseModel):
     retrieval_run_item_id: int
     document_chunk_id: int

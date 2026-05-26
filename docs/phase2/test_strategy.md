@@ -88,6 +88,16 @@
 - `strategy_metrics_summary_json` and the strategy comparison API aggregate metrics by strategy.
 - Metric detail JSON contains counts, ranks, units, and reason codes only; it does not contain raw prompt, full context, raw chunk text, PII, or secrets.
 
+## PR-26 Retrieval Debug UI v2 Tests
+
+- `GET /api/v1/rag/retrieval-runs/{retrieval_run_id}` is admin-only, read-only, and returns redacted trace/items.
+- The detail response excludes raw prompt, full context, raw chunk text, PII, token, secret, credential, API key, password, CSRF, session, and cookie values.
+- `/admin/retrieval-debug` is protected by the admin route guard.
+- The strategy selector exposes `dense`, `sparse`, and `hybrid`, while router and multi-query strategies are disabled as coming soon.
+- The debug form calls `/api/v1/rag/search` with the selected strategy and CSRF token.
+- The page displays run summary, query plan, strategy decision, retrieval settings, latency breakdown, score summary, score breakdown, retrieval run items, and latest strategy evaluation summary.
+- Frontend redaction helpers remove forbidden trace keys and secret-like assignment values before rendering.
+
 ## Checks
 
 - `ruff format --check .`

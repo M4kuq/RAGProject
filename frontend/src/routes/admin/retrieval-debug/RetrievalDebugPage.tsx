@@ -1,0 +1,533 @@
+import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { StatusBadge } from "../../../components/admin/StatusBadge";
+import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
+import { useEvaluationRuns } from "../../../features/evaluations/evaluationHooks";
+import type { StrategyComparisonMetric } from "../../../features/evaluations/evaluationTypes";
+import { formatUnknownValue, redactString, safeRecord } from "../../../features/retrievalDebug/redaction";
+import {
+  useRagDebugSearch,
+  useRetrievalRunDebugDetail
+} from "../../../features/retrievalDebug/retrievalDebugHooks";
+import type {
+  RagSearchDebugItem,
+  RetrievalRunDebugDetail,
+  RetrievalRunDebugItem,
+  SupportedRetrievalDebugStrategy
+} from "../../../features/retrievalDebug/retrievalDebugTypes";
+import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
+
+const SUPPORTED_STRATEGIES: Array<{ value: SupportedRetrievalDebugStrategy; label: string }> = [
+  { value: "dense", label: "dense" },
+  { value: "sparse", label: "sparse" },
+  { value: "hybrid", label: "hybrid" }
+];
+
+const FUTURE_STRATEGIES = [
+  "agentic_router",
+  "multi_query_dense",
+  "multi_query_hybrid",
+  "metadata_filtered",
+  "version_aware"
+];
+
+const LATENCY_KEYS = [
+  "total_ms",
+  "retrieval_ms",
+  "query_embedding_ms",
+  "qdrant_search_ms",
+  "sparse_search_ms",
+  "fusion_ms",
+  "rdb_final_check_ms",
+  "rerank_ms",
+  "retrieval_items_persist_ms",
+  "generation_ms",
+  "citation_build_ms",
+  "confidence_ms"
+];
+
+const SCORE_KEYS = ["dense_score", "sparse_score", "fused_score", "fusion_score", "rerank_score"];
+const EVALUATION_METRICS = [
+  "recall_at_k",
+  "mrr",
+  "no_context_rate",
+  "p95_latency",
+  "citation_coverage",
+  "groundedness"
+];
+
+type DisplayItem = {
+  key: string;
+  searchItem: RagSearchDebugItem | null;
+  detailItem: RetrievalRunDebugItem | null;
+};
+
+export function RetrievalDebugPage() {
+  const [query, setQuery] = useState("");
+  const [strategy, setStrategy] = useState<SupportedRetrievalDebugStrategy>("dense");
+  const [topK, setTopK] = useState(10);
+  const [rerankTopN, setRerankTopN] = useState(5);
+  const [formError, setFormError] = useState<string | null>(null);
+  const search = useRagDebugSearch();
+  const latestRunId = search.data?.retrieval_run_id ?? null;
+  const detail = useRetrievalRunDebugDetail(latestRunId);
+  const evaluations = useEvaluationRuns({ page: 1, page_size: 5 });
+
+  const displayItems = useMemo(
+    () => buildDisplayItems(search.data?.items ?? [], detail.data?.items ?? []),
+    [search.data?.items, detail.data?.items]
+  );
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      setFormError("Query is required.");
+      return;
+    }
+    setFormError(null);
+    const safeTopK = clampNumber(topK, 1, 20, 10);
+    const safeRerankTopN = clampNumber(rerankTopN, 1, 20, 5);
+    await search.mutateAsync({
+      query: trimmedQuery,
+      top_k: safeTopK,
+      rerank_top_n: safeRerankTopN,
+      strategy
+    });
+  }
+
+  return (
+    <main className="admin-main retrieval-debug-page">
+      <header className="page-header">
+        <div>
+          <h1>Retrieval Debug</h1>
+          <p className="muted">Run dense, sparse, and hybrid retrieval and inspect safe trace metadata.</p>
+        </div>
+        <button type="button" disabled={!latestRunId || detail.isFetching} onClick={() => void detail.refetch()}>
+          Refresh trace
+        </button>
+      </header>
+
+      <form className="admin-section retrieval-debug-form" onSubmit={submit}>
+        <label>
+          query
+          <textarea
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            maxLength={8000}
+            rows={4}
+            required
+          />
+        </label>
+        <label>
+          strategy
+          <select
+            value={strategy}
+            onChange={(event) => setStrategy(event.target.value as SupportedRetrievalDebugStrategy)}
+          >
+            {SUPPORTED_STRATEGIES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          top_k
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={topK}
+            onChange={(event) => setTopK(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          rerank_top_n
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={rerankTopN}
+            onChange={(event) => setRerankTopN(Number(event.target.value))}
+          />
+        </label>
+        <button type="submit" disabled={search.isPending}>
+          Run search
+        </button>
+        <div className="field-group unsupported-strategy-list">
+          coming soon
+          <span className="inline-options">
+            {FUTURE_STRATEGIES.map((item) => (
+              <button key={item} type="button" disabled title="Coming soon">
+                {item}
+              </button>
+            ))}
+          </span>
+        </div>
+      </form>
+
+      {formError ? <InlineAlert tone="error">{formError}</InlineAlert> : null}
+      {search.error ? <InlineAlert tone="error">{search.error.message}</InlineAlert> : null}
+      {search.isPending ? <LoadingState label="Running retrieval..." /> : null}
+
+      {search.data ? (
+        <>
+          <SearchResultSummary detail={detail.data} searchData={search.data} />
+          {detail.isLoading ? <LoadingState label="Loading trace..." /> : null}
+          {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
+          {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
+          <ScoreBreakdownTable items={displayItems} />
+          <RetrievalRunItemsTable items={displayItems} />
+        </>
+      ) : (
+        <EmptyState title="No debug run">Run a retrieval search to inspect trace and score breakdowns.</EmptyState>
+      )}
+
+      <EvaluationStrategySummaryPanel metrics={latestStrategyMetrics(evaluations.data?.items ?? [])} />
+    </main>
+  );
+}
+
+function SearchResultSummary({
+  detail,
+  searchData
+}: {
+  detail: RetrievalRunDebugDetail | undefined;
+  searchData: { retrieval_run_id: number; retrieval_score_summary: Record<string, unknown>; items: unknown[] };
+}) {
+  const run = detail?.retrieval_run;
+  const summary = safeRecord(run?.retrieval_score_summary ?? searchData.retrieval_score_summary);
+  return (
+    <section className="admin-section">
+      <h2>Run Summary</h2>
+      <dl className="detail-grid">
+        <Detail label="retrieval_run_id" value={`#${searchData.retrieval_run_id}`} />
+        <Detail label="status" value={run ? <StatusBadge status={run.status} /> : "succeeded"} />
+        <Detail label="strategy" value={run?.strategy_type ?? "N/A"} />
+        <Detail label="selected_count" value={formatUnknownValue(summary.selected_count)} />
+        <Detail
+          label="rdb_final_check_excluded"
+          value={formatUnknownValue(summary.excluded_by_rdb_check_count)}
+        />
+        <Detail label="fallback_used" value={formatUnknownValue(run?.strategy_decision_json?.fallback_used ?? false)} />
+        <Detail label="started" value={formatDate(run?.started_at)} />
+        <Detail label="finished" value={formatDate(run?.finished_at)} />
+        <Detail label="error" value={formatSafeText(run?.error_code ?? null, 80)} />
+      </dl>
+    </section>
+  );
+}
+
+function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail }) {
+  const run = detail.retrieval_run;
+  const queryPlan = safeRecord(run.query_plan_json);
+  const decision = safeRecord(run.strategy_decision_json);
+  const settings = safeRecord(run.retrieval_settings_json);
+  const latency = safeRecord(run.latency_breakdown_json);
+  const summary = safeRecord(run.retrieval_score_summary);
+
+  return (
+    <section className="admin-section retrieval-debug-grid">
+      <TraceCard title="Query Plan">
+        <dl className="detail-grid">
+          <Detail label="query_mode" value={formatUnknownValue(queryPlan.query_mode)} />
+          <Detail label="query_hash" value={shortHash(queryPlan.query_hash)} />
+          <Detail label="rewrite_applied" value={formatUnknownValue(queryPlan.rewrite_applied ?? false)} />
+          <Detail label="rewritten_query" value="N/A" />
+          <Detail label="sub_queries" value={formatUnknownValue(queryPlan.sub_query_count ?? 0)} />
+          <Detail
+            label="metadata_filter"
+            value={formatUnknownValue(queryPlan.metadata_filter_applied ?? false)}
+          />
+        </dl>
+        <SafeDetails record={queryPlan} />
+      </TraceCard>
+
+      <TraceCard title="Strategy Decision">
+        <dl className="detail-grid">
+          <Detail label="selected_strategy" value={formatUnknownValue(decision.selected_strategy)} />
+          <Detail label="decision_source" value={formatUnknownValue(decision.decision_source ?? "default")} />
+          <Detail label="router_enabled" value={formatUnknownValue(decision.router_enabled ?? false)} />
+          <Detail label="fallback_used" value={formatUnknownValue(decision.fallback_used ?? false)} />
+          <Detail label="fallback_strategy" value={formatUnknownValue(decision.fallback_strategy ?? "N/A")} />
+          <Detail label="reason_codes" value={formatUnknownValue(decision.reason_codes ?? [])} />
+        </dl>
+        <SafeDetails record={decision} />
+      </TraceCard>
+
+      <TraceCard title="Retrieval Settings">
+        <dl className="detail-grid">
+          <Detail label="top_k" value={formatUnknownValue(settings.top_k)} />
+          <Detail label="rerank_top_n" value={formatUnknownValue(settings.rerank_top_n)} />
+          <Detail label="embedding_provider" value={formatUnknownValue(settings.embedding_provider)} />
+          <Detail label="rerank_provider" value={formatUnknownValue(settings.rerank_provider)} />
+          <Detail label="fusion_method" value={formatUnknownValue(settings.fusion_method)} />
+          <Detail label="router_enabled" value={formatUnknownValue(settings.router_enabled ?? false)} />
+        </dl>
+        <SafeDetails record={settings} />
+      </TraceCard>
+
+      <TraceCard title="Latency Breakdown">
+        <table className="admin-table compact-table">
+          <tbody>
+            {LATENCY_KEYS.map((key) => (
+              <tr key={key}>
+                <th>{key}</th>
+                <td>{formatLatency(latency[key])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TraceCard>
+
+      <TraceCard title="Retrieval Score Summary">
+        <KeyValueTable record={summary} />
+      </TraceCard>
+    </section>
+  );
+}
+
+function ScoreBreakdownTable({ items }: { items: DisplayItem[] }) {
+  return (
+    <section className="admin-section">
+      <h2>Score Breakdown</h2>
+      <table className="admin-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Chunk</th>
+            <th>Source</th>
+            <th>dense</th>
+            <th>sparse</th>
+            <th>fusion</th>
+            <th>rerank</th>
+            <th>selected</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(({ detailItem, key, searchItem }) => {
+            const breakdown = safeRecord(detailItem?.score_breakdown_json);
+            return (
+              <tr key={key}>
+                <td>{formatUnknownValue(breakdown.final_rank ?? detailItem?.rank_order ?? searchItem?.rank_order)}</td>
+                <td>{detailItem?.document_chunk_id ?? searchItem?.document_chunk_id ?? "N/A"}</td>
+                <td>{formatDebugText(searchItem?.source_label ?? detailItem?.source_label ?? null, 48)}</td>
+                <td>{formatScore(breakdown.dense_score)}</td>
+                <td>{formatScore(breakdown.sparse_score)}</td>
+                <td>{formatScore(breakdown.fused_score ?? breakdown.fusion_score)}</td>
+                <td>{formatScore(breakdown.rerank_score ?? searchItem?.rerank_score)}</td>
+                <td>{formatUnknownValue(breakdown.selected_flag ?? detailItem?.selected_flag ?? searchItem?.selected_flag)}</td>
+              </tr>
+            );
+          })}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={8}>No retrieval items.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function RetrievalRunItemsTable({ items }: { items: DisplayItem[] }) {
+  return (
+    <section className="admin-section">
+      <h2>Retrieval Run Items</h2>
+      <table className="admin-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Chunk</th>
+            <th>Page</th>
+            <th>retrieval_source</th>
+            <th>rank_order</th>
+            <th>rerank_order</th>
+            <th>retrieval_score</th>
+            <th>snippet</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(({ detailItem, key, searchItem }) => (
+            <tr key={key}>
+              <td>{detailItem?.retrieval_run_item_id ?? searchItem?.retrieval_run_item_id ?? "N/A"}</td>
+              <td>{detailItem?.document_chunk_id ?? searchItem?.document_chunk_id ?? "N/A"}</td>
+              <td>{formatPage(searchItem?.page_from ?? detailItem?.page_from, searchItem?.page_to ?? detailItem?.page_to)}</td>
+              <td>{formatUnknownValue(detailItem?.retrieval_source ?? "N/A")}</td>
+              <td>{detailItem?.rank_order ?? searchItem?.rank_order ?? "N/A"}</td>
+              <td>{detailItem?.rerank_order ?? searchItem?.rerank_order ?? "N/A"}</td>
+              <td>{formatScore(detailItem?.retrieval_score ?? searchItem?.retrieval_score)}</td>
+              <td>{formatDebugText(searchItem?.snippet ?? null, 160)}</td>
+            </tr>
+          ))}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={8}>No retrieval items.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function EvaluationStrategySummaryPanel({ metrics }: { metrics: StrategyComparisonMetric[] }) {
+  const visibleMetrics = metrics.filter((metric) => EVALUATION_METRICS.includes(metric.metric_name));
+  return (
+    <section className="admin-section">
+      <h2>Evaluation Strategy Summary</h2>
+      {visibleMetrics.length ? (
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Metric</th>
+              <th>Average</th>
+              <th>p95</th>
+              <th>Count</th>
+              <th>Failed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleMetrics.map((metric) => (
+              <tr key={`${metric.strategy_type}-${metric.metric_name}`}>
+                <td>{metric.strategy_type}</td>
+                <td>{metric.metric_name}</td>
+                <td>{formatScore(metric.average)}</td>
+                <td>{formatScore(metric.p95)}</td>
+                <td>{metric.count}</td>
+                <td>{metric.failed_count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <EmptyState title="No strategy summary">
+          Strategy evaluation summary will be available after an evaluation run.
+        </EmptyState>
+      )}
+    </section>
+  );
+}
+
+function TraceCard({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <section className="trace-card">
+      <h2>{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function SafeDetails({ record }: { record: Record<string, unknown> }) {
+  if (!Object.keys(record).length) {
+    return <p className="muted">No safe trace fields.</p>;
+  }
+  return (
+    <details className="safe-json-details">
+      <summary>Safe fields</summary>
+      <KeyValueTable record={record} />
+    </details>
+  );
+}
+
+function KeyValueTable({ record }: { record: Record<string, unknown> }) {
+  const entries = Object.entries(safeRecord(record));
+  return (
+    <table className="admin-table compact-table">
+      <tbody>
+        {entries.map(([key, value]) => (
+          <tr key={key}>
+            <th>{key}</th>
+            <td>{formatUnknownValue(value)}</td>
+          </tr>
+        ))}
+        {entries.length === 0 ? (
+          <tr>
+            <td>No fields.</td>
+          </tr>
+        ) : null}
+      </tbody>
+    </table>
+  );
+}
+
+function buildDisplayItems(
+  searchItems: RagSearchDebugItem[],
+  detailItems: RetrievalRunDebugItem[]
+): DisplayItem[] {
+  if (!searchItems.length) {
+    return detailItems.map((detailItem) => ({
+      key: String(detailItem.retrieval_run_item_id),
+      detailItem,
+      searchItem: null
+    }));
+  }
+  return searchItems.map((searchItem) => {
+    const detailItem =
+      detailItems.find((item) => item.retrieval_run_item_id === searchItem.retrieval_run_item_id) ??
+      detailItems.find((item) => item.document_chunk_id === searchItem.document_chunk_id) ??
+      null;
+    return {
+      key: String(searchItem.retrieval_run_item_id),
+      detailItem,
+      searchItem
+    };
+  });
+}
+
+function latestStrategyMetrics(runs: Array<{ strategy_comparison: StrategyComparisonMetric[] }>) {
+  return runs.find((run) => run.strategy_comparison.length > 0)?.strategy_comparison ?? [];
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function formatScore(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "N/A";
+  }
+  return value.toFixed(3);
+}
+
+function formatLatency(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "N/A";
+  }
+  return `${value} ms`;
+}
+
+function formatPage(pageFrom: number | null | undefined, pageTo: number | null | undefined) {
+  if (pageFrom === null || pageFrom === undefined) {
+    return "N/A";
+  }
+  return pageTo && pageTo !== pageFrom ? `${pageFrom}-${pageTo}` : String(pageFrom);
+}
+
+function formatDebugText(value: string | null | undefined, maxLength: number) {
+  if (!value) {
+    return "N/A";
+  }
+  return truncateText(redactString(value, maxLength), maxLength);
+}
+
+function shortHash(value: unknown) {
+  if (typeof value !== "string" || value.length < 12) {
+    return "N/A";
+  }
+  return `${value.slice(0, 12)}...`;
+}

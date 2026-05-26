@@ -121,3 +121,6 @@ trace builder は forbidden key を除外し、secret/token/credential 形式、
 - PR-23/24 は `retrieval_source` と `score_breakdown_json` に sparse/fusion score を追加する。
 - PR-26 は Debug UI でこの safe trace を表示する。ただし raw prompt / raw chunk text / full context は表示しない。
 - PR-28/29 は `strategy_decision_json` と `query_plan_json` に router / agentic loop metadata を追加する。
+## PR-26 Debug UI Display Contract
+
+`GET /api/v1/rag/retrieval-runs/{retrieval_run_id}` exposes admin-only safe trace details for the Debug UI. The endpoint and frontend both apply redaction before display. Query plan, strategy decision, latency, retrieval settings, retrieval score summary, and score breakdown can be inspected, but raw prompt, full context, raw chunk text, PII, and secret-like values remain hidden.

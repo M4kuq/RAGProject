@@ -484,6 +484,86 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
+def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    csrf_token = _login(client)
+    search_response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "top_k": 5, "rerank_top_n": 1},
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert search_response.status_code == 200
+    retrieval_run_id = int(search_response.json()["data"]["retrieval_run_id"])
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, retrieval_run_id)
+        assert run is not None
+        run.query_plan_json = {
+            "schema_version": "phase2.trace.v1",
+            "query_hash": hashlib.sha256(b"alpha policy").hexdigest(),
+            "raw_prompt": "full prompt must not leak",
+            "safe_value": "OPENAI_API_KEY=sk-secret-value",
+        }
+        item = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .first()
+        )
+        assert item is not None
+        item.payload_snapshot = {
+            "source_label": "hand book.pdf",
+            "page_from": 1,
+            "content_text": "raw chunk text must not leak",
+            "session_token": "secret-token",
+        }
+        item.score_breakdown_json = {
+            "schema_version": "phase2.trace.v1",
+            "retrieval_source": "dense",
+            "dense_score": 0.91,
+            "rank_order": 1,
+            "selected_flag": True,
+            "raw_chunk_text": "raw chunk text must not leak",
+            "details": "DATABASE_PASSWORD=secret-value",
+        }
+        db.commit()
+
+    detail_response = client.get(f"/api/v1/rag/retrieval-runs/{retrieval_run_id}")
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()["data"]
+    assert detail["retrieval_run"]["retrieval_run_id"] == retrieval_run_id
+    assert detail["retrieval_run"]["origin_type"] == "standalone"
+    assert detail["retrieval_run"]["strategy_type"] == "dense"
+    assert detail["retrieval_run"]["query_plan_json"]["safe_value"] == "redacted"
+    assert "raw_prompt" not in detail["retrieval_run"]["query_plan_json"]
+    assert detail["items"][0]["source_label"] == "hand book.pdf"
+    assert detail["items"][0]["payload_snapshot"] == {
+        "source_label": "hand book.pdf",
+        "page_from": 1,
+    }
+    assert detail["items"][0]["score_breakdown_json"]["details"] == "redacted"
+    serialized = str(detail_response.json())
+    assert "full prompt must not leak" not in serialized
+    assert "raw chunk text must not leak" not in serialized
+    assert "secret-token" not in serialized
+    assert "secret-value" not in serialized
+
+    client.cookies.clear()
+    _login(client, email="viewer@example.com")
+    viewer_response = client.get(f"/api/v1/rag/retrieval-runs/{retrieval_run_id}")
+    assert viewer_response.status_code == 403
+    assert viewer_response.json()["error"]["code"] == "permission_denied"
+
+    client.cookies.clear()
+    _login(client, email="admin@example.com")
+    missing_response = client.get("/api/v1/rag/retrieval-runs/999999")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["error"]["code"] == "resource_not_found"
+
+
 def test_rag_search_sparse_success_persists_trace_and_score_breakdown(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

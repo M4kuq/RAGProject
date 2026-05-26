@@ -34,5 +34,9 @@ export const queryKeys = {
     dataset: (evaluationDatasetId: number) => ["evaluations", "dataset", evaluationDatasetId] as const,
     cases: (evaluationDatasetId: number, params: { page: number; page_size: number }) =>
       ["evaluations", "dataset", evaluationDatasetId, "cases", params] as const
+  },
+  retrievalDebug: {
+    all: ["retrievalDebug"] as const,
+    run: (retrievalRunId: number | null) => ["retrievalDebug", "run", retrievalRunId] as const
   }
 };

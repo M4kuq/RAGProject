@@ -7,13 +7,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import PurePosixPath
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import ClientMessageConflict, ConflictError, RequestInProgress
+from app.core.errors import (
+    ClientMessageConflict,
+    ConflictError,
+    RequestInProgress,
+    ResourceNotFound,
+)
 from app.db.models import ChatMessage, RetrievalRun, RetrievalRunItem, User
 from app.ingest.embedding import (
     EmbeddingAdapter,
@@ -59,6 +64,7 @@ from app.rag.strategy import (
 )
 from app.rag.trace import (
     LatencyTracker,
+    TraceRedactor,
     build_default_dense_query_plan,
     build_default_dense_strategy_decision,
     build_dense_score_breakdown,
@@ -88,6 +94,9 @@ from app.schemas.rag import (
     RagSearchItem,
     RagSearchRequest,
     RagSearchResponse,
+    RetrievalRunDebugItem,
+    RetrievalRunDebugResponse,
+    RetrievalRunDebugSummary,
     RetrievalScoreSummary,
 )
 from app.services.chat_service import ChatService
@@ -297,6 +306,21 @@ class RagService:
                 latency_tracker=latency_tracker,
             )
             raise
+
+    def get_retrieval_run_detail(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+    ) -> RetrievalRunDebugResponse:
+        run = self.repository.get_run(db, retrieval_run_id=retrieval_run_id)
+        if run is None:
+            raise ResourceNotFound()
+        items = self.repository.list_items_for_run(db, retrieval_run_id=retrieval_run_id)
+        return RetrievalRunDebugResponse(
+            retrieval_run=_retrieval_run_debug_summary(run),
+            items=[_retrieval_run_debug_item(item) for item in items],
+        )
 
     def ask(
         self,
@@ -1271,6 +1295,57 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
     return snapshot
 
 
+def _retrieval_run_debug_summary(run: RetrievalRun) -> RetrievalRunDebugSummary:
+    confidence_label = (
+        run.confidence_label if run.confidence_label in {"High", "Medium", "Low"} else None
+    )
+    return RetrievalRunDebugSummary(
+        retrieval_run_id=run.retrieval_run_id,
+        origin_type="chat" if run.chat_session_id is not None else "standalone",
+        chat_session_id=run.chat_session_id,
+        request_message_id=run.request_message_id,
+        status=run.status,
+        strategy_type=RetrievalStrategy(run.strategy_type),
+        error_code=run.error_code,
+        query_hash=run.query_hash,
+        top_k=run.top_k,
+        retrieval_score_summary=_safe_json_object(run.retrieval_score_summary),
+        query_plan_json=_safe_json_object(run.query_plan_json),
+        strategy_decision_json=_safe_json_object(run.strategy_decision_json),
+        latency_breakdown_json=_safe_json_object(run.latency_breakdown_json),
+        retrieval_settings_json=_safe_json_object(run.retrieval_settings_json),
+        rerank_score_top1=_optional_rounded_float(run.rerank_score_top1),
+        answer_confidence=_optional_rounded_float(run.answer_confidence),
+        groundedness_score=_optional_rounded_float(run.groundedness_score),
+        confidence_label=confidence_label,
+        started_at=_aware_utc(run.started_at) if run.started_at is not None else None,
+        finished_at=_aware_utc(run.finished_at) if run.finished_at is not None else None,
+        created_at=_aware_utc(run.created_at),
+    )
+
+
+def _retrieval_run_debug_item(item: RetrievalRunItem) -> RetrievalRunDebugItem:
+    payload_snapshot = _safe_json_object(item.payload_snapshot)
+    score_breakdown = _safe_json_object(item.score_breakdown_json)
+    return RetrievalRunDebugItem(
+        retrieval_run_item_id=item.retrieval_run_item_id,
+        document_chunk_id=item.document_chunk_id,
+        retrieval_score=_round_score(float(item.retrieval_score)),
+        rerank_score=_optional_rounded_float(item.rerank_score),
+        rank_order=item.rank_order,
+        rerank_order=item.rerank_order,
+        selected_flag=item.selected_flag,
+        retrieval_source=_safe_optional_string(item.retrieval_source, max_length=50),
+        payload_snapshot=payload_snapshot,
+        score_breakdown_json=score_breakdown,
+        source_label=_safe_snapshot_string(payload_snapshot, "source_label", max_length=255),
+        page_from=_safe_snapshot_int(payload_snapshot, "page_from"),
+        page_to=_safe_snapshot_int(payload_snapshot, "page_to"),
+        old_version_flag=_safe_snapshot_bool(payload_snapshot, "old_version_flag"),
+        created_at=_aware_utc(item.created_at),
+    )
+
+
 def _retrieval_settings_snapshot(
     *,
     settings: Settings,
@@ -1624,6 +1699,55 @@ def _decimal_score(value: float) -> Decimal:
 
 def _round_score(value: float) -> float:
     return round(float(value), 6)
+
+
+def _optional_rounded_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        return None
+    score = float(value)
+    if not math.isfinite(score):
+        return None
+    return _round_score(score)
+
+
+def _safe_json_object(value: dict[str, Any] | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return TraceRedactor.safe_dict(value)
+
+
+def _safe_optional_string(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    safe = TraceRedactor.safe_string(value, max_length=max_length)
+    return safe or None
+
+
+def _safe_snapshot_string(
+    payload_snapshot: dict[str, object] | None,
+    key: str,
+    *,
+    max_length: int,
+) -> str | None:
+    if payload_snapshot is None:
+        return None
+    return _safe_optional_string(payload_snapshot.get(key), max_length=max_length)
+
+
+def _safe_snapshot_int(payload_snapshot: dict[str, object] | None, key: str) -> int | None:
+    if payload_snapshot is None:
+        return None
+    value = payload_snapshot.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _safe_snapshot_bool(payload_snapshot: dict[str, object] | None, key: str) -> bool | None:
+    if payload_snapshot is None:
+        return None
+    value = payload_snapshot.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _add_optional(payload: dict[str, object], key: str, value: object) -> None:

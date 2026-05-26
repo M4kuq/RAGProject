@@ -144,6 +144,22 @@ class RetrievalRepository:
         statement = select(RetrievalRun).where(RetrievalRun.retrieval_run_id.in_(run_ids))
         return {run.retrieval_run_id: run for run in db.scalars(statement).all()}
 
+    def list_items_for_run(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+    ) -> list[RetrievalRunItem]:
+        statement = (
+            select(RetrievalRunItem)
+            .where(RetrievalRunItem.retrieval_run_id == retrieval_run_id)
+            .order_by(
+                RetrievalRunItem.rank_order.asc(),
+                RetrievalRunItem.retrieval_run_item_id.asc(),
+            )
+        )
+        return list(db.scalars(statement).all())
+
     def get_latest_run_for_request_message(
         self,
         db: Session,
