@@ -38,4 +38,6 @@ def downgrade() -> None:
         op.execute(
             "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts_english"
         )
-        op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts")
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts"
+        )
