@@ -71,6 +71,23 @@ class EvaluationMetricName(StrEnum):
     CONTEXT_PRECISION = "context_precision"
 
 
+PR25_ALLOWED_STRATEGIES = {
+    RetrievalStrategy.DENSE,
+    RetrievalStrategy.SPARSE,
+    RetrievalStrategy.HYBRID,
+}
+
+DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
+    EvaluationMetricName.RECALL_AT_K,
+    EvaluationMetricName.MRR,
+    EvaluationMetricName.CITATION_COVERAGE,
+    EvaluationMetricName.GROUNDEDNESS,
+    EvaluationMetricName.FAITHFULNESS,
+    EvaluationMetricName.NO_CONTEXT_RATE,
+    EvaluationMetricName.P95_LATENCY,
+)
+
+
 class MetricSpec(BaseModel):
     schema_version: Literal["phase2.evaluation.v1"] = EVALUATION_SCHEMA_VERSION
     metric_name: EvaluationMetricName
@@ -109,6 +126,18 @@ class StrategyMetricSummary(BaseModel):
     case_count: int = Field(default=0, ge=0)
     succeeded_count: int = Field(default=0, ge=0)
     failed_count: int = Field(default=0, ge=0)
+
+
+class StrategyComparisonMetric(BaseModel):
+    schema_version: Literal["phase2.evaluation.v1"] = EVALUATION_SCHEMA_VERSION
+    strategy_type: RetrievalStrategy
+    metric_name: EvaluationMetricName | str
+    average: float | None = None
+    p50: float | None = None
+    p95: float | None = None
+    count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    not_applicable_count: int = Field(default=0, ge=0)
 
 
 class EvaluationCaseSpec(BaseModel):
@@ -315,6 +344,14 @@ class EvaluationRunCreateRequest(BaseModel):
     evaluation_dataset_id: int | None = Field(default=None, ge=1)
     case_limit: int | None = Field(default=10, ge=1, le=50)
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
+    strategies: list[RetrievalStrategy] | None = Field(default=None, min_length=1, max_length=3)
+    metrics: list[EvaluationMetricName] = Field(
+        default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
+        min_length=1,
+        max_length=8,
+    )
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
 
     @field_validator("dataset_name")
@@ -323,13 +360,23 @@ class EvaluationRunCreateRequest(BaseModel):
         return _safe_key(value, field_name="dataset_name")
 
     @model_validator(mode="after")
-    def validate_fixture_dataset_name(self) -> EvaluationRunCreateRequest:
+    def validate_request(self) -> EvaluationRunCreateRequest:
         if self.evaluation_dataset_id is None and not _SAFE_FIXTURE_KEY_RE.fullmatch(
             self.dataset_name
         ):
             raise ValueError(
                 "dataset_name must use lowercase letters, digits, underscore or hyphen"
             )
+        selected_strategies = self.strategies or [self.strategy_type]
+        deduped: list[RetrievalStrategy] = []
+        for strategy in selected_strategies:
+            if strategy not in PR25_ALLOWED_STRATEGIES:
+                raise ValueError("strategy is not enabled for PR-25 evaluation runner")
+            if strategy not in deduped:
+                deduped.append(strategy)
+        self.strategies = deduped
+        self.strategy_type = deduped[0]
+        self.metrics = list(dict.fromkeys(self.metrics))
         return self
 
 
@@ -337,6 +384,7 @@ class EvaluationRunCreateResponse(BaseModel):
     evaluation_run_id: int
     job_id: int
     status: Literal["queued"]
+    strategies: list[RetrievalStrategy] = Field(default_factory=list)
 
 
 class EvaluationMetricResult(BaseModel):
@@ -375,12 +423,17 @@ class EvaluationRunSummary(BaseModel):
     evaluation_dataset_id: int | None = None
     dataset_name: str
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
+    strategies: list[RetrievalStrategy] = Field(
+        default_factory=lambda: [DEFAULT_RETRIEVAL_STRATEGY]
+    )
+    metric_names: list[str] = Field(default_factory=list)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
     status: EvaluationStatus
     case_count: int
     succeeded_count: int
     failed_count: int
     metric_summary: dict[str, float]
+    strategy_comparison: list[StrategyComparisonMetric] = Field(default_factory=list)
     strategy_metrics_summary_json: dict[str, object] | None = None
     error_code: str | None = None
     error_message: str | None = None
@@ -392,6 +445,12 @@ class EvaluationRunSummary(BaseModel):
 
 class EvaluationRunDetail(EvaluationRunSummary):
     items: list[EvaluationRunItemResponse] = Field(default_factory=list)
+
+
+class EvaluationStrategyComparisonResponse(BaseModel):
+    evaluation_run_id: int
+    strategies: list[RetrievalStrategy]
+    metrics: list[StrategyComparisonMetric]
 
 
 class PagedEvaluationRuns(BaseModel):

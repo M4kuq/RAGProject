@@ -74,11 +74,15 @@ The comparison key is:
 evaluation_dataset_id + strategy_type + metric_name
 ```
 
-PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`, and PR-24 makes hybrid search executable for `/rag/search`, but PR-25 still owns dataset-wide Strategy Evaluation Runner execution across dense/sparse/hybrid/agentic_router.
+PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`, and PR-24 makes hybrid search executable for `/rag/search`.
+
+PR-25 executes dataset-wide comparisons for dense / sparse / hybrid. Each case/strategy pair creates one `evaluation_run_items` row and one linked retrieval run. The aggregate comparison is stored in `evaluation_runs.strategy_metrics_summary_json` and exposed by the strategy comparison API.
+
+`agentic_router` is not executed in PR-25. `strategy_selection_accuracy` remains not-applicable until PR-30.
 
 ## CI Direction
 
-CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-22 validation.
+CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-25 validation.
 
 ## Redaction Rules
 

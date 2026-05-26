@@ -76,6 +76,18 @@
 - Dense `/rag/search`, sparse `/rag/search`, `/rag/ask`, and evaluation dataset regressions remain green.
 - Trace, response, and score breakdown do not include raw query, raw prompt, raw chunk text, full context, PII, or secrets.
 
+## PR-25 Strategy Evaluation Runner Tests
+
+- `EvaluationRunCreateRequest` accepts `strategies=["dense", "sparse", "hybrid"]` and rejects `agentic_router`.
+- Archived or empty persistent datasets cannot queue a run.
+- Worker execution creates one item per case per strategy.
+- Dense, sparse, and hybrid items link to strategy-specific `retrieval_runs`.
+- `evaluation_results` stores `recall_at_k`, `mrr`, `citation_coverage`, `groundedness`, `faithfulness`, `no_context_rate`, `p95_latency`, and not-applicable `strategy_selection_accuracy`.
+- Partial case failures leave the run succeeded with `failed_count` in the summary.
+- All case/strategy failures mark the run failed.
+- `strategy_metrics_summary_json` and the strategy comparison API aggregate metrics by strategy.
+- Metric detail JSON contains counts, ranks, units, and reason codes only; it does not contain raw prompt, full context, raw chunk text, PII, or secrets.
+
 ## Checks
 
 - `ruff format --check .`

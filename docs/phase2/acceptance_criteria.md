@@ -62,6 +62,18 @@
 - Hybrid disabled returns `strategy_not_enabled` without creating a retrieval run.
 - Dense `/rag/search`, sparse `/rag/search`, `/rag/ask`, and evaluation regressions still pass.
 
+## PR-25
+
+- Admin can queue evaluation runs with `strategies=["dense", "sparse", "hybrid"]`.
+- `agentic_router` is rejected or marked disabled for PR-25 execution.
+- The runner creates one item per active case per strategy.
+- Each item links to a strategy-specific retrieval run.
+- Results store `recall_at_k`, `mrr`, `citation_coverage`, `groundedness`, `faithfulness`, `no_context_rate`, `p95_latency`, and not-applicable `strategy_selection_accuracy`.
+- `strategy_metrics_summary_json` stores per-strategy aggregates.
+- The strategy comparison API returns per-strategy metric summaries.
+- Existing default dense evaluation runs still work.
+- External LLM judge, heavy model downloads, CI workflow scheduling, QueryAnalyzer, StrategyRouter, and Agentic Retrieval Loop remain out of scope.
+
 ## Security
 
 The following must not be stored in dataset, case, metric detail, trace, score breakdown, logs, or normal responses:
@@ -75,9 +87,8 @@ The following must not be stored in dataset, case, metric detail, trace, score b
 Evaluation case `question` is allowed only as a safe evaluation input. It must not be a full prompt or contain PII/secrets.
 Sparse and hybrid response snippets are bounded display snippets. Raw chunk text is never stored in trace or score breakdown.
 
-## Out of Scope for PR-24
+## Out of Scope for PR-25
 
-- Strategy Evaluation Runner
 - QueryAnalyzer / QueryPlanner
 - Agentic Router
 - Agentic Retrieval Loop

@@ -19,6 +19,10 @@ export type EvaluationRunCreateRequest = {
   evaluation_dataset_id?: number | null;
   case_limit: number | null;
   strategy_type?: RetrievalStrategy;
+  strategies?: RetrievalStrategy[];
+  metrics?: string[];
+  top_k?: number | null;
+  rerank_top_n?: number | null;
   trigger_type?: EvaluationTriggerType;
 };
 
@@ -26,6 +30,7 @@ export type EvaluationRunCreateResponse = {
   evaluation_run_id: number;
   job_id: number;
   status: "queued";
+  strategies: RetrievalStrategy[];
 };
 
 export type EvaluationMetricResult = {
@@ -64,12 +69,15 @@ export type EvaluationRunSummary = {
   evaluation_dataset_id: number | null;
   dataset_name: string;
   strategy_type: RetrievalStrategy;
+  strategies: RetrievalStrategy[];
+  metric_names: string[];
   trigger_type: EvaluationTriggerType;
   status: EvaluationStatus;
   case_count: number;
   succeeded_count: number;
   failed_count: number;
   metric_summary: Record<string, number>;
+  strategy_comparison: StrategyComparisonMetric[];
   strategy_metrics_summary_json: Record<string, unknown> | null;
   error_code: string | null;
   error_message: string | null;
@@ -81,6 +89,18 @@ export type EvaluationRunSummary = {
 
 export type EvaluationRunDetail = EvaluationRunSummary & {
   items: EvaluationRunItem[];
+};
+
+export type StrategyComparisonMetric = {
+  schema_version: "phase2.evaluation.v1";
+  strategy_type: RetrievalStrategy;
+  metric_name: string;
+  average: number | null;
+  p50: number | null;
+  p95: number | null;
+  count: number;
+  failed_count: number;
+  not_applicable_count: number;
 };
 
 export type PagedEvaluationRuns = {

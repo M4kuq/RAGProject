@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid.
 
 ## PR Plan
 
@@ -100,9 +100,23 @@ PR-24 adds:
 
 `/rag/ask` remains default dense in PR-24. QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, Debug UI v2, Strategy Evaluation Runner, LangSmith export, and SentenceTransformers experiments remain later PRs.
 
+## PR-25 Strategy Evaluation Runner
+
+PR-25 adds:
+
+- `POST /api/v1/evaluations/runs` strategy lists via `strategies`
+- one evaluation item per case per strategy
+- dense / sparse / hybrid execution through the existing safe retrieval path
+- deterministic `recall_at_k`, `mrr`, `citation_coverage`, `groundedness`, `faithfulness`, `no_context_rate`, and `p95_latency`
+- `strategy_selection_accuracy` as not-applicable until `agentic_router`
+- `GET /api/v1/evaluations/runs/{evaluation_run_id}/strategy-comparison`
+- minimal Evaluation UI display for selected strategies and strategy summaries
+
+PR-25 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, or full dashboard charts.
+
 ## Non-goals
 
-PR-24 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, Retrieval Debug UI v2, Strategy Evaluation Runner, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-25 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, Retrieval Debug UI v2, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

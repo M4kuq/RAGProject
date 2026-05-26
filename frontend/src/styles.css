@@ -320,8 +320,21 @@ textarea {
 }
 
 .filter-bar label,
+.filter-bar .field-group,
 .upload-form label {
   display: grid;
+  gap: 4px;
+}
+
+.inline-options {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.inline-options label {
+  align-items: center;
+  display: flex;
   gap: 4px;
 }
 

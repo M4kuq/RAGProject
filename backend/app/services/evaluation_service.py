@@ -31,6 +31,7 @@ from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
 from app.schemas.evaluations import (
     DATASET_MANIFEST_SCHEMA_VERSION,
+    DEFAULT_EVALUATION_METRICS,
     EVALUATION_SCHEMA_VERSION,
     EvaluationCaseCreateRequest,
     EvaluationCaseResponse,
@@ -49,7 +50,9 @@ from app.schemas.evaluations import (
     EvaluationRunItemResponse,
     EvaluationRunSummary,
     EvaluationStatus,
+    EvaluationStrategyComparisonResponse,
     MetricSpec,
+    StrategyComparisonMetric,
 )
 
 SCORE_QUANT = Decimal("0.000001")
@@ -144,6 +147,7 @@ class EvaluationRagService(Protocol):
         *,
         question: str,
         request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult: ...
@@ -179,11 +183,22 @@ class EvaluationService:
                 db,
                 evaluation_dataset_id=payload.evaluation_dataset_id,
             )
-            if dataset is None or dataset.status != "active":
+            if dataset is None:
                 raise ResourceNotFound()
+            if dataset.status != "active":
+                raise ValidationFailed({"evaluation_dataset_id": "dataset is archived"})
+            active_case_count = self.repository.count_cases(
+                db,
+                evaluation_dataset_id=payload.evaluation_dataset_id,
+                status="active",
+            )
+            if active_case_count < 1:
+                raise ValidationFailed({"evaluation_dataset_id": "dataset has no active cases"})
             dataset_name = dataset.dataset_name
 
-        strategy_type = payload.strategy_type.value
+        strategies = [strategy.value for strategy in _selected_strategies(payload)]
+        metrics = [metric.value for metric in payload.metrics]
+        strategy_type = strategies[0]
         trigger_type = payload.trigger_type.value
         run = self.repository.create_run(
             db,
@@ -192,10 +207,18 @@ class EvaluationService:
             evaluation_dataset_id=payload.evaluation_dataset_id,
             case_limit=payload.case_limit,
             strategy_type=strategy_type,
+            strategies=strategies,
+            metrics=metrics,
+            top_k=payload.top_k,
+            rerank_top_n=payload.rerank_top_n,
             trigger_type=trigger_type,
             retrieval_settings_json=_retrieval_settings_snapshot(
                 strategy_type=strategy_type,
+                strategies=strategies,
+                metrics=metrics,
                 case_limit=payload.case_limit,
+                top_k=payload.top_k,
+                rerank_top_n=payload.rerank_top_n,
             ),
         )
         job = self.job_repository.create_job(
@@ -209,6 +232,10 @@ class EvaluationService:
                 "evaluation_dataset_id": payload.evaluation_dataset_id,
                 "case_limit": payload.case_limit,
                 "strategy_type": strategy_type,
+                "strategies": strategies,
+                "metrics": metrics,
+                "top_k": payload.top_k,
+                "rerank_top_n": payload.rerank_top_n,
                 "trigger_type": trigger_type,
             },
             created_by=user.user_id,
@@ -221,6 +248,7 @@ class EvaluationService:
             evaluation_run_id=run.evaluation_run_id,
             job_id=job.job_id,
             status="queued",
+            strategies=[cast(RetrievalStrategy, strategy) for strategy in strategies],
         )
 
     def create_dataset(
@@ -593,6 +621,19 @@ class EvaluationService:
             ],
         )
 
+    def get_strategy_comparison(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationStrategyComparisonResponse:
+        detail = self.get_run_detail(db, evaluation_run_id=evaluation_run_id)
+        return EvaluationStrategyComparisonResponse(
+            evaluation_run_id=evaluation_run_id,
+            strategies=detail.strategies,
+            metrics=detail.strategy_comparison,
+        )
+
     def run_job(
         self,
         db: Session,
@@ -626,63 +667,61 @@ class EvaluationService:
             db.commit()
             raise
 
-        if run.strategy_type != RetrievalStrategy.DENSE.value:
-            run = self._require_run(db, evaluation_run_id)
-            self.repository.mark_run_failed(
-                db,
-                run=run,
-                error_code="strategy_runner_not_implemented",
-                error_message=None,
-                finished_at=datetime.now(UTC),
-            )
-            db.commit()
-            raise EvaluationFixtureError("strategy_runner_not_implemented")
-
         succeeded_count = 0
         failed_count = 0
         try:
             rag_service = self.rag_service_factory(self.settings, db)
-            strategy_type = cast(str, config["strategy_type"])
+            strategies = _strategy_values(config)
+            top_k = cast(int | None, config["top_k"])
+            rerank_top_n = cast(int | None, config["rerank_top_n"])
             for loaded_case in cases:
-                item = self.repository.create_item(
-                    db,
-                    evaluation_run_id=evaluation_run_id,
-                    status="running",
-                    strategy_type=strategy_type,
-                    evaluation_case_id=loaded_case.evaluation_case_id,
-                    case_key=loaded_case.case_key,
-                )
-                item_id = item.evaluation_run_item_id
-                db.commit()
-                try:
-                    case_result = self._run_case(
+                for strategy_type in strategies:
+                    item = self.repository.create_item(
                         db,
-                        rag_service=rag_service,
-                        case=loaded_case.case,
-                        request_id=request_id,
+                        evaluation_run_id=evaluation_run_id,
+                        status="running",
+                        strategy_type=strategy_type,
+                        evaluation_case_id=loaded_case.evaluation_case_id,
+                        case_key=loaded_case.case_key,
                     )
-                except Exception:
-                    db.rollback()
-                    failed_count += 1
-                    self._store_case_failure(
+                    item_id = item.evaluation_run_item_id
+                    db.commit()
+                    try:
+                        case_result = self._run_case(
+                            db,
+                            rag_service=rag_service,
+                            case=loaded_case.case,
+                            strategy_type=RetrievalStrategy(strategy_type),
+                            request_id=_case_request_id(
+                                request_id,
+                                case_key=loaded_case.case_key,
+                                strategy_type=strategy_type,
+                            ),
+                            top_k=top_k,
+                            rerank_top_n=rerank_top_n,
+                        )
+                    except Exception:
+                        db.rollback()
+                        failed_count += 1
+                        self._store_case_failure(
+                            db,
+                            item_id=item_id,
+                            case=loaded_case.case,
+                            strategy_type=strategy_type,
+                        )
+                        db.commit()
+                        continue
+                    if case_result["status"] == "succeeded":
+                        succeeded_count += 1
+                    else:
+                        failed_count += 1
+                    self._store_case_result(
                         db,
-                        item_id=item_id,
-                        case=loaded_case.case,
+                        item=item,
+                        case_result=case_result,
                         strategy_type=strategy_type,
                     )
                     db.commit()
-                    continue
-                if case_result["status"] == "succeeded":
-                    succeeded_count += 1
-                else:
-                    failed_count += 1
-                self._store_case_result(
-                    db,
-                    item=item,
-                    case_result=case_result,
-                    strategy_type=strategy_type,
-                )
-                db.commit()
         except Exception:
             db.rollback()
             run = self._require_run(db, evaluation_run_id)
@@ -697,13 +736,25 @@ class EvaluationService:
             raise
 
         run = self._require_run(db, evaluation_run_id)
+        summary = self._summary(db, run)
         run.strategy_metrics_summary_json = _strategy_metrics_summary_json(
-            strategy_type=run.strategy_type,
-            metric_summary=self._summary(db, run).metric_summary,
+            strategies=_strategy_values(_config(run)),
+            strategy_comparison=summary.strategy_comparison,
+            metric_summary=summary.metric_summary,
             case_count=len(cases),
             succeeded_count=succeeded_count,
             failed_count=failed_count,
         )
+        if succeeded_count == 0:
+            self.repository.mark_run_failed(
+                db,
+                run=run,
+                error_code="all_cases_failed",
+                error_message=None,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            raise EvaluationFixtureError("all_cases_failed")
         self.repository.mark_run_succeeded(db, run=run, finished_at=datetime.now(UTC))
         db.commit()
         return {
@@ -720,14 +771,31 @@ class EvaluationService:
         *,
         rag_service: EvaluationRagService,
         case: EvaluationCase,
+        strategy_type: RetrievalStrategy,
         request_id: str | None,
+        top_k: int | None,
+        rerank_top_n: int | None,
     ) -> dict[str, object]:
         started = time.perf_counter()
-        rag_result = rag_service.evaluate_question(
-            db,
-            question=case.question,
-            request_id=request_id,
-        )
+        strategy_runner = getattr(rag_service, "evaluate_strategy", None)
+        if callable(strategy_runner):
+            rag_result = strategy_runner(
+                db,
+                question=case.question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+        else:
+            rag_result = rag_service.evaluate_question(
+                db,
+                question=case.question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
         latency_ms = int((time.perf_counter() - started) * 1000)
         metrics = calculate_metrics(
             EvaluationMetricInputs(
@@ -736,6 +804,8 @@ class EvaluationService:
                 citations=rag_result.citations,
                 confidence=rag_result.confidence,
                 retrieval_summary=rag_result.retrieval_score_summary,
+                retrieved_items=rag_result.retrieved_items,
+                latency_ms=latency_ms,
                 error_code=rag_result.error_code,
             )
         )
@@ -830,24 +900,29 @@ class EvaluationService:
             db,
             evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
         )
+        config = _config(run)
         metric_summary = _metric_summary(results_by_item)
+        strategy_comparison = _strategy_comparison(items, results_by_item)
         job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
         planned_case_count = (
             self._planned_case_count(db, run) if run.status in {"queued", "running"} else 0
         )
-        case_count = max(len(items), planned_case_count)
+        case_count = max(_unique_case_count(items), planned_case_count)
         return EvaluationRunSummary(
             evaluation_run_id=run.evaluation_run_id,
             job_id=job.job_id if job is not None else None,
             evaluation_dataset_id=run.evaluation_dataset_id,
-            dataset_name=cast(str, _config(run)["dataset_name"]),
+            dataset_name=cast(str, config["dataset_name"]),
             strategy_type=cast(RetrievalStrategy, run.strategy_type),
+            strategies=[cast(RetrievalStrategy, strategy) for strategy in _strategy_values(config)],
+            metric_names=cast(list[str], config["metrics"]),
             trigger_type=run.trigger_type,
             status=cast(EvaluationStatus, run.status),
             case_count=case_count,
             succeeded_count=sum(1 for item in items if item.status == "succeeded"),
             failed_count=sum(1 for item in items if item.status == "failed"),
             metric_summary=metric_summary,
+            strategy_comparison=strategy_comparison,
             strategy_metrics_summary_json=run.strategy_metrics_summary_json,
             error_code=run.error_code,
             error_message=redact_error_message(run.error_message) if run.error_message else None,
@@ -1010,7 +1085,23 @@ def _config(run: EvaluationRun) -> dict[str, object]:
     evaluation_dataset_id = config.get("evaluation_dataset_id")
     case_limit = config.get("case_limit")
     strategy_type = config.get("strategy_type") or run.strategy_type
+    raw_strategies = config.get("strategies")
+    raw_metrics = config.get("metrics")
+    top_k = config.get("top_k")
+    rerank_top_n = config.get("rerank_top_n")
     trigger_type = config.get("trigger_type") or run.trigger_type
+    strategies = (
+        [str(strategy) for strategy in raw_strategies if isinstance(strategy, str)]
+        if isinstance(raw_strategies, list)
+        else []
+    )
+    if not strategies and isinstance(strategy_type, str):
+        strategies = [strategy_type]
+    metrics = (
+        [str(metric) for metric in raw_metrics if isinstance(metric, str)]
+        if isinstance(raw_metrics, list)
+        else [metric.value for metric in DEFAULT_EVALUATION_METRICS]
+    )
     return {
         "dataset_name": dataset_name if isinstance(dataset_name, str) else "phase1_smoke",
         "evaluation_dataset_id": (
@@ -1018,6 +1109,10 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         ),
         "case_limit": case_limit if isinstance(case_limit, int) else None,
         "strategy_type": strategy_type if isinstance(strategy_type, str) else "dense",
+        "strategies": strategies,
+        "metrics": metrics,
+        "top_k": top_k if isinstance(top_k, int) else None,
+        "rerank_top_n": rerank_top_n if isinstance(rerank_top_n, int) else None,
         "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
     }
 
@@ -1040,7 +1135,9 @@ def _result_input(metric: MetricValue, *, strategy_type: str) -> EvaluationResul
     return EvaluationResultInput(
         metric_name=metric.metric_name,
         metric_score=_decimal_score(metric.metric_score),
-        metric_value=_decimal_metric_value(metric.metric_score),
+        metric_value=_decimal_metric_value(
+            metric.metric_value if metric.metric_value is not None else metric.metric_score
+        ),
         metric_label=metric.metric_label,
         details_json=detail,
         metric_detail_json=detail,
@@ -1086,27 +1183,138 @@ def _find_metric(metrics: list[MetricValue], name: str) -> MetricValue | None:
     return next((metric for metric in metrics if metric.metric_name == name), None)
 
 
+def _selected_strategies(payload: EvaluationRunCreateRequest) -> list[RetrievalStrategy]:
+    return payload.strategies or [payload.strategy_type]
+
+
+def _strategy_values(config: dict[str, object]) -> list[str]:
+    raw = config.get("strategies")
+    values = [str(strategy) for strategy in raw] if isinstance(raw, list) else []
+    enabled = {
+        RetrievalStrategy.DENSE.value,
+        RetrievalStrategy.SPARSE.value,
+        RetrievalStrategy.HYBRID.value,
+    }
+    filtered = [strategy for strategy in values if strategy in enabled]
+    return filtered or [DEFAULT_RETRIEVAL_STRATEGY.value]
+
+
+def _case_request_id(
+    request_id: str | None,
+    *,
+    case_key: str,
+    strategy_type: str,
+) -> str | None:
+    if request_id is None:
+        return None
+    return f"{request_id}:{strategy_type}:{case_key}"[:255]
+
+
+def _unique_case_count(items: list[EvaluationRunItem]) -> int:
+    keys = {
+        item.case_key or f"id:{item.evaluation_case_id}"
+        for item in items
+        if item.case_key or item.evaluation_case_id is not None
+    }
+    return len(keys) if keys else len(items)
+
+
 def _metric_summary(results_by_item: dict[int, list[EvaluationResult]]) -> dict[str, float]:
     values: dict[str, list[float]] = {}
     for results in results_by_item.values():
         for result in results:
-            if result.metric_score is None or result.metric_name == "case_metadata":
+            if result.metric_name == "case_metadata":
                 continue
-            values.setdefault(result.metric_name, []).append(float(result.metric_score))
+            value = _result_numeric_value(result)
+            if value is None:
+                continue
+            values.setdefault(result.metric_name, []).append(value)
     return {
-        metric_name: round(sum(scores) / len(scores), 6)
+        metric_name: (
+            _percentile(scores, 0.95)
+            if metric_name == "p95_latency"
+            else round(sum(scores) / len(scores), 6)
+        )
         for metric_name, scores in sorted(values.items())
         if scores
     }
+
+
+def _strategy_comparison(
+    items: list[EvaluationRunItem],
+    results_by_item: dict[int, list[EvaluationResult]],
+) -> list[StrategyComparisonMetric]:
+    items_by_id = {item.evaluation_run_item_id: item for item in items}
+    values: dict[tuple[str, str], list[float]] = {}
+    not_applicable: dict[tuple[str, str], int] = {}
+    failed_count: dict[str, int] = {}
+    for item in items:
+        if item.status == "failed":
+            failed_count[item.strategy_type] = failed_count.get(item.strategy_type, 0) + 1
+    for item_id, results in results_by_item.items():
+        item_for_result = items_by_id.get(item_id)
+        if item_for_result is None:
+            continue
+        for result in results:
+            if result.metric_name == "case_metadata":
+                continue
+            key = (item_for_result.strategy_type, result.metric_name)
+            value = _result_numeric_value(result)
+            if value is None:
+                not_applicable[key] = not_applicable.get(key, 0) + 1
+                continue
+            values.setdefault(key, []).append(value)
+
+    metrics: list[StrategyComparisonMetric] = []
+    all_keys = sorted(set(values).union(not_applicable))
+    for strategy_type, metric_name in all_keys:
+        series = sorted(values.get((strategy_type, metric_name), []))
+        average = round(sum(series) / len(series), 6) if series else None
+        metrics.append(
+            StrategyComparisonMetric(
+                strategy_type=cast(RetrievalStrategy, strategy_type),
+                metric_name=metric_name,
+                average=average,
+                p50=_percentile(series, 0.50) if series else None,
+                p95=_percentile(series, 0.95) if series else None,
+                count=len(series),
+                failed_count=failed_count.get(strategy_type, 0),
+                not_applicable_count=not_applicable.get((strategy_type, metric_name), 0),
+            )
+        )
+    return metrics
+
+
+def _result_numeric_value(result: EvaluationResult) -> float | None:
+    if result.metric_name == "p95_latency":
+        return float(result.metric_value) if result.metric_value is not None else None
+    if result.metric_score is not None:
+        return float(result.metric_score)
+    if result.metric_value is not None:
+        return float(result.metric_value)
+    return None
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 6)
+    index = int(round((len(ordered) - 1) * percentile))
+    return round(ordered[min(max(index, 0), len(ordered) - 1)], 6)
 
 
 def _metric_summary_json(metrics: list[MetricValue]) -> dict[str, object]:
     return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
         "metrics": {
-            metric.metric_name: metric.metric_score
+            metric.metric_name: (
+                metric.metric_value if metric.metric_value is not None else metric.metric_score
+            )
             for metric in metrics
-            if metric.metric_score is not None and metric.metric_name != "case_metadata"
+            if (metric.metric_score is not None or metric.metric_value is not None)
+            and metric.metric_name != "case_metadata"
         },
     }
 
@@ -1122,29 +1330,64 @@ def _latency_breakdown_json(latency_ms: int | None) -> dict[str, object]:
 def _retrieval_settings_snapshot(
     *,
     strategy_type: str,
+    strategies: list[str],
+    metrics: list[str],
     case_limit: int | None,
+    top_k: int | None,
+    rerank_top_n: int | None,
 ) -> dict[str, object]:
     return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
         "strategy_type": strategy_type,
+        "strategies": strategies,
+        "metrics": metrics,
         "case_limit": case_limit,
-        "runner_implementation": "phase1_dense_fixture",
-        "strategy_runner_enabled": strategy_type == DEFAULT_RETRIEVAL_STRATEGY.value,
+        "top_k": top_k,
+        "rerank_top_n": rerank_top_n,
+        "runner_implementation": "phase2_strategy_evaluation_runner",
+        "strategy_runner_enabled": True,
     }
 
 
 def _strategy_metrics_summary_json(
     *,
-    strategy_type: str,
+    strategies: list[str],
+    strategy_comparison: list[StrategyComparisonMetric],
     metric_summary: dict[str, float],
     case_count: int,
     succeeded_count: int,
     failed_count: int,
 ) -> dict[str, object]:
+    by_strategy: dict[str, dict[str, object]] = {}
+    for comparison in strategy_comparison:
+        entry = by_strategy.setdefault(
+            comparison.strategy_type.value,
+            {
+                "metric_summary": {},
+                "case_count": case_count,
+                "succeeded_count": 0,
+                "failed_count": comparison.failed_count,
+            },
+        )
+        succeeded_value = entry.get("succeeded_count")
+        failed_value = entry.get("failed_count")
+        entry["succeeded_count"] = max(
+            succeeded_value if isinstance(succeeded_value, int) else 0,
+            comparison.count,
+        )
+        entry["failed_count"] = max(
+            failed_value if isinstance(failed_value, int) else 0,
+            comparison.failed_count,
+        )
+        if comparison.average is not None:
+            cast(dict[str, float], entry["metric_summary"])[str(comparison.metric_name)] = (
+                comparison.average
+            )
     return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
-        "strategy_type": strategy_type,
+        "strategies": strategies,
         "metric_summary": metric_summary,
+        "strategy_metrics": by_strategy,
         "case_count": case_count,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,
@@ -1159,6 +1402,8 @@ def _loaded_case_from_model(case: EvaluationCaseModel) -> LoadedEvaluationCase:
             expected_keywords=tuple(_string_list(case.expected_keywords)),
             required_citation=case.required_citation,
             expected_answer=case.expected_answer,
+            expected_document_ids=tuple(_int_list(case.expected_document_ids)),
+            expected_chunk_ids=tuple(_int_list(case.expected_chunk_ids)),
         ),
         evaluation_case_id=case.evaluation_case_id,
         case_key=case.case_key,

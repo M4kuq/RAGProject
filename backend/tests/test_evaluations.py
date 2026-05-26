@@ -36,11 +36,16 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.evaluation.fixtures import EvaluationCase, load_evaluation_cases
-from app.evaluation.metrics import EvaluationMetricInputs, calculate_metrics
+from app.evaluation.metrics import (
+    EvaluationMetricInputs,
+    RetrievedEvaluationItem,
+    calculate_metrics,
+)
 from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import (
     EvaluationCaseCreateRequest,
@@ -313,6 +318,9 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
 
     listing = client.get("/api/v1/evaluations/runs")
     detail = client.get(f"/api/v1/evaluations/runs/{body['data']['evaluation_run_id']}")
+    comparison = client.get(
+        f"/api/v1/evaluations/runs/{body['data']['evaluation_run_id']}/strategy-comparison"
+    )
     missing = client.get("/api/v1/evaluations/runs/999")
 
     assert listing.status_code == 200
@@ -321,6 +329,8 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
     assert detail.status_code == 200
     assert detail.json()["data"]["case_count"] == 1
     assert detail.json()["data"]["items"] == []
+    assert comparison.status_code == 200
+    assert comparison.json()["data"]["strategies"] == ["dense"]
     assert missing.status_code == 404
     assert "token" not in listing.text.lower()
     assert "secret" not in detail.text.lower()
@@ -451,8 +461,20 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
         assert run.retrieval_settings_json == {
             "schema_version": "phase2.evaluation.v1",
             "strategy_type": "dense",
+            "strategies": ["dense"],
+            "metrics": [
+                "recall_at_k",
+                "mrr",
+                "citation_coverage",
+                "groundedness",
+                "faithfulness",
+                "no_context_rate",
+                "p95_latency",
+            ],
             "case_limit": 1,
-            "runner_implementation": "phase1_dense_fixture",
+            "top_k": None,
+            "rerank_top_n": None,
+            "runner_implementation": "phase2_strategy_evaluation_runner",
             "strategy_runner_enabled": True,
         }
 
@@ -691,6 +713,329 @@ def test_evaluation_service_runs_persistent_dataset_cases() -> None:
         engine.dispose()
 
 
+def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="compare_strategy",
+                    description="Compare dense sparse hybrid.",
+                    version="v1",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="compare_case",
+                    question="Which retrieval strategy finds the target chunk?",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid"],
+                    metrics=[
+                        "recall_at_k",
+                        "mrr",
+                        "citation_coverage",
+                        "groundedness",
+                        "faithfulness",
+                        "no_context_rate",
+                        "p95_latency",
+                    ],
+                    top_k=5,
+                    rerank_top_n=3,
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            assert created.strategies == [
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-strategy-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            assert run.strategy_metrics_summary_json is not None
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == ["dense", "sparse", "hybrid"]
+            assert all(item.retrieval_run_id is not None for item in items)
+            retrieval_runs = db.scalars(
+                select(RetrievalRun).order_by(RetrievalRun.retrieval_run_id)
+            ).all()
+            assert [retrieval.strategy_type for retrieval in retrieval_runs] == [
+                "dense",
+                "sparse",
+                "hybrid",
+            ]
+            results = db.scalars(select(EvaluationResult)).all()
+            assert {result.metric_name for result in results} >= {
+                "recall_at_k",
+                "mrr",
+                "citation_coverage",
+                "groundedness",
+                "faithfulness",
+                "no_context_rate",
+                "p95_latency",
+                "strategy_selection_accuracy",
+            }
+            assert all(
+                "target chunk" not in json.dumps(result.metric_detail_json).lower()
+                for result in results
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.strategies == [
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            ]
+            comparison = service.get_strategy_comparison(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+            )
+            assert {metric.strategy_type for metric in comparison.metrics} >= {
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            }
+            dense_recall = next(
+                metric
+                for metric in comparison.metrics
+                if metric.strategy_type == RetrievalStrategy.DENSE
+                and metric.metric_name == "recall_at_k"
+            )
+            assert dense_recall.average == 1.0
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_executes_real_dense_sparse_hybrid_retrieval_paths() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=user.user_id,
+                title="Strategy runner source",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="b" * 64,
+                status="ready",
+                is_active=True,
+                file_name="strategy-runner.md",
+                mime_type="text/markdown",
+                file_size_bytes=100,
+                created_by=user.user_id,
+            )
+            db.add(version)
+            db.flush()
+            chunk = DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=0,
+                chunk_hash=hashlib.sha256(b"alpha target retrieval").hexdigest(),
+                content_text="alpha target retrieval qdrant deterministic citation",
+                modality="text",
+            )
+            db.add(chunk)
+            db.flush()
+
+            service = EvaluationService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    rerank_provider="fake",
+                    sparse_enabled=True,
+                    hybrid_enabled=True,
+                )
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="real_strategy_paths",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="real_paths_case",
+                    question="alpha target retrieval",
+                    expected_keywords=["alpha", "target"],
+                    expected_document_ids=[logical.logical_document_id],
+                    expected_chunk_ids=[chunk.document_chunk_id],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid"],
+                    case_limit=1,
+                    top_k=5,
+                    rerank_top_n=3,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    rerank_provider="fake",
+                    sparse_enabled=True,
+                    hybrid_enabled=True,
+                )
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-real-strategy-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == ["dense", "sparse", "hybrid"]
+            retrieval_runs = db.scalars(
+                select(RetrievalRun).order_by(RetrievalRun.retrieval_run_id)
+            ).all()
+            assert [run.strategy_type for run in retrieval_runs] == [
+                "dense",
+                "sparse",
+                "hybrid",
+            ]
+            assert all(run.query_plan_json for run in retrieval_runs)
+            assert "alpha target retrieval" not in json.dumps(
+                [run.query_plan_json for run in retrieval_runs]
+            )
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_strategy_runner_treats_no_context_as_metric_outcome() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _NoContextStrategyRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="no_context_strategy_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="no_context_case",
+                    question="zzzznevermatchlexical",
+                    expected_keywords=["zzzznevermatchlexical"],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["sparse"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _NoContextStrategyRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-no-context-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            items = db.scalars(select(EvaluationRunItem)).all()
+            assert len(items) == 1
+            assert items[0].status == "succeeded"
+            assert items[0].error_code is None
+            metadata = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.evaluation_run_item_id == items[0].evaluation_run_item_id,
+                    EvaluationResult.metric_name == "case_metadata",
+                )
+            )
+            assert metadata is not None
+            assert metadata.details_json is not None
+            assert metadata.details_json["error_code"] == "no_context_found"
+            no_context = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.evaluation_run_item_id == items[0].evaluation_run_item_id,
+                    EvaluationResult.metric_name == "no_context_rate",
+                )
+            )
+            assert no_context is not None
+            assert no_context.metric_score is not None
+            assert float(no_context.metric_score) == 1.0
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["failed_count"] == 0
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_handler_processes_job_and_case_failure() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -752,44 +1097,32 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
-def test_evaluation_handler_fails_job_for_unsupported_strategy() -> None:
+def test_evaluation_create_rejects_agentic_router_strategy() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
             user = _seed_admin(db)
             service = EvaluationService(settings=Settings(app_env="test"))
+            with pytest.raises(ValueError):
+                EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategy_type="agentic_router",
+                )
             created = service.create_run(
                 db,
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategy_type="hybrid",
+                    strategies=["dense", "sparse", "hybrid"],
                 ),
                 user=user,
             )
-
-        handler = EvaluationRunHandler(
-            session_factory=session_factory,
-            service_factory=lambda: EvaluationService(settings=Settings(app_env="test")),
-        )
-        result = handler.handle(
-            JobExecutionContext(
-                job_id=11,
-                job_type="evaluation_run",
-                target_type="evaluation_run",
-                target_id=created.evaluation_run_id,
-                payload={"evaluation_run_id": created.evaluation_run_id},
-                worker_instance_id="worker-1",
-            )
-        )
-
-        assert result.status == "failed"
-        assert result.error_code == "strategy_runner_not_implemented"
-        with session_factory() as db:
             run = db.get(EvaluationRun, created.evaluation_run_id)
             assert run is not None
-            assert run.status == "failed"
-            assert run.error_code == "strategy_runner_not_implemented"
+            assert run.status == "queued"
+            assert run.metrics_config is not None
+            assert run.metrics_config["strategies"] == ["dense", "sparse", "hybrid"]
     finally:
         engine.dispose()
 
@@ -904,14 +1237,17 @@ class _FakeEvaluationRagService:
         *,
         question: str,
         request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
         retrieval_run = _create_fake_retrieval_run(
             db,
             question=question,
             status="succeeded",
             request_id=request_id,
+            strategy_type=strategy_type.value,
         )
         return RagEvaluationResult(
             retrieval_run_id=retrieval_run.retrieval_run_id,
@@ -943,6 +1279,7 @@ class _FakeEvaluationRagService:
                 selected_count=1,
                 excluded_by_rdb_check_count=0,
             ),
+            retrieved_items=[],
             context_sources_for_safety=[],
         )
 
@@ -957,6 +1294,7 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
         *,
         question: str,
         request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
@@ -968,6 +1306,7 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
                 status="failed",
                 request_id=request_id,
                 error_code="no_context_found",
+                strategy_type=strategy_type.value,
             )
             return RagEvaluationResult(
                 retrieval_run_id=retrieval_run.retrieval_run_id,
@@ -976,6 +1315,7 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
                 citations=[],
                 confidence=None,
                 retrieval_score_summary=None,
+                retrieved_items=[],
                 context_sources_for_safety=[],
                 error_code="no_context_found",
             )
@@ -983,8 +1323,101 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
             db,
             question=question,
             request_id=request_id,
+            strategy_type=strategy_type,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
+        )
+
+
+class _NoContextStrategyRagService(_FakeEvaluationRagService):
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+        )
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="",
+            citations=[],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=0,
+                post_filter_candidate_count=0,
+                selected_count=0,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[],
+            context_sources_for_safety=[],
+            error_code="no_context_found",
+        )
+
+
+class _StrategyAwareFakeEvaluationRagService(_FakeEvaluationRagService):
+    def evaluate_question(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+        )
+        snippet = f"{strategy_type.value} safe target citation preview."
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=100,
+                    source_label="strategy-seed.md",
+                    snippet=snippet,
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=100,
+                    logical_document_id=10,
+                    rank_order=1,
+                    snippet=snippet,
+                )
+            ],
+            context_sources_for_safety=[],
         )
 
 
@@ -999,6 +1432,7 @@ def _create_fake_retrieval_run(
     status: str,
     request_id: str | None,
     error_code: str | None = None,
+    strategy_type: str = "dense",
 ) -> RetrievalRun:
     now = datetime.now(UTC)
     run = RetrievalRun(
@@ -1019,6 +1453,7 @@ def _create_fake_retrieval_run(
         groundedness_score=0.9 if status == "succeeded" else None,
         confidence_label="High" if status == "succeeded" else None,
         request_id=request_id,
+        strategy_type=strategy_type,
     )
     db.add(run)
     db.flush()

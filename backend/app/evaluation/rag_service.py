@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
+from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun
+from app.evaluation.metrics import RetrievedEvaluationItem
 from app.ingest.embedding import (
     EmbeddingAdapterError,
     FakeEmbeddingAdapter,
@@ -30,8 +31,16 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
     VectorSearchClient,
 )
-from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
+from app.schemas.rag import (
+    RagAskCitation,
+    RagAskConfidence,
+    RagSearchItem,
+    RagSearchRequest,
+    RetrievalScoreSummary,
+)
 from app.services.rag_service import (
+    RagSearchPipelineError,
     RagService,
     _assemble_context,
     _citation_input,
@@ -47,12 +56,13 @@ from app.services.rag_service import (
 
 @dataclass(frozen=True)
 class RagEvaluationResult:
-    retrieval_run_id: int
+    retrieval_run_id: int | None
     status: Literal["succeeded", "failed"]
     answer_text: str
     citations: list[RagAskCitation]
     confidence: RagAskConfidence | None
     retrieval_score_summary: RetrievalScoreSummary | None
+    retrieved_items: list[RetrievedEvaluationItem]
     context_sources_for_safety: list[str]
     error_code: str | None = None
 
@@ -81,9 +91,20 @@ class EvaluationRagQuestionService:
         *,
         question: str,
         request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
+        if strategy_type != DEFAULT_RETRIEVAL_STRATEGY:
+            return self.evaluate_strategy(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
         effective_top_k = self.service._effective_ask_top_k(top_k)
         effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
         run = self.service.repository.create_standalone_run(
@@ -182,6 +203,7 @@ class EvaluationRagQuestionService:
                 citations=[_citation_response(record) for record in citation_records],
                 confidence=_confidence_response(run),
                 retrieval_score_summary=result.summary,
+                retrieved_items=[],
                 context_sources_for_safety=[item.text for item in context_items],
             )
         except CitationBuildError:
@@ -219,6 +241,88 @@ class EvaluationRagQuestionService:
                 error_code="internal_error",
             )
             raise
+
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        try:
+            response = self.service.search(
+                db,
+                payload=RagSearchRequest(
+                    query=question,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    strategy=strategy_type,
+                ),
+                request_id=request_id,
+            )
+            citations = [
+                _citation_from_search_item(index, item)
+                for index, item in enumerate(response.items, start=1)
+            ]
+            retrieved_items = [_retrieved_item_from_search_item(item) for item in response.items]
+            return RagEvaluationResult(
+                retrieval_run_id=response.retrieval_run_id,
+                status="succeeded",
+                answer_text="",
+                citations=citations,
+                confidence=None,
+                retrieval_score_summary=response.retrieval_score_summary,
+                retrieved_items=retrieved_items,
+                context_sources_for_safety=[],
+                error_code=None if response.items else "no_context_found",
+            )
+        except RagSearchPipelineError as exc:
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                exc.error_code,
+            )
+
+
+def _citation_from_search_item(index: int, item: RagSearchItem) -> RagAskCitation:
+    return RagAskCitation(
+        citation_id=index,
+        local_citation_id=index,
+        document_chunk_id=item.document_chunk_id,
+        source_label=item.source_label,
+        snippet=item.snippet,
+        page_from=item.page_from,
+        page_to=item.page_to,
+        old_version_flag=False,
+    )
+
+
+def _retrieved_item_from_search_item(item: RagSearchItem) -> RetrievedEvaluationItem:
+    return RetrievedEvaluationItem(
+        document_chunk_id=item.document_chunk_id,
+        logical_document_id=_safe_int(item.payload_snapshot.get("logical_document_id")),
+        rank_order=item.rank_order,
+        snippet=item.snippet,
+    )
+
+
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+def _latest_retrieval_run_id(db: Session, *, request_id: str | None) -> int | None:
+    if request_id is None:
+        return None
+    run = db.scalar(
+        select(RetrievalRun)
+        .where(RetrievalRun.request_id == request_id)
+        .order_by(RetrievalRun.created_at.desc(), RetrievalRun.retrieval_run_id.desc())
+    )
+    return run.retrieval_run_id if run is not None else None
 
 
 class DatabaseVectorSearchClient(VectorSearchClient):
@@ -335,7 +439,7 @@ def _dot_product(left: Sequence[float], right: Sequence[float]) -> float:
 
 
 def _failed_evaluation_result(
-    retrieval_run_id: int,
+    retrieval_run_id: int | None,
     error_code: str,
     *,
     retrieval_score_summary: RetrievalScoreSummary | None = None,
@@ -347,6 +451,7 @@ def _failed_evaluation_result(
         citations=[],
         confidence=None,
         retrieval_score_summary=retrieval_score_summary,
+        retrieved_items=[],
         context_sources_for_safety=[],
         error_code=error_code,
     )

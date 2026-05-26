@@ -128,4 +128,6 @@ Evaluation datasets, cases, metrics, logs, and responses must not store:
 
 ## Handoff
 
-PR-25 will use these datasets and strategy fields to run dense / sparse / hybrid comparisons. PR-30 will use the same schema for agentic router evaluation and failure dataset promotion. PR-31 will add CI/scheduled evaluation workflows.
+PR-25 uses these datasets and strategy fields to run dense / sparse / hybrid comparisons. It stores one `evaluation_run_items` row per case per strategy, links each item to a strategy-specific `retrieval_runs` row, and writes deterministic metric rows to `evaluation_results`.
+
+PR-25 keeps `strategy_selection_accuracy` not-applicable because `agentic_router` is not implemented yet. PR-30 will use the same schema for agentic router evaluation and failure dataset promotion. PR-31 will add CI/scheduled evaluation workflows.

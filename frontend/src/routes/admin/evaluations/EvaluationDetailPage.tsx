@@ -54,8 +54,8 @@ export function EvaluationDetailPage() {
             </dd>
           </div>
           <div>
-            <dt>Strategy</dt>
-            <dd>{run.data.strategy_type}</dd>
+            <dt>Strategies</dt>
+            <dd>{run.data.strategies.length ? run.data.strategies.join(", ") : run.data.strategy_type}</dd>
           </div>
           <div>
             <dt>Trigger</dt>
@@ -112,11 +112,47 @@ export function EvaluationDetailPage() {
       </section>
 
       <section className="admin-section">
+        <h2>Strategy Comparison</h2>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Metric</th>
+              <th>Average</th>
+              <th>p50</th>
+              <th>p95</th>
+              <th>Count</th>
+              <th>Failed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {run.data.strategy_comparison.map((metric) => (
+              <tr key={`${metric.strategy_type}-${metric.metric_name}`}>
+                <td>{metric.strategy_type}</td>
+                <td>{metric.metric_name}</td>
+                <td>{formatScore(metric.average)}</td>
+                <td>{formatScore(metric.p50)}</td>
+                <td>{formatScore(metric.p95)}</td>
+                <td>{metric.count}</td>
+                <td>{metric.failed_count}</td>
+              </tr>
+            ))}
+            {run.data.strategy_comparison.length === 0 ? (
+              <tr>
+                <td colSpan={7}>No strategy comparison yet.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="admin-section">
         <h2>Case Results</h2>
         <table className="admin-table">
           <thead>
             <tr>
               <th>Case</th>
+              <th>Strategy</th>
               <th>Status</th>
               <th>Faithfulness</th>
               <th>Groundedness</th>
@@ -130,6 +166,7 @@ export function EvaluationDetailPage() {
             {run.data.items.map((item) => (
               <tr key={item.evaluation_run_item_id}>
                 <td>{item.case_key ?? item.case_id ?? `item-${item.evaluation_run_item_id}`}</td>
+                <td>{item.strategy_type}</td>
                 <td>
                   <StatusBadge status={item.status} />
                 </td>
@@ -143,7 +180,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.items.length === 0 ? (
               <tr>
-                <td colSpan={8}>No case results yet.</td>
+                <td colSpan={9}>No case results yet.</td>
               </tr>
             ) : null}
           </tbody>

@@ -18,7 +18,7 @@ export function EvaluationListPage() {
   const [datasetName, setDatasetName] = useState("phase1_smoke");
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
-  const [strategyType, setStrategyType] = useState<RetrievalStrategy>("dense");
+  const [strategies, setStrategies] = useState<RetrievalStrategy[]>(["dense"]);
   const [message, setMessage] = useState<string | null>(null);
   const params = useMemo(
     () => ({
@@ -47,7 +47,8 @@ export function EvaluationListPage() {
       dataset_name: selectedDataset?.dataset_name ?? (datasetName.trim() || "phase1_smoke"),
       evaluation_dataset_id: evaluationDatasetId,
       case_limit: safeCaseLimit,
-      strategy_type: strategyType,
+      strategy_type: strategies[0] ?? "dense",
+      strategies,
       trigger_type: "manual"
     });
     setMessage(`Evaluation run #${result.evaluation_run_id} queued as job #${result.job_id}.`);
@@ -86,18 +87,26 @@ export function EvaluationListPage() {
             ))}
           </select>
         </label>
-        <label>
-          strategy
-          <select
-            value={strategyType}
-            onChange={(event) => setStrategyType(event.target.value as RetrievalStrategy)}
-          >
-            <option value="dense">dense</option>
-            <option value="sparse">sparse</option>
-            <option value="hybrid">hybrid</option>
-            <option value="agentic_router">agentic_router</option>
-          </select>
-        </label>
+        <div className="field-group">
+          strategies
+          <span className="inline-options">
+            {(["dense", "sparse", "hybrid"] as RetrievalStrategy[]).map((strategy) => (
+              <label key={strategy}>
+                <input
+                  type="checkbox"
+                  checked={strategies.includes(strategy)}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...strategies, strategy]
+                      : strategies.filter((item) => item !== strategy);
+                    setStrategies(next.length ? next : ["dense"]);
+                  }}
+                />
+                {strategy}
+              </label>
+            ))}
+          </span>
+        </div>
         <label>
           case_limit
           <input
@@ -143,7 +152,7 @@ export function EvaluationListPage() {
                     <Link to={`/admin/evaluations/${run.evaluation_run_id}`}>#{run.evaluation_run_id}</Link>
                   </td>
                   <td>{truncateText(run.dataset_name, 32)}</td>
-                  <td>{run.strategy_type}</td>
+                  <td>{run.strategies.length ? run.strategies.join(", ") : run.strategy_type}</td>
                   <td>
                     <StatusBadge status={run.status} />
                   </td>
