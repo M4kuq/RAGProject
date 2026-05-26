@@ -819,6 +819,9 @@ CREATE INDEX ix_document_chunks_version_index
 CREATE INDEX ix_document_chunks_content_fts
     ON document_chunks
     USING GIN (to_tsvector('simple', content_text));
+CREATE INDEX ix_document_chunks_content_fts_english
+    ON document_chunks
+    USING GIN (to_tsvector('english', content_text));
 
 CREATE INDEX ix_jobs_status_priority_created
     ON jobs(status, priority ASC, created_at ASC);

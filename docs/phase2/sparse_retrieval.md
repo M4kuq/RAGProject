@@ -49,8 +49,8 @@ Flow:
 
 1. Create a standalone `retrieval_runs` row with `strategy_type = "sparse"`.
 2. Store a safe query plan trace with `query_hash` and normalized term count.
-3. Run sparse lexical search over `document_chunks`.
-4. Reuse the existing RDB final check.
+3. Run sparse lexical search over `document_chunks`, pre-filtering to active logical documents and ready active versions before ranking and `LIMIT`.
+4. Reuse the existing RDB final check as a defense-in-depth validation.
 5. Persist `retrieval_run_items` with `retrieval_source = "sparse"`.
 6. Persist `score_breakdown_json` with `sparse_score`, `rank_order`, `final_rank`, and `selected_flag`.
 7. Mark the run `succeeded`, including safe latency and settings trace.
@@ -59,7 +59,7 @@ Sparse 0-result searches return `200 OK` with `items=[]`.
 
 ## RDB Final Check
 
-PR-23 reuses the existing final check. Only candidates that satisfy all conditions are returned:
+PR-23 applies the same eligibility conditions before sparse ranking and `LIMIT`, then reuses the existing final check. Only candidates that satisfy all conditions are returned:
 
 - chunk exists
 - `document_versions.status = 'ready'`
@@ -68,7 +68,7 @@ PR-23 reuses the existing final check. Only candidates that satisfy all conditio
 - requested modality matches
 - requested logical document filter matches, when provided
 
-Archived documents, inactive versions, failed versions, and wrong-modality chunks are excluded after lexical candidate retrieval.
+Archived documents, inactive versions, failed versions, and wrong-modality chunks are excluded before sparse ranking/limit so invalid high-scoring lexical matches cannot hide valid active matches. The final check remains in place to catch stale or inconsistent candidates.
 
 ## Score Semantics
 

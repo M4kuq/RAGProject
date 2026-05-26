@@ -39,7 +39,7 @@
 - Sparse retrieval runs save `retrieval_runs.strategy_type = sparse`.
 - Sparse run items save `retrieval_run_items.retrieval_source = sparse`.
 - Sparse score breakdown saves `sparse_score`, rank metadata, and selection flag only.
-- Existing RDB final check excludes archived logical documents, inactive versions, failed versions, missing chunks, and wrong modality.
+- Sparse ranking/limit pre-filters active logical documents and ready active versions; the existing RDB final check remains a defense-in-depth guard for archived logical documents, inactive versions, failed versions, missing chunks, and wrong modality.
 - Sparse 0-result returns `200 OK` with `items=[]`.
 - Sparse failure marks the run failed with safe trace.
 - Dense `/rag/search` and `/rag/ask` regressions still pass.

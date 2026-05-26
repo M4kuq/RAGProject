@@ -973,6 +973,11 @@ Index(
     func.to_tsvector(literal_column("'simple'"), DocumentChunk.content_text),
     postgresql_using="gin",
 ).ddl_if(dialect="postgresql")
+Index(
+    "ix_document_chunks_content_fts_english",
+    func.to_tsvector(literal_column("'english'"), DocumentChunk.content_text),
+    postgresql_using="gin",
+).ddl_if(dialect="postgresql")
 Index("ix_jobs_status_priority_created", Job.status, Job.priority, Job.created_at)
 Index(
     "ix_jobs_lease_expires",

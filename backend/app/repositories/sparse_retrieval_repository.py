@@ -72,24 +72,27 @@ class SparseRetrievalRepository:
         rank = func.ts_rank_cd(vector, query)
         statement = (
             select(DocumentChunk.document_chunk_id, rank.label("raw_score"))
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
             .where(
                 DocumentChunk.modality == filters.modality,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+                LogicalDocument.status == "active",
                 vector.op("@@")(query),
             )
             .order_by(desc("raw_score"), DocumentChunk.document_chunk_id.asc())
             .limit(limit)
         )
         if filters.logical_document_ids:
-            statement = (
-                statement.join(
-                    DocumentVersion,
-                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
-                )
-                .join(
-                    LogicalDocument,
-                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
-                )
-                .where(LogicalDocument.logical_document_id.in_(filters.logical_document_ids))
+            statement = statement.where(
+                LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
         raw_candidates = [
             (int(row.document_chunk_id), float(row.raw_score))
@@ -105,20 +108,26 @@ class SparseRetrievalRepository:
         limit: int,
         filters: RetrievalFilters,
     ) -> list[SparseSearchCandidate]:
-        statement = select(DocumentChunk.document_chunk_id, DocumentChunk.content_text).where(
-            DocumentChunk.modality == filters.modality
+        statement = (
+            select(DocumentChunk.document_chunk_id, DocumentChunk.content_text)
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .where(
+                DocumentChunk.modality == filters.modality,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+                LogicalDocument.status == "active",
+            )
         )
         if filters.logical_document_ids:
-            statement = (
-                statement.join(
-                    DocumentVersion,
-                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
-                )
-                .join(
-                    LogicalDocument,
-                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
-                )
-                .where(LogicalDocument.logical_document_id.in_(filters.logical_document_ids))
+            statement = statement.where(
+                LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
         rows = [
             (int(row.document_chunk_id), str(row.content_text)) for row in db.execute(statement)

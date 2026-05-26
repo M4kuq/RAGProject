@@ -208,6 +208,9 @@ def test_sparse_query_normalization_and_score_order_are_deterministic() -> None:
     ]
     assert ranked[0].sparse_score == 1.0
     assert ranked[2].sparse_score == 0.5
+    rounded_tie_ranked = normalize_sparse_scores([(2, 1.0000002), (1, 1.0000001)])
+    assert [candidate.document_chunk_id for candidate in rounded_tie_ranked] == [2, 1]
+    assert rounded_tie_ranked[0].sparse_score == rounded_tie_ranked[1].sparse_score
 
 
 def test_sparse_settings_validation() -> None:
@@ -426,9 +429,9 @@ def test_rag_search_sparse_success_persists_trace_and_score_breakdown(
     assert vector_client.query_vectors == []
     summary = data["retrieval_score_summary"]
     assert summary["qdrant_candidate_count"] == 0
-    assert summary["sparse_candidate_count"] == 5
+    assert summary["sparse_candidate_count"] == 2
     assert summary["post_filter_candidate_count"] == 2
-    assert summary["excluded_by_rdb_check_count"] == 3
+    assert summary["excluded_by_rdb_check_count"] == 0
     assert summary["selected_count"] == 1
     assert summary["top1_rerank_score"] is None
     assert len(data["items"]) == 2
@@ -484,6 +487,47 @@ def test_rag_search_sparse_success_persists_trace_and_score_breakdown(
         assert "content_text" not in str(first_score_breakdown)
         assert "raw_chunk_text" not in str(first_score_breakdown)
         assert all(item.rerank_score is None and item.rerank_order is None for item in items)
+
+
+def test_rag_search_sparse_filters_invalid_candidates_before_limit(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    with session_factory() as db:
+        for document_chunk_id in (200, 300, 400):
+            chunk = db.get(DocumentChunk, document_chunk_id)
+            assert chunk is not None
+            chunk.content_text = "alpha " * 200
+            chunk.char_count = len(chunk.content_text)
+        db.commit()
+
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha", "top_k": 1, "strategy": "sparse"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert vector_client.query_vectors == []
+    assert len(data["items"]) == 1
+    assert data["items"][0]["document_chunk_id"] in {100, 101}
+    summary = data["retrieval_score_summary"]
+    assert summary["sparse_candidate_count"] == 1
+    assert summary["post_filter_candidate_count"] == 1
+    assert summary["excluded_by_rdb_check_count"] == 0
+    assert "content_text" not in str(data)
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "sparse"
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert len(items) == 1
+        assert items[0].retrieval_source == "sparse"
+        assert items[0].document_chunk_id in {100, 101}
 
 
 def test_rag_search_sparse_no_result_succeeds_without_items(

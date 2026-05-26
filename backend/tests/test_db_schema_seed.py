@@ -150,6 +150,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ix_evaluation_runs_dataset_strategy",
         "ix_evaluation_run_items_case",
         "ix_document_chunks_content_fts",
+        "ix_document_chunks_content_fts_english",
     }
     actual_indexes = scalar_set(
         pg_engine,
@@ -177,7 +178,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
                         'ux_jobs_active_message_edit',
                         'ix_chat_sessions_user_status_created',
                         'ix_audit_logs_target',
-                        'ix_document_chunks_content_fts'
+                        'ix_document_chunks_content_fts',
+                        'ix_document_chunks_content_fts_english'
                       )
                     """
                 )
@@ -192,6 +194,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
     assert "created_at desc" in partial_index_defs["ix_audit_logs_target"]
     assert "using gin" in partial_index_defs["ix_document_chunks_content_fts"]
     assert "to_tsvector('simple'" in partial_index_defs["ix_document_chunks_content_fts"]
+    assert "using gin" in partial_index_defs["ix_document_chunks_content_fts_english"]
+    assert "to_tsvector('english'" in partial_index_defs["ix_document_chunks_content_fts_english"]
 
 
 def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> None:
