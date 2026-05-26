@@ -505,6 +505,10 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
             "query_hash": hashlib.sha256(b"alpha policy").hexdigest(),
             "raw_prompt": "full prompt must not leak",
             "safe_value": "OPENAI_API_KEY=sk-secret-value",
+            "apikey": "sk-uncovered-secret",
+            "csrf": "csrf-must-not-leak",
+            "session_id": "session-must-not-leak",
+            "cookie": "cookie-must-not-leak",
         }
         item = (
             db.query(RetrievalRunItem)
@@ -539,6 +543,10 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert detail["retrieval_run"]["strategy_type"] == "dense"
     assert detail["retrieval_run"]["query_plan_json"]["safe_value"] == "redacted"
     assert "raw_prompt" not in detail["retrieval_run"]["query_plan_json"]
+    assert "apikey" not in detail["retrieval_run"]["query_plan_json"]
+    assert "csrf" not in detail["retrieval_run"]["query_plan_json"]
+    assert "session_id" not in detail["retrieval_run"]["query_plan_json"]
+    assert "cookie" not in detail["retrieval_run"]["query_plan_json"]
     assert detail["items"][0]["source_label"] == "hand book.pdf"
     assert detail["items"][0]["payload_snapshot"] == {
         "source_label": "hand book.pdf",
@@ -550,6 +558,10 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert "raw chunk text must not leak" not in serialized
     assert "secret-token" not in serialized
     assert "secret-value" not in serialized
+    assert "sk-uncovered-secret" not in serialized
+    assert "csrf-must-not-leak" not in serialized
+    assert "session-must-not-leak" not in serialized
+    assert "cookie-must-not-leak" not in serialized
 
     client.cookies.clear()
     _login(client, email="viewer@example.com")

@@ -49,7 +49,16 @@ def test_trace_redactor_removes_forbidden_fields_and_sensitive_values() -> None:
         {
             "safe_count": 1,
             "raw_prompt": "do not persist",
-            "nested": {"api_key": "secret", "mode": "dense"},
+            "nested": {
+                "api_key": "secret",
+                "apikey": "secret",
+                "api-key": "secret",
+                "csrf": "secret",
+                "session_id": "secret",
+                "cookie": "secret",
+                "private_key": "secret",
+                "mode": "dense",
+            },
             "provider": "fake",
             "operator": "person@example.com",
             "env_assignment": "OPENAI_API_KEY=sk-test",

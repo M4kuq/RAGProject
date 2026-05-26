@@ -17,17 +17,23 @@ from app.rag.strategy import (
 TRACE_SCHEMA_VERSION: Literal["phase2.trace.v1"] = "phase2.trace.v1"
 
 SENSITIVE_TRACE_KEY_PARTS = (
+    "api-key",
     "api_key",
+    "apikey",
     "chunk_text",
     "content_text",
     "credential",
+    "cookie",
+    "csrf",
     "full_context",
     "password",
     "pii",
+    "private_key",
     "prompt",
     "raw_chunk",
     "raw_text",
     "secret",
+    "session",
     "token",
 )
 
