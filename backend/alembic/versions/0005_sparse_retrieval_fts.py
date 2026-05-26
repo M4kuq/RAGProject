@@ -14,32 +14,32 @@ down_revision = "0004_eval_dataset_metrics"
 branch_labels = None
 depends_on = None
 
-_SIMPLE_FTS_INDEX_SQL = (
-    "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_fts "
-    "ON document_chunks USING GIN (to_tsvector('simple', content_text))"
-)
-_ENGLISH_FTS_INDEX_SQL = (
-    "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
-    "ix_document_chunks_content_fts_english ON document_chunks "
-    "USING GIN (to_tsvector('english', content_text))"
-)
-_DROP_ENGLISH_FTS_INDEX_SQL = (
-    "DROP INDEX CONCURRENTLY IF EXISTS "
-    "ix_document_chunks_content_fts_english"
-)
-_DROP_SIMPLE_FTS_INDEX_SQL = (
-    "DROP INDEX CONCURRENTLY IF EXISTS "
-    "ix_document_chunks_content_fts"
-)
+
+def _create_index_sql(index_name: str, language: str) -> str:
+    return " ".join(
+        [
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS",
+            index_name,
+            "ON document_chunks",
+            "USING GIN",
+            f"(to_tsvector('{language}', content_text))",
+        ]
+    )
+
+
+def _drop_index_sql(index_name: str) -> str:
+    return " ".join(["DROP INDEX CONCURRENTLY IF EXISTS", index_name])
 
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(_SIMPLE_FTS_INDEX_SQL)
-        op.execute(_ENGLISH_FTS_INDEX_SQL)
+        op.execute(_create_index_sql("ix_document_chunks_content_fts", "simple"))
+        op.execute(
+            _create_index_sql("ix_document_chunks_content_fts_english", "english")
+        )
 
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(_DROP_ENGLISH_FTS_INDEX_SQL)
-        op.execute(_DROP_SIMPLE_FTS_INDEX_SQL)
+        op.execute(_drop_index_sql("ix_document_chunks_content_fts_english"))
+        op.execute(_drop_index_sql("ix_document_chunks_content_fts"))
