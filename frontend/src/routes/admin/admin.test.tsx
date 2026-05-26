@@ -35,6 +35,10 @@ test("AdminSidebar renders document review and job links", () => {
 
   expect(screen.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/admin/documents");
   expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/admin/documents/review");
+  expect(screen.getByRole("link", { name: "Retrieval Debug" })).toHaveAttribute(
+    "href",
+    "/admin/retrieval-debug"
+  );
   expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute("href", "/admin/jobs");
 });
 
@@ -255,6 +259,223 @@ test("admin evaluation dataset detail shows cases and export", async () => {
   expect(await screen.findByText("dense_case")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Export" }));
   expect(await screen.findByText(/phase2.evaluation_dataset.v1/)).toBeInTheDocument();
+});
+
+test("retrieval debug runs hybrid search and renders redacted trace details", async () => {
+  const searchRequests: RequestInit[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/rag/search")) {
+        searchRequests.push(init ?? {});
+        return jsonResponse({
+          data: {
+            retrieval_run_id: 600,
+            status: "succeeded",
+            retrieval_score_summary: {
+              requested_top_k: 10,
+              qdrant_candidate_count: 2,
+              sparse_candidate_count: 2,
+              post_filter_candidate_count: 1,
+              selected_count: 1,
+              excluded_by_rdb_check_count: 1,
+              top1_retrieval_score: 0.73,
+              top3_avg_retrieval_score: 0.73,
+              top1_rerank_score: null
+            },
+            items: [
+              {
+                retrieval_run_item_id: 900,
+                document_chunk_id: 300,
+                source_label: "phase2.md",
+                snippet: "hybrid retrieval safe snippet",
+                page_from: 4,
+                page_to: 4,
+                retrieval_score: 0.73,
+                rerank_score: null,
+                rank_order: 1,
+                rerank_order: null,
+                selected_flag: true,
+                payload_snapshot: { source_label: "phase2.md" }
+              }
+            ]
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/rag/retrieval-runs/600")) {
+        return jsonResponse({
+          data: {
+            retrieval_run: {
+              retrieval_run_id: 600,
+              origin_type: "standalone",
+              chat_session_id: null,
+              request_message_id: null,
+              status: "succeeded",
+              strategy_type: "hybrid",
+              error_code: null,
+              query_hash: "a".repeat(64),
+              top_k: 10,
+              retrieval_score_summary: {
+                selected_count: 1,
+                excluded_by_rdb_check_count: 1
+              },
+              query_plan_json: {
+                schema_version: "phase2.trace.v1",
+                strategy_type: "hybrid",
+                query_mode: "dense_sparse_single_query",
+                query_hash: "a".repeat(64),
+                raw_prompt: "raw prompt must not appear",
+                safe_value: "OPENAI_API_KEY=sk-secret"
+              },
+              strategy_decision_json: {
+                selected_strategy: "hybrid",
+                decision_source: "request",
+                router_enabled: false,
+                fallback_used: false,
+                reason_codes: ["explicit_strategy_hybrid"]
+              },
+              latency_breakdown_json: {
+                total_ms: 42,
+                query_embedding_ms: 4,
+                sparse_search_ms: 5,
+                fusion_ms: 3,
+                rdb_final_check_ms: 2,
+                retrieval_items_persist_ms: 1
+              },
+              retrieval_settings_json: {
+                top_k: 10,
+                rerank_top_n: 5,
+                embedding_provider: "fake",
+                rerank_provider: "fake",
+                fusion_method: "rrf",
+                router_enabled: false
+              },
+              rerank_score_top1: null,
+              answer_confidence: null,
+              groundedness_score: null,
+              confidence_label: null,
+              started_at: "2026-05-01T00:00:00Z",
+              finished_at: "2026-05-01T00:00:01Z",
+              created_at: "2026-05-01T00:00:00Z"
+            },
+            items: [
+              {
+                retrieval_run_item_id: 900,
+                document_chunk_id: 300,
+                retrieval_score: 0.73,
+                rerank_score: null,
+                rank_order: 1,
+                rerank_order: null,
+                selected_flag: true,
+                retrieval_source: "hybrid",
+                payload_snapshot: {
+                  source_label: "phase2.md",
+                  page_from: 4,
+                  content_text: "raw chunk text must not appear"
+                },
+                score_breakdown_json: {
+                  retrieval_source: "hybrid",
+                  dense_score: 0.7,
+                  sparse_score: 0.6,
+                  fused_score: 0.73,
+                  final_rank: 1,
+                  selected_flag: true,
+                  raw_chunk_text: "raw chunk text must not appear"
+                },
+                source_label: "phase2.md",
+                page_from: 4,
+                page_to: 4,
+                old_version_flag: null,
+                created_at: "2026-05-01T00:00:00Z"
+              }
+            ]
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({
+          data: [
+            {
+              evaluation_run_id: 10,
+              job_id: 20,
+              evaluation_dataset_id: 1,
+              dataset_name: "phase2_strategy_smoke",
+              strategy_type: "dense",
+              strategies: ["dense", "sparse", "hybrid"],
+              metric_names: ["recall_at_k"],
+              trigger_type: "manual",
+              status: "succeeded",
+              case_count: 3,
+              succeeded_count: 3,
+              failed_count: 0,
+              metric_summary: { recall_at_k: 0.8 },
+              strategy_comparison: [
+                {
+                  schema_version: "phase2.evaluation.v1",
+                  strategy_type: "hybrid",
+                  metric_name: "recall_at_k",
+                  average: 0.8,
+                  p50: 0.8,
+                  p95: 0.8,
+                  count: 1,
+                  failed_count: 0,
+                  not_applicable_count: 0
+                }
+              ],
+              strategy_metrics_summary_json: null,
+              error_code: null,
+              error_message: null,
+              started_at: "2026-05-01T00:00:00Z",
+              finished_at: "2026-05-01T00:00:01Z",
+              created_at: "2026-05-01T00:00:00Z",
+              updated_at: "2026-05-01T00:00:01Z"
+            }
+          ],
+          meta: { pagination: { page: 1, page_size: 5, total: 1, has_next: false } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/retrieval-debug");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Retrieval Debug" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "dense" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "sparse" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "hybrid" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "agentic_router" })).toBeDisabled();
+
+  fireEvent.change(screen.getByLabelText("query"), { target: { value: "hybrid retrieval" } });
+  fireEvent.change(screen.getByLabelText("strategy"), { target: { value: "hybrid" } });
+  fireEvent.click(screen.getByRole("button", { name: "Run search" }));
+
+  await waitFor(() => expect(searchRequests.length).toBe(1));
+  expect(JSON.parse(String(searchRequests[0].body)).strategy).toBe("hybrid");
+  expect(await screen.findByText("#600")).toBeInTheDocument();
+  expect((await screen.findAllByText("dense_sparse_single_query")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/explicit_strategy_hybrid/)).length).toBeGreaterThan(0);
+  expect(await screen.findByText("42 ms")).toBeInTheDocument();
+  expect((await screen.findAllByText("0.730")).length).toBeGreaterThan(0);
+  expect(await screen.findByText("hybrid retrieval safe snippet")).toBeInTheDocument();
+  expect(await screen.findByText("recall_at_k")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("raw prompt must not appear");
+  expect(document.body).not.toHaveTextContent("raw chunk text must not appear");
+  expect(document.body).not.toHaveTextContent("OPENAI_API_KEY");
+  expect(document.body).not.toHaveTextContent("sk-secret");
 });
 
 test("document list renders filters, statuses and safe escaped text", async () => {

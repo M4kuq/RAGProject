@@ -362,6 +362,63 @@ textarea {
   font-size: 14px;
 }
 
+.compact-table th,
+.compact-table td {
+  font-size: 13px;
+  padding: 8px;
+}
+
+.retrieval-debug-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(280px, 2fr) minmax(140px, 160px) repeat(2, minmax(110px, 130px)) auto;
+}
+
+.retrieval-debug-form label,
+.retrieval-debug-form .field-group {
+  display: grid;
+  gap: 4px;
+}
+
+.retrieval-debug-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.unsupported-strategy-list {
+  grid-column: 1 / -1;
+}
+
+.unsupported-strategy-list button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.retrieval-debug-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.trace-card {
+  min-width: 0;
+}
+
+.trace-card h2 {
+  font-size: 16px;
+}
+
+.safe-json-details {
+  margin-top: 12px;
+}
+
+.safe-json-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -475,6 +532,10 @@ textarea {
   .admin-table {
     display: block;
     overflow-x: auto;
+  }
+
+  .retrieval-debug-form {
+    grid-template-columns: 1fr;
   }
 }
 
