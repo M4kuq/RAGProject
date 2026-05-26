@@ -34,6 +34,10 @@ class EvaluationRepository:
         evaluation_dataset_id: int | None,
         case_limit: int | None,
         strategy_type: str,
+        strategies: list[str],
+        metrics: list[str],
+        top_k: int | None,
+        rerank_top_n: int | None,
         trigger_type: str,
         retrieval_settings_json: dict[str, object] | None,
     ) -> EvaluationRun:
@@ -51,18 +55,11 @@ class EvaluationRepository:
                 "evaluation_dataset_id": evaluation_dataset_id,
                 "case_limit": case_limit,
                 "strategy_type": strategy_type,
+                "strategies": strategies,
                 "trigger_type": trigger_type,
-                "metrics": [
-                    "recall_at_k",
-                    "mrr",
-                    "faithfulness",
-                    "groundedness",
-                    "citation_coverage",
-                    "context_precision",
-                    "no_context_rate",
-                    "p95_latency",
-                    "strategy_selection_accuracy",
-                ],
+                "metrics": metrics,
+                "top_k": top_k,
+                "rerank_top_n": rerank_top_n,
             },
         )
         db.add(run)

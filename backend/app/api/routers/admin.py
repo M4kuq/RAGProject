@@ -236,6 +236,20 @@ def evaluation_run_detail(
     return success_response(result.model_dump(mode="json"), request)
 
 
+@router.get("/evaluations/runs/{evaluation_run_id}/strategy-comparison")
+def evaluation_run_strategy_comparison(
+    evaluation_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_strategy_comparison(
+        db,
+        evaluation_run_id=evaluation_run_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
 @router.get("/audit-logs")
 def audit_logs(
     request: Request,

@@ -17,6 +17,8 @@ class EvaluationCase:
     expected_keywords: tuple[str, ...]
     required_citation: bool
     expected_answer: str | None = None
+    expected_document_ids: tuple[int, ...] = ()
+    expected_chunk_ids: tuple[int, ...] = ()
 
 
 def load_evaluation_cases(
@@ -62,6 +64,8 @@ def _case_from_payload(value: Any) -> EvaluationCase:
         raise EvaluationFixtureError("evaluation_case_invalid")
     keywords = tuple(_keyword(item) for item in raw_keywords)
     expected_answer = _optional_text(value, "expected_answer", max_length=8000)
+    expected_document_ids = _optional_positive_ids(value, "expected_document_ids")
+    expected_chunk_ids = _optional_positive_ids(value, "expected_chunk_ids")
     if not keywords and expected_answer is None:
         raise EvaluationFixtureError("evaluation_case_invalid")
     return EvaluationCase(
@@ -70,6 +74,8 @@ def _case_from_payload(value: Any) -> EvaluationCase:
         expected_keywords=keywords,
         required_citation=bool(value.get("required_citation", True)),
         expected_answer=expected_answer,
+        expected_document_ids=expected_document_ids,
+        expected_chunk_ids=expected_chunk_ids,
     )
 
 
@@ -110,6 +116,20 @@ def _keyword(value: Any) -> str:
     if not keyword or len(keyword) > 100 or _contains_sensitive_word(keyword):
         raise EvaluationFixtureError("evaluation_case_invalid")
     return keyword
+
+
+def _optional_positive_ids(value: dict[str, Any], key: str) -> tuple[int, ...]:
+    raw = value.get(key, [])
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise EvaluationFixtureError("evaluation_case_invalid")
+    ids: list[int] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            raise EvaluationFixtureError("evaluation_case_invalid")
+        ids.append(item)
+    return tuple(ids)
 
 
 def _contains_sensitive_word(value: str) -> bool:
