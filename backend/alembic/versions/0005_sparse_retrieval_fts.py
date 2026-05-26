@@ -28,18 +28,29 @@ def _create_index_sql(index_name: str, language: str) -> str:
 
 
 def _drop_index_sql(index_name: str) -> str:
-    return " ".join(["DROP INDEX CONCURRENTLY IF EXISTS", index_name])
+    return " ".join(
+        [
+            "DROP INDEX CONCURRENTLY IF EXISTS",
+            index_name,
+        ]
+    )
 
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(_create_index_sql("ix_document_chunks_content_fts", "simple"))
         op.execute(
-            _create_index_sql("ix_document_chunks_content_fts_english", "english")
+            _create_index_sql("ix_document_chunks_content_fts", "simple"),
+        )
+        op.execute(
+            _create_index_sql("ix_document_chunks_content_fts_english", "english"),
         )
 
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(_drop_index_sql("ix_document_chunks_content_fts_english"))
-        op.execute(_drop_index_sql("ix_document_chunks_content_fts"))
+        op.execute(
+            _drop_index_sql("ix_document_chunks_content_fts_english"),
+        )
+        op.execute(
+            _drop_index_sql("ix_document_chunks_content_fts"),
+        )
