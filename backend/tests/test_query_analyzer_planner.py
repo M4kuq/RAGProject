@@ -168,6 +168,33 @@ def test_query_plan_builder_redacts_pii_and_does_not_apply_rewrite_by_default() 
     assert built.analysis.query_hash == hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
 
 
+def test_query_plan_builder_redact_pii_false_disables_derived_previews() -> None:
+    settings = Settings(
+        app_env="test",
+        query_planner_redact_pii=False,
+        query_planner_store_query_preview=True,
+    )
+    builder = QueryPlanBuilder(settings)
+
+    built = builder.build(
+        "  Compare dense vs sparse section:intro .md  ",
+        filters=RetrievalFilters(),
+        requested_strategy=RetrievalStrategy.DENSE,
+    )
+
+    assert built.analysis is not None
+    assert built.planner is not None
+    assert built.analysis.metadata_filter_hints
+    assert all(
+        candidate.value_preview is None for candidate in built.analysis.metadata_filter_hints
+    )
+    assert built.planner.rewritten_query_preview is None
+    assert built.planner.sub_queries
+    assert all(sub_query.query_preview is None for sub_query in built.planner.sub_queries)
+    dumped = json.dumps(built.trace_metadata, ensure_ascii=False)
+    assert "intro" not in dumped
+
+
 def test_query_plan_builder_disabled_fallback_is_safe() -> None:
     settings = Settings(
         app_env="test",

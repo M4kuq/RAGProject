@@ -164,7 +164,7 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     ),
     "rag.query_planner.redact_pii": (
         True,
-        "Redact PII-like strings from query analysis and planning previews.",
+        "Enable PII-redacted derived query previews; false disables preview persistence.",
     ),
 }
 

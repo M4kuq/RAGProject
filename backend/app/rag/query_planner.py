@@ -280,14 +280,17 @@ class QueryPlanner:
 class QueryPlanBuilder:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        store_query_preview = (
+            settings.query_planner_store_query_preview and settings.query_planner_redact_pii
+        )
         self.analyzer = QueryAnalyzer(
             max_preview_chars=settings.query_planner_max_preview_chars,
-            store_query_preview=settings.query_planner_store_query_preview,
+            store_query_preview=store_query_preview,
         )
         self.planner = QueryPlanner(
             max_preview_chars=settings.query_planner_max_preview_chars,
             max_sub_queries=settings.query_planner_max_sub_queries,
-            store_query_preview=settings.query_planner_store_query_preview,
+            store_query_preview=store_query_preview,
             apply_rewrite_to_retrieval=settings.query_planner_apply_rewrite_to_retrieval,
         )
 

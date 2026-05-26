@@ -71,6 +71,8 @@ The trace stores a SHA-256 `query_hash`. It does not persist the original user q
 - no secret, token, credential, session, cookie, CSRF, or private key
 - no email, URL, phone-number-like PII, or secret assignment value
 
+If `rag.query_planner.redact_pii = false`, PR-27 does not store unredacted previews. It disables derived preview persistence and keeps hashes / counts / structured reason codes only.
+
 The backend redactor is still applied again when returning retrieval-run detail to the Debug UI.
 
 ## Settings
@@ -84,6 +86,8 @@ Seeded `system_settings` defaults:
 - `rag.query_planner.max_preview_chars = 160`
 - `rag.query_planner.store_query_preview = true`
 - `rag.query_planner.redact_pii = true`
+
+Preview persistence requires both `store_query_preview` and `redact_pii` to be true.
 
 The seed remains idempotent and does not overwrite existing values.
 
