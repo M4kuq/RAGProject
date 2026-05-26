@@ -16,14 +16,26 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS ix_document_chunks_content_fts
-        ON document_chunks
-        USING GIN (to_tsvector('simple', content_text))
-        """
-    )
+    with op.get_context().autocommit_block():
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_fts
+            ON document_chunks
+            USING GIN (to_tsvector('simple', content_text))
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_fts_english
+            ON document_chunks
+            USING GIN (to_tsvector('english', content_text))
+            """
+        )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_document_chunks_content_fts")
+    with op.get_context().autocommit_block():
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts_english"
+        )
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_document_chunks_content_fts")

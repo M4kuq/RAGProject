@@ -34,7 +34,7 @@
 - `SparseRetrievalStrategy` exists.
 - `/api/v1/rag/search` accepts `strategy=sparse`.
 - `strategy` omitted remains default `dense`.
-- PostgreSQL full-text search is available through `ix_document_chunks_content_fts`.
+- PostgreSQL full-text search is available through language-matched FTS indexes.
 - SQLite tests use deterministic lightweight BM25 fallback without new production dependencies.
 - Sparse retrieval runs save `retrieval_runs.strategy_type = sparse`.
 - Sparse run items save `retrieval_run_items.retrieval_source = sparse`.

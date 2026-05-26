@@ -104,7 +104,7 @@ def normalize_sparse_scores(
             )
             for document_chunk_id, score in finite_candidates
         ),
-        key=lambda candidate: (-candidate.sparse_score, candidate.document_chunk_id),
+        key=lambda candidate: (-candidate.raw_score, candidate.document_chunk_id),
     )
     return [
         SparseSearchCandidate(

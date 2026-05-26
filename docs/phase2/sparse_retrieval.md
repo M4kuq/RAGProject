@@ -10,10 +10,10 @@ This is the first Advanced Retrieval implementation after the PR-20 strategy sch
 
 The production path uses PostgreSQL full-text search:
 
-- `to_tsvector('simple', document_chunks.content_text)`
-- `plainto_tsquery('simple', :normalized_query)`
+- `to_tsvector(<language>, document_chunks.content_text)` where `<language>` is `simple` or `english`
+- `plainto_tsquery(<language>, :normalized_query)`
 - `ts_rank_cd(...)`
-- `GIN` expression index: `ix_document_chunks_content_fts`
+- `GIN` expression indexes: `ix_document_chunks_content_fts` and `ix_document_chunks_content_fts_english`
 
 The SQLite test path uses a deterministic lightweight BM25 fallback inside the repository. It is for CI/unit coverage only and does not introduce a production dependency.
 
@@ -72,12 +72,12 @@ Archived documents, inactive versions, failed versions, and wrong-modality chunk
 
 ## Score Semantics
 
-Sparse score is normalized to `0.0..1.0` using max-score normalization within a result set.
+Sparse score is normalized to `0.0..1.0` using max-score normalization within a result set. Ranking uses the unrounded raw sparse score; the normalized score is rounded only for persisted/displayed score metadata.
 
 Tie-breaks are deterministic:
 
 ```text
-sparse_score DESC, document_chunk_id ASC
+raw_score DESC, document_chunk_id ASC
 ```
 
 `rerank_score` and `rerank_order` remain null for sparse PR-23. Hybrid fusion and optional rerank-on-sparse are not implemented here.

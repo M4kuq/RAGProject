@@ -53,9 +53,9 @@
 ## PR-23 Sparse Retrieval Tests
 
 - Alembic head is `0005_sparse_retrieval_fts`.
-- PostgreSQL schema includes `ix_document_chunks_content_fts`.
+- PostgreSQL schema includes language-matched sparse FTS indexes.
 - Sparse query normalization lowercases, deduplicates, and enforces the max term limit.
-- Sparse score normalization is deterministic and tie-breaks by `document_chunk_id ASC`.
+- Sparse score normalization ranks by raw score and tie-breaks by `document_chunk_id ASC`.
 - `/rag/search strategy=sparse` writes `retrieval_runs.strategy_type = sparse`.
 - Sparse items write `retrieval_source = sparse` and `score_breakdown_json.sparse_score`.
 - Sparse no-result returns `200 OK` with `items=[]`.

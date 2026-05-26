@@ -75,16 +75,20 @@ Both migrations are additive. They do not delete existing Phase1 columns or chan
 
 ## Downgrade
 
-`0005_sparse_retrieval_fts` downgrade drops only `ix_document_chunks_content_fts` and leaves `document_chunks` data unchanged. `0004_eval_dataset_metrics` downgrade drops PR-22 constraints, indexes, added columns, then `evaluation_cases` and `evaluation_datasets`. This removes PR-22 metadata but returns to the PR-21 schema.
+`0005_sparse_retrieval_fts` downgrade drops only the sparse FTS indexes and leaves `document_chunks` data unchanged. `0004_eval_dataset_metrics` downgrade drops PR-22 constraints, indexes, added columns, then `evaluation_cases` and `evaluation_datasets`. This removes PR-22 metadata but returns to the PR-21 schema.
 
 ## PR-23 Sparse Index
 
-PR-23 adds this PostgreSQL index:
+PR-23 adds these PostgreSQL indexes concurrently:
 
 ```sql
-CREATE INDEX IF NOT EXISTS ix_document_chunks_content_fts
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_fts
 ON document_chunks
 USING GIN (to_tsvector('simple', content_text));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_document_chunks_content_fts_english
+ON document_chunks
+USING GIN (to_tsvector('english', content_text));
 ```
 
 No generated column is added. The index uses existing `document_chunks.content_text` for search only. Raw chunk text is not copied into trace JSON, score breakdown JSON, logs, or API payload snapshots.
