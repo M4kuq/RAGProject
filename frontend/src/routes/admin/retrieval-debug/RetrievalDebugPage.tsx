@@ -221,6 +221,12 @@ function SearchResultSummary({
 function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail }) {
   const run = detail.retrieval_run;
   const queryPlan = safeRecord(run.query_plan_json);
+  const analysis = recordFrom(queryPlan.analysis);
+  const planner = recordFrom(queryPlan.planner);
+  const subQueries = arrayFrom(queryPlan.sub_queries ?? planner.sub_queries);
+  const metadataCandidates = arrayFrom(
+    queryPlan.metadata_filter_candidates ?? planner.metadata_filter_candidates
+  );
   const decision = safeRecord(run.strategy_decision_json);
   const settings = safeRecord(run.retrieval_settings_json);
   const latency = safeRecord(run.latency_breakdown_json);
@@ -232,14 +238,37 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
         <dl className="detail-grid">
           <Detail label="query_mode" value={formatUnknownValue(queryPlan.query_mode)} />
           <Detail label="query_hash" value={shortHash(queryPlan.query_hash)} />
+          <Detail label="intent" value={formatUnknownValue(queryPlan.intent ?? analysis.intent)} />
+          <Detail label="ambiguity_score" value={formatScore(queryPlan.ambiguity_score ?? analysis.ambiguity_score)} />
+          <Detail
+            label="ambiguity_flags"
+            value={formatUnknownValue(queryPlan.ambiguity_flags ?? analysis.ambiguity_flags ?? [])}
+          />
+          <Detail
+            label="keyword_heavy_score"
+            value={formatScore(queryPlan.keyword_heavy_score ?? analysis.keyword_heavy_score)}
+          />
+          <Detail
+            label="version_specific"
+            value={formatUnknownValue(queryPlan.version_specific_flag ?? analysis.version_specific_flag ?? false)}
+          />
           <Detail label="rewrite_applied" value={formatUnknownValue(queryPlan.rewrite_applied ?? false)} />
-          <Detail label="rewritten_query" value="N/A" />
-          <Detail label="sub_queries" value={formatUnknownValue(queryPlan.sub_query_count ?? 0)} />
+          <Detail
+            label="rewritten_query_preview"
+            value={formatUnknownValue(queryPlan.rewritten_query_preview ?? planner.rewritten_query_preview)}
+          />
+          <Detail label="sub_queries" value={formatUnknownValue(queryPlan.sub_query_count ?? subQueries.length)} />
           <Detail
             label="metadata_filter"
             value={formatUnknownValue(queryPlan.metadata_filter_applied ?? false)}
           />
+          <Detail label="metadata_candidates" value={formatUnknownValue(metadataCandidates.length)} />
+          <Detail label="candidate_strategies" value={formatUnknownValue(queryPlan.candidate_strategies ?? [])} />
+          <Detail label="recommended_strategy" value={formatUnknownValue(queryPlan.recommended_strategy)} />
+          <Detail label="planned_only" value={formatUnknownValue(queryPlan.safety_flags ?? [])} />
         </dl>
+        <NestedList title="Sub-query previews" items={subQueries} />
+        <NestedList title="Metadata filter candidates" items={metadataCandidates} />
         <SafeDetails record={queryPlan} />
       </TraceCard>
 
@@ -462,6 +491,22 @@ function KeyValueTable({ record }: { record: Record<string, unknown> }) {
   );
 }
 
+function NestedList({ items, title }: { items: unknown[]; title: string }) {
+  if (!items.length) {
+    return <p className="muted">{title}: N/A</p>;
+  }
+  return (
+    <div>
+      <h3>{title}</h3>
+      <ul className="compact-list">
+        {items.map((item, index) => (
+          <li key={index}>{formatUnknownValue(item)}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function buildDisplayItems(
   searchItems: RagSearchDebugItem[],
   detailItems: RetrievalRunDebugItem[]
@@ -530,4 +575,14 @@ function shortHash(value: unknown) {
     return "N/A";
   }
   return `${value.slice(0, 12)}...`;
+}
+
+function recordFrom(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? safeRecord(value as Record<string, unknown>)
+    : {};
+}
+
+function arrayFrom(value: unknown) {
+  return Array.isArray(value) ? value : [];
 }

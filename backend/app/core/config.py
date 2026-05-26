@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     sparse_min_query_terms: int = Field(default=1, ge=1, le=32)
     sparse_max_query_terms: int = Field(default=32, ge=1, le=64)
     sparse_score_normalization: str = "max"
+    query_analyzer_enabled: bool = True
+    query_planner_enabled: bool = True
+    query_planner_apply_rewrite_to_retrieval: bool = False
+    query_planner_max_sub_queries: int = Field(default=3, ge=0, le=3)
+    query_planner_max_preview_chars: int = Field(default=160, ge=20, le=240)
+    query_planner_store_query_preview: bool = True
+    query_planner_redact_pii: bool = True
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
     rerank_top_n_max: int = Field(default=5, ge=1, le=20)

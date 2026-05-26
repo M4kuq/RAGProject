@@ -23,6 +23,8 @@ const SECRET_ASSIGNMENT_PATTERN =
   /(?:^|\s)(?:export\s+)?[A-Z0-9_.-]*(?:api[_-]?key|secret|password|token|credential)[A-Z0-9_.-]*\s*[:=]\s*\S+/i;
 const URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\//i;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+const PHONE_PATTERN = /\b(?:\+?\d[\d ._-]{7,}\d)\b/;
+const SENSITIVE_TOKEN_PATTERN = /(?:api[_-]?key|secret|password|token|credential|cookie|csrf|session)/i;
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001f\u007f]/g;
 
 export function isSensitiveKey(key: string): boolean {
@@ -35,7 +37,9 @@ export function redactString(value: string, maxLength = 255): string {
   if (
     SECRET_ASSIGNMENT_PATTERN.test(normalized) ||
     URL_PATTERN.test(normalized) ||
-    EMAIL_PATTERN.test(normalized)
+    EMAIL_PATTERN.test(normalized) ||
+    PHONE_PATTERN.test(normalized) ||
+    SENSITIVE_TOKEN_PATTERN.test(normalized)
   ) {
     return "[redacted]";
   }

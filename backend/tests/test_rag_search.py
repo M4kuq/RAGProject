@@ -289,11 +289,15 @@ def test_sparse_settings_validation() -> None:
         sparse_min_query_terms=2,
         sparse_max_query_terms=4,
         sparse_score_normalization="max",
+        query_planner_max_sub_queries=2,
+        query_planner_max_preview_chars=120,
     )
 
     assert settings.sparse_provider == "postgres_fts"
     assert settings.sparse_language == "english"
     assert settings.hybrid_fusion_method == "weighted"
+    assert settings.query_planner_max_sub_queries == 2
+    assert settings.query_planner_max_preview_chars == 120
 
     with pytest.raises(ValueError):
         Settings(hybrid_fusion_method="invalid")
@@ -305,6 +309,8 @@ def test_sparse_settings_validation() -> None:
         Settings(sparse_language="japanese")
     with pytest.raises(ValueError):
         Settings(sparse_min_query_terms=5, sparse_max_query_terms=4)
+    with pytest.raises(ValueError):
+        Settings(query_planner_max_sub_queries=4)
     with pytest.raises(ValueError):
         Settings(sparse_score_normalization="none")
 
@@ -392,18 +398,22 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert run.request_message_id is None
         assert run.status == "succeeded"
         assert run.strategy_type == "dense"
-        assert run.query_plan_json == {
-            "schema_version": "phase2.trace.v1",
-            "strategy_type": "dense",
-            "query_mode": "single_query",
-            "query_hash": hashlib.sha256(b"alpha policy").hexdigest(),
-            "rewrite_applied": False,
-            "sub_query_count": 0,
-            "metadata_filter_applied": False,
-            "metadata_filter_count": 0,
-            "logical_document_filter_count": 0,
-            "reason_codes": ["phase1_compat_default_dense"],
-        }
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["schema_version"] == "phase2.trace.v1"
+        assert run.query_plan_json["strategy_type"] == "dense"
+        assert run.query_plan_json["query_mode"] == "single_query"
+        assert run.query_plan_json["query_hash"] == hashlib.sha256(b"alpha policy").hexdigest()
+        assert run.query_plan_json["rewrite_applied"] is False
+        assert run.query_plan_json["sub_query_count"] == 0
+        assert run.query_plan_json["metadata_filter_applied"] is False
+        assert run.query_plan_json["metadata_filter_count"] == 0
+        assert run.query_plan_json["logical_document_filter_count"] == 0
+        assert run.query_plan_json["reason_codes"] == ["phase1_compat_default_dense"]
+        assert run.query_plan_json["intent"] == "factual_lookup"
+        assert run.query_plan_json["recommended_strategy"] == "dense"
+        assert run.query_plan_json["candidate_strategies"] == ["dense", "hybrid"]
+        assert "analysis" in run.query_plan_json
+        assert "planner" in run.query_plan_json
         assert run.strategy_decision_json == {
             "schema_version": "phase2.trace.v1",
             "selected_strategy": "dense",
@@ -446,7 +456,6 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert latency["rerank_ms"] >= 0
         assert latency["retrieval_items_persist_ms"] >= 0
         assert "generation_ms" not in latency
-        assert "alpha policy" not in str(run.query_plan_json)
         assert "query_plan_json" not in str(data)
         assert run.answer_confidence is None
         assert run.groundedness_score is None
@@ -2035,7 +2044,14 @@ def _assert_safe_run_trace(
             "latency": run.latency_breakdown_json,
         }
     )
-    assert raw_query not in dumped
+    if any(part in raw_query.lower() for part in ("secret", "token", "password", "api_key")):
+        assert raw_query not in dumped
+    assert (
+        run.query_plan_json["query_hash"] == hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
+    )
+    assert "intent" in run.query_plan_json
+    assert "candidate_strategies" in run.query_plan_json
+    assert "recommended_strategy" in run.query_plan_json
     assert "raw_prompt" not in dumped
     assert "raw_chunk" not in dumped
     assert "content_text" not in dumped

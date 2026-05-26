@@ -37,6 +37,8 @@ test("retrieval debug redaction removes forbidden trace keys and secret-like val
 
 test("retrieval debug value formatting avoids unsafe primitive display", () => {
   expect(formatUnknownValue("OPENAI_API_KEY=sk-secret")).toBe("[redacted]");
+  expect(formatUnknownValue("secret-token")).toBe("[redacted]");
+  expect(formatUnknownValue("+1 555 111 2222")).toBe("[redacted]");
   expect(formatUnknownValue(-1)).toBe("-1");
   expect(redactValue(["safe", "token=secret-value"])).toEqual(["safe", "[redacted]"]);
 });

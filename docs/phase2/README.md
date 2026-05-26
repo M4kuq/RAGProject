@@ -128,9 +128,26 @@ PR-26 adds:
 
 PR-26 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
+## PR-27 Query Analyzer / Query Planner
+
+PR-27 adds:
+
+- deterministic rule-based `QueryAnalyzer`
+- deterministic rule-based `QueryPlanner`
+- intent classification
+- ambiguity, keyword-heavy, temporal, and version-specific signals
+- safe query rewrite metadata
+- planned sub-query previews
+- structured metadata filter candidates
+- candidate strategy and recommended strategy proposals
+- query-plan trace integration for `/api/v1/rag/search` and `/api/v1/rag/ask`
+- Retrieval Debug UI display for analysis and planning summary
+
+PR-27 does not execute StrategyRouter, Agentic Retrieval Loop, context sufficiency checks, multi-query retrieval, metadata-filtered retrieval, version-aware retrieval, LLM planning, LangSmith export, Graph-RAG, OCR, or external operation agents.
+
 ## Non-goals
 
-PR-26 does not implement QueryAnalyzer, StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-27 does not implement StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

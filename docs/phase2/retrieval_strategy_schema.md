@@ -32,6 +32,23 @@ The trace DTOs use `phase2.trace.v1`:
 
 They are JSON serializable and must not carry raw prompt, raw query, full context, raw chunk text, PII, secrets, tokens, or credentials.
 
+PR-27 query analysis and planning extends `QueryPlanTrace` with safe planned-only fields:
+
+- `analysis.intent`
+- `analysis.ambiguity_score`
+- `analysis.keyword_heavy_score`
+- `analysis.version_specific_flag`
+- `planner.rewrite_applied`
+- `planner.rewritten_query_hash`
+- bounded `planner.rewritten_query_preview`
+- `planner.sub_queries`
+- `planner.metadata_filter_candidates`
+- `planner.candidate_strategies`
+- `planner.recommended_strategy`
+- `planner.safety_flags`
+
+Top-level summary copies are stored for Retrieval Debug UI rendering. The original user query preview is not persisted; derived previews are redacted and truncated. Candidate strategies are not executed until the Strategy Router PR.
+
 PR-23 sparse trace adds:
 
 - `query_plan_json.reason_codes = ["phase2_sparse_lexical", "normalized_terms:<count>"]`

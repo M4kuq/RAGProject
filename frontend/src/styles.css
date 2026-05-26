@@ -419,6 +419,14 @@ textarea {
   margin-bottom: 8px;
 }
 
+.compact-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
