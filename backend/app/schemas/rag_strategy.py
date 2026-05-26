@@ -73,6 +73,7 @@ class LatencyBreakdown(SafeTraceModel):
     retrieval_ms: int | None = Field(default=None, ge=0)
     query_embedding_ms: int | None = Field(default=None, ge=0)
     qdrant_search_ms: int | None = Field(default=None, ge=0)
+    sparse_search_ms: int | None = Field(default=None, ge=0)
     rdb_final_check_ms: int | None = Field(default=None, ge=0)
     rerank_ms: int | None = Field(default=None, ge=0)
     retrieval_items_persist_ms: int | None = Field(default=None, ge=0)
@@ -99,6 +100,9 @@ class RetrievalSettingsSnapshot(SafeTraceModel):
     router_enabled: bool = False
     trace_enabled: bool = True
     fusion_method: FusionMethod = DEFAULT_FUSION_METHOD
+    sparse_provider: str | None = Field(default=None, max_length=100)
+    sparse_language: str | None = Field(default=None, max_length=30)
+    sparse_score_normalization: str | None = Field(default=None, max_length=30)
 
 
 class ScoreBreakdown(SafeTraceModel):

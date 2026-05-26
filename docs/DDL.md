@@ -296,7 +296,7 @@ CREATE TABLE document_chunks (
 );
 
 COMMENT ON TABLE document_chunks IS 'document_version 配下の chunk。Phase1 では chunk 単位 is_active は持たず、version active と logical document status を正とする。';
-COMMENT ON COLUMN document_chunks.content_text IS 'RAG retrieval/generation 用の chunk text。application log / audit log には出さない。';
+COMMENT ON COLUMN document_chunks.content_text IS 'RAG retrieval/generation/sparse retrieval 用の chunk text。application log / audit log / trace JSON / score_breakdown JSON には出さない。';
 
 -- ============================================================
 -- 4. Jobs
@@ -816,6 +816,12 @@ CREATE INDEX ix_document_versions_active
 
 CREATE INDEX ix_document_chunks_version_index
     ON document_chunks(document_version_id, chunk_index ASC);
+CREATE INDEX ix_document_chunks_content_fts
+    ON document_chunks
+    USING GIN (to_tsvector('simple', content_text));
+CREATE INDEX ix_document_chunks_content_fts_english
+    ON document_chunks
+    USING GIN (to_tsvector('english', content_text));
 
 CREATE INDEX ix_jobs_status_priority_created
     ON jobs(status, priority ASC, created_at ASC);

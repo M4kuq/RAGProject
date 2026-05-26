@@ -16,6 +16,18 @@ PR-21 stores safe retrieval trace for the existing dense flow:
 
 Trace payloads never store raw query, raw prompt, full context, raw chunk text, PII, secrets, credentials, tokens, or external raw request/response bodies.
 
+PR-23 extends this foundation to standalone sparse retrieval:
+
+- `retrieval_runs.strategy_type = "sparse"`
+- `query_plan_json` stores query hash, safe filter counts, and normalized term count only
+- `strategy_decision_json` records explicit sparse selection
+- `latency_breakdown_json` includes `sparse_search_ms`
+- `retrieval_settings_json` includes sparse provider/language/normalization
+- `retrieval_run_items.retrieval_source = "sparse"`
+- `score_breakdown_json` stores `sparse_score` and rank metadata only
+
+Sparse trace does not expose the raw query, `content_text`, full context, or full PostgreSQL result payload.
+
 ## Dataset Foundation
 
 PR-22 stores evaluation datasets and cases in DB so the same dataset can be reused across strategies:
@@ -50,7 +62,7 @@ The comparison key is:
 evaluation_dataset_id + strategy_type + metric_name
 ```
 
-PR-22 stores this shape but does not run sparse, hybrid, or agentic_router comparisons. PR-25 will add Strategy Evaluation Runner on top of this schema.
+PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`, but PR-25 still owns dataset-wide Strategy Evaluation Runner execution across dense/sparse/hybrid/agentic_router.
 
 ## CI Direction
 

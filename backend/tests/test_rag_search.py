@@ -50,6 +50,7 @@ from app.rag.retrieval import (
     RetrievalFilters,
     VectorSearchCandidate,
 )
+from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query, normalize_sparse_scores
 from app.services.rag_service import RagService
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -190,6 +191,50 @@ def test_retrieval_and_rerank_settings_validation() -> None:
         Settings(generation_provider="remote")
 
 
+def test_sparse_query_normalization_and_score_order_are_deterministic() -> None:
+    normalized = normalize_sparse_query(
+        "Alpha alpha secondary SQL_123 beta gamma delta",
+        max_terms=4,
+    )
+
+    assert normalized.terms == ("alpha", "secondary", "sql_123", "beta")
+    assert normalized.search_text == "alpha secondary sql_123 beta"
+
+    ranked = normalize_sparse_scores([(2, 2.0), (1, 2.0), (3, 1.0), (4, 0.0)])
+    assert [(candidate.document_chunk_id, candidate.rank_order) for candidate in ranked] == [
+        (1, 1),
+        (2, 2),
+        (3, 3),
+    ]
+    assert ranked[0].sparse_score == 1.0
+    assert ranked[2].sparse_score == 0.5
+    rounded_tie_ranked = normalize_sparse_scores([(2, 1.0000002), (1, 1.0000001)])
+    assert [candidate.document_chunk_id for candidate in rounded_tie_ranked] == [2, 1]
+    assert rounded_tie_ranked[0].sparse_score == rounded_tie_ranked[1].sparse_score
+
+
+def test_sparse_settings_validation() -> None:
+    settings = Settings(
+        sparse_provider="postgres_fts",
+        sparse_language="english",
+        sparse_min_query_terms=2,
+        sparse_max_query_terms=4,
+        sparse_score_normalization="max",
+    )
+
+    assert settings.sparse_provider == "postgres_fts"
+    assert settings.sparse_language == "english"
+
+    with pytest.raises(ValueError):
+        Settings(sparse_provider="external")
+    with pytest.raises(ValueError):
+        Settings(sparse_language="japanese")
+    with pytest.raises(ValueError):
+        Settings(sparse_min_query_terms=5, sparse_max_query_terms=4)
+    with pytest.raises(ValueError):
+        Settings(sparse_score_normalization="none")
+
+
 def test_in_memory_vector_search_client_scores_fake_qdrant_points() -> None:
     qdrant = InMemoryQdrantClient()
     qdrant.create_collection(
@@ -245,6 +290,7 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
     assert summary == {
         "requested_top_k": 5,
         "qdrant_candidate_count": 5,
+        "sparse_candidate_count": None,
         "post_filter_candidate_count": 2,
         "selected_count": 1,
         "excluded_by_rdb_check_count": 3,
@@ -360,6 +406,180 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
+def test_rag_search_sparse_success_persists_trace_and_score_breakdown(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "alpha secondary material",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "strategy": "sparse",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert vector_client.query_vectors == []
+    summary = data["retrieval_score_summary"]
+    assert summary["qdrant_candidate_count"] == 0
+    assert summary["sparse_candidate_count"] == 2
+    assert summary["post_filter_candidate_count"] == 2
+    assert summary["excluded_by_rdb_check_count"] == 0
+    assert summary["selected_count"] == 1
+    assert summary["top1_rerank_score"] is None
+    assert len(data["items"]) == 2
+    assert all(item["rerank_score"] is None for item in data["items"])
+    assert all(item["rerank_order"] is None for item in data["items"])
+    assert [item["rank_order"] for item in data["items"]] == [1, 2]
+    assert sum(1 for item in data["items"] if item["selected_flag"]) == 1
+    assert "content_text" not in str(data)
+    assert "OPENAI_API_KEY" not in str(data)
+    assert "full active chunk text should not be returned whole" not in str(data)
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "sparse"
+        _assert_safe_run_trace(run, raw_query="alpha secondary material", strategy="sparse")
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["reason_codes"] == [
+            "phase2_sparse_lexical",
+            "normalized_terms:3",
+        ]
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["decision_source"] == "request"
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["sparse_provider"] == "postgres_fts"
+        assert run.retrieval_settings_json["sparse_language"] == "simple"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["sparse_search_ms"] >= 0
+        assert run.latency_breakdown_json["rdb_final_check_ms"] >= 0
+        assert run.latency_breakdown_json["retrieval_items_persist_ms"] >= 0
+        assert "qdrant_search_ms" not in run.latency_breakdown_json
+        assert "query_embedding_ms" not in run.latency_breakdown_json
+        assert "rerank_ms" not in run.latency_breakdown_json
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert [item.retrieval_source for item in items] == ["sparse", "sparse"]
+        first_score_breakdown = items[0].score_breakdown_json
+        assert first_score_breakdown is not None
+        assert first_score_breakdown == {
+            "schema_version": "phase2.trace.v1",
+            "retrieval_source": "sparse",
+            "sparse_score": first_score_breakdown["sparse_score"],
+            "rank_order": 1,
+            "final_rank": 1,
+            "selected_flag": True,
+        }
+        assert 0.0 <= first_score_breakdown["sparse_score"] <= 1.0
+        assert "content_text" not in str(first_score_breakdown)
+        assert "raw_chunk_text" not in str(first_score_breakdown)
+        assert all(item.rerank_score is None and item.rerank_order is None for item in items)
+
+
+def test_rag_search_sparse_filters_invalid_candidates_before_limit(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    with session_factory() as db:
+        for document_chunk_id in (200, 300, 400):
+            chunk = db.get(DocumentChunk, document_chunk_id)
+            assert chunk is not None
+            chunk.content_text = "alpha " * 200
+            chunk.char_count = len(chunk.content_text)
+        db.commit()
+
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha", "top_k": 1, "strategy": "sparse"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert vector_client.query_vectors == []
+    assert len(data["items"]) == 1
+    assert data["items"][0]["document_chunk_id"] in {100, 101}
+    summary = data["retrieval_score_summary"]
+    assert summary["sparse_candidate_count"] == 1
+    assert summary["post_filter_candidate_count"] == 1
+    assert summary["excluded_by_rdb_check_count"] == 0
+    assert "content_text" not in str(data)
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "sparse"
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert len(items) == 1
+        assert items[0].retrieval_source == "sparse"
+        assert items[0].document_chunk_id in {100, 101}
+
+
+def test_rag_search_sparse_no_result_succeeds_without_items(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "zzzz-no-match", "strategy": "sparse"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["items"] == []
+    assert vector_client.query_vectors == []
+    assert data["retrieval_score_summary"]["sparse_candidate_count"] == 0
+    assert data["retrieval_score_summary"]["selected_count"] == 0
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "sparse"
+        _assert_safe_run_trace(run, raw_query="zzzz-no-match", strategy="sparse")
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+
+
+def test_rag_search_unsupported_strategy_returns_safe_error(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha secret-token", "strategy": "hybrid"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "strategy_not_enabled"
+    assert "secret-token" not in str(body)
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(RetrievalRun).count() == 0
+
+
 def test_rag_search_zero_result_succeeds_without_items(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -448,6 +668,52 @@ def test_rag_search_retrieval_failure_marks_run_failed(
         assert run.error_code == "retrieval_failed"
         assert run.answer_confidence is None
         _assert_safe_run_trace(run, raw_query="alpha secret-token")
+
+
+def test_rag_search_sparse_failure_marks_run_failed_without_raw_query(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        qdrant_collection_name="document_chunks",
+    )
+    failing_service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        sparse_strategy=_FailingSparseStrategy(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: failing_service
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha secret-token", "strategy": "sparse"},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["code"] == "retrieval_failed"
+    assert "secret-token" not in str(body)
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        run = db.query(RetrievalRun).order_by(RetrievalRun.retrieval_run_id.desc()).first()
+        assert run is not None
+        assert run.status == "failed"
+        assert run.strategy_type == "sparse"
+        assert run.error_code == "retrieval_failed"
+        _assert_safe_run_trace(run, raw_query="alpha secret-token", strategy="sparse")
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
 
 
 def test_rag_search_rerank_failure_marks_run_failed_without_items(
@@ -1078,6 +1344,19 @@ class _FailingReranker:
         raise RerankError()
 
 
+class _FailingSparseStrategy(SparseRetrievalStrategy):
+    def search(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        settings: Settings,
+    ) -> list[VectorSearchCandidate]:
+        raise RetrievalError()
+
+
 class _FailingAnswerGenerator:
     def generate(self, request: GenerationRequest) -> Any:
         raise AnswerGenerationError()
@@ -1312,18 +1591,23 @@ def _unsafe_headers(csrf_token: str) -> dict[str, str]:
     return {"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN}
 
 
-def _assert_safe_run_trace(run: RetrievalRun, *, raw_query: str) -> None:
+def _assert_safe_run_trace(
+    run: RetrievalRun,
+    *,
+    raw_query: str,
+    strategy: str = "dense",
+) -> None:
     assert run.query_plan_json is not None
     assert run.query_plan_json["schema_version"] == "phase2.trace.v1"
-    assert run.query_plan_json["strategy_type"] == "dense"
+    assert run.query_plan_json["strategy_type"] == strategy
     assert (
         run.query_plan_json["query_hash"] == hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
     )
     assert run.strategy_decision_json is not None
-    assert run.strategy_decision_json["selected_strategy"] == "dense"
+    assert run.strategy_decision_json["selected_strategy"] == strategy
     assert run.strategy_decision_json["router_enabled"] is False
     assert run.retrieval_settings_json is not None
-    assert run.retrieval_settings_json["strategy_type"] == "dense"
+    assert run.retrieval_settings_json["strategy_type"] == strategy
     assert run.latency_breakdown_json is not None
     assert run.latency_breakdown_json["schema_version"] == "phase2.trace.v1"
     assert run.latency_breakdown_json["total_ms"] >= 0

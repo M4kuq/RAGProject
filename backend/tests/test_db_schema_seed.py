@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0004_eval_dataset_metrics"
+    assert version == "0005_sparse_retrieval_fts"
 
     expected_tables = {
         "roles",
@@ -149,6 +149,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ix_evaluation_cases_dataset_status",
         "ix_evaluation_runs_dataset_strategy",
         "ix_evaluation_run_items_case",
+        "ix_document_chunks_content_fts",
+        "ix_document_chunks_content_fts_english",
     }
     actual_indexes = scalar_set(
         pg_engine,
@@ -175,7 +177,9 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
                         'ux_jobs_active_retry_per_source',
                         'ux_jobs_active_message_edit',
                         'ix_chat_sessions_user_status_created',
-                        'ix_audit_logs_target'
+                        'ix_audit_logs_target',
+                        'ix_document_chunks_content_fts',
+                        'ix_document_chunks_content_fts_english'
                       )
                     """
                 )
@@ -188,6 +192,10 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
     assert "message_edit_regeneration" in partial_index_defs["ux_jobs_active_message_edit"]
     assert "created_at desc" in partial_index_defs["ix_chat_sessions_user_status_created"]
     assert "created_at desc" in partial_index_defs["ix_audit_logs_target"]
+    assert "using gin" in partial_index_defs["ix_document_chunks_content_fts"]
+    assert "to_tsvector('simple'" in partial_index_defs["ix_document_chunks_content_fts"]
+    assert "using gin" in partial_index_defs["ix_document_chunks_content_fts_english"]
+    assert "to_tsvector('english'" in partial_index_defs["ix_document_chunks_content_fts_english"]
 
 
 def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> None:
@@ -572,6 +580,12 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.hybrid.enabled") is False
         assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
         assert _setting_value(db, "rag.trace.enabled") is True
+        assert _setting_value(db, "rag.sparse.enabled") is True
+        assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
+        assert _setting_value(db, "rag.sparse.language") == "simple"
+        assert _setting_value(db, "rag.sparse.min_query_terms") == 1
+        assert _setting_value(db, "rag.sparse.max_query_terms") == 32
+        assert _setting_value(db, "rag.sparse.score_normalization") == "max"
         assert _setting_value(db, "rag.evaluation.default_dataset") == {
             "dataset_name": "phase2_strategy_smoke",
             "strategy_type": "dense",
@@ -650,6 +664,8 @@ def test_seed_preserves_existing_phase2_strategy_setting(
             assert _setting_value(db, "rag.default_strategy") == "hybrid"
             assert _setting_value(db, "rag.hybrid.enabled") is False
             assert _setting_value(db, "rag.router.enabled") is False
+            assert _setting_value(db, "rag.sparse.enabled") is True
+            assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
             assert _setting_value(db, "rag.evaluation.default_dataset") == {
                 "dataset_name": "phase2_strategy_smoke",
                 "strategy_type": "dense",

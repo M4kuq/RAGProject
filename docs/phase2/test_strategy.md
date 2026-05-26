@@ -24,7 +24,7 @@
 
 ## PR-22 DB / Migration Tests
 
-- Alembic head is `0004_evaluation_dataset_strategy_metrics`.
+- Alembic head is `0004_eval_dataset_metrics`.
 - `evaluation_datasets` and `evaluation_cases` exist.
 - `evaluation_runs` has dataset, strategy, trigger, retrieval settings, and strategy summary fields.
 - `evaluation_run_items` has case, strategy, case key, latency, and metric summary fields.
@@ -49,6 +49,19 @@
 - Persistent dataset cases can be evaluated by the existing dense runner.
 - PR-21 retrieval trace tests still pass.
 - `/rag/search` and `/rag/ask` tests still pass.
+
+## PR-23 Sparse Retrieval Tests
+
+- Alembic head is `0005_sparse_retrieval_fts`.
+- PostgreSQL schema includes language-matched sparse FTS indexes.
+- Sparse query normalization lowercases, deduplicates, and enforces the max term limit.
+- Sparse score normalization ranks by raw score and tie-breaks by `document_chunk_id ASC`.
+- `/rag/search strategy=sparse` writes `retrieval_runs.strategy_type = sparse`.
+- Sparse items write `retrieval_source = sparse` and `score_breakdown_json.sparse_score`.
+- Sparse no-result returns `200 OK` with `items=[]`.
+- Sparse failure marks the run failed with safe trace.
+- Dense `/rag/search` and `/rag/ask` remain default dense.
+- Trace, response, and score breakdown do not include raw query, raw prompt, raw chunk text, full context, PII, or secrets.
 
 ## Checks
 

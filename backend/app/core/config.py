@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=32, ge=1)
     retrieval_top_k_default: int = Field(default=20, ge=1, le=20)
     retrieval_top_k_max: int = Field(default=20, ge=1, le=20)
+    sparse_enabled: bool = True
+    sparse_provider: str = "postgres_fts"
+    sparse_language: str = "simple"
+    sparse_min_query_terms: int = Field(default=1, ge=1, le=32)
+    sparse_max_query_terms: int = Field(default=32, ge=1, le=64)
+    sparse_score_normalization: str = "max"
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
     rerank_top_n_max: int = Field(default=5, ge=1, le=20)
@@ -150,6 +156,17 @@ class Settings(BaseSettings):
             raise ValueError("RERANK_PROVIDER must be none, fake, or local")
         if self.retrieval_top_k_default > self.retrieval_top_k_max:
             raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
+        self.sparse_provider = self.sparse_provider.lower()
+        if self.sparse_provider != "postgres_fts":
+            raise ValueError("SPARSE_PROVIDER must be postgres_fts")
+        self.sparse_language = self.sparse_language.lower()
+        if self.sparse_language not in {"simple", "english"}:
+            raise ValueError("SPARSE_LANGUAGE must be simple or english")
+        if self.sparse_min_query_terms > self.sparse_max_query_terms:
+            raise ValueError("SPARSE_MIN_QUERY_TERMS must be <= SPARSE_MAX_QUERY_TERMS")
+        self.sparse_score_normalization = self.sparse_score_normalization.lower()
+        if self.sparse_score_normalization != "max":
+            raise ValueError("SPARSE_SCORE_NORMALIZATION must be max")
         if self.rerank_top_n_default > self.rerank_top_n_max:
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:

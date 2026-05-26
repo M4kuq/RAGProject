@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.base import Base
 from app.rag.retrieval import RetrievalFilters
+from app.rag.strategy import RetrievalStrategy
 from app.rag.trace import (
     LatencyTracker,
     TraceRedactor,
@@ -18,6 +19,9 @@ from app.rag.trace import (
     build_default_dense_strategy_decision,
     build_dense_score_breakdown,
     build_retrieval_settings_snapshot,
+    build_sparse_query_plan,
+    build_sparse_score_breakdown,
+    build_sparse_strategy_decision,
 )
 from app.repositories.retrieval_repository import RetrievalRepository
 
@@ -93,6 +97,37 @@ def test_default_dense_strategy_decision_has_no_prompt_or_context() -> None:
     assert "context" not in dumped
 
 
+def test_sparse_trace_builders_keep_only_safe_metadata() -> None:
+    raw_query = "alpha secondary OPENAI_API_KEY=sk-test"
+    query_hash = hashlib.sha256(raw_query.encode("utf-8")).hexdigest()
+
+    plan = build_sparse_query_plan(
+        query_hash=query_hash,
+        filters=RetrievalFilters(logical_document_ids=(10,), modality="text"),
+        normalized_term_count=3,
+    )
+    decision = build_sparse_strategy_decision()
+    score = build_sparse_score_breakdown(
+        sparse_score=0.8123456,
+        rank_order=1,
+        final_rank=1,
+        selected_flag=True,
+    )
+    dumped = json.dumps({"plan": plan, "decision": decision, "score": score})
+
+    assert plan["strategy_type"] == "sparse"
+    assert plan["query_hash"] == query_hash
+    assert plan["metadata_filter_applied"] is True
+    assert plan["reason_codes"] == ["phase2_sparse_lexical", "normalized_terms:3"]
+    assert decision["selected_strategy"] == "sparse"
+    assert decision["decision_source"] == "request"
+    assert score["retrieval_source"] == "sparse"
+    assert score["sparse_score"] == 0.812346
+    assert raw_query not in dumped
+    assert "sk-test" not in dumped
+    assert "content_text" not in dumped
+
+
 def test_retrieval_settings_snapshot_has_safe_provider_metadata_only() -> None:
     settings = Settings(
         app_env="test",
@@ -116,6 +151,18 @@ def test_retrieval_settings_snapshot_has_safe_provider_metadata_only() -> None:
     assert snapshot["generation_provider"] == "fake"
     assert snapshot["qdrant_collection"] == "redacted"
     assert "password" not in json.dumps(snapshot).lower()
+
+    sparse_snapshot = build_retrieval_settings_snapshot(
+        settings=settings,
+        top_k=5,
+        rerank_top_n=2,
+        filters=RetrievalFilters(),
+        strategy_type=RetrievalStrategy.SPARSE,
+    )
+    assert sparse_snapshot["strategy_type"] == "sparse"
+    assert sparse_snapshot["sparse_provider"] == "postgres_fts"
+    assert sparse_snapshot["sparse_language"] == "simple"
+    assert sparse_snapshot["sparse_score_normalization"] == "max"
 
 
 def test_score_breakdown_has_scores_without_chunk_text() -> None:

@@ -36,9 +36,21 @@ PR-22 adds evaluation dataset and case management:
 
 The existing evaluation runner remains dense-compatible. Non-dense strategy execution belongs to PR-25.
 
+## PR-23 Delta
+
+PR-23 adds standalone sparse retrieval:
+
+- PostgreSQL full-text search over `document_chunks`
+- `SparseRetrievalStrategy`
+- `strategy=sparse` for `/api/v1/rag/search`
+- sparse run trace and item score breakdown
+- existing RDB final check reuse
+
+`/rag/ask` remains dense by default. Hybrid fusion and strategy routing remain downstream work.
+
 ## Downstream Dependencies
 
-PR-23/24 will add sparse and hybrid retrieval. PR-25 will use PR-22 datasets and strategy metric schema to compare retrieval strategies. PR-30 will reuse the schema for agentic router evaluation and failure dataset promotion.
+PR-24 will consume PR-23 sparse candidates and existing dense candidates for hybrid retrieval. PR-25 will use PR-22 datasets and strategy metric schema to compare retrieval strategies. PR-30 will reuse the schema for agentic router evaluation and failure dataset promotion.
 
 ## Phase3 Boundary
 
