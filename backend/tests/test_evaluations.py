@@ -470,6 +470,7 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "faithfulness",
                 "no_context_rate",
                 "p95_latency",
+                "strategy_selection_accuracy",
             ],
             "case_limit": 1,
             "top_k": None,
@@ -619,7 +620,7 @@ def test_evaluation_service_runner_persists_items_results_and_safe_details() -> 
                 "faithfulness",
                 "groundedness",
                 "citation_coverage",
-                "context_precision",
+                "strategy_selection_accuracy",
             }
             assert all(result.strategy_type == "dense" for result in results)
             assert all(
@@ -792,6 +793,8 @@ def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> No
             ).all()
             assert [item.strategy_type for item in items] == ["dense", "sparse", "hybrid"]
             assert all(item.retrieval_run_id is not None for item in items)
+            assert run.strategy_metrics_summary_json["case_count"] == 3
+            assert run.strategy_metrics_summary_json["succeeded_count"] == 3
             retrieval_runs = db.scalars(
                 select(RetrievalRun).order_by(RetrievalRun.retrieval_run_id)
             ).all()
@@ -809,7 +812,6 @@ def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> No
                 "faithfulness",
                 "no_context_rate",
                 "p95_latency",
-                "strategy_selection_accuracy",
             }
             assert all(
                 "target chunk" not in json.dumps(result.metric_detail_json).lower()
@@ -821,6 +823,9 @@ def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> No
                 RetrievalStrategy.SPARSE,
                 RetrievalStrategy.HYBRID,
             ]
+            assert detail.case_count == 3
+            assert detail.succeeded_count == 3
+            assert detail.failed_count == 0
             comparison = service.get_strategy_comparison(
                 db,
                 evaluation_run_id=created.evaluation_run_id,
@@ -837,6 +842,79 @@ def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> No
                 and metric.metric_name == "recall_at_k"
             )
             assert dense_recall.average == 1.0
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_runner_honors_metric_selection_and_bounds_request_ids() -> None:
+    engine, session_factory = _session_factory()
+    long_case_key = "case_" + ("x" * 115)
+    long_request_id = "request-" + ("r" * 90)
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="custom_metric_strategy",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key=long_case_key,
+                    question="Which retrieval strategy finds the target?",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse"],
+                    metrics=["recall_at_k"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id=long_request_id,
+            )
+            assert result["case_count"] == 2
+            assert result["succeeded_count"] == 2
+
+        with session_factory() as db:
+            detail = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            ).get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.case_count == 2
+            assert detail.metric_names == ["recall_at_k"]
+            results = db.scalars(select(EvaluationResult)).all()
+            assert {result.metric_name for result in results} == {"recall_at_k"}
+            retrieval_runs = db.scalars(select(RetrievalRun)).all()
+            assert len(retrieval_runs) == 2
+            assert all(run.request_id is not None for run in retrieval_runs)
+            assert all(len(str(run.request_id)) <= 100 for run in retrieval_runs)
+            assert len({run.request_id for run in retrieval_runs}) == 2
     finally:
         engine.dispose()
 
@@ -1012,15 +1090,6 @@ def test_evaluation_strategy_runner_treats_no_context_as_metric_outcome() -> Non
             assert len(items) == 1
             assert items[0].status == "succeeded"
             assert items[0].error_code is None
-            metadata = db.scalar(
-                select(EvaluationResult).where(
-                    EvaluationResult.evaluation_run_item_id == items[0].evaluation_run_item_id,
-                    EvaluationResult.metric_name == "case_metadata",
-                )
-            )
-            assert metadata is not None
-            assert metadata.details_json is not None
-            assert metadata.details_json["error_code"] == "no_context_found"
             no_context = db.scalar(
                 select(EvaluationResult).where(
                     EvaluationResult.evaluation_run_item_id == items[0].evaluation_run_item_id,
@@ -1080,19 +1149,7 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
             ).all()
             assert [item.status for item in items] == ["succeeded", "failed"]
             assert items[1].error_code == "no_context_found"
-            failed_metadata = db.scalar(
-                select(EvaluationResult).where(
-                    EvaluationResult.evaluation_run_item_id == items[1].evaluation_run_item_id,
-                    EvaluationResult.metric_name == "case_metadata",
-                )
-            )
-            assert failed_metadata is not None
-            assert failed_metadata.details_json == {
-                "case_id": "phase1_seed_ci",
-                "expected_keyword_count": 2,
-                "required_citation": True,
-                "error_code": "no_context_found",
-            }
+            assert items[1].case_key == "phase1_seed_ci"
     finally:
         engine.dispose()
 

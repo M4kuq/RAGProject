@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,6 +57,7 @@ from app.schemas.evaluations import (
 )
 
 SCORE_QUANT = Decimal("0.000001")
+RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH = 100
 
 STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
@@ -672,6 +674,7 @@ class EvaluationService:
         try:
             rag_service = self.rag_service_factory(self.settings, db)
             strategies = _strategy_values(config)
+            requested_metrics = set(cast(list[str], config["metrics"]))
             top_k = cast(int | None, config["top_k"])
             rerank_top_n = cast(int | None, config["rerank_top_n"])
             for loaded_case in cases:
@@ -692,6 +695,7 @@ class EvaluationService:
                             rag_service=rag_service,
                             case=loaded_case.case,
                             strategy_type=RetrievalStrategy(strategy_type),
+                            requested_metrics=requested_metrics,
                             request_id=_case_request_id(
                                 request_id,
                                 case_key=loaded_case.case_key,
@@ -708,6 +712,7 @@ class EvaluationService:
                             item_id=item_id,
                             case=loaded_case.case,
                             strategy_type=strategy_type,
+                            requested_metrics=requested_metrics,
                         )
                         db.commit()
                         continue
@@ -737,11 +742,12 @@ class EvaluationService:
 
         run = self._require_run(db, evaluation_run_id)
         summary = self._summary(db, run)
+        item_count = len(cases) * len(_strategy_values(config))
         run.strategy_metrics_summary_json = _strategy_metrics_summary_json(
             strategies=_strategy_values(_config(run)),
             strategy_comparison=summary.strategy_comparison,
             metric_summary=summary.metric_summary,
-            case_count=len(cases),
+            case_count=item_count,
             succeeded_count=succeeded_count,
             failed_count=failed_count,
         )
@@ -760,7 +766,7 @@ class EvaluationService:
         return {
             "status": "succeeded",
             "evaluation_run_id": evaluation_run_id,
-            "case_count": len(cases),
+            "case_count": item_count,
             "succeeded_count": succeeded_count,
             "failed_count": failed_count,
         }
@@ -772,6 +778,7 @@ class EvaluationService:
         rag_service: EvaluationRagService,
         case: EvaluationCase,
         strategy_type: RetrievalStrategy,
+        requested_metrics: set[str],
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
@@ -797,17 +804,20 @@ class EvaluationService:
                 rerank_top_n=rerank_top_n,
             )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        metrics = calculate_metrics(
-            EvaluationMetricInputs(
-                case=case,
-                answer_text=rag_result.answer_text,
-                citations=rag_result.citations,
-                confidence=rag_result.confidence,
-                retrieval_summary=rag_result.retrieval_score_summary,
-                retrieved_items=rag_result.retrieved_items,
-                latency_ms=latency_ms,
-                error_code=rag_result.error_code,
-            )
+        metrics = _filter_metrics(
+            calculate_metrics(
+                EvaluationMetricInputs(
+                    case=case,
+                    answer_text=rag_result.answer_text,
+                    citations=rag_result.citations,
+                    confidence=rag_result.confidence,
+                    retrieval_summary=rag_result.retrieval_score_summary,
+                    retrieved_items=rag_result.retrieved_items,
+                    latency_ms=latency_ms,
+                    error_code=rag_result.error_code,
+                )
+            ),
+            requested_metrics,
         )
         status = "succeeded" if rag_result.status == "succeeded" else "failed"
         return {
@@ -869,11 +879,15 @@ class EvaluationService:
         item_id: int,
         case: EvaluationCase,
         strategy_type: str,
+        requested_metrics: set[str],
     ) -> None:
         item = db.get(EvaluationRunItem, item_id)
         if item is None:
             return
-        metrics = failure_metrics(case, error_code="internal_error")
+        metrics = _filter_metrics(
+            failure_metrics(case, error_code="internal_error"),
+            requested_metrics,
+        )
         self.repository.finish_item(
             db,
             item=item,
@@ -904,10 +918,10 @@ class EvaluationService:
         metric_summary = _metric_summary(results_by_item)
         strategy_comparison = _strategy_comparison(items, results_by_item)
         job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
-        planned_case_count = (
-            self._planned_case_count(db, run) if run.status in {"queued", "running"} else 0
+        planned_item_count = (
+            self._planned_item_count(db, run) if run.status in {"queued", "running"} else 0
         )
-        case_count = max(_unique_case_count(items), planned_case_count)
+        case_count = max(len(items), planned_item_count)
         return EvaluationRunSummary(
             evaluation_run_id=run.evaluation_run_id,
             job_id=job.job_id if job is not None else None,
@@ -946,15 +960,18 @@ class EvaluationService:
             ),
             None,
         )
-        case_id = next(
-            (
-                str(result.details_json.get("case_id"))
-                for result in results
-                if result.metric_name == "case_metadata"
-                and isinstance(result.details_json, dict)
-                and result.details_json.get("case_id")
-            ),
-            None,
+        case_id = (
+            next(
+                (
+                    str(result.details_json.get("case_id"))
+                    for result in results
+                    if result.metric_name == "case_metadata"
+                    and isinstance(result.details_json, dict)
+                    and result.details_json.get("case_id")
+                ),
+                None,
+            )
+            or item.case_key
         )
         return EvaluationRunItemResponse(
             evaluation_run_item_id=item.evaluation_run_item_id,
@@ -1025,6 +1042,10 @@ class EvaluationService:
             )
             return min(count, case_limit) if case_limit is not None else count
         return _fixture_planned_case_count(run)
+
+    def _planned_item_count(self, db: Session, run: EvaluationRun) -> int:
+        config = _config(run)
+        return self._planned_case_count(db, run) * len(_strategy_values(config))
 
     def _dataset_response(
         self, db: Session, dataset: EvaluationDataset
@@ -1183,6 +1204,10 @@ def _find_metric(metrics: list[MetricValue], name: str) -> MetricValue | None:
     return next((metric for metric in metrics if metric.metric_name == name), None)
 
 
+def _filter_metrics(metrics: list[MetricValue], requested_metrics: set[str]) -> list[MetricValue]:
+    return [metric for metric in metrics if metric.metric_name in requested_metrics]
+
+
 def _selected_strategies(payload: EvaluationRunCreateRequest) -> list[RetrievalStrategy]:
     return payload.strategies or [payload.strategy_type]
 
@@ -1207,7 +1232,13 @@ def _case_request_id(
 ) -> str | None:
     if request_id is None:
         return None
-    return f"{request_id}:{strategy_type}:{case_key}"[:255]
+    derived = f"{request_id}:{strategy_type}:{case_key}"
+    if len(derived) <= RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH:
+        return derived
+    digest = hashlib.sha256(derived.encode("utf-8")).hexdigest()[:12]
+    suffix = f":{strategy_type}:{digest}"
+    prefix_length = max(RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH - len(suffix), 0)
+    return f"{request_id[:prefix_length]}{suffix}"
 
 
 def _unique_case_count(items: list[EvaluationRunItem]) -> int:

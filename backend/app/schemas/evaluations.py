@@ -85,6 +85,7 @@ DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.FAITHFULNESS,
     EvaluationMetricName.NO_CONTEXT_RATE,
     EvaluationMetricName.P95_LATENCY,
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY,
 )
 
 
