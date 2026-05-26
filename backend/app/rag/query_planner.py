@@ -29,7 +29,8 @@ _SENSITIVE_QUERY_RE = re.compile(
 _VERSION_RE = re.compile(r"(?i)\b(?:v(?:ersion)?\.?\s*\d+(?:\.\d+){0,3}|\d+\.\d+(?:\.\d+)*)\b")
 _ERROR_CODE_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]{2,}|[A-Z]+-\d{2,}|(?i:HTTP)\s*[45]\d{2})\b")
 _ENDPOINT_RE = re.compile(r"(?i)(?:^|\s)/[A-Za-z0-9_./{}:-]+")
-_FILE_EXTENSION_RE = re.compile(r"(?i)\.[a-z0-9]{1,8}\b")
+_FILE_EXTENSION_RE = re.compile(r"(?i)\.[a-z][a-z0-9]{0,7}\b")
+_SECTION_HINT_RE = re.compile(r"(?i)(?:^|\s)section\s*:\s*(?P<hint>.+)$")
 _QUOTED_RE = re.compile(r"[\"'`「『](.*?)[\"'`」』]")
 _STOPWORDS: Final = {
     "a",
@@ -168,7 +169,11 @@ class QueryAnalyzer:
         ambiguity_flags = _ambiguity_flags(normalized, tokens)
         keyword_signals = _keyword_signals(normalized, tokens)
         version_hints = _version_hints(normalized)
-        metadata_hints = _metadata_filter_candidates(normalized, self.max_preview_chars)
+        metadata_hints = _metadata_filter_candidates(
+            normalized,
+            self.max_preview_chars,
+            store_query_preview=self.store_query_preview,
+        )
         intent = _intent(normalized, version_hints=version_hints)
         keyword_score = _keyword_heavy_score(tokens, keyword_signals)
         ambiguity_score = _ambiguity_score(ambiguity_flags)
@@ -464,12 +469,11 @@ def _keyword_heavy_score(tokens: list[str], signals: list[str]) -> float:
 
 
 def _version_hints(normalized: str) -> list[str]:
-    lowered = normalized.lower()
     hints: list[str] = []
     if _VERSION_RE.search(normalized):
         hints.append("version_token")
     for keyword in _VERSION_KEYWORDS:
-        if keyword.lower() in lowered:
+        if _contains_keyword(normalized, keyword):
             hints.append(f"version_keyword:{TraceRedactor.safe_string(keyword, max_length=40)}")
     return _dedupe(hints)
 
@@ -477,6 +481,8 @@ def _version_hints(normalized: str) -> list[str]:
 def _metadata_filter_candidates(
     normalized: str,
     max_preview_chars: int,
+    *,
+    store_query_preview: bool,
 ) -> list[QueryMetadataFilterCandidate]:
     candidates: list[QueryMetadataFilterCandidate] = []
     for extension in _dedupe(
@@ -487,21 +493,30 @@ def _metadata_filter_candidates(
                 filter_type="file_extension",
                 field="source_label",
                 operator="ends_with",
-                value_preview=_preview(extension, max_chars=max_preview_chars, enabled=True),
+                value_preview=_preview(
+                    extension,
+                    max_chars=max_preview_chars,
+                    enabled=store_query_preview,
+                ),
                 value_hash=_hash_text(extension),
                 confidence=0.7,
                 reason_code="file_extension_signal",
             )
         )
-    if "section:" in normalized.lower():
-        section_hint = normalized.split(":", 1)[1].strip()
+    section_match = _SECTION_HINT_RE.search(normalized)
+    if section_match:
+        section_hint = section_match.group("hint").strip()
         if section_hint:
             candidates.append(
                 QueryMetadataFilterCandidate(
                     filter_type="section_title",
                     field="section_title",
                     operator="contains",
-                    value_preview=_preview(section_hint, max_chars=max_preview_chars, enabled=True),
+                    value_preview=_preview(
+                        section_hint,
+                        max_chars=max_preview_chars,
+                        enabled=store_query_preview,
+                    ),
                     value_hash=_hash_text(section_hint),
                     confidence=0.45,
                     reason_code="section_hint_signal",
@@ -551,9 +566,7 @@ def _sub_queries(
     elif intent == QueryIntent.VERSION_SPECIFIC:
         without_version_words = normalized
         for keyword in _VERSION_KEYWORDS:
-            without_version_words = re.sub(
-                re.escape(keyword), " ", without_version_words, flags=re.I
-            )
+            without_version_words = _replace_keyword(without_version_words, keyword, " ")
         candidates.append((normalize_query(without_version_words), "version_target"))
     elif intent == QueryIntent.TROUBLESHOOTING:
         codes = [match.group(0) for match in _ERROR_CODE_RE.finditer(normalized)]
@@ -604,8 +617,31 @@ def _tokens(query: str) -> list[str]:
 
 
 def _contains_any(value: str, keywords: tuple[str, ...]) -> bool:
+    return any(_contains_keyword(value, keyword) for keyword in keywords)
+
+
+def _contains_keyword(value: str, keyword: str) -> bool:
     lowered = value.lower()
-    return any(keyword.lower() in lowered for keyword in keywords)
+    keyword_lower = keyword.lower()
+    if keyword.isascii():
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(keyword_lower)}(?![A-Za-z0-9_])",
+                lowered,
+            )
+        )
+    return keyword_lower in lowered
+
+
+def _replace_keyword(value: str, keyword: str, replacement: str) -> str:
+    if keyword.isascii():
+        return re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(keyword)}(?![A-Za-z0-9_])",
+            replacement,
+            value,
+            flags=re.I,
+        )
+    return re.sub(re.escape(keyword), replacement, value, flags=re.I)
 
 
 def _hash_text(value: str) -> str:

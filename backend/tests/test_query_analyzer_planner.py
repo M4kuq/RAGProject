@@ -75,6 +75,45 @@ def test_query_analyzer_does_not_treat_plain_lowercase_words_as_error_codes() ->
     assert "deictic_reference" not in analysis.ambiguity_flags
 
 
+def test_query_analyzer_avoids_false_version_and_extension_signals() -> None:
+    analyzer = QueryAnalyzer()
+
+    plain_analysis = analyzer.analyze("cold folder policy", filters=RetrievalFilters())
+    assert plain_analysis.version_specific_flag is False
+    assert plain_analysis.version_hints == []
+
+    version_analysis = analyzer.analyze("compare v1.2 and v1.3", filters=RetrievalFilters())
+    assert version_analysis.version_specific_flag is True
+    assert "file_extension" not in version_analysis.keyword_signals
+    assert not any(
+        candidate.filter_type == "file_extension"
+        for candidate in version_analysis.metadata_filter_hints
+    )
+
+
+def test_query_analyzer_parses_section_hint_from_section_token() -> None:
+    analyzer = QueryAnalyzer()
+    analysis = analyzer.analyze("/api:v1 behavior section:intro", filters=RetrievalFilters())
+
+    section_candidates = [
+        candidate
+        for candidate in analysis.metadata_filter_hints
+        if candidate.filter_type == "section_title"
+    ]
+    assert len(section_candidates) == 1
+    assert section_candidates[0].value_preview == "intro"
+    assert section_candidates[0].value_hash == hashlib.sha256(b"intro").hexdigest()
+
+
+def test_query_analyzer_respects_preview_disable_for_metadata_candidates() -> None:
+    analyzer = QueryAnalyzer(store_query_preview=False)
+    analysis = analyzer.analyze("section:intro .md", filters=RetrievalFilters())
+
+    assert analysis.metadata_filter_hints
+    assert all(candidate.value_preview is None for candidate in analysis.metadata_filter_hints)
+    assert all(candidate.value_hash is not None for candidate in analysis.metadata_filter_hints)
+
+
 def test_query_planner_rewrites_and_generates_safe_sub_queries() -> None:
     analyzer = QueryAnalyzer()
     planner = QueryPlanner(max_sub_queries=3)
