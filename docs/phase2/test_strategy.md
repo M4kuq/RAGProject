@@ -63,6 +63,19 @@
 - Dense `/rag/search` and `/rag/ask` remain default dense.
 - Trace, response, and score breakdown do not include raw query, raw prompt, raw chunk text, full context, PII, or secrets.
 
+## PR-24 Hybrid Retrieval Tests
+
+- Hybrid fusion deduplicates by `document_chunk_id`.
+- RRF and weighted fusion are deterministic.
+- Fused scores normalize to `0.0..1.0`.
+- `/rag/search strategy=hybrid` writes `retrieval_runs.strategy_type = hybrid`.
+- Hybrid items write `retrieval_source = hybrid`.
+- Hybrid score breakdown writes dense score, sparse score, fused score, fusion method, and rank metadata.
+- Hybrid trace writes query plan, strategy decision, retrieval settings, `qdrant_search_ms`, `sparse_search_ms`, `fusion_ms`, and final-check latency.
+- Hybrid disabled returns `strategy_not_enabled` without creating a retrieval run.
+- Dense `/rag/search`, sparse `/rag/search`, `/rag/ask`, and evaluation dataset regressions remain green.
+- Trace, response, and score breakdown do not include raw query, raw prompt, raw chunk text, full context, PII, or secrets.
+
 ## Checks
 
 - `ruff format --check .`

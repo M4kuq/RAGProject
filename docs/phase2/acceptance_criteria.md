@@ -44,6 +44,24 @@
 - Sparse failure marks the run failed with safe trace.
 - Dense `/rag/search` and `/rag/ask` regressions still pass.
 
+## PR-24
+
+- `HybridRetrievalStrategy` exists.
+- `/api/v1/rag/search` accepts `strategy=hybrid`.
+- `strategy` omitted remains default `dense`.
+- Hybrid retrieval runs dense vector retrieval and sparse lexical retrieval for the same safe query hash.
+- Candidate dedupe is by `document_chunk_id`.
+- RRF and weighted fusion are available without new production dependencies.
+- Fused scores are normalized to `0.0..1.0` and ranking is deterministic.
+- Hybrid retrieval runs save `retrieval_runs.strategy_type = hybrid`.
+- Hybrid run items save `retrieval_run_items.retrieval_source = hybrid`.
+- Hybrid score breakdown saves dense score, sparse score, fused score, rank metadata, fusion method, and selection flag only.
+- Hybrid trace records safe query plan, strategy decision, retrieval settings, latency, and score metadata.
+- Hybrid reuses the existing RDB final check.
+- Hybrid 0-result returns `200 OK` with `items=[]`.
+- Hybrid disabled returns `strategy_not_enabled` without creating a retrieval run.
+- Dense `/rag/search`, sparse `/rag/search`, `/rag/ask`, and evaluation regressions still pass.
+
 ## Security
 
 The following must not be stored in dataset, case, metric detail, trace, score breakdown, logs, or normal responses:
@@ -55,12 +73,11 @@ The following must not be stored in dataset, case, metric detail, trace, score b
 - secret, token, credential, API key, password
 
 Evaluation case `question` is allowed only as a safe evaluation input. It must not be a full prompt or contain PII/secrets.
-Sparse response snippets are bounded display snippets. Raw chunk text is never stored in trace or score breakdown.
+Sparse and hybrid response snippets are bounded display snippets. Raw chunk text is never stored in trace or score breakdown.
 
-## Out of Scope for PR-23
+## Out of Scope for PR-24
 
 - Strategy Evaluation Runner
-- Hybrid Retrieval / score fusion
 - QueryAnalyzer / QueryPlanner
 - Agentic Router
 - Agentic Retrieval Loop

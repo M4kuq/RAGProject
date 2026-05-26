@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 
@@ -81,6 +81,8 @@ class RagAskRequest(BaseModel):
 
 
 class RetrievalScoreSummary(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     requested_top_k: int
     qdrant_candidate_count: int
     sparse_candidate_count: int | None = None

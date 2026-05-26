@@ -28,6 +28,18 @@ PR-23 extends this foundation to standalone sparse retrieval:
 
 Sparse trace does not expose the raw query, `content_text`, full context, or full PostgreSQL result payload.
 
+PR-24 extends this foundation to standalone hybrid retrieval:
+
+- `retrieval_runs.strategy_type = "hybrid"`
+- `query_plan_json` stores query hash, safe filter counts, normalized term count, and fusion method only
+- `strategy_decision_json` records explicit hybrid selection
+- `latency_breakdown_json` includes dense, sparse, and `fusion_ms` spans
+- `retrieval_settings_json` includes fusion method, weights, RRF constant, and sparse provider metadata
+- `retrieval_run_items.retrieval_source = "hybrid"`
+- `score_breakdown_json` stores dense score, sparse score, fused score, rank metadata, and fusion method only
+
+Hybrid trace does not expose the raw query, raw chunk text, full context, Qdrant raw payload, or full PostgreSQL result payload.
+
 ## Dataset Foundation
 
 PR-22 stores evaluation datasets and cases in DB so the same dataset can be reused across strategies:
@@ -62,7 +74,7 @@ The comparison key is:
 evaluation_dataset_id + strategy_type + metric_name
 ```
 
-PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`, but PR-25 still owns dataset-wide Strategy Evaluation Runner execution across dense/sparse/hybrid/agentic_router.
+PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`, and PR-24 makes hybrid search executable for `/rag/search`, but PR-25 still owns dataset-wide Strategy Evaluation Runner execution across dense/sparse/hybrid/agentic_router.
 
 ## CI Direction
 

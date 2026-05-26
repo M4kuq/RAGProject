@@ -6,7 +6,7 @@
 - `0004_eval_dataset_metrics`: PR-22 evaluation dataset and strategy metric schema.
 - `0005_sparse_retrieval_fts`: PR-23 PostgreSQL full-text expression index for sparse retrieval.
 
-Both migrations are additive. They do not delete existing Phase1 columns or change existing API contracts.
+These migrations are additive. They do not delete existing Phase1 columns or change existing API contracts. PR-24 adds hybrid retrieval in application code and reuses the PR-20 retrieval trace/source/score columns, so it does not require a new Alembic migration.
 
 ## PR-22 New Tables
 
@@ -92,6 +92,20 @@ USING GIN (to_tsvector('english', content_text));
 ```
 
 No generated column is added. The index uses existing `document_chunks.content_text` for search only. Raw chunk text is not copied into trace JSON, score breakdown JSON, logs, or API payload snapshots.
+
+## PR-24 Hybrid Retrieval
+
+PR-24 uses the existing schema:
+
+- `retrieval_runs.strategy_type = hybrid`
+- `retrieval_runs.query_plan_json`
+- `retrieval_runs.strategy_decision_json`
+- `retrieval_runs.latency_breakdown_json`
+- `retrieval_runs.retrieval_settings_json`
+- `retrieval_run_items.retrieval_source = hybrid`
+- `retrieval_run_items.score_breakdown_json`
+
+No table, column, index, CHECK constraint, or downgrade step is added in PR-24.
 
 ## Security
 

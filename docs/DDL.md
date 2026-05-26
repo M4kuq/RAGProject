@@ -529,7 +529,7 @@ CREATE TABLE retrieval_run_items (
 COMMENT ON TABLE retrieval_run_items IS 'RDB final check を通過した post-final-check candidates。Qdrant raw candidates は保存しない。';
 COMMENT ON COLUMN retrieval_run_items.retrieval_score IS 'vector search score。initial_score という列名は使用しない。';
 COMMENT ON COLUMN retrieval_run_items.payload_snapshot IS 'source_label, page_from, page_to, modality 等の表示用 snapshot。raw chunk text は保存しない。';
-COMMENT ON COLUMN retrieval_run_items.retrieval_source IS 'Phase2 retrieval source。PR-20ではdense保存の土台のみを作る。';
+COMMENT ON COLUMN retrieval_run_items.retrieval_source IS 'Phase2 retrieval source。dense/sparse/hybrid/fallback等のitem provenanceを保存する。';
 COMMENT ON COLUMN retrieval_run_items.score_breakdown_json IS 'Phase2 score breakdown。dense/sparse/fused/rerank等のscoreのみを保存し、raw chunk text/prompt/PII/secretは保存しない。';
 
 CREATE TABLE citations (

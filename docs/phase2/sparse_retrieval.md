@@ -127,7 +127,7 @@ PR-23 does not implement:
 
 ## PR-24 Handoff
 
-PR-24 can build hybrid retrieval by consuming:
+PR-24 builds hybrid retrieval by consuming:
 
 - dense candidates from the existing dense retrieval path
 - sparse candidates from `SparseRetrievalStrategy`

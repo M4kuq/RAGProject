@@ -48,9 +48,22 @@ PR-23 adds standalone sparse retrieval:
 
 `/rag/ask` remains dense by default. Hybrid fusion and strategy routing remain downstream work.
 
+## PR-24 Delta
+
+PR-24 adds standalone hybrid retrieval:
+
+- `HybridRetrievalStrategy`
+- RRF and weighted score fusion in `rag/fusion.py`
+- dense+sparse candidate dedupe by `document_chunk_id`
+- `strategy=hybrid` for `/api/v1/rag/search`
+- hybrid run trace and item score breakdown
+- existing RDB final check reuse
+
+`/rag/ask` remains dense by default. Query analysis, strategy routing, agentic control, Debug UI v2, and Strategy Evaluation Runner remain downstream work.
+
 ## Downstream Dependencies
 
-PR-24 will consume PR-23 sparse candidates and existing dense candidates for hybrid retrieval. PR-25 will use PR-22 datasets and strategy metric schema to compare retrieval strategies. PR-30 will reuse the schema for agentic router evaluation and failure dataset promotion.
+PR-25 will use PR-22 datasets and strategy metric schema to compare dense, sparse, and hybrid retrieval. PR-30 will reuse the schema for agentic router evaluation and failure dataset promotion.
 
 ## Phase3 Boundary
 

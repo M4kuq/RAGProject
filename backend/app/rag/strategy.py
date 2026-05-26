@@ -56,12 +56,28 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         "Default retrieval strategy. Phase1 behavior remains dense.",
     ),
     "rag.hybrid.enabled": (
-        False,
-        "Hybrid retrieval is disabled until the Phase2 hybrid retrieval PR.",
+        True,
+        "Enable standalone dense+sparse hybrid retrieval for Phase2 PR-24.",
     ),
     "rag.hybrid.fusion_method": (
         DEFAULT_FUSION_METHOD.value,
-        "Default future hybrid fusion method.",
+        "Default hybrid fusion method.",
+    ),
+    "rag.hybrid.rrf_k": (
+        60,
+        "RRF rank constant for hybrid retrieval.",
+    ),
+    "rag.hybrid.dense_weight": (
+        0.5,
+        "Dense score weight for hybrid weighted fusion.",
+    ),
+    "rag.hybrid.sparse_weight": (
+        0.5,
+        "Sparse score weight for hybrid weighted fusion.",
+    ),
+    "rag.hybrid.candidate_multiplier": (
+        2,
+        "Candidate overfetch multiplier for hybrid retrieval final check.",
     ),
     "rag.router.enabled": (
         False,
