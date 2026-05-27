@@ -56,7 +56,7 @@ class StrategyTraceSettings:
 
 DEFAULT_RETRIEVAL_STRATEGY: Final = RetrievalStrategy.DENSE
 DEFAULT_FUSION_METHOD: Final = FusionMethod.RRF
-DEFAULT_ROUTER_FALLBACK_STRATEGY: Final = RouterFallbackStrategy.DENSE
+DEFAULT_ROUTER_FALLBACK_STRATEGY: Final = RouterFallbackStrategy.FALLBACK_DENSE
 
 RETRIEVAL_STRATEGY_VALUES: Final = tuple(strategy.value for strategy in RetrievalStrategy)
 RETRIEVAL_SOURCE_VALUES: Final = tuple(source.value for source in RetrievalSource)
