@@ -1240,9 +1240,8 @@ class EvaluationService:
         accuracy: float | None = None
         accuracy_label = "not_applicable"
         not_applicable = True
-        if (expected_strategy or acceptable_strategies) and (
-            selected_strategy is not None or execution_strategy is not None
-        ):
+        has_strategy_decision = selected_strategy is not None or execution_strategy is not None
+        if (expected_strategy or acceptable_strategies) and has_strategy_decision:
             accepted = set(acceptable_strategies)
             if expected_strategy:
                 accepted.add(expected_strategy)
@@ -2164,13 +2163,12 @@ def _strategy_metrics_summary_json(
         case_value = entry.get("case_count")
         succeeded_value = entry.get("succeeded_count")
         failed_value = entry.get("failed_count")
-        observed_count = (
-            comparison.count + comparison.not_applicable_count + comparison.failed_count
-        )
+        successful_metric_count = comparison.count + comparison.not_applicable_count
+        observed_count = successful_metric_count + comparison.failed_count
         entry["case_count"] = max(case_value if isinstance(case_value, int) else 0, observed_count)
         entry["succeeded_count"] = max(
             succeeded_value if isinstance(succeeded_value, int) else 0,
-            comparison.count + comparison.not_applicable_count,
+            successful_metric_count,
         )
         entry["failed_count"] = max(
             failed_value if isinstance(failed_value, int) else 0,
