@@ -439,6 +439,36 @@ def test_rag_ask_agentic_router_respects_store_decision_trace_false(
         assert run.strategy_decision_json is None
 
 
+@pytest.mark.parametrize("strategy", ["sparse", "hybrid", "fallback_dense"])
+def test_rag_ask_request_rejects_non_public_strategies_without_persisting_messages(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    strategy: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="invalid ask strategy")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": f"invalid-strategy-{strategy}",
+            "message": "alpha secret-token",
+            "strategy": strategy,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+    assert "secret-token" not in str(body)
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+        assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
+
+
 def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

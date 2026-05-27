@@ -59,6 +59,12 @@ class EvaluationTriggerType(StrEnum):
     ONLINE_SAMPLED_TRACE = "online_sampled_trace"
 
 
+class EvaluationRunRequestStrategy(StrEnum):
+    DENSE = "dense"
+    SPARSE = "sparse"
+    HYBRID = "hybrid"
+
+
 class EvaluationMetricName(StrEnum):
     RECALL_AT_K = "recall_at_k"
     MRR = "mrr"
@@ -71,11 +77,8 @@ class EvaluationMetricName(StrEnum):
     CONTEXT_PRECISION = "context_precision"
 
 
-PR25_ALLOWED_STRATEGIES = {
-    RetrievalStrategy.DENSE,
-    RetrievalStrategy.SPARSE,
-    RetrievalStrategy.HYBRID,
-}
+DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY = EvaluationRunRequestStrategy.DENSE
+PR25_ALLOWED_STRATEGIES = set(EvaluationRunRequestStrategy)
 
 DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.RECALL_AT_K,
@@ -344,8 +347,10 @@ class EvaluationRunCreateRequest(BaseModel):
     dataset_name: str = Field(default="phase1_smoke", min_length=1, max_length=120)
     evaluation_dataset_id: int | None = Field(default=None, ge=1)
     case_limit: int | None = Field(default=10, ge=1, le=50)
-    strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
-    strategies: list[RetrievalStrategy] | None = Field(default=None, min_length=1, max_length=3)
+    strategy_type: EvaluationRunRequestStrategy = DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY
+    strategies: list[EvaluationRunRequestStrategy] | None = Field(
+        default=None, min_length=1, max_length=3
+    )
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
@@ -369,7 +374,7 @@ class EvaluationRunCreateRequest(BaseModel):
                 "dataset_name must use lowercase letters, digits, underscore or hyphen"
             )
         selected_strategies = self.strategies or [self.strategy_type]
-        deduped: list[RetrievalStrategy] = []
+        deduped: list[EvaluationRunRequestStrategy] = []
         for strategy in selected_strategies:
             if strategy not in PR25_ALLOWED_STRATEGIES:
                 raise ValueError("strategy is not enabled for PR-25 evaluation runner")

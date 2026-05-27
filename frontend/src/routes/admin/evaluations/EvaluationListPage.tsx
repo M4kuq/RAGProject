@@ -8,7 +8,7 @@ import {
   useEvaluationDatasets,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
-import type { RetrievalStrategy } from "../../../features/evaluations/evaluationTypes";
+import type { EvaluationRunnableStrategy } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
@@ -18,7 +18,7 @@ export function EvaluationListPage() {
   const [datasetName, setDatasetName] = useState("phase1_smoke");
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
-  const [strategies, setStrategies] = useState<RetrievalStrategy[]>(["dense"]);
+  const [strategies, setStrategies] = useState<EvaluationRunnableStrategy[]>(["dense"]);
   const [message, setMessage] = useState<string | null>(null);
   const params = useMemo(
     () => ({
@@ -90,7 +90,7 @@ export function EvaluationListPage() {
         <div className="field-group">
           strategies
           <span className="inline-options">
-            {(["dense", "sparse", "hybrid"] as RetrievalStrategy[]).map((strategy) => (
+            {(["dense", "sparse", "hybrid"] as EvaluationRunnableStrategy[]).map((strategy) => (
               <label key={strategy}>
                 <input
                   type="checkbox"
