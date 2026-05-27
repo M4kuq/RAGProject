@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     router_allow_agentic_ask: bool = True
     router_keyword_heavy_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
     router_ambiguity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
-    router_fallback_strategy: str = "dense"
+    router_fallback_strategy: str = "fallback_dense"
     router_store_decision_trace: bool = True
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
