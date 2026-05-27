@@ -254,7 +254,9 @@ def build_router_query_plan(
     )
 
 
-def build_router_strategy_decision(*, decision: RouterDecisionTrace) -> dict[str, object]:
+def build_router_strategy_decision(*, decision: RouterDecisionTrace) -> dict[str, object] | None:
+    if not decision.store_decision_trace:
+        return None
     return TraceRedactor.safe_dict(decision.model_dump(mode="json", exclude_none=True))
 
 
