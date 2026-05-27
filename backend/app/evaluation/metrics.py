@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from app.evaluation.fixtures import EvaluationCase
+from app.evaluation.fixtures import (
+    EvaluationCase,
+    evaluation_case_question_hash,
+    evaluation_case_snapshot_hash,
+)
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
 
 EVALUATION_DETAIL_SCHEMA_VERSION: Final = "phase2.eval.v1"
@@ -70,6 +74,15 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     )
     metadata_details: dict[str, object] = {
         "case_id": inputs.case.case_id,
+        "question_hash": evaluation_case_question_hash(inputs.case.question),
+        "case_snapshot_hash": evaluation_case_snapshot_hash(
+            question=inputs.case.question,
+            expected_answer=inputs.case.expected_answer,
+            expected_keywords=inputs.case.expected_keywords,
+            expected_document_ids=inputs.case.expected_document_ids,
+            expected_chunk_ids=inputs.case.expected_chunk_ids,
+            required_citation=inputs.case.required_citation,
+        ),
         "expected_keyword_count": len(inputs.case.expected_keywords),
         "required_citation": inputs.case.required_citation,
     }

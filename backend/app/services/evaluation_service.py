@@ -18,7 +18,12 @@ from app.core.job_utils import redact_error_message
 from app.db.evaluation_models import EvaluationResult
 from app.db.models import EvaluationCase as EvaluationCaseModel
 from app.db.models import EvaluationDataset, EvaluationRun, EvaluationRunItem, RetrievalRun, User
-from app.evaluation.fixtures import EvaluationCase, EvaluationFixtureError, load_evaluation_cases
+from app.evaluation.fixtures import (
+    EvaluationCase,
+    EvaluationFixtureError,
+    evaluation_case_snapshot_hash,
+    load_evaluation_cases,
+)
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     MetricValue,
@@ -759,6 +764,20 @@ class EvaluationService:
                 )
                 continue
 
+            if _source_case_changed(source_case, candidate):
+                skipped_count += 1
+                items.append(
+                    EvaluationFailurePromotionItem(
+                        promotion_key=candidate.promotion_key,
+                        failure_type=candidate.failure_type,
+                        strategy_type=candidate.strategy_type,
+                        evaluation_run_item_id=candidate.evaluation_run_item_id,
+                        evaluation_case_id=candidate.evaluation_case_id,
+                        result_code="source_case_changed",
+                    )
+                )
+                continue
+
             case_key = f"failure_{candidate.promotion_key[:16]}"
             existing = self.repository.get_case_by_key(
                 db,
@@ -1053,8 +1072,13 @@ class EvaluationService:
         strategy_type: str,
     ) -> None:
         rag_result = case_result["rag_result"]
+        case = case_result["case"]
         metrics = case_result["metrics"]
-        if not isinstance(rag_result, RagEvaluationResult) or not isinstance(metrics, list):
+        if (
+            not isinstance(rag_result, RagEvaluationResult)
+            or not isinstance(case, EvaluationCase)
+            or not isinstance(metrics, list)
+        ):
             raise RuntimeError("invalid_evaluation_case_result")
         latency_ms = case_result["latency_ms"]
         if not isinstance(latency_ms, int):
@@ -1063,7 +1087,7 @@ class EvaluationService:
         metric_by_name = {
             metric.metric_name: metric for metric in metrics if isinstance(metric, MetricValue)
         }
-        metric_summary_json = _metric_summary_json(metrics)
+        metric_summary_json = _metric_summary_json(metrics, case=case)
         self.repository.finish_item(
             db,
             item=item,
@@ -1114,7 +1138,7 @@ class EvaluationService:
             citation_coverage=_metric_decimal(_find_metric(metrics, "citation_coverage")),
             latency_ms=None,
             latency_breakdown_json=_latency_breakdown_json(None),
-            metric_summary_json=_metric_summary_json(metrics),
+            metric_summary_json=_metric_summary_json(metrics, case=case),
             error_code="internal_error",
             error_message=redact_error_message("Evaluation case failed."),
         )
@@ -1240,14 +1264,12 @@ class EvaluationService:
         accuracy: float | None = None
         accuracy_label = "not_applicable"
         not_applicable = True
-        has_strategy_decision = selected_strategy is not None or execution_strategy is not None
+        has_strategy_decision = selected_strategy is not None
         if (expected_strategy or acceptable_strategies) and has_strategy_decision:
             accepted = set(acceptable_strategies)
             if expected_strategy:
                 accepted.add(expected_strategy)
-            accuracy = (
-                1.0 if selected_strategy in accepted or execution_strategy in accepted else 0.0
-            )
+            accuracy = 1.0 if selected_strategy in accepted else 0.0
             accuracy_label = "correct" if accuracy == 1.0 else "incorrect"
             not_applicable = False
 
@@ -1355,7 +1377,18 @@ class EvaluationService:
             results = results_by_item.get(item.evaluation_run_item_id, [])
             metric_by_name = {result.metric_name: result for result in results}
             metric_snapshot = _metric_snapshot(metric_by_name)
-            question_hash = _question_hash(source_case.question if source_case else item.case_key)
+            case_metadata = _case_metadata_details(metric_by_name)
+            item_case_snapshot = _item_case_snapshot(item)
+            case_snapshot_hash = _safe_hash_value(
+                case_metadata.get("case_snapshot_hash")
+            ) or _safe_hash_value(item_case_snapshot.get("case_snapshot_hash"))
+            if case_snapshot_hash is not None:
+                metric_snapshot["case_snapshot_hash"] = case_snapshot_hash
+            question_hash = (
+                _safe_hash_value(case_metadata.get("question_hash"))
+                or _safe_hash_value(item_case_snapshot.get("question_hash"))
+                or _question_hash(source_case.question if source_case else item.case_key)
+            )
             case_key = source_case.case_key if source_case is not None else item.case_key
 
             for failure_type, severity, reason_codes in _failure_reasons(
@@ -1834,7 +1867,14 @@ def _strategy_comparison(
             values.setdefault(key, []).append(value)
 
     metrics: list[StrategyComparisonMetric] = []
-    all_keys = sorted(set(values).union(not_applicable))
+    observed_keys = set(values).union(not_applicable)
+    observed_strategies = {strategy_type for strategy_type, _ in observed_keys}
+    failed_only_keys = {
+        (strategy_type, "evaluation_item_status")
+        for strategy_type in failed_count
+        if strategy_type not in observed_strategies
+    }
+    all_keys = sorted(observed_keys.union(failed_only_keys))
     for strategy_type, metric_name in all_keys:
         series = sorted(values.get((strategy_type, metric_name), []))
         average = round(sum(series) / len(series), 6) if series else None
@@ -1872,6 +1912,30 @@ def _metric_snapshot(metric_by_name: dict[str, EvaluationResult]) -> dict[str, o
         if value is not None:
             snapshot[name] = round(value, 6)
     return snapshot
+
+
+def _case_metadata_details(metric_by_name: dict[str, EvaluationResult]) -> dict[str, object]:
+    case_metadata = metric_by_name.get("case_metadata")
+    if case_metadata is None or not isinstance(case_metadata.metric_detail_json, dict):
+        return {}
+    return case_metadata.metric_detail_json
+
+
+def _item_case_snapshot(item: EvaluationRunItem) -> dict[str, object]:
+    payload = item.metric_summary_json
+    if not isinstance(payload, dict):
+        return {}
+    case_snapshot = payload.get("case_snapshot")
+    return case_snapshot if isinstance(case_snapshot, dict) else {}
+
+
+def _safe_hash_value(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) != 64:
+        return None
+    lowered = value.lower()
+    if any(char not in "0123456789abcdef" for char in lowered):
+        return None
+    return lowered
 
 
 def _metric_score(metric_by_name: dict[str, EvaluationResult], name: str) -> float | None:
@@ -2035,6 +2099,27 @@ def _failure_candidate_priority(candidate: EvaluationFailureCandidate) -> tuple[
     )
 
 
+def _source_case_changed(
+    source_case: PromotionSourceCase,
+    candidate: EvaluationFailureCandidate,
+) -> bool:
+    snapshot_hash = _safe_hash_value(candidate.metric_snapshot.get("case_snapshot_hash"))
+    if snapshot_hash is None:
+        return False
+    return snapshot_hash != _source_case_snapshot_hash(source_case)
+
+
+def _source_case_snapshot_hash(source_case: PromotionSourceCase) -> str:
+    return evaluation_case_snapshot_hash(
+        question=source_case.question,
+        expected_answer=source_case.expected_answer,
+        expected_keywords=source_case.expected_keywords,
+        expected_document_ids=source_case.expected_document_ids,
+        expected_chunk_ids=source_case.expected_chunk_ids,
+        required_citation=source_case.required_citation,
+    )
+
+
 def _promotion_metadata(
     candidate: EvaluationFailureCandidate,
     source_metadata_json: dict[str, object] | None,
@@ -2095,9 +2180,10 @@ def _percentile(values: list[float], percentile: float) -> float:
     return round(ordered[min(max(index, 0), len(ordered) - 1)], 6)
 
 
-def _metric_summary_json(metrics: list[MetricValue]) -> dict[str, object]:
+def _metric_summary_json(metrics: list[MetricValue], *, case: EvaluationCase) -> dict[str, object]:
     return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
+        "case_snapshot": _case_snapshot_from_case(case),
         "metrics": {
             metric.metric_name: (
                 metric.metric_value if metric.metric_value is not None else metric.metric_score
@@ -2106,6 +2192,20 @@ def _metric_summary_json(metrics: list[MetricValue]) -> dict[str, object]:
             if (metric.metric_score is not None or metric.metric_value is not None)
             and metric.metric_name != "case_metadata"
         },
+    }
+
+
+def _case_snapshot_from_case(case: EvaluationCase) -> dict[str, object]:
+    return {
+        "question_hash": _question_hash(case.question),
+        "case_snapshot_hash": evaluation_case_snapshot_hash(
+            question=case.question,
+            expected_answer=case.expected_answer,
+            expected_keywords=case.expected_keywords,
+            expected_document_ids=case.expected_document_ids,
+            expected_chunk_ids=case.expected_chunk_ids,
+            required_citation=case.required_citation,
+        ),
     }
 
 

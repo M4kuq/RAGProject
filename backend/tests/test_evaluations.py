@@ -262,6 +262,172 @@ def test_fixture_metadata_drives_agentic_strategy_accuracy() -> None:
         engine.dispose()
 
 
+def test_agentic_strategy_accuracy_uses_selected_strategy_not_execution() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_selection_accuracy_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="fallback_execution_is_accepted",
+                    question="fallback accepted target retrieval",
+                    expected_keywords=["target"],
+                    required_citation=True,
+                    metadata_json={"expected_strategy": "dense"},
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["agentic_router"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-selected-strategy-only",
+            )
+            accuracy = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.strategy_type == "agentic_router",
+                    EvaluationResult.metric_name == "strategy_selection_accuracy",
+                )
+            )
+            assert accuracy is not None
+            assert accuracy.metric_score is not None
+            assert float(accuracy.metric_score) == 0.0
+            assert accuracy.metric_detail_json is not None
+            assert accuracy.metric_detail_json["selected_strategy"] == "hybrid"
+            assert accuracy.metric_detail_json["execution_strategy"] == "dense"
+    finally:
+        engine.dispose()
+
+
+def test_promotion_skips_source_case_changed_after_run() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_changed_source_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            created_case = service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="changed_source",
+                    question="missing target retrieval",
+                    expected_keywords=["missing"],
+                    required_citation=True,
+                    metadata_json={"expected_strategy": "sparse"},
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["agentic_router"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-promotion-source-change",
+            )
+            source_case = db.get(EvaluationCaseModel, created_case.evaluation_case_id)
+            assert source_case is not None
+            source_case.question = "changed target retrieval"
+            db.commit()
+
+            promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=dataset.evaluation_dataset_id,
+                    failure_types=["no_context"],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted.created_count == 0
+            assert promoted.skipped_count == 1
+            assert promoted.items[0].result_code == "source_case_changed"
+    finally:
+        engine.dispose()
+
+
+def test_failed_only_strategy_is_preserved_in_summary() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticOnlyFailingRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    strategies=["dense", "agentic_router"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-failed-only-strategy",
+            )
+            assert result["status"] == "succeeded"
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            agentic_summary = run.strategy_metrics_summary_json["strategy_metrics"][
+                "agentic_router"
+            ]
+            assert agentic_summary["case_count"] == 1
+            assert agentic_summary["succeeded_count"] == 0
+            assert agentic_summary["failed_count"] == 1
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert any(
+                metric.strategy_type == "agentic_router"
+                and metric.metric_name == "evaluation_item_status"
+                and metric.failed_count == 1
+                for metric in detail.strategy_comparison
+            )
+    finally:
+        engine.dispose()
+
+
 def test_database_vector_search_client_uses_ready_active_chunks() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -1865,7 +2031,14 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 rerank_top_n=rerank_top_n,
             )
 
-        selected_strategy = "hybrid" if "hybrid" in question.lower() else "dense"
+        selected_strategy = (
+            "hybrid"
+            if ("hybrid" in question.lower() or "fallback accepted" in question.lower())
+            else "dense"
+        )
+        execution_strategy = (
+            "dense" if "fallback accepted" in question.lower() else selected_strategy
+        )
         has_context = "missing" not in question.lower()
         strategy_decision_json = None
         if has_context:
@@ -1873,7 +2046,7 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 "schema_version": "phase2.router.v1",
                 "requested_strategy": "agentic_router",
                 "selected_strategy": selected_strategy,
-                "execution_strategy": selected_strategy,
+                "execution_strategy": execution_strategy,
                 "fallback_used": True,
                 "fallback_strategy": "dense",
                 "fallback_reason": "insufficient_context",
@@ -1940,6 +2113,47 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
             else [],
             context_sources_for_safety=[],
             error_code=None if has_context else "no_context_found",
+        )
+
+
+class _AgenticOnlyFailingRagService(_FakeEvaluationRagService):
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        if strategy_type != RetrievalStrategy.AGENTIC_ROUTER:
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="failed",
+            request_id=request_id,
+            error_code="no_context_found",
+            strategy_type=strategy_type.value,
+        )
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="failed",
+            answer_text="",
+            citations=[],
+            confidence=None,
+            retrieval_score_summary=None,
+            retrieved_items=[],
+            context_sources_for_safety=[],
+            error_code="no_context_found",
         )
 
 

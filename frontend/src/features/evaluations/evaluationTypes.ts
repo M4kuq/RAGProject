@@ -131,7 +131,7 @@ export type EvaluationFailurePromotionResponse = {
     evaluation_case_id: number | null;
     promoted_case_id: number | null;
     case_key: string | null;
-    result_code: "created" | "already_exists" | "source_case_missing";
+    result_code: "created" | "already_exists" | "source_case_missing" | "source_case_changed";
   }>;
 };
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,31 @@ def load_evaluation_cases(
     if not loaded:
         raise EvaluationFixtureError("evaluation_dataset_empty")
     return loaded
+
+
+def evaluation_case_question_hash(question: str | None) -> str:
+    return hashlib.sha256((question or "").encode("utf-8")).hexdigest()
+
+
+def evaluation_case_snapshot_hash(
+    *,
+    question: str | None,
+    expected_answer: str | None,
+    expected_keywords: list[str] | tuple[str, ...],
+    expected_document_ids: list[int] | tuple[int, ...],
+    expected_chunk_ids: list[int] | tuple[int, ...],
+    required_citation: bool,
+) -> str:
+    snapshot = {
+        "question_hash": evaluation_case_question_hash(question),
+        "expected_answer_hash": evaluation_case_question_hash(expected_answer),
+        "expected_keywords": list(expected_keywords),
+        "expected_document_ids": list(expected_document_ids),
+        "expected_chunk_ids": list(expected_chunk_ids),
+        "required_citation": required_citation,
+    }
+    payload = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _safe_dataset_name(value: str) -> str:

@@ -512,7 +512,12 @@ class EvaluationFailurePromotionItem(BaseModel):
     evaluation_case_id: int | None = None
     promoted_case_id: int | None = None
     case_key: str | None = None
-    result_code: Literal["created", "already_exists", "source_case_missing"]
+    result_code: Literal[
+        "created",
+        "already_exists",
+        "source_case_missing",
+        "source_case_changed",
+    ]
 
 
 class EvaluationFailurePromotionResponse(BaseModel):
