@@ -71,6 +71,18 @@ def test_strategy_router_normal_query_chooses_dense() -> None:
     ]
 
 
+def test_strategy_router_planner_fallback_candidate_uses_configured_dense() -> None:
+    decision = _route(
+        "this policy",
+        settings=Settings(app_env="test", router_fallback_strategy="dense"),
+    )
+
+    assert decision.selected_strategy == RetrievalStrategy.DENSE
+    assert decision.execution_strategy == RetrievalStrategy.DENSE
+    assert "planner_candidate:fallback_dense" in decision.reason_codes
+    assert "fallback_strategy:dense" in decision.reason_codes
+
+
 def test_strategy_router_version_specific_falls_back_from_unimplemented_candidate() -> None:
     decision = _route("v2 changes for alpha policy")
 
