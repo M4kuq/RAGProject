@@ -113,13 +113,14 @@
 
 ## PR-28 Strategy Router Tests
 
-- `StrategyRouter` disabled or failing returns `fallback_dense`.
+- `StrategyRouter` disabled or failing returns the configured fallback strategy (`fallback_dense` by default, `dense` when configured).
 - Keyword-heavy and comparison queries select `hybrid` when available.
 - Normal factual queries select `dense`.
 - Version-specific queries record disabled `version_aware` candidates and execute an implemented strategy.
 - Sparse/hybrid unavailable states fall back to `dense`.
 - `/rag/search strategy=agentic_router` persists `retrieval_runs.strategy_type = agentic_router`.
-- Router decisions persist requested, selected, and execution strategies in `strategy_decision_json`.
+- Router decisions persist requested, selected, and execution strategies in `strategy_decision_json` when enabled.
+- `router_store_decision_trace=false` suppresses router decision persistence without changing execution.
 - Router latency is recorded as `strategy_router_ms`.
 - `/rag/ask strategy=agentic_router` is explicit opt-in; default ask remains dense.
 - Retrieval Debug UI renders router decision, fallback, confidence, reason codes, disabled candidates, and safety flags.
