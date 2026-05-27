@@ -27,8 +27,6 @@ from app.schemas.rag_strategy import (
 TRACE_SCHEMA_VERSION = "phase2.trace.v1"
 
 _RETRIEVAL_LATENCY_KEYS = (
-    "initial_retrieval_ms",
-    "fallback_retrieval_ms",
     "sufficiency_check_ms",
     "merge_dedupe_ms",
     "rerank_after_merge_ms",

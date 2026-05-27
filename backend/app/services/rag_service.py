@@ -290,7 +290,7 @@ class RagService:
 
         try:
             retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            if _should_use_agentic_loop(requested_strategy, router_decision):
                 result = self._retrieve_agentic(
                     db,
                     query=retrieval_query,
@@ -520,7 +520,7 @@ class RagService:
 
         try:
             retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
+            if _should_use_agentic_loop(requested_strategy, router_decision):
                 result = self._retrieve_agentic(
                     db,
                     query=retrieval_query,
@@ -1597,6 +1597,17 @@ def _is_executable_router_strategy(strategy: RetrievalStrategy) -> bool:
     }
 
 
+def _should_use_agentic_loop(
+    requested_strategy: RetrievalStrategy,
+    router_decision: Any,
+) -> bool:
+    return (
+        requested_strategy == RetrievalStrategy.AGENTIC_ROUTER
+        and router_decision is not None
+        and bool(router_decision.router_enabled)
+    )
+
+
 def _query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
@@ -1787,7 +1798,7 @@ def _agentic_run_item_input(
         document_chunk_id=candidate.chunk.document_chunk_id,
         retrieval_score=_decimal_score(candidate.retrieval_score),
         rerank_score=_decimal_score(rerank_score),
-        rank_order=final_rank,
+        rank_order=candidate.rank_order,
         rerank_order=rerank_order,
         selected_flag=selected_flag,
         payload_snapshot=_payload_snapshot(candidate),

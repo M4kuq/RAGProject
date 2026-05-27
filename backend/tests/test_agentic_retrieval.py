@@ -47,6 +47,14 @@ def test_context_sufficiency_checker_rejects_empty_low_score_and_comparison_dive
     assert comparison.sufficient is False
     assert "insufficient_source_diversity_for_comparison" in comparison.reason_codes
 
+    single_selected_comparison = checker.check(
+        [_candidate(100, 0.8), _candidate(101, 0.7, logical_document_id=11)],
+        selected_count=1,
+        intent=QueryIntent.COMPARISON,
+    )
+    assert single_selected_comparison.sufficient is False
+    assert "too_few_selected_candidates_for_comparison" in single_selected_comparison.reason_codes
+
 
 def test_agentic_executor_fallback_merges_and_dedupes_candidates() -> None:
     settings = Settings(
@@ -121,6 +129,43 @@ def test_agentic_executor_respects_retrieval_budget() -> None:
         latency_tracker=LatencyTracker(),
     )
 
+    assert result.retrieval_call_count == 1
+    assert result.fallback_used is False
+    assert result.budget_exhausted is True
+    assert result.no_context is True
+
+
+def test_agentic_executor_skips_dense_equivalent_fallback_after_dense_attempt() -> None:
+    settings = Settings(
+        app_env="test",
+        router_sufficiency_top_score_threshold=0.9,
+        router_max_retrieval_calls=2,
+        router_max_fallback_calls=1,
+        router_enable_fallback_hybrid=False,
+        router_fallback_strategy="fallback_dense",
+    )
+    executor = AgenticRetrievalExecutor(settings)
+    calls: list[RetrievalStrategy] = []
+
+    def retrieve(strategy: RetrievalStrategy, role: str) -> RetrievalAttemptResult:
+        calls.append(strategy)
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=[_candidate(100, 0.3)],
+            qdrant_candidate_count=1,
+            role=role,
+        )
+
+    result = executor.execute(
+        initial_strategy=RetrievalStrategy.DENSE,
+        intent=QueryIntent.FACTUAL_LOOKUP,
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=retrieve,
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert calls == [RetrievalStrategy.DENSE]
     assert result.retrieval_call_count == 1
     assert result.fallback_used is False
     assert result.budget_exhausted is True

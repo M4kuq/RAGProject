@@ -932,6 +932,7 @@ def test_rag_search_agentic_router_disabled_falls_back_to_dense(
         qdrant_collection_name="document_chunks",
         search_snippet_max_chars=32,
         router_enabled=False,
+        router_sufficiency_top_score_threshold=0.99,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
@@ -959,15 +960,17 @@ def test_rag_search_agentic_router_disabled_falls_back_to_dense(
         assert run.strategy_decision_json["execution_strategy"] == "fallback_dense"
         assert run.strategy_decision_json["fallback_used"] is True
         assert run.strategy_decision_json["fallback_reason"] == "router_disabled"
+        assert "retrieval_call_count" not in run.strategy_decision_json
         assert run.latency_breakdown_json is not None
         assert run.latency_breakdown_json["strategy_router_ms"] >= 0
+        assert "initial_retrieval_ms" not in run.latency_breakdown_json
+        assert "fallback_retrieval_ms" not in run.latency_breakdown_json
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "fallback_dense" for item in items)
         assert all(
             item.score_breakdown_json is not None
-            and item.score_breakdown_json["retrieval_source"] == "agentic_router"
-            and item.score_breakdown_json["item_retrieval_source"] == "fallback_dense"
+            and item.score_breakdown_json["retrieval_source"] == "fallback_dense"
             for item in items
         )
 
@@ -1045,6 +1048,56 @@ def test_rag_search_agentic_router_runs_bounded_fallback_and_persists_loop_trace
         assert first_breakdown["fallback_used"] is True
         assert first_breakdown["sources"]
         assert "content_text" not in str(first_breakdown)
+
+
+def test_rag_search_agentic_router_preserves_retrieval_rank_when_rerank_reorders(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_ReverseOrderReranker(),
+        strategy_router=cast(Any, _DenseRouter(settings)),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "strategy": "agentic_router", "top_k": 5},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [item["document_chunk_id"] for item in data["items"][:2]] == [101, 100]
+    with session_factory() as db:
+        promoted = (
+            db.query(RetrievalRunItem)
+            .filter_by(
+                retrieval_run_id=data["retrieval_run_id"],
+                document_chunk_id=101,
+            )
+            .one()
+        )
+        assert promoted.rank_order == 2
+        assert promoted.rerank_order == 1
+        assert promoted.score_breakdown_json is not None
+        assert promoted.score_breakdown_json["rank_order"] == 2
+        assert promoted.score_breakdown_json["final_rank"] == 1
 
 
 def test_rag_search_agentic_router_respects_store_decision_trace_false(
@@ -2079,6 +2132,24 @@ class _OutOfRangeReranker:
                 document_chunk_id=candidate.document_chunk_id,
                 rerank_score=10.0 if index == 1 else -2.0,
                 rerank_order=index,
+            )
+            for index, candidate in enumerate(candidates, start=1)
+        ]
+
+
+class _ReverseOrderReranker:
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: Sequence[RerankCandidate],
+    ) -> list[RerankResult]:
+        total = len(candidates)
+        return [
+            RerankResult(
+                document_chunk_id=candidate.document_chunk_id,
+                rerank_score=float(index) / max(1, total),
+                rerank_order=total - index + 1,
             )
             for index, candidate in enumerate(candidates, start=1)
         ]

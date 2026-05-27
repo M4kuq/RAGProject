@@ -161,7 +161,8 @@ class ContextSufficiencyChecker:
         min_candidates = self.settings.router_sufficiency_min_candidates
         min_selected = self.settings.router_sufficiency_min_selected
         top_score = _top_score(candidates)
-        source_diversity = _source_diversity(candidates)
+        selected_candidates = candidates[:selected_count]
+        source_diversity = _source_diversity(selected_candidates)
         reason_codes: list[str] = []
         sufficient = True
 
@@ -180,6 +181,9 @@ class ContextSufficiencyChecker:
         elif top_score < self.settings.router_sufficiency_top_score_threshold:
             sufficient = False
             reason_codes.append("low_top_score")
+        if intent == QueryIntent.COMPARISON and selected_count < 2:
+            sufficient = False
+            reason_codes.append("too_few_selected_candidates_for_comparison")
         if intent == QueryIntent.COMPARISON and source_diversity < 2:
             sufficient = False
             reason_codes.append("insufficient_source_diversity_for_comparison")
@@ -312,7 +316,8 @@ class AgenticRetrievalExecutor:
         return [
             strategy
             for strategy in strategies
-            if _strategy_available(strategy, self.settings) and strategy != initial_strategy
+            if _strategy_available(strategy, self.settings)
+            and _execution_family(strategy) != _execution_family(initial_strategy)
         ]
 
     def _result_from_attempts(
@@ -502,6 +507,12 @@ def _strategy_available(strategy: RetrievalStrategy, settings: Settings) -> bool
             return False
         return settings.hybrid_sparse_weight <= 0 or settings.sparse_enabled
     return False
+
+
+def _execution_family(strategy: RetrievalStrategy) -> str:
+    if strategy in {RetrievalStrategy.DENSE, RetrievalStrategy.FALLBACK_DENSE}:
+        return RetrievalStrategy.DENSE.value
+    return strategy.value
 
 
 def _item_source_for_strategy(strategy: RetrievalStrategy) -> str:
