@@ -33,6 +33,12 @@ const FUTURE_STRATEGIES = [
 const LATENCY_KEYS = [
   "total_ms",
   "retrieval_ms",
+  "agentic_total_ms",
+  "initial_retrieval_ms",
+  "fallback_retrieval_ms",
+  "sufficiency_check_ms",
+  "merge_dedupe_ms",
+  "rerank_after_merge_ms",
   "query_embedding_ms",
   "qdrant_search_ms",
   "sparse_search_ms",
@@ -211,6 +217,14 @@ function SearchResultSummary({
           value={formatUnknownValue(summary.excluded_by_rdb_check_count)}
         />
         <Detail label="fallback_used" value={formatUnknownValue(run?.strategy_decision_json?.fallback_used ?? false)} />
+        <Detail
+          label="retrieval_call_count"
+          value={formatUnknownValue(run?.strategy_decision_json?.retrieval_call_count ?? "N/A")}
+        />
+        <Detail
+          label="sufficiency_score"
+          value={formatScore(run?.strategy_decision_json?.sufficiency_score)}
+        />
         <Detail label="started" value={formatDate(run?.started_at)} />
         <Detail label="finished" value={formatDate(run?.finished_at)} />
         <Detail label="error" value={formatSafeText(run?.error_code ?? null, 80)} />
@@ -282,6 +296,17 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
           <Detail label="fallback_used" value={formatUnknownValue(decision.fallback_used ?? false)} />
           <Detail label="fallback_strategy" value={formatUnknownValue(decision.fallback_strategy ?? "N/A")} />
           <Detail label="fallback_reason" value={formatUnknownValue(decision.fallback_reason)} />
+          <Detail label="retrieval_call_count" value={formatUnknownValue(decision.retrieval_call_count)} />
+          <Detail label="budget_exhausted" value={formatUnknownValue(decision.budget_exhausted ?? false)} />
+          <Detail label="sufficiency_score" value={formatScore(decision.sufficiency_score)} />
+          <Detail
+            label="sufficiency_reason_codes"
+            value={formatUnknownValue(decision.sufficiency_reason_codes ?? [])}
+          />
+          <Detail label="initial_candidates" value={formatUnknownValue(decision.initial_candidate_count)} />
+          <Detail label="merged_candidates" value={formatUnknownValue(decision.merged_candidate_count)} />
+          <Detail label="deduped_candidates" value={formatUnknownValue(decision.deduped_candidate_count)} />
+          <Detail label="final_selected" value={formatUnknownValue(decision.final_selected_count)} />
           <Detail label="confidence" value={formatScore(decision.confidence)} />
           <Detail label="disabled_candidates" value={formatUnknownValue(decision.disabled_candidates ?? [])} />
           <Detail label="safety_flags" value={formatUnknownValue(decision.safety_flags ?? [])} />
@@ -298,6 +323,12 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
           <Detail label="rerank_provider" value={formatUnknownValue(settings.rerank_provider)} />
           <Detail label="fusion_method" value={formatUnknownValue(settings.fusion_method)} />
           <Detail label="router_enabled" value={formatUnknownValue(settings.router_enabled ?? false)} />
+          <Detail label="max_retrieval_calls" value={formatUnknownValue(settings.max_retrieval_calls)} />
+          <Detail label="max_fallback_calls" value={formatUnknownValue(settings.max_fallback_calls)} />
+          <Detail
+            label="sufficiency_threshold"
+            value={formatScore(settings.sufficiency_top_score_threshold)}
+          />
         </dl>
         <SafeDetails record={settings} />
       </TraceCard>

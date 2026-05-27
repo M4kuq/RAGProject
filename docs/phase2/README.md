@@ -160,9 +160,26 @@ PR-28 adds:
 
 PR-28 stores `retrieval_runs.strategy_type = agentic_router` for router-triggered runs and stores the actual execution strategy in `strategy_decision_json.execution_strategy`. It does not implement Agentic Retrieval Loop, context sufficiency checks, additional retrieval calls, multi-query execution, metadata-filtered execution, version-aware execution, LLM router execution, LangSmith export, Graph-RAG, OCR, or external operation agents.
 
+## PR-29 Agentic Retrieval Loop / Context Sufficiency Check
+
+PR-29 adds:
+
+- bounded `AgenticRetrievalExecutor`
+- deterministic `ContextSufficiencyChecker`
+- retrieval budget settings with default `max_retrieval_calls = 2`
+- fallback retrieval when the first router-selected result is insufficient
+- merge and dedupe by `document_chunk_id`
+- rerank after merged candidates
+- safe sufficiency, fallback, retrieval-call-count, budget, and latency trace fields
+- `/api/v1/rag/search strategy=agentic_router` loop execution
+- `/api/v1/rag/ask strategy=agentic_router` opt-in loop execution with `no_context_found` after budget exhaustion
+- Retrieval Debug UI display for fallback, sufficiency, and loop latency fields
+
+PR-29 still does not implement multi-query execution, metadata-filtered execution, version-aware retrieval execution, Graph-RAG, OCR, multi-agent architecture, external operation agents, LangSmith export, or SentenceTransformers experiments.
+
 ## Non-goals
 
-PR-28 does not implement Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-29 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

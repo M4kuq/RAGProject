@@ -391,6 +391,105 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert "content_text" not in dumped
 
 
+def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=2,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        generation_provider="fake",
+        router_enabled=False,
+        router_sufficiency_top_score_threshold=0.99,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic ask disabled")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-disabled-msg-1",
+            "message": "alpha policy disabled router",
+            "strategy": "agentic_router",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    assert len(vector_client.query_vectors) == 1
+    data = response.json()["data"]
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "agentic_router"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["execution_strategy"] == "fallback_dense"
+        assert run.strategy_decision_json["fallback_reason"] == "router_disabled"
+        assert "retrieval_call_count" not in run.strategy_decision_json
+        assert run.latency_breakdown_json is not None
+        assert "initial_retrieval_ms" not in run.latency_breakdown_json
+        assert "fallback_retrieval_ms" not in run.latency_breakdown_json
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "fallback_dense" for item in items)
+
+
+def test_rag_ask_agentic_router_budget_exhausted_returns_no_context_without_assistant(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic no context")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-no-context-msg-1",
+            "message": "alpha policy missing context",
+            "strategy": "agentic_router",
+            "filters": {"logical_document_ids": [999]},
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_type == "agentic_router"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["retrieval_call_count"] == 2
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["no_context"] is True
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["initial_retrieval_ms"] >= 0
+        assert run.latency_breakdown_json["fallback_retrieval_ms"] >= 0
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+
+
 def test_rag_ask_agentic_router_respects_store_decision_trace_false(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

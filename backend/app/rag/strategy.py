@@ -133,8 +133,36 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         "Ambiguity threshold for rule-based StrategyRouter fallback handling.",
     ),
     "rag.router.max_retrieval_calls": (
+        2,
+        "Maximum bounded retrieval calls for PR-29 AgenticRetrievalExecutor.",
+    ),
+    "rag.router.max_fallback_calls": (
         1,
-        "PR-28 StrategyRouter performs one retrieval call; loops are deferred to PR-29.",
+        "Maximum fallback retrieval calls within the PR-29 bounded loop.",
+    ),
+    "rag.router.sufficiency_min_candidates": (
+        1,
+        "Minimum post-final-check candidates required by ContextSufficiencyChecker.",
+    ),
+    "rag.router.sufficiency_min_selected": (
+        1,
+        "Minimum selected candidates required by ContextSufficiencyChecker.",
+    ),
+    "rag.router.sufficiency_top_score_threshold": (
+        0.2,
+        "Minimum top retrieval score for deterministic context sufficiency.",
+    ),
+    "rag.router.enable_fallback_hybrid": (
+        True,
+        "Allow hybrid fallback retrieval inside the bounded agentic loop.",
+    ),
+    "rag.router.enable_fallback_dense": (
+        True,
+        "Allow dense/fallback_dense retrieval inside the bounded agentic loop.",
+    ),
+    "rag.router.no_context_after_budget_exhausted": (
+        True,
+        "Treat insufficient context after budget exhaustion as no_context for ask.",
     ),
     "rag.router.fallback_strategy": (
         DEFAULT_ROUTER_FALLBACK_STRATEGY.value,

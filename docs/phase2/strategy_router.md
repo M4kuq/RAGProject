@@ -92,10 +92,13 @@ Decision traces must not include:
 
 ## PR-29 Handoff
 
-PR-29 should add the Agentic Retrieval Loop on top of this single-call router:
+PR-29 adds the Agentic Retrieval Loop on top of this single-call router:
 
 - context sufficiency check
 - bounded additional retrieval calls
 - fallback and merge/dedupe behavior
 - budget control
+- rerank after merged candidates
+- safe loop-level trace fields such as `retrieval_call_count`, `budget_exhausted`,
+  `sufficiency_score`, and `sufficiency_reason_codes`
 - loop-level trace fields

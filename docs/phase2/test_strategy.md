@@ -126,6 +126,18 @@
 - Retrieval Debug UI renders router decision, fallback, confidence, reason codes, disabled candidates, and safety flags.
 - Router decision JSON does not contain raw query, raw prompt, full context, raw chunk text, PII, secrets, or raw exception messages.
 
+## PR-29 Agentic Retrieval Loop Tests
+
+- `ContextSufficiencyChecker` accepts enough candidates and rejects zero, low-score, and low-diversity comparison results.
+- `AgenticRetrievalExecutor` respects `max_retrieval_calls` and `max_fallback_calls`.
+- Initial insufficient context triggers one deterministic fallback when budget remains.
+- Fallback results merge and dedupe by `document_chunk_id`.
+- Merged candidates are reranked before final persistence.
+- `/rag/search strategy=agentic_router` persists `retrieval_call_count`, fallback, sufficiency, and agentic latency fields.
+- `/rag/ask strategy=agentic_router` returns `422 no_context_found` without an assistant message when budget is exhausted.
+- Direct dense, sparse, and hybrid strategy regressions remain green.
+- Agentic trace and score breakdown do not contain raw query, raw prompt, full context, raw chunk text, PII, secrets, or raw exception messages.
+
 ## Checks
 
 - `ruff format --check .`

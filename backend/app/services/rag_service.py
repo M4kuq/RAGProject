@@ -25,6 +25,12 @@ from app.ingest.embedding import (
     EmbeddingAdapterError,
     create_embedding_adapter,
 )
+from app.rag.agentic import (
+    AgenticRetrievalExecutor,
+    AgenticRetrievalResult,
+    ContextSufficiencyChecker,
+    RetrievalAttemptResult,
+)
 from app.rag.citations import (
     CitationBuildError,
     CitationSource,
@@ -135,6 +141,7 @@ class RetrievalPipelineResult:
     items: list[RagSearchItem]
     selected_candidates: list[CheckedRetrievalCandidate]
     citation_sources: list[CitationSource]
+    no_context: bool = False
 
 
 class RagService:
@@ -152,6 +159,7 @@ class RagService:
         hybrid_strategy: HybridRetrievalStrategy | None = None,
         query_plan_builder: QueryPlanBuilder | None = None,
         strategy_router: StrategyRouter | None = None,
+        agentic_executor: AgenticRetrievalExecutor | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -164,6 +172,10 @@ class RagService:
         self.hybrid_strategy = hybrid_strategy or HybridRetrievalStrategy()
         self.query_plan_builder = query_plan_builder or QueryPlanBuilder(settings)
         self.strategy_router = strategy_router or StrategyRouter(settings)
+        self.agentic_executor = agentic_executor or AgenticRetrievalExecutor(
+            settings,
+            ContextSufficiencyChecker(settings),
+        )
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -278,7 +290,23 @@ class RagService:
 
         try:
             retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
+            if _should_use_agentic_loop(requested_strategy, router_decision):
+                result = self._retrieve_agentic(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    initial_strategy=execution_strategy,
+                    query_intent=(
+                        query_plan_build.analysis.intent
+                        if query_plan_build.analysis is not None
+                        else None
+                    ),
+                    latency_tracker=latency_tracker,
+                )
+            elif retrieval_execution_strategy == RetrievalStrategy.SPARSE:
                 result = self._retrieve_sparse(
                     db,
                     query=retrieval_query,
@@ -492,7 +520,23 @@ class RagService:
 
         try:
             retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
+            if _should_use_agentic_loop(requested_strategy, router_decision):
+                result = self._retrieve_agentic(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    initial_strategy=execution_strategy,
+                    query_intent=(
+                        query_plan_build.analysis.intent
+                        if query_plan_build.analysis is not None
+                        else None
+                    ),
+                    latency_tracker=latency_tracker,
+                )
+            elif retrieval_execution_strategy == RetrievalStrategy.SPARSE:
                 result = self._retrieve_sparse(
                     db,
                     query=retrieval_query,
@@ -525,12 +569,13 @@ class RagService:
                     if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
                     else RetrievalSource.DENSE,
                 )
-            if not result.selected_candidates:
+            if result.no_context or not result.selected_candidates:
                 self._mark_failed_safely(
                     db,
                     retrieval_run_id=run_id,
                     error_code="no_context_found",
                     latency_tracker=latency_tracker,
+                    rollback=False,
                 )
                 raise RagAskPipelineError("no_context_found", 422)
 
@@ -1023,6 +1068,360 @@ class RagService:
             ],
         )
 
+    def _retrieve_agentic(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        initial_strategy: RetrievalStrategy,
+        query_intent: Any,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalPipelineResult:
+        with latency_tracker.span("agentic_total_ms"):
+            agentic_result = self.agentic_executor.execute(
+                initial_strategy=initial_strategy,
+                intent=query_intent,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                retrieve=lambda strategy, role: self._execute_agentic_attempt(
+                    db,
+                    query=query,
+                    top_k=top_k,
+                    filters=filters,
+                    strategy=strategy,
+                    role=role,
+                    latency_tracker=latency_tracker,
+                ),
+                latency_tracker=latency_tracker,
+            )
+            pipeline_result = self._persist_agentic_result(
+                db,
+                query=query,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                retrieval_run_id=retrieval_run_id,
+                agentic_result=agentic_result,
+                latency_tracker=latency_tracker,
+            )
+        self._update_agentic_trace(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            agentic_result=agentic_result,
+        )
+        return pipeline_result
+
+    def _execute_agentic_attempt(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        strategy: RetrievalStrategy,
+        role: str,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalAttemptResult:
+        execution_strategy = _retrieval_execution_strategy(strategy)
+        if execution_strategy == RetrievalStrategy.SPARSE:
+            return self._collect_sparse_attempt(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                strategy=strategy,
+                role=role,
+                latency_tracker=latency_tracker,
+            )
+        if execution_strategy == RetrievalStrategy.HYBRID:
+            return self._collect_hybrid_attempt(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                strategy=strategy,
+                role=role,
+                latency_tracker=latency_tracker,
+            )
+        return self._collect_dense_attempt(
+            db,
+            query=query,
+            top_k=top_k,
+            filters=filters,
+            strategy=strategy,
+            role=role,
+            latency_tracker=latency_tracker,
+        )
+
+    def _collect_dense_attempt(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        strategy: RetrievalStrategy,
+        role: str,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalAttemptResult:
+        with latency_tracker.span("query_embedding_ms"):
+            query_vector = self._embed_query(query)
+        with latency_tracker.span("qdrant_search_ms"):
+            vector_candidates = self.vector_client.search(
+                collection_name=self.settings.qdrant_collection_name,
+                query_vector=query_vector,
+                limit=top_k,
+                filters=filters,
+            )
+        with latency_tracker.span("rdb_final_check_ms"):
+            checked_candidates = self.repository.final_check_candidates(
+                db,
+                candidates=vector_candidates,
+                filters=filters,
+            )
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=checked_candidates,
+            qdrant_candidate_count=len(vector_candidates),
+            excluded_by_rdb_check_count=max(0, len(vector_candidates) - len(checked_candidates)),
+            role=role,
+        )
+
+    def _collect_sparse_attempt(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        strategy: RetrievalStrategy,
+        role: str,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalAttemptResult:
+        with latency_tracker.span("sparse_search_ms"):
+            sparse_candidates = self.sparse_strategy.search(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                settings=self.settings,
+            )
+        with latency_tracker.span("rdb_final_check_ms"):
+            checked_candidates = self.repository.final_check_candidates(
+                db,
+                candidates=sparse_candidates,
+                filters=filters,
+            )
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=checked_candidates,
+            qdrant_candidate_count=0,
+            sparse_candidate_count=len(sparse_candidates),
+            excluded_by_rdb_check_count=max(0, len(sparse_candidates) - len(checked_candidates)),
+            role=role,
+        )
+
+    def _collect_hybrid_attempt(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        strategy: RetrievalStrategy,
+        role: str,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalAttemptResult:
+        candidate_limit = _hybrid_candidate_limit(top_k, self.settings)
+        fusion_method = _fusion_method(self.settings)
+        dense_candidates: list[VectorSearchCandidate] = []
+        sparse_candidates: list[VectorSearchCandidate] = []
+        if _hybrid_uses_dense(self.settings):
+            with latency_tracker.span("query_embedding_ms"):
+                query_vector = self._embed_query(query)
+            with latency_tracker.span("qdrant_search_ms"):
+                dense_candidates = self.vector_client.search(
+                    collection_name=self.settings.qdrant_collection_name,
+                    query_vector=query_vector,
+                    limit=candidate_limit,
+                    filters=filters,
+                )
+        if _hybrid_uses_sparse(self.settings):
+            with latency_tracker.span("sparse_search_ms"):
+                sparse_candidates = self.sparse_strategy.search(
+                    db,
+                    query=query,
+                    top_k=candidate_limit,
+                    filters=filters,
+                    settings=self.settings,
+                )
+        with latency_tracker.span("fusion_ms"):
+            fused_candidates = self.hybrid_strategy.fuse(
+                dense_candidates=dense_candidates,
+                sparse_candidates=sparse_candidates,
+                fusion_method=fusion_method,
+                limit=candidate_limit,
+                rrf_k=self.settings.hybrid_rrf_k,
+                dense_weight=self.settings.hybrid_dense_weight,
+                sparse_weight=self.settings.hybrid_sparse_weight,
+            )
+        with latency_tracker.span("rdb_final_check_ms"):
+            checked_candidates = self.repository.final_check_candidates(
+                db,
+                candidates=fused_candidates,
+                filters=filters,
+            )
+        visible_candidates = checked_candidates[:top_k]
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=visible_candidates,
+            qdrant_candidate_count=len(dense_candidates),
+            sparse_candidate_count=len(sparse_candidates),
+            hybrid_candidate_count=len(fused_candidates),
+            excluded_by_rdb_check_count=max(0, len(fused_candidates) - len(checked_candidates)),
+            role=role,
+        )
+
+    def _persist_agentic_result(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        retrieval_run_id: int,
+        agentic_result: AgenticRetrievalResult,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalPipelineResult:
+        final_candidates = agentic_result.final_candidates
+        if not final_candidates:
+            summary = _agentic_score_summary(
+                requested_top_k=top_k,
+                checked_candidates=[],
+                selected_count=0,
+                top1_rerank_score=None,
+                agentic_result=agentic_result,
+            )
+            return RetrievalPipelineResult(
+                summary=summary,
+                items=[],
+                selected_candidates=[],
+                citation_sources=[],
+                no_context=True,
+            )
+
+        with latency_tracker.span("rerank_after_merge_ms"):
+            rerank_results = self.reranker.rerank(
+                query=query,
+                candidates=[
+                    RerankCandidate(
+                        document_chunk_id=candidate.chunk.document_chunk_id,
+                        text=candidate.chunk.content_text,
+                        retrieval_score=candidate.retrieval_score,
+                    )
+                    for candidate in final_candidates
+                ],
+            )
+            rerank_by_chunk_id = _validated_rerank_results(
+                rerank_results,
+                checked_candidates=final_candidates,
+            )
+
+        ordered_candidates = sorted(
+            final_candidates,
+            key=lambda candidate: (
+                rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+            ),
+        )
+        selected_count = (
+            0 if agentic_result.no_context else min(rerank_top_n, len(ordered_candidates))
+        )
+        item_inputs = [
+            _agentic_run_item_input(
+                candidate,
+                rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                final_rank=index,
+                selected_flag=index <= selected_count,
+                agentic_result=agentic_result,
+            )
+            for index, candidate in enumerate(ordered_candidates, start=1)
+        ]
+        with latency_tracker.span("retrieval_items_persist_ms"):
+            saved_items = self.repository.save_items(
+                db,
+                retrieval_run_id=retrieval_run_id,
+                items=item_inputs,
+            )
+        top1_rerank_score = rerank_by_chunk_id[
+            ordered_candidates[0].chunk.document_chunk_id
+        ].rerank_score
+        summary = _agentic_score_summary(
+            requested_top_k=top_k,
+            checked_candidates=ordered_candidates,
+            selected_count=selected_count,
+            top1_rerank_score=top1_rerank_score,
+            agentic_result=agentic_result,
+        )
+        return RetrievalPipelineResult(
+            summary=summary,
+            items=[
+                _response_item(
+                    candidate,
+                    saved_item_id=saved_item.retrieval_run_item_id,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                    selected_flag=index <= selected_count,
+                    snippet_max_chars=self.settings.search_snippet_max_chars,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(ordered_candidates, saved_items, strict=True),
+                    start=1,
+                )
+            ],
+            selected_candidates=ordered_candidates[:selected_count],
+            citation_sources=[
+                _citation_source(
+                    candidate,
+                    saved_item=saved_item,
+                    local_citation_id=local_id,
+                    snippet_max_chars=self.settings.citation_preview_max_chars,
+                )
+                for local_id, (candidate, saved_item) in enumerate(
+                    zip(
+                        ordered_candidates[:selected_count],
+                        saved_items[:selected_count],
+                        strict=True,
+                    ),
+                    start=1,
+                )
+            ],
+            no_context=agentic_result.no_context,
+        )
+
+    def _update_agentic_trace(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        agentic_result: AgenticRetrievalResult,
+    ) -> None:
+        run = self._require_run(db, retrieval_run_id)
+        strategy_decision = _agentic_strategy_decision(
+            run.strategy_decision_json,
+            agentic_result=agentic_result,
+        )
+        if strategy_decision is None:
+            return
+        self.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            strategy_decision_json=strategy_decision,
+        )
+
     def _classify_duplicate(
         self,
         db: Session,
@@ -1198,6 +1597,17 @@ def _is_executable_router_strategy(strategy: RetrievalStrategy) -> bool:
     }
 
 
+def _should_use_agentic_loop(
+    requested_strategy: RetrievalStrategy,
+    router_decision: Any,
+) -> bool:
+    return (
+        requested_strategy == RetrievalStrategy.AGENTIC_ROUTER
+        and router_decision is not None
+        and bool(router_decision.router_enabled)
+    )
+
+
 def _query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
@@ -1370,6 +1780,37 @@ def _hybrid_run_item_input(
             final_rank=final_rank,
             selected_flag=selected_flag,
             fusion_method=fusion_method,
+        ),
+    )
+
+
+def _agentic_run_item_input(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    rerank_score: float,
+    rerank_order: int,
+    final_rank: int,
+    selected_flag: bool,
+    agentic_result: AgenticRetrievalResult,
+) -> RetrievalRunItemInput:
+    retrieval_source = _agentic_item_source(candidate)
+    return RetrievalRunItemInput(
+        document_chunk_id=candidate.chunk.document_chunk_id,
+        retrieval_score=_decimal_score(candidate.retrieval_score),
+        rerank_score=_decimal_score(rerank_score),
+        rank_order=candidate.rank_order,
+        rerank_order=rerank_order,
+        selected_flag=selected_flag,
+        payload_snapshot=_payload_snapshot(candidate),
+        retrieval_source=retrieval_source.value,
+        score_breakdown_json=_agentic_score_breakdown(
+            candidate,
+            rerank_score=rerank_score,
+            rerank_order=rerank_order,
+            final_rank=final_rank,
+            selected_flag=selected_flag,
+            agentic_result=agentic_result,
+            item_source=retrieval_source,
         ),
     )
 
@@ -1580,6 +2021,134 @@ def _hybrid_score_breakdown(
         dense_rank=_payload_int(candidate, "dense_rank"),
         sparse_rank=_payload_int(candidate, "sparse_rank"),
     )
+
+
+def _agentic_score_breakdown(
+    candidate: CheckedRetrievalCandidate,
+    *,
+    rerank_score: float,
+    rerank_order: int,
+    final_rank: int,
+    selected_flag: bool,
+    agentic_result: AgenticRetrievalResult,
+    item_source: RetrievalSource,
+) -> dict[str, object]:
+    dense_score = _payload_float(candidate, "dense_score")
+    sparse_score = _payload_float(candidate, "sparse_score")
+    fused_score = _payload_float(candidate, "fused_score")
+    if dense_score is None and item_source in {
+        RetrievalSource.DENSE,
+        RetrievalSource.FALLBACK_DENSE,
+    }:
+        dense_score = candidate.retrieval_score
+    if sparse_score is None and item_source == RetrievalSource.SPARSE:
+        sparse_score = candidate.retrieval_score
+    if fused_score is None and item_source == RetrievalSource.HYBRID:
+        fused_score = candidate.retrieval_score
+    payload = {
+        "schema_version": "phase2.trace.v1",
+        "retrieval_source": RetrievalStrategy.AGENTIC_ROUTER.value,
+        "item_retrieval_source": item_source.value,
+        "sources": _payload_string_list(candidate, "agentic_sources"),
+        "initial_strategy": agentic_result.initial_strategy.value,
+        "fallback_used": agentic_result.fallback_used,
+        "fallback_strategy": (
+            agentic_result.fallback_strategies[-1].value
+            if agentic_result.fallback_strategies
+            else None
+        ),
+        "fallback_reason": agentic_result.fallback_reason,
+        "dense_score": _round_score(dense_score) if dense_score is not None else None,
+        "sparse_score": _round_score(sparse_score) if sparse_score is not None else None,
+        "fused_score": _round_score(fused_score) if fused_score is not None else None,
+        "rerank_score": _round_score(rerank_score),
+        "rank_order": candidate.rank_order,
+        "rerank_order": rerank_order,
+        "final_rank": final_rank,
+        "selected_flag": selected_flag,
+    }
+    return TraceRedactor.safe_dict(payload)
+
+
+def _agentic_item_source(candidate: CheckedRetrievalCandidate) -> RetrievalSource:
+    source = candidate.payload.get("agentic_primary_source")
+    if source == RetrievalSource.SPARSE.value:
+        return RetrievalSource.SPARSE
+    if source == RetrievalSource.HYBRID.value:
+        return RetrievalSource.HYBRID
+    if source == RetrievalSource.FALLBACK_DENSE.value:
+        return RetrievalSource.FALLBACK_DENSE
+    return RetrievalSource.DENSE
+
+
+def _payload_string_list(candidate: CheckedRetrievalCandidate, key: str) -> list[str]:
+    value = candidate.payload.get(key)
+    if not isinstance(value, list):
+        return []
+    safe_values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        safe = TraceRedactor.safe_string(item, max_length=80)
+        if safe:
+            safe_values.append(safe)
+    return safe_values[:10]
+
+
+def _agentic_score_summary(
+    *,
+    requested_top_k: int,
+    checked_candidates: list[CheckedRetrievalCandidate],
+    selected_count: int,
+    top1_rerank_score: float | None,
+    agentic_result: AgenticRetrievalResult,
+) -> RetrievalScoreSummary:
+    summary = _score_summary(
+        requested_top_k=requested_top_k,
+        qdrant_candidate_count=agentic_result.qdrant_candidate_count,
+        sparse_candidate_count=agentic_result.sparse_candidate_count,
+        hybrid_candidate_count=agentic_result.hybrid_candidate_count,
+        checked_candidates=checked_candidates,
+        selected_count=selected_count,
+        top1_rerank_score=top1_rerank_score,
+        excluded_by_rdb_check_count=agentic_result.excluded_by_rdb_check_count,
+    ).model_dump(mode="json")
+    summary.update(agentic_result.summary_fields())
+    return RetrievalScoreSummary(**summary)
+
+
+def _agentic_strategy_decision(
+    base_decision: dict[str, Any] | None,
+    *,
+    agentic_result: AgenticRetrievalResult,
+) -> dict[str, object] | None:
+    if base_decision is None:
+        return None
+    decision: dict[str, object] = dict(base_decision)
+    agentic_fields = agentic_result.decision_trace_fields()
+    router_fallback_used = bool(decision.get("fallback_used"))
+    if agentic_result.fallback_used:
+        decision.update(agentic_fields)
+    else:
+        for key, value in agentic_fields.items():
+            if key in {"fallback_used", "fallback_reason", "fallback_strategy"}:
+                continue
+            decision[key] = value
+        decision["fallback_used"] = router_fallback_used
+    reason_codes = decision.get("reason_codes")
+    if isinstance(reason_codes, list):
+        merged_reason_codes = [str(code) for code in reason_codes]
+    else:
+        merged_reason_codes = []
+    final_decision = agentic_result.final_decision
+    if final_decision is not None:
+        for code in final_decision.reason_codes:
+            if code not in merged_reason_codes:
+                merged_reason_codes.append(code)
+    if agentic_result.fallback_used and "agentic_fallback_executed" not in merged_reason_codes:
+        merged_reason_codes.append("agentic_fallback_executed")
+    decision["reason_codes"] = merged_reason_codes
+    return TraceRedactor.safe_dict(decision)
 
 
 def _payload_float(candidate: CheckedRetrievalCandidate, key: str) -> float | None:

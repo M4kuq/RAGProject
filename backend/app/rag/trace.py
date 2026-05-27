@@ -27,6 +27,9 @@ from app.schemas.rag_strategy import (
 TRACE_SCHEMA_VERSION = "phase2.trace.v1"
 
 _RETRIEVAL_LATENCY_KEYS = (
+    "sufficiency_check_ms",
+    "merge_dedupe_ms",
+    "rerank_after_merge_ms",
     "strategy_router_ms",
     "query_embedding_ms",
     "qdrant_search_ms",
@@ -315,6 +318,36 @@ def build_retrieval_settings_snapshot(
         ),
         router_allow_agentic_ask=(
             bool(settings.router_allow_agentic_ask)
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        max_retrieval_calls=(
+            settings.router_max_retrieval_calls
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        max_fallback_calls=(
+            settings.router_max_fallback_calls
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        sufficiency_min_candidates=(
+            settings.router_sufficiency_min_candidates
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        sufficiency_min_selected=(
+            settings.router_sufficiency_min_selected
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        sufficiency_top_score_threshold=(
+            round(float(settings.router_sufficiency_top_score_threshold), 6)
+            if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+            else None
+        ),
+        no_context_after_budget_exhausted=(
+            bool(settings.router_no_context_after_budget_exhausted)
             if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
             else None
         ),

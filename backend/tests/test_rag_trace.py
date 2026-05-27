@@ -44,6 +44,26 @@ def test_latency_tracker_records_non_negative_durations() -> None:
     assert all(value >= 0 for value in snapshot.values() if isinstance(value, int))
 
 
+def test_latency_tracker_excludes_nested_agentic_parent_spans_from_retrieval_total() -> None:
+    clock = _Clock([0.0, 0.1])
+    tracker = LatencyTracker(clock=clock)
+    tracker.record_ms("initial_retrieval_ms", 100)
+    tracker.record_ms("fallback_retrieval_ms", 80)
+    tracker.record_ms("query_embedding_ms", 10)
+    tracker.record_ms("qdrant_search_ms", 20)
+    tracker.record_ms("rdb_final_check_ms", 5)
+    tracker.record_ms("sparse_search_ms", 15)
+    tracker.record_ms("sufficiency_check_ms", 2)
+
+    snapshot = tracker.snapshot()
+
+    assert snapshot["initial_retrieval_ms"] == 100
+    assert snapshot["fallback_retrieval_ms"] == 80
+    assert snapshot["retrieval_ms"] == 52
+    assert isinstance(snapshot["total_ms"], int)
+    assert 52 <= snapshot["total_ms"]
+
+
 def test_trace_redactor_removes_forbidden_fields_and_sensitive_values() -> None:
     redacted = TraceRedactor.safe_dict(
         {

@@ -52,7 +52,8 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
 )
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query, normalize_sparse_scores
-from app.rag.strategy import FusionMethod
+from app.rag.strategy import FusionMethod, RetrievalStrategy
+from app.schemas.rag_strategy import RouterDecisionTrace
 from app.services.rag_service import RagService
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -931,6 +932,7 @@ def test_rag_search_agentic_router_disabled_falls_back_to_dense(
         qdrant_collection_name="document_chunks",
         search_snippet_max_chars=32,
         router_enabled=False,
+        router_sufficiency_top_score_threshold=0.99,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
@@ -958,8 +960,11 @@ def test_rag_search_agentic_router_disabled_falls_back_to_dense(
         assert run.strategy_decision_json["execution_strategy"] == "fallback_dense"
         assert run.strategy_decision_json["fallback_used"] is True
         assert run.strategy_decision_json["fallback_reason"] == "router_disabled"
+        assert "retrieval_call_count" not in run.strategy_decision_json
         assert run.latency_breakdown_json is not None
         assert run.latency_breakdown_json["strategy_router_ms"] >= 0
+        assert "initial_retrieval_ms" not in run.latency_breakdown_json
+        assert "fallback_retrieval_ms" not in run.latency_breakdown_json
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "fallback_dense" for item in items)
@@ -968,6 +973,131 @@ def test_rag_search_agentic_router_disabled_falls_back_to_dense(
             and item.score_breakdown_json["retrieval_source"] == "fallback_dense"
             for item in items
         )
+
+
+def test_rag_search_agentic_router_runs_bounded_fallback_and_persists_loop_trace(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        router_sufficiency_top_score_threshold=0.99,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        strategy_router=cast(Any, _DenseRouter(settings)),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "strategy": "agentic_router", "top_k": 5},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["items"]
+    assert len(vector_client.query_vectors) == 2
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "agentic_router"
+        assert run.strategy_decision_json is not None
+        decision = run.strategy_decision_json
+        assert decision["execution_strategy"] == "dense"
+        assert decision["fallback_used"] is True
+        assert decision["fallback_reason"] == "insufficient_context"
+        assert decision["retrieval_call_count"] == 2
+        assert decision["budget_exhausted"] is False
+        assert "agentic_fallback_executed" in decision["reason_codes"]
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["max_retrieval_calls"] == 2
+        assert run.retrieval_settings_json["sufficiency_top_score_threshold"] == 0.99
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["initial_retrieval_ms"] >= 0
+        assert run.latency_breakdown_json["fallback_retrieval_ms"] >= 0
+        assert run.latency_breakdown_json["sufficiency_check_ms"] >= 0
+        assert run.latency_breakdown_json["merge_dedupe_ms"] >= 0
+        assert run.latency_breakdown_json["rerank_after_merge_ms"] >= 0
+        assert run.retrieval_score_summary is not None
+        assert run.retrieval_score_summary["retrieval_call_count"] == 2
+        assert run.retrieval_score_summary["fallback_used"] is True
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert items
+        first_breakdown = items[0].score_breakdown_json
+        assert first_breakdown is not None
+        assert first_breakdown["retrieval_source"] == "agentic_router"
+        assert first_breakdown["fallback_used"] is True
+        assert first_breakdown["sources"]
+        assert "content_text" not in str(first_breakdown)
+
+
+def test_rag_search_agentic_router_preserves_retrieval_rank_when_rerank_reorders(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_ReverseOrderReranker(),
+        strategy_router=cast(Any, _DenseRouter(settings)),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "strategy": "agentic_router", "top_k": 5},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [item["document_chunk_id"] for item in data["items"][:2]] == [101, 100]
+    with session_factory() as db:
+        promoted = (
+            db.query(RetrievalRunItem)
+            .filter_by(
+                retrieval_run_id=data["retrieval_run_id"],
+                document_chunk_id=101,
+            )
+            .one()
+        )
+        assert promoted.rank_order == 2
+        assert promoted.rerank_order == 1
+        assert promoted.score_breakdown_json is not None
+        assert promoted.score_breakdown_json["rank_order"] == 2
+        assert promoted.score_breakdown_json["final_rank"] == 1
 
 
 def test_rag_search_agentic_router_respects_store_decision_trace_false(
@@ -2007,6 +2137,24 @@ class _OutOfRangeReranker:
         ]
 
 
+class _ReverseOrderReranker:
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: Sequence[RerankCandidate],
+    ) -> list[RerankResult]:
+        total = len(candidates)
+        return [
+            RerankResult(
+                document_chunk_id=candidate.document_chunk_id,
+                rerank_score=float(index) / max(1, total),
+                rerank_order=total - index + 1,
+            )
+            for index, candidate in enumerate(candidates, start=1)
+        ]
+
+
 class _DuplicateOrderReranker:
     def rerank(
         self,
@@ -2039,6 +2187,24 @@ class _InvalidOrderTypeReranker:
             )
             for index, candidate in enumerate(candidates, start=1)
         ]
+
+
+class _DenseRouter:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def route(self, **_: object) -> RouterDecisionTrace:
+        return RouterDecisionTrace(
+            requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
+            selected_strategy=RetrievalStrategy.DENSE,
+            execution_strategy=RetrievalStrategy.DENSE,
+            decision_source="test",
+            fallback_used=False,
+            router_enabled=True,
+            confidence=1.0,
+            reason_codes=["test_dense"],
+            store_decision_trace=self.settings.router_store_decision_trace,
+        )
 
 
 def _seed_auth(db: Session) -> None:
