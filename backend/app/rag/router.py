@@ -50,6 +50,7 @@ class StrategyRouter:
         reason_codes: list[str],
     ) -> RouterDecisionTrace:
         fallback_strategy = _configured_fallback_strategy(self.settings)
+        normalized_reason_codes = [code for code in reason_codes if code != "fallback_dense"]
         return RouterDecisionTrace(
             requested_strategy=requested_strategy,
             selected_strategy=fallback_strategy,
@@ -60,7 +61,7 @@ class StrategyRouter:
             router_enabled=False,
             confidence=0.0,
             reason_codes=[
-                *reason_codes,
+                *normalized_reason_codes,
                 f"fallback_strategy:{fallback_strategy.value}",
             ],
             safety_flags=[f"{fallback_strategy.value}_only", "single_retrieval_call"],
