@@ -39,7 +39,7 @@ class StrategyRouter:
             return self.fallback_decision(
                 requested_strategy=requested_strategy,
                 fallback_reason="router_error",
-                reason_codes=["router_error_fallback_dense"],
+                reason_codes=["router_error"],
             )
 
     def fallback_decision(
@@ -49,17 +49,22 @@ class StrategyRouter:
         fallback_reason: str,
         reason_codes: list[str],
     ) -> RouterDecisionTrace:
+        fallback_strategy = _configured_fallback_strategy(self.settings)
         return RouterDecisionTrace(
             requested_strategy=requested_strategy,
-            selected_strategy=RetrievalStrategy.AGENTIC_ROUTER,
-            execution_strategy=RetrievalStrategy.FALLBACK_DENSE,
+            selected_strategy=fallback_strategy,
+            execution_strategy=fallback_strategy,
             decision_source="fallback",
             fallback_used=True,
             fallback_reason=fallback_reason,
             router_enabled=False,
             confidence=0.0,
-            reason_codes=reason_codes,
-            safety_flags=["fallback_dense_only", "single_retrieval_call"],
+            reason_codes=[
+                *reason_codes,
+                f"fallback_strategy:{fallback_strategy.value}",
+            ],
+            safety_flags=[f"{fallback_strategy.value}_only", "single_retrieval_call"],
+            store_decision_trace=self.settings.router_store_decision_trace,
         )
 
     def _route(
@@ -79,25 +84,26 @@ class StrategyRouter:
                 router_enabled=False,
                 confidence=1.0,
                 reason_codes=[f"explicit_strategy:{requested_strategy.value}"],
+                store_decision_trace=self.settings.router_store_decision_trace,
             )
 
         if not self.settings.router_enabled:
             return self.fallback_decision(
                 requested_strategy=requested_strategy,
                 fallback_reason="router_disabled",
-                reason_codes=["router_disabled_fallback_dense"],
+                reason_codes=["router_disabled"],
             )
         if request_kind == "search" and not self.settings.router_allow_agentic_search:
             return self.fallback_decision(
                 requested_strategy=requested_strategy,
                 fallback_reason="agentic_search_disabled",
-                reason_codes=["agentic_search_disabled_fallback_dense"],
+                reason_codes=["agentic_search_disabled"],
             )
         if request_kind == "ask" and not self.settings.router_allow_agentic_ask:
             return self.fallback_decision(
                 requested_strategy=requested_strategy,
                 fallback_reason="agentic_ask_disabled",
-                reason_codes=["agentic_ask_disabled_fallback_dense"],
+                reason_codes=["agentic_ask_disabled"],
             )
 
         available = _available_strategies(self.settings)
@@ -117,6 +123,7 @@ class StrategyRouter:
         execution, fallback_used, fallback_reason, resolution_reasons = _resolve_execution_strategy(
             selected,
             available_strategies=available,
+            fallback_strategy=_configured_fallback_strategy(self.settings),
         )
         return RouterDecisionTrace(
             requested_strategy=requested_strategy,
@@ -130,6 +137,7 @@ class StrategyRouter:
             reason_codes=reason_codes + resolution_reasons,
             disabled_candidates=disabled_candidates,
             safety_flags=["single_retrieval_call", "no_agentic_loop", "no_external_action"],
+            store_decision_trace=self.settings.router_store_decision_trace,
         )
 
 
@@ -140,6 +148,12 @@ def _available_strategies(settings: Settings) -> set[RetrievalStrategy]:
     if settings.hybrid_enabled and (settings.hybrid_sparse_weight <= 0 or settings.sparse_enabled):
         available.add(RetrievalStrategy.HYBRID)
     return available
+
+
+def _configured_fallback_strategy(settings: Settings) -> RetrievalStrategy:
+    if settings.router_fallback_strategy == RetrievalStrategy.DENSE.value:
+        return RetrievalStrategy.DENSE
+    return RetrievalStrategy.FALLBACK_DENSE
 
 
 def _select_strategy(
@@ -178,7 +192,7 @@ def _select_strategy(
         )
     if ambiguity_score >= settings.router_ambiguity_threshold:
         return _choose_first_available(
-            [RetrievalStrategy.HYBRID, RetrievalStrategy.FALLBACK_DENSE],
+            [RetrievalStrategy.HYBRID, _configured_fallback_strategy(settings)],
             available_strategies=available_strategies,
             reason_code="ambiguous_query",
             confidence=0.58,
@@ -208,6 +222,7 @@ def _resolve_execution_strategy(
     selected_strategy: RetrievalStrategy,
     *,
     available_strategies: set[RetrievalStrategy],
+    fallback_strategy: RetrievalStrategy,
 ) -> tuple[RetrievalStrategy, bool, str | None, list[str]]:
     if selected_strategy in UNIMPLEMENTED_ROUTER_STRATEGIES:
         if RetrievalStrategy.HYBRID in available_strategies:
@@ -218,18 +233,25 @@ def _resolve_execution_strategy(
                 ["candidate_not_implemented", "hybrid_fallback"],
             )
         return (
-            RetrievalStrategy.FALLBACK_DENSE,
+            fallback_strategy,
             True,
             "candidate_not_implemented",
-            ["candidate_not_implemented", "fallback_dense"],
+            ["candidate_not_implemented", f"fallback_strategy:{fallback_strategy.value}"],
+        )
+    if selected_strategy == RetrievalStrategy.FALLBACK_DENSE:
+        return (
+            selected_strategy,
+            True,
+            "fallback_dense_selected",
+            ["fallback_dense_selected", "fallback_strategy:fallback_dense"],
         )
     if selected_strategy in available_strategies:
         return selected_strategy, False, None, [f"execution_strategy:{selected_strategy.value}"]
     return (
-        RetrievalStrategy.FALLBACK_DENSE,
+        fallback_strategy,
         True,
         "selected_strategy_unavailable",
-        ["selected_strategy_unavailable", "fallback_dense"],
+        ["selected_strategy_unavailable", f"fallback_strategy:{fallback_strategy.value}"],
     )
 
 
