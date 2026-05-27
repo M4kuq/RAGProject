@@ -494,7 +494,8 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(screen.getByRole("option", { name: "dense" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "sparse" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "hybrid" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "agentic_router" })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "agentic_router" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "multi_query_hybrid" })).toBeDisabled();
 
   fireEvent.change(screen.getByLabelText("query"), { target: { value: "hybrid retrieval" } });
   fireEvent.change(screen.getByLabelText("strategy"), { target: { value: "hybrid" } });

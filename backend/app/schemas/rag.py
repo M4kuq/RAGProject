@@ -51,6 +51,7 @@ class RagAskRequest(BaseModel):
     model_key: str | None = Field(default=None, max_length=128)
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
+    strategy: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
     filters: RagSearchFilters | None = None
 
     @field_validator("client_message_id")

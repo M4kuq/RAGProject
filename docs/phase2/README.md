@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback.
 
 ## PR Plan
 
@@ -145,9 +145,24 @@ PR-27 adds:
 
 PR-27 does not execute StrategyRouter, Agentic Retrieval Loop, context sufficiency checks, multi-query retrieval, metadata-filtered retrieval, version-aware retrieval, LLM planning, LangSmith export, Graph-RAG, OCR, or external operation agents.
 
+## PR-28 Strategy Router / Agentic Retrieval Control
+
+PR-28 adds:
+
+- deterministic rule-based `StrategyRouter`
+- `RouterDecisionTrace` persisted in `retrieval_runs.strategy_decision_json`
+- `/api/v1/rag/search` `strategy=agentic_router`
+- `/api/v1/rag/ask` explicit `strategy=agentic_router`
+- one selected execution strategy per request: `dense`, `sparse`, `hybrid`, or `fallback_dense`
+- safe fallback to dense when router is disabled, fails, or selects an unavailable strategy
+- `strategy_router_ms` latency span
+- Retrieval Debug UI display for requested strategy, selected strategy, execution strategy, fallback, confidence, reason codes, disabled candidates, and safety flags
+
+PR-28 stores `retrieval_runs.strategy_type = agentic_router` for router-triggered runs and stores the actual execution strategy in `strategy_decision_json.execution_strategy`. It does not implement Agentic Retrieval Loop, context sufficiency checks, additional retrieval calls, multi-query execution, metadata-filtered execution, version-aware execution, LLM router execution, LangSmith export, Graph-RAG, OCR, or external operation agents.
+
 ## Non-goals
 
-PR-27 does not implement StrategyRouter, Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-28 does not implement Agentic Retrieval Loop, CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

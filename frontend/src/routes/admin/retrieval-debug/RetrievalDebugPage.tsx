@@ -19,11 +19,11 @@ import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 const SUPPORTED_STRATEGIES: Array<{ value: SupportedRetrievalDebugStrategy; label: string }> = [
   { value: "dense", label: "dense" },
   { value: "sparse", label: "sparse" },
-  { value: "hybrid", label: "hybrid" }
+  { value: "hybrid", label: "hybrid" },
+  { value: "agentic_router", label: "agentic_router" }
 ];
 
 const FUTURE_STRATEGIES = [
-  "agentic_router",
   "multi_query_dense",
   "multi_query_hybrid",
   "metadata_filtered",
@@ -37,6 +37,7 @@ const LATENCY_KEYS = [
   "qdrant_search_ms",
   "sparse_search_ms",
   "fusion_ms",
+  "strategy_router_ms",
   "rdb_final_check_ms",
   "rerank_ms",
   "retrieval_items_persist_ms",
@@ -275,10 +276,15 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
       <TraceCard title="Strategy Decision">
         <dl className="detail-grid">
           <Detail label="selected_strategy" value={formatUnknownValue(decision.selected_strategy)} />
+          <Detail label="execution_strategy" value={formatUnknownValue(decision.execution_strategy)} />
           <Detail label="decision_source" value={formatUnknownValue(decision.decision_source ?? "default")} />
           <Detail label="router_enabled" value={formatUnknownValue(decision.router_enabled ?? false)} />
           <Detail label="fallback_used" value={formatUnknownValue(decision.fallback_used ?? false)} />
           <Detail label="fallback_strategy" value={formatUnknownValue(decision.fallback_strategy ?? "N/A")} />
+          <Detail label="fallback_reason" value={formatUnknownValue(decision.fallback_reason)} />
+          <Detail label="confidence" value={formatScore(decision.confidence)} />
+          <Detail label="disabled_candidates" value={formatUnknownValue(decision.disabled_candidates ?? [])} />
+          <Detail label="safety_flags" value={formatUnknownValue(decision.safety_flags ?? [])} />
           <Detail label="reason_codes" value={formatUnknownValue(decision.reason_codes ?? [])} />
         </dl>
         <SafeDetails record={decision} />

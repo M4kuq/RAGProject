@@ -291,6 +291,10 @@ def test_sparse_settings_validation() -> None:
         sparse_score_normalization="max",
         query_planner_max_sub_queries=2,
         query_planner_max_preview_chars=120,
+        router_mode="rule_based",
+        router_keyword_heavy_threshold=0.7,
+        router_ambiguity_threshold=0.8,
+        router_fallback_strategy="fallback_dense",
     )
 
     assert settings.sparse_provider == "postgres_fts"
@@ -298,6 +302,10 @@ def test_sparse_settings_validation() -> None:
     assert settings.hybrid_fusion_method == "weighted"
     assert settings.query_planner_max_sub_queries == 2
     assert settings.query_planner_max_preview_chars == 120
+    assert settings.router_mode == "rule_based"
+    assert settings.router_keyword_heavy_threshold == 0.7
+    assert settings.router_ambiguity_threshold == 0.8
+    assert settings.router_fallback_strategy == "fallback_dense"
 
     with pytest.raises(ValueError):
         Settings(hybrid_fusion_method="invalid")
@@ -313,6 +321,10 @@ def test_sparse_settings_validation() -> None:
         Settings(query_planner_max_sub_queries=4)
     with pytest.raises(ValueError):
         Settings(sparse_score_normalization="none")
+    with pytest.raises(ValueError):
+        Settings(router_mode="llm")
+    with pytest.raises(ValueError):
+        Settings(router_fallback_strategy="hybrid")
 
 
 def test_in_memory_vector_search_client_scores_fake_qdrant_points() -> None:
@@ -824,6 +836,186 @@ def test_rag_search_hybrid_success_persists_fusion_trace_and_score_breakdown(
         assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
+def test_rag_search_agentic_router_selects_hybrid_and_persists_decision(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "HTTP 500 API_ERROR SQL_ERROR alpha secondary",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "strategy": "agentic_router",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert len(vector_client.query_vectors) == 1
+    assert data["items"]
+    assert "content_text" not in str(data)
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "agentic_router"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "agentic_router"
+        assert run.query_plan_json["query_mode"] == "router_single_strategy"
+        assert (
+            run.query_plan_json["query_hash"]
+            == hashlib.sha256(b"HTTP 500 API_ERROR SQL_ERROR alpha secondary").hexdigest()
+        )
+        assert "router_executed" in run.query_plan_json["safety_flags"]
+        assert "router_not_executed" not in run.query_plan_json["safety_flags"]
+        assert "planned_only" not in run.query_plan_json["safety_flags"]
+        assert "disabled_reason" not in run.query_plan_json
+        assert "router_executed" in run.query_plan_json["planner"]["safety_flags"]
+        assert "router_not_executed" not in run.query_plan_json["planner"]["safety_flags"]
+        assert "planned_only" not in run.query_plan_json["planner"]["safety_flags"]
+        assert "disabled_reason" not in run.query_plan_json["planner"]
+        assert run.strategy_decision_json is not None
+        decision = run.strategy_decision_json
+        assert decision["schema_version"] == "phase2.router.v1"
+        assert decision["requested_strategy"] == "agentic_router"
+        assert decision["selected_strategy"] == "hybrid"
+        assert decision["execution_strategy"] == "hybrid"
+        assert decision["decision_source"] == "rule_based"
+        assert decision["fallback_used"] is False
+        assert decision["router_enabled"] is True
+        assert "keyword_heavy" in decision["reason_codes"]
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["strategy_type"] == "agentic_router"
+        assert run.retrieval_settings_json["router_enabled"] is True
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["strategy_router_ms"] >= 0
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        dumped = str(
+            {
+                "query_plan": run.query_plan_json,
+                "decision": run.strategy_decision_json,
+                "settings": run.retrieval_settings_json,
+            }
+        )
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+
+
+def test_rag_search_agentic_router_disabled_falls_back_to_dense(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        router_enabled=False,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "strategy": "agentic_router", "top_k": 5},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["items"]
+    assert len(vector_client.query_vectors) == 1
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "agentic_router"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["execution_strategy"] == "fallback_dense"
+        assert run.strategy_decision_json["fallback_used"] is True
+        assert run.strategy_decision_json["fallback_reason"] == "router_disabled"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["strategy_router_ms"] >= 0
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "fallback_dense" for item in items)
+        assert all(
+            item.score_breakdown_json is not None
+            and item.score_breakdown_json["retrieval_source"] == "fallback_dense"
+            for item in items
+        )
+
+
+def test_rag_search_agentic_router_respects_store_decision_trace_false(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        router_store_decision_trace=False,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "HTTP 500 API_ERROR SQL_ERROR alpha secondary",
+            "strategy": "agentic_router",
+            "top_k": 5,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["items"]
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "agentic_router"
+        assert run.query_plan_json is not None
+        assert run.strategy_decision_json is None
+
+
 def test_rag_search_hybrid_reports_post_filter_count_before_top_k_truncation(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -954,7 +1146,7 @@ def test_rag_search_unsupported_strategy_returns_safe_error(
 
     response = client.post(
         "/api/v1/rag/search",
-        json={"query": "alpha secret-token", "strategy": "agentic_router"},
+        json={"query": "alpha secret-token", "strategy": "multi_query_dense"},
         headers=_unsafe_headers(csrf_token),
     )
 

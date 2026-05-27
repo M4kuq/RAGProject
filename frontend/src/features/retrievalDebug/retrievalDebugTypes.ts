@@ -1,6 +1,6 @@
 import type { RetrievalStrategy } from "../evaluations/evaluationTypes";
 
-export type SupportedRetrievalDebugStrategy = "dense" | "sparse" | "hybrid";
+export type SupportedRetrievalDebugStrategy = "dense" | "sparse" | "hybrid" | "agentic_router";
 export type FusionMethod = "rrf" | "weighted";
 
 export type RagSearchDebugRequest = {

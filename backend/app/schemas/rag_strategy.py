@@ -142,6 +142,22 @@ class StrategyDecisionTrace(SafeTraceModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+class RouterDecisionTrace(SafeTraceModel):
+    schema_version: Literal["phase2.router.v1"] = "phase2.router.v1"
+    requested_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER
+    selected_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER
+    execution_strategy: RetrievalStrategy = RetrievalStrategy.FALLBACK_DENSE
+    decision_source: str = Field(default="rule_based", max_length=100)
+    fallback_used: bool = False
+    fallback_reason: str | None = Field(default=None, max_length=100)
+    router_enabled: bool = True
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason_codes: list[str] = Field(default_factory=list)
+    disabled_candidates: list[RetrievalStrategy] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    store_decision_trace: bool = Field(default=True, exclude=True)
+
+
 class LatencyBreakdown(SafeTraceModel):
     schema_version: Literal["phase2.trace.v1"] = TRACE_SCHEMA_VERSION
     total_ms: int | None = Field(default=None, ge=0)
@@ -157,6 +173,7 @@ class LatencyBreakdown(SafeTraceModel):
     generation_ms: int | None = Field(default=None, ge=0)
     citation_build_ms: int | None = Field(default=None, ge=0)
     confidence_ms: int | None = Field(default=None, ge=0)
+    strategy_router_ms: int | None = Field(default=None, ge=0)
 
 
 class RetrievalSettingsSnapshot(SafeTraceModel):
@@ -183,6 +200,10 @@ class RetrievalSettingsSnapshot(SafeTraceModel):
     hybrid_dense_weight: float | None = Field(default=None, ge=0.0, le=1.0)
     hybrid_sparse_weight: float | None = Field(default=None, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int | None = Field(default=None, ge=1)
+    router_mode: str | None = Field(default=None, max_length=30)
+    router_fallback_strategy: RetrievalStrategy | None = None
+    router_allow_agentic_search: bool | None = None
+    router_allow_agentic_ask: bool | None = None
 
 
 class ScoreBreakdown(SafeTraceModel):

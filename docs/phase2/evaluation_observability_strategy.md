@@ -53,6 +53,8 @@ PR-27 extends `query_plan_json` with deterministic analyzer/planner metadata:
 
 These fields are observability and future-router inputs only. They do not change the executed strategy in PR-27.
 
+PR-28 records rule-based router decisions in `retrieval_runs.strategy_decision_json` using `phase2.router.v1`. Evaluation and debug tooling should treat `retrieval_runs.strategy_type = agentic_router` as the requested strategy and `strategy_decision_json.execution_strategy` as the executed strategy. Router decision details remain safe metadata only: reason codes, confidence, fallback flags, disabled candidates, and safety flags. Raw query, prompt, context, chunk text, PII, secrets, and raw exception messages are not stored.
+
 ## Dataset Foundation
 
 PR-22 stores evaluation datasets and cases in DB so the same dataset can be reused across strategies:

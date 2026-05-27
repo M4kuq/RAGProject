@@ -9,6 +9,7 @@ The page at `/admin/retrieval-debug` lets admins run the existing standalone `/a
 - `dense`
 - `sparse`
 - `hybrid`
+- `agentic_router`
 
 The page visualizes the safe trace produced by PR-21 and the sparse/hybrid score metadata added by PR-23 and PR-24. It also shows the strategy comparison summary produced by PR-25 when recent evaluation runs are available.
 
@@ -18,7 +19,6 @@ PR-26 does not implement QueryAnalyzer, QueryPlanner, StrategyRouter, Agentic Re
 
 Future strategies are shown as disabled or coming soon:
 
-- `agentic_router`
 - `multi_query_dense`
 - `multi_query_hybrid`
 - `metadata_filtered`
@@ -51,7 +51,7 @@ The debug page displays:
 - RDB final check exclusion count
 - latest available strategy evaluation summary
 
-Query analysis, rewritten-query preview, planned sub-query preview, metadata filter candidates, and candidate strategy proposals are populated by PR-27. Router decision and fallback fields remain empty, `N/A`, default, or false until PR-28 provides real router decisions.
+Query analysis, rewritten-query preview, planned sub-query preview, metadata filter candidates, and candidate strategy proposals are populated by PR-27. PR-28 populates router decision and fallback fields when admins choose `agentic_router`.
 
 ## Redaction Rules
 
@@ -82,3 +82,20 @@ The Query Plan panel displays:
 - `planned_only` safety flags
 
 These fields are for inspection only in PR-27. PR-28 can populate router decision metadata in `strategy_decision_json` and decide whether to execute the recommended strategy.
+
+## PR-28 Integration
+
+The Strategy Decision panel displays:
+
+- requested strategy
+- selected strategy
+- execution strategy
+- decision source
+- router enabled
+- fallback used and fallback reason
+- confidence
+- reason codes
+- disabled candidates
+- safety flags
+
+`agentic_router` runs a single selected retrieval strategy in PR-28. Additional retrieval loops, context sufficiency checks, and multi-query execution remain out of scope for PR-26/PR-28 and move to PR-29.

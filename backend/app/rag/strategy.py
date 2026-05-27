@@ -56,7 +56,7 @@ class StrategyTraceSettings:
 
 DEFAULT_RETRIEVAL_STRATEGY: Final = RetrievalStrategy.DENSE
 DEFAULT_FUSION_METHOD: Final = FusionMethod.RRF
-DEFAULT_ROUTER_FALLBACK_STRATEGY: Final = RouterFallbackStrategy.DENSE
+DEFAULT_ROUTER_FALLBACK_STRATEGY: Final = RouterFallbackStrategy.FALLBACK_DENSE
 
 RETRIEVAL_STRATEGY_VALUES: Final = tuple(strategy.value for strategy in RetrievalStrategy)
 RETRIEVAL_SOURCE_VALUES: Final = tuple(source.value for source in RetrievalSource)
@@ -91,16 +91,40 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         "Candidate overfetch multiplier for hybrid retrieval final check.",
     ),
     "rag.router.enabled": (
-        False,
-        "Strategy router is disabled until the Phase2 router PR.",
+        True,
+        "Enable explicit StrategyRouter execution for Phase2 PR-28.",
+    ),
+    "rag.router.mode": (
+        "rule_based",
+        "StrategyRouter mode. PR-28 supports deterministic rule_based routing only.",
+    ),
+    "rag.router.allow_agentic_search": (
+        True,
+        "Allow explicit /rag/search strategy=agentic_router requests.",
+    ),
+    "rag.router.allow_agentic_ask": (
+        True,
+        "Allow explicit /rag/ask strategy=agentic_router requests while keeping default ask dense.",
+    ),
+    "rag.router.keyword_heavy_threshold": (
+        0.65,
+        "Keyword-heavy threshold for rule-based StrategyRouter hybrid selection.",
+    ),
+    "rag.router.ambiguity_threshold": (
+        0.75,
+        "Ambiguity threshold for rule-based StrategyRouter fallback handling.",
     ),
     "rag.router.max_retrieval_calls": (
         1,
-        "Maximum retrieval calls while router support is disabled.",
+        "PR-28 StrategyRouter performs one retrieval call; loops are deferred to PR-29.",
     ),
     "rag.router.fallback_strategy": (
         DEFAULT_ROUTER_FALLBACK_STRATEGY.value,
-        "Fallback strategy for future router failures.",
+        "Fallback strategy for router failures.",
+    ),
+    "rag.router.store_decision_trace": (
+        True,
+        "Store redacted StrategyRouter decision trace.",
     ),
     "rag.trace.enabled": (
         True,

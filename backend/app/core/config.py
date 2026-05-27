@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     query_planner_max_preview_chars: int = Field(default=160, ge=20, le=240)
     query_planner_store_query_preview: bool = True
     query_planner_redact_pii: bool = True
+    router_enabled: bool = True
+    router_mode: str = "rule_based"
+    router_allow_agentic_search: bool = True
+    router_allow_agentic_ask: bool = True
+    router_keyword_heavy_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    router_ambiguity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    router_fallback_strategy: str = "fallback_dense"
+    router_store_decision_trace: bool = True
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
     rerank_top_n_max: int = Field(default=5, ge=1, le=20)
@@ -185,6 +193,12 @@ class Settings(BaseSettings):
         self.sparse_score_normalization = self.sparse_score_normalization.lower()
         if self.sparse_score_normalization != "max":
             raise ValueError("SPARSE_SCORE_NORMALIZATION must be max")
+        self.router_mode = self.router_mode.lower()
+        if self.router_mode != "rule_based":
+            raise ValueError("ROUTER_MODE must be rule_based")
+        self.router_fallback_strategy = self.router_fallback_strategy.lower()
+        if self.router_fallback_strategy not in {"dense", "fallback_dense"}:
+            raise ValueError("ROUTER_FALLBACK_STRATEGY must be dense or fallback_dense")
         if self.rerank_top_n_default > self.rerank_top_n_max:
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:
