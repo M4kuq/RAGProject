@@ -735,8 +735,7 @@ class EvaluationService:
             if (not selected_types or candidate.failure_type in selected_types)
             and _severity_rank(candidate.severity) >= _severity_rank(payload.min_severity)
         ]
-        if not selected_types:
-            candidates = _primary_failure_candidates(candidates)
+        candidates = _primary_failure_candidates(candidates)
         limit = min(payload.limit, self.settings.evaluation_failure_max_promotions_per_run)
         candidates = candidates[:limit]
         source_cases = self._promotion_source_cases(db, run)

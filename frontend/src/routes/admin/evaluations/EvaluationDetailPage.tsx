@@ -6,7 +6,10 @@ import {
   useEvaluationRunDetail,
   usePromoteEvaluationFailures
 } from "../../../features/evaluations/evaluationHooks";
-import type { EvaluationMetricResult } from "../../../features/evaluations/evaluationTypes";
+import type {
+  EvaluationFailureCandidate,
+  EvaluationMetricResult
+} from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
 export function EvaluationDetailPage() {
@@ -193,6 +196,7 @@ export function EvaluationDetailPage() {
               void promoteFailures
                 .mutateAsync({
                   target_dataset_id: run.data.evaluation_dataset_id,
+                  failure_types: primaryFailureTypes(run.data.failure_candidates),
                   min_severity: "medium",
                   limit: 50
                 })
@@ -291,6 +295,24 @@ export function EvaluationDetailPage() {
 
 function formatScore(value: number | null) {
   return value === null ? "-" : value.toFixed(3);
+}
+
+function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[] {
+  const byItem = new Map<number, EvaluationFailureCandidate>();
+  for (const candidate of candidates) {
+    const existing = byItem.get(candidate.evaluation_run_item_id);
+    if (!existing || failurePriority(candidate) < failurePriority(existing)) {
+      byItem.set(candidate.evaluation_run_item_id, candidate);
+    }
+  }
+  return Array.from(
+    new Set(Array.from(byItem.values()).map((candidate) => candidate.failure_type))
+  );
+}
+
+function failurePriority(candidate: EvaluationFailureCandidate): string {
+  const severityRank = { high: 0, medium: 1, low: 2 }[candidate.severity];
+  return `${severityRank}:${candidate.failure_type}:${candidate.promotion_key}`;
 }
 
 function formatMetricDetails(metrics: EvaluationMetricResult[]) {
