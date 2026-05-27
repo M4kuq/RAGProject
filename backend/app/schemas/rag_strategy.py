@@ -155,6 +155,7 @@ class RouterDecisionTrace(SafeTraceModel):
     reason_codes: list[str] = Field(default_factory=list)
     disabled_candidates: list[RetrievalStrategy] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
+    store_decision_trace: bool = Field(default=True, exclude=True)
 
 
 class LatencyBreakdown(SafeTraceModel):
@@ -218,23 +219,14 @@ class ScoreBreakdown(SafeTraceModel):
     selected_flag: bool
 
 
-class StrategyEvaluationMetricSpec(SafeTraceModel):
-    metric_name: str = Field(min_length=1, max_length=100)
-    display_name: str = Field(min_length=1, max_length=100)
-    description: str = Field(min_length=1, max_length=500)
-    higher_is_better: bool = True
-    min_value: float = Field(default=0.0, ge=0.0, le=1.0)
-    max_value: float = Field(default=1.0, ge=0.0, le=1.0)
-
-
-def _reject_sensitive_keys(value: Any) -> None:
-    if isinstance(value, Mapping):
-        for key, nested in value.items():
+def _reject_sensitive_keys(data: Any) -> None:
+    if isinstance(data, Mapping):
+        for key, value in data.items():
             key_text = str(key).lower()
             if any(part in key_text for part in SENSITIVE_TRACE_KEY_PARTS):
-                raise ValueError(f"trace field is not allowed: {key}")
-            _reject_sensitive_keys(nested)
+                raise ValueError("sensitive trace key is not allowed")
+            _reject_sensitive_keys(value)
         return
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        for nested in value:
-            _reject_sensitive_keys(nested)
+    if isinstance(data, Sequence) and not isinstance(data, str | bytes | bytearray):
+        for item in data:
+            _reject_sensitive_keys(item)
