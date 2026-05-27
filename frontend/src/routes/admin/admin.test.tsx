@@ -261,6 +261,147 @@ test("admin evaluation dataset detail shows cases and export", async () => {
   expect(await screen.findByText(/phase2.evaluation_dataset.v1/)).toBeInTheDocument();
 });
 
+test("evaluation detail promotes fixture failures to selected dataset with backend priority", async () => {
+  const promoteRequests: RequestInit[] = [];
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({
+          data: [
+            {
+              evaluation_dataset_id: 42,
+              dataset_name: "promoted_failures",
+              description: "Target dataset",
+              version: "v1",
+              source_type: "manual",
+              status: "active",
+              metadata_json: null,
+              case_count: 0,
+              created_by: 1,
+              created_at: "2026-05-01T00:00:00Z",
+              updated_at: "2026-05-01T00:00:00Z"
+            }
+          ],
+          meta: { pagination: { page: 1, page_size: 50, total: 1, has_next: false } }
+        });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs/77/promote-failures")) {
+        promoteRequests.push(init ?? {});
+        return jsonResponse({
+          data: {
+            evaluation_run_id: 77,
+            target_dataset_id: 42,
+            created_count: 1,
+            skipped_count: 0,
+            items: [
+              {
+                promotion_key: "promotion-key-1",
+                failure_type: "retrieval_exception",
+                strategy_type: "agentic_router",
+                evaluation_run_item_id: 700,
+                evaluation_case_id: null,
+                promoted_case_id: 900,
+                case_key: "failure_case",
+                result_code: "created"
+              }
+            ]
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs/77")) {
+        return jsonResponse({
+          data: {
+            evaluation_run_id: 77,
+            job_id: 88,
+            evaluation_dataset_id: null,
+            dataset_name: "phase2_strategy_smoke",
+            strategy_type: "agentic_router",
+            strategies: ["agentic_router"],
+            metric_names: ["no_context_rate"],
+            trigger_type: "manual",
+            status: "succeeded",
+            case_count: 1,
+            succeeded_count: 0,
+            failed_count: 1,
+            metric_summary: {},
+            strategy_comparison: [],
+            strategy_metrics_summary_json: null,
+            error_code: null,
+            error_message: null,
+            started_at: "2026-05-01T00:00:00Z",
+            finished_at: "2026-05-01T00:00:01Z",
+            created_at: "2026-05-01T00:00:00Z",
+            updated_at: "2026-05-01T00:00:01Z",
+            items: [],
+            failure_candidates: [
+              {
+                schema_version: "phase2.evaluation.v1",
+                evaluation_run_id: 77,
+                evaluation_run_item_id: 700,
+                evaluation_case_id: null,
+                case_key: "fixture_case",
+                question_hash: "a".repeat(64),
+                strategy_type: "agentic_router",
+                failure_type: "no_context",
+                severity: "high",
+                failure_reason_codes: ["no_context"],
+                metric_snapshot: {},
+                recommended_tags: ["failure_promoted"],
+                promotion_key: "promotion-key-no-context"
+              },
+              {
+                schema_version: "phase2.evaluation.v1",
+                evaluation_run_id: 77,
+                evaluation_run_item_id: 700,
+                evaluation_case_id: null,
+                case_key: "fixture_case",
+                question_hash: "a".repeat(64),
+                strategy_type: "agentic_router",
+                failure_type: "retrieval_exception",
+                severity: "high",
+                failure_reason_codes: ["rerank_failed"],
+                metric_snapshot: {},
+                recommended_tags: ["failure_promoted"],
+                promotion_key: "promotion-key-retrieval"
+              }
+            ]
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations/77");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Evaluation #77" })).toBeInTheDocument();
+  fireEvent.change(await screen.findByLabelText("failure promotion target dataset"), {
+    target: { value: "42" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Promote primary failures" }));
+
+  await waitFor(() => expect(promoteRequests.length).toBe(1));
+  const body = JSON.parse(String(promoteRequests[0].body));
+  expect(body.target_dataset_id).toBe(42);
+  expect(body.failure_types).toEqual(["retrieval_exception"]);
+  expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
+});
+
 test("retrieval debug runs hybrid search and renders redacted trace details", async () => {
   const searchRequests: RequestInit[] = [];
   vi.stubGlobal(
