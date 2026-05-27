@@ -201,6 +201,18 @@ def _select_strategy(
     for candidate in candidate_list:
         if candidate in UNIMPLEMENTED_ROUTER_STRATEGIES:
             continue
+        if candidate == RetrievalStrategy.FALLBACK_DENSE:
+            fallback_strategy = _configured_fallback_strategy(settings)
+            if fallback_strategy in available_strategies:
+                return (
+                    fallback_strategy,
+                    [
+                        f"planner_candidate:{candidate.value}",
+                        f"fallback_strategy:{fallback_strategy.value}",
+                    ],
+                    0.64,
+                )
+            continue
         if candidate in available_strategies:
             return candidate, [f"planner_candidate:{candidate.value}"], 0.64
     return RetrievalStrategy.DENSE, ["default_dense"], 0.6
