@@ -391,6 +391,54 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert "content_text" not in dumped
 
 
+def test_rag_ask_agentic_router_respects_store_decision_trace_false(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=2,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        generation_provider="fake",
+        router_store_decision_trace=False,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic ask no decision")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-no-decision-msg-1",
+            "message": "HTTP 500 API_ERROR SQL_ERROR alpha secondary",
+            "strategy": "agentic_router",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_type == "agentic_router"
+        assert run.query_plan_json is not None
+        assert run.strategy_decision_json is None
+
+
 def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

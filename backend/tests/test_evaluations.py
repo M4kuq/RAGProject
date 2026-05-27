@@ -1166,6 +1166,24 @@ def test_evaluation_create_rejects_agentic_router_strategy() -> None:
                     case_limit=1,
                     strategy_type="agentic_router",
                 )
+            with pytest.raises(ValueError):
+                EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategy_type="fallback_dense",
+                )
+            with pytest.raises(ValueError):
+                EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategies=["dense", "agentic_router"],
+                )
+            with pytest.raises(ValueError):
+                EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategies=["fallback_dense"],
+                )
             created = service.create_run(
                 db,
                 payload=EvaluationRunCreateRequest(
@@ -1182,6 +1200,33 @@ def test_evaluation_create_rejects_agentic_router_strategy() -> None:
             assert run.metrics_config["strategies"] == ["dense", "sparse", "hybrid"]
     finally:
         engine.dispose()
+
+
+def test_evaluation_api_rejects_agentic_router_and_fallback_dense_strategies(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = evaluation_client
+    _login_as(client, "admin@example.com")
+    csrf_token = _session_csrf(client)
+
+    for payload in (
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "agentic_router"},
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategies": ["agentic_router"]},
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategies": ["fallback_dense"]},
+        {
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["dense", "agentic_router"],
+        },
+    ):
+        response = client.post(
+            "/api/v1/evaluations/runs",
+            json=payload,
+            headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_error"
 
 
 def test_evaluation_service_marks_run_failed_when_setup_fails() -> None:

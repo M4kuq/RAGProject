@@ -590,7 +590,7 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.router.keyword_heavy_threshold") == 0.65
         assert _setting_value(db, "rag.router.ambiguity_threshold") == 0.75
         assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
-        assert _setting_value(db, "rag.router.fallback_strategy") == "dense"
+        assert _setting_value(db, "rag.router.fallback_strategy") == "fallback_dense"
         assert _setting_value(db, "rag.router.store_decision_trace") is True
         assert _setting_value(db, "rag.trace.enabled") is True
         assert _setting_value(db, "rag.sparse.enabled") is True
@@ -680,6 +680,13 @@ def test_seed_preserves_existing_phase2_strategy_setting(
                     description="Operator router override",
                 )
             )
+            db.add(
+                SystemSetting(
+                    setting_key="rag.router.fallback_strategy",
+                    setting_value="dense",
+                    description="Operator fallback override",
+                )
+            )
             db.commit()
 
         with Session() as db:
@@ -692,6 +699,7 @@ def test_seed_preserves_existing_phase2_strategy_setting(
             assert _setting_value(db, "rag.hybrid.enabled") is True
             assert _setting_value(db, "rag.hybrid.fusion_method") == "rrf"
             assert _setting_value(db, "rag.router.enabled") is False
+            assert _setting_value(db, "rag.router.fallback_strategy") == "dense"
             assert _setting_value(db, "rag.router.allow_agentic_search") is True
             assert _setting_value(db, "rag.router.allow_agentic_ask") is True
             assert _setting_value(db, "rag.sparse.enabled") is True
