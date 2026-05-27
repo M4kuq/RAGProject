@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     router_allow_agentic_ask: bool = True
     router_keyword_heavy_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
     router_ambiguity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    router_max_retrieval_calls: int = Field(default=2, ge=1, le=3)
+    router_max_fallback_calls: int = Field(default=1, ge=0, le=2)
+    router_sufficiency_min_candidates: int = Field(default=1, ge=1, le=20)
+    router_sufficiency_min_selected: int = Field(default=1, ge=1, le=20)
+    router_sufficiency_top_score_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    router_enable_fallback_hybrid: bool = True
+    router_enable_fallback_dense: bool = True
+    router_no_context_after_budget_exhausted: bool = True
     router_fallback_strategy: str = "fallback_dense"
     router_store_decision_trace: bool = True
     rerank_provider: str = "fake"
@@ -199,6 +207,12 @@ class Settings(BaseSettings):
         self.router_fallback_strategy = self.router_fallback_strategy.lower()
         if self.router_fallback_strategy not in {"dense", "fallback_dense"}:
             raise ValueError("ROUTER_FALLBACK_STRATEGY must be dense or fallback_dense")
+        if self.router_max_fallback_calls > self.router_max_retrieval_calls - 1:
+            raise ValueError("ROUTER_MAX_FALLBACK_CALLS must be less than retrieval call budget")
+        if self.router_sufficiency_min_selected > self.router_sufficiency_min_candidates:
+            raise ValueError(
+                "ROUTER_SUFFICIENCY_MIN_SELECTED must be <= ROUTER_SUFFICIENCY_MIN_CANDIDATES"
+            )
         if self.rerank_top_n_default > self.rerank_top_n_max:
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:

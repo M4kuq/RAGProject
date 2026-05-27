@@ -391,6 +391,47 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert "content_text" not in dumped
 
 
+def test_rag_ask_agentic_router_budget_exhausted_returns_no_context_without_assistant(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic no context")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-no-context-msg-1",
+            "message": "alpha policy missing context",
+            "strategy": "agentic_router",
+            "filters": {"logical_document_ids": [999]},
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_type == "agentic_router"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["retrieval_call_count"] == 2
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["no_context"] is True
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["initial_retrieval_ms"] >= 0
+        assert run.latency_breakdown_json["fallback_retrieval_ms"] >= 0
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+
+
 def test_rag_ask_agentic_router_respects_store_decision_trace_false(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

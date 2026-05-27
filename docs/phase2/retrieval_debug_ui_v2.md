@@ -98,4 +98,14 @@ The Strategy Decision panel displays:
 - disabled candidates
 - safety flags
 
-`agentic_router` runs a single selected retrieval strategy in PR-28. Additional retrieval loops, context sufficiency checks, and multi-query execution remain out of scope for PR-26/PR-28 and move to PR-29.
+`agentic_router` runs a single selected retrieval strategy in PR-28. PR-29 adds a bounded retrieval loop and the Debug UI displays the additional safe fields when present:
+
+- `retrieval_call_count`
+- `fallback_used`, `fallback_strategy`, and `fallback_reason`
+- `budget_exhausted`
+- `sufficiency_score` and `sufficiency_reason_codes`
+- initial, merged, deduped, and final selected candidate counts
+- `agentic_total_ms`, `initial_retrieval_ms`, `fallback_retrieval_ms`,
+  `sufficiency_check_ms`, `merge_dedupe_ms`, and `rerank_after_merge_ms`
+
+Multi-query execution, metadata-filtered execution, version-aware retrieval, Graph-RAG, OCR, and external observability export remain out of scope.

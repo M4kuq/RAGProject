@@ -589,7 +589,14 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.router.allow_agentic_ask") is True
         assert _setting_value(db, "rag.router.keyword_heavy_threshold") == 0.65
         assert _setting_value(db, "rag.router.ambiguity_threshold") == 0.75
-        assert _setting_value(db, "rag.router.max_retrieval_calls") == 1
+        assert _setting_value(db, "rag.router.max_retrieval_calls") == 2
+        assert _setting_value(db, "rag.router.max_fallback_calls") == 1
+        assert _setting_value(db, "rag.router.sufficiency_min_candidates") == 1
+        assert _setting_value(db, "rag.router.sufficiency_min_selected") == 1
+        assert _setting_value(db, "rag.router.sufficiency_top_score_threshold") == 0.2
+        assert _setting_value(db, "rag.router.enable_fallback_hybrid") is True
+        assert _setting_value(db, "rag.router.enable_fallback_dense") is True
+        assert _setting_value(db, "rag.router.no_context_after_budget_exhausted") is True
         assert _setting_value(db, "rag.router.fallback_strategy") == "fallback_dense"
         assert _setting_value(db, "rag.router.store_decision_trace") is True
         assert _setting_value(db, "rag.trace.enabled") is True

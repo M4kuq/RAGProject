@@ -162,6 +162,12 @@ class LatencyBreakdown(SafeTraceModel):
     schema_version: Literal["phase2.trace.v1"] = TRACE_SCHEMA_VERSION
     total_ms: int | None = Field(default=None, ge=0)
     retrieval_ms: int | None = Field(default=None, ge=0)
+    agentic_total_ms: int | None = Field(default=None, ge=0)
+    initial_retrieval_ms: int | None = Field(default=None, ge=0)
+    fallback_retrieval_ms: int | None = Field(default=None, ge=0)
+    sufficiency_check_ms: int | None = Field(default=None, ge=0)
+    merge_dedupe_ms: int | None = Field(default=None, ge=0)
+    rerank_after_merge_ms: int | None = Field(default=None, ge=0)
     query_embedding_ms: int | None = Field(default=None, ge=0)
     qdrant_search_ms: int | None = Field(default=None, ge=0)
     sparse_search_ms: int | None = Field(default=None, ge=0)
@@ -204,6 +210,12 @@ class RetrievalSettingsSnapshot(SafeTraceModel):
     router_fallback_strategy: RetrievalStrategy | None = None
     router_allow_agentic_search: bool | None = None
     router_allow_agentic_ask: bool | None = None
+    max_retrieval_calls: int | None = Field(default=None, ge=1)
+    max_fallback_calls: int | None = Field(default=None, ge=0)
+    sufficiency_min_candidates: int | None = Field(default=None, ge=1)
+    sufficiency_min_selected: int | None = Field(default=None, ge=1)
+    sufficiency_top_score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    no_context_after_budget_exhausted: bool | None = None
 
 
 class ScoreBreakdown(SafeTraceModel):
