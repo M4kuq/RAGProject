@@ -82,6 +82,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             expected_document_ids=inputs.case.expected_document_ids,
             expected_chunk_ids=inputs.case.expected_chunk_ids,
             required_citation=inputs.case.required_citation,
+            metadata_json=inputs.case.metadata_json,
         ),
         "expected_keyword_count": len(inputs.case.expected_keywords),
         "required_citation": inputs.case.required_citation,

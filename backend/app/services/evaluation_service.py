@@ -2011,7 +2011,7 @@ def _failure_reasons(
     latency = item.latency_ms or _metric_value(metric_by_name, "p95_latency")
     if latency is not None and latency > settings.evaluation_failure_high_latency_ms:
         reasons.append(("high_latency", EvaluationFailureSeverity.LOW, ["latency_above_threshold"]))
-    if item.error_code in {"retrieval_failed", "internal_error"}:
+    if item.error_code in {"retrieval_failed", "rerank_failed", "internal_error"}:
         reasons.append(
             ("retrieval_exception", EvaluationFailureSeverity.HIGH, [str(item.error_code)])
         )
@@ -2091,12 +2091,26 @@ def _primary_failure_candidates(
     return sorted(by_item.values(), key=lambda candidate: candidate.evaluation_run_item_id)
 
 
-def _failure_candidate_priority(candidate: EvaluationFailureCandidate) -> tuple[int, str, str]:
+def _failure_candidate_priority(candidate: EvaluationFailureCandidate) -> tuple[int, int, str, str]:
     return (
         -_severity_rank(candidate.severity),
+        _failure_type_priority(candidate.failure_type),
         candidate.failure_type,
         candidate.promotion_key,
     )
+
+
+def _failure_type_priority(failure_type: str) -> int:
+    priority = {
+        "retrieval_exception": 0,
+        "generation_exception": 1,
+        "citation_build_failed": 2,
+        "fallback_failed": 3,
+        "budget_exhausted": 4,
+        "strategy_selection_incorrect": 5,
+        "no_context": 6,
+    }
+    return priority.get(failure_type, 100)
 
 
 def _source_case_changed(
@@ -2117,6 +2131,7 @@ def _source_case_snapshot_hash(source_case: PromotionSourceCase) -> str:
         expected_document_ids=source_case.expected_document_ids,
         expected_chunk_ids=source_case.expected_chunk_ids,
         required_citation=source_case.required_citation,
+        metadata_json=source_case.metadata_json,
     )
 
 
@@ -2205,6 +2220,7 @@ def _case_snapshot_from_case(case: EvaluationCase) -> dict[str, object]:
             expected_document_ids=case.expected_document_ids,
             expected_chunk_ids=case.expected_chunk_ids,
             required_citation=case.required_citation,
+            metadata_json=case.metadata_json,
         ),
     }
 
@@ -2322,6 +2338,7 @@ def _loaded_case_from_model(case: EvaluationCaseModel) -> LoadedEvaluationCase:
             expected_answer=case.expected_answer,
             expected_document_ids=tuple(_int_list(case.expected_document_ids)),
             expected_chunk_ids=tuple(_int_list(case.expected_chunk_ids)),
+            metadata_json=case.metadata_json,
         ),
         evaluation_case_id=case.evaluation_case_id,
         case_key=case.case_key,

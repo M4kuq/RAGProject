@@ -62,6 +62,7 @@ def evaluation_case_snapshot_hash(
     expected_document_ids: list[int] | tuple[int, ...],
     expected_chunk_ids: list[int] | tuple[int, ...],
     required_citation: bool,
+    metadata_json: dict[str, object] | None = None,
 ) -> str:
     snapshot = {
         "question_hash": evaluation_case_question_hash(question),
@@ -70,9 +71,31 @@ def evaluation_case_snapshot_hash(
         "expected_document_ids": list(expected_document_ids),
         "expected_chunk_ids": list(expected_chunk_ids),
         "required_citation": required_citation,
+        "strategy_hints": evaluation_case_strategy_snapshot(metadata_json),
     }
     payload = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def evaluation_case_strategy_snapshot(
+    metadata_json: dict[str, object] | None,
+) -> dict[str, object]:
+    if not isinstance(metadata_json, dict):
+        return {}
+    snapshot: dict[str, object] = {}
+    expected = _safe_metadata_text_or_none(metadata_json.get("expected_strategy"), max_length=80)
+    if expected is not None:
+        snapshot["expected_strategy"] = expected
+    raw_acceptable = metadata_json.get("acceptable_strategies")
+    if isinstance(raw_acceptable, list):
+        acceptable: list[str] = []
+        for item in raw_acceptable:
+            strategy = _safe_metadata_text_or_none(item, max_length=80)
+            if strategy is not None and strategy not in acceptable:
+                acceptable.append(strategy)
+        if acceptable:
+            snapshot["acceptable_strategies"] = acceptable
+    return snapshot
 
 
 def _safe_dataset_name(value: str) -> str:
@@ -194,6 +217,15 @@ def _safe_metadata_text(value: Any, *, max_length: int) -> str:
     text = " ".join(value.replace("\x00", " ").split())
     if not text or len(text) > max_length or _contains_sensitive_word(text):
         raise EvaluationFixtureError("evaluation_case_invalid")
+    return text
+
+
+def _safe_metadata_text_or_none(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.replace("\x00", " ").split())
+    if not text or len(text) > max_length or _contains_sensitive_word(text):
+        return None
     return text
 
 

@@ -35,7 +35,7 @@ from app.db.models import (
     EvaluationCase as EvaluationCaseModel,
 )
 from app.db.session import get_db
-from app.evaluation.fixtures import EvaluationCase, load_evaluation_cases
+from app.evaluation.fixtures import EvaluationCase, EvaluationFixtureError, load_evaluation_cases
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     RetrievedEvaluationItem,
@@ -320,7 +320,7 @@ def test_agentic_strategy_accuracy_uses_selected_strategy_not_execution() -> Non
         engine.dispose()
 
 
-def test_promotion_skips_source_case_changed_after_run() -> None:
+def test_promotion_skips_source_case_metadata_changed_after_run() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -364,7 +364,7 @@ def test_promotion_skips_source_case_changed_after_run() -> None:
             )
             source_case = db.get(EvaluationCaseModel, created_case.evaluation_case_id)
             assert source_case is not None
-            source_case.question = "changed target retrieval"
+            source_case.metadata_json = {"expected_strategy": "dense"}
             db.commit()
 
             promoted = service.promote_failures(
@@ -380,6 +380,80 @@ def test_promotion_skips_source_case_changed_after_run() -> None:
             assert promoted.created_count == 0
             assert promoted.skipped_count == 1
             assert promoted.items[0].result_code == "source_case_changed"
+    finally:
+        engine.dispose()
+
+
+def test_rerank_failure_promotes_retrieval_exception_as_primary() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RerankFailingRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="rerank_failure_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="rerank_failure_case",
+                    question="rerank target retrieval",
+                    expected_keywords=["target"],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            with pytest.raises(EvaluationFixtureError, match="all_cases_failed"):
+                service.run_job(
+                    db,
+                    evaluation_run_id=created.evaluation_run_id,
+                    request_id="test-rerank-failure",
+                )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            failure_types = {candidate.failure_type for candidate in detail.failure_candidates}
+            assert "retrieval_exception" in failure_types
+            assert "no_context" in failure_types
+
+            target = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="rerank_failure_target",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=target.evaluation_dataset_id,
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted.created_count == 1
+            promoted_case = db.get(EvaluationCaseModel, promoted.items[0].promoted_case_id)
+            assert promoted_case is not None
+            assert promoted_case.metadata_json is not None
+            assert promoted_case.metadata_json["failure_type"] == "retrieval_exception"
+            assert promoted_case.metadata_json["failure_reason_codes"] == ["rerank_failed"]
     finally:
         engine.dispose()
 
@@ -1953,6 +2027,39 @@ class _NoContextStrategyRagService(_FakeEvaluationRagService):
             retrieved_items=[],
             context_sources_for_safety=[],
             error_code="no_context_found",
+        )
+
+
+class _RerankFailingRagService(_FakeEvaluationRagService):
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="failed",
+            request_id=request_id,
+            error_code="rerank_failed",
+            strategy_type=strategy_type.value,
+        )
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="failed",
+            answer_text="",
+            citations=[],
+            confidence=None,
+            retrieval_score_summary=None,
+            retrieved_items=[],
+            context_sources_for_safety=[],
+            error_code="rerank_failed",
         )
 
 
