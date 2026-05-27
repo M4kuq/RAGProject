@@ -1231,12 +1231,18 @@ class EvaluationService:
             retrieval_run.retrieval_score_summary if retrieval_run is not None else None
         )
         expected_strategy, acceptable_strategies = _expected_strategy_hints(case_metadata_json)
-        selected_strategy = _safe_strategy_value(decision.get("selected_strategy"))
-        execution_strategy = _safe_strategy_value(decision.get("execution_strategy"))
+        selected_strategy = _safe_strategy_value(
+            decision.get("selected_strategy") or score_summary.get("selected_strategy")
+        )
+        execution_strategy = _safe_strategy_value(
+            decision.get("execution_strategy") or score_summary.get("execution_strategy")
+        )
         accuracy: float | None = None
         accuracy_label = "not_applicable"
         not_applicable = True
-        if expected_strategy or acceptable_strategies:
+        if (expected_strategy or acceptable_strategies) and (
+            selected_strategy is not None or execution_strategy is not None
+        ):
             accepted = set(acceptable_strategies)
             if expected_strategy:
                 accepted.add(expected_strategy)
@@ -1435,8 +1441,8 @@ class EvaluationService:
                     expected_document_ids=list(fixture.expected_document_ids),
                     expected_chunk_ids=list(fixture.expected_chunk_ids),
                     required_citation=fixture.required_citation,
-                    tags=[],
-                    metadata_json=None,
+                    tags=list(fixture.tags),
+                    metadata_json=fixture.metadata_json,
                 )
             if source is not None:
                 source_cases[item.evaluation_run_item_id] = source
@@ -1476,8 +1482,8 @@ class EvaluationService:
                 case=case,
                 evaluation_case_id=None,
                 case_key=case.case_id,
-                metadata_json=None,
-                tags=None,
+                metadata_json=case.metadata_json,
+                tags=list(case.tags),
             )
             for case in fixture_cases
         ]
@@ -1815,6 +1821,8 @@ def _strategy_comparison(
     for item_id, results in results_by_item.items():
         item_for_result = items_by_id.get(item_id)
         if item_for_result is None:
+            continue
+        if item_for_result.status == "failed":
             continue
         for result in results:
             if result.metric_name == "case_metadata":

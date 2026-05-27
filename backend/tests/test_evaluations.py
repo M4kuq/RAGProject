@@ -190,6 +190,9 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "no_context_expected",
         "future_hybrid_candidate",
     ]
+    assert cases[0].tags == ("dense", "baseline")
+    assert cases[0].metadata_json == {"expected_strategy": "dense"}
+    assert cases[4].metadata_json == {"expected_strategy": "hybrid"}
 
     fixture_path = (
         Path(__file__).resolve().parents[1]
@@ -217,6 +220,46 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
     assert "full context" not in dumped.lower()
     assert "raw chunk" not in dumped.lower()
     assert "secret" not in dumped.lower()
+
+
+def test_fixture_metadata_drives_agentic_strategy_accuracy() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase2_strategy_smoke",
+                    case_limit=1,
+                    strategies=["agentic_router"],
+                ),
+                user=user,
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-fixture-agentic",
+            )
+            assert result["status"] == "succeeded"
+            strategy_accuracy = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.strategy_type == "agentic_router",
+                    EvaluationResult.metric_name == "strategy_selection_accuracy",
+                )
+            )
+            assert strategy_accuracy is not None
+            assert strategy_accuracy.metric_score is not None
+            assert float(strategy_accuracy.metric_score) == 1.0
+            assert strategy_accuracy.metric_detail_json is not None
+            assert strategy_accuracy.metric_detail_json["not_applicable"] is False
+            assert strategy_accuracy.metric_detail_json["expected_strategy"] == "dense"
+    finally:
+        engine.dispose()
 
 
 def test_database_vector_search_client_uses_ready_active_chunks() -> None:
@@ -1157,12 +1200,26 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
                     },
                 ),
             )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_strategy_mismatch",
+                    question="dense target retrieval",
+                    expected_keywords=["target"],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "sparse",
+                        "acceptable_strategies": ["sparse", "hybrid"],
+                    },
+                ),
+            )
             created = service.create_run(
                 db,
                 payload=EvaluationRunCreateRequest(
                     evaluation_dataset_id=dataset.evaluation_dataset_id,
                     strategies=["dense", "sparse", "hybrid", "agentic_router"],
-                    case_limit=2,
+                    case_limit=3,
                 ),
                 user=user,
             )
@@ -1186,12 +1243,17 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
             assert run.strategy_metrics_summary_json is not None
             assert run.strategy_metrics_summary_json["agentic_summary"]["fallback_rate"] == 1.0
             assert (
-                run.strategy_metrics_summary_json["agentic_summary"]["budget_exhausted_rate"] == 0.5
+                run.strategy_metrics_summary_json["agentic_summary"]["budget_exhausted_rate"]
+                == 0.333333
+            )
+            assert (
+                run.strategy_metrics_summary_json["agentic_summary"]["strategy_selection_accuracy"]
+                == 0.5
             )
             items = db.scalars(
                 select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
             ).all()
-            assert len(items) == 8
+            assert len(items) == 12
             assert {item.strategy_type for item in items} == {
                 "dense",
                 "sparse",
@@ -1328,6 +1390,11 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
             assert [item.status for item in items] == ["succeeded", "failed"]
             assert items[1].error_code == "no_context_found"
             assert items[1].case_key == "phase1_seed_ci"
+            assert run.strategy_metrics_summary_json is not None
+            dense_summary = run.strategy_metrics_summary_json["strategy_metrics"]["dense"]
+            assert dense_summary["case_count"] == 2
+            assert dense_summary["succeeded_count"] == 1
+            assert dense_summary["failed_count"] == 1
     finally:
         engine.dispose()
 
