@@ -81,6 +81,10 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "agentic_router",
+    )
+    assert "fallback_dense" not in _field_enum_values(
+        EvaluationRunCreateRequest.model_json_schema(), "strategy_type"
     )
 
 

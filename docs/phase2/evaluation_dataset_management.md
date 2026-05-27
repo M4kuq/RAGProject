@@ -91,6 +91,12 @@ PR-22 supports JSON manifests with:
 
 Import is idempotent by `dataset_name` and `(evaluation_dataset_id, case_key)`. Re-import updates safe metadata and cases without creating duplicates. Export returns the safe manifest only; it does not include raw context, chunk text, prompts, secrets, credentials, or retrieval trace internals.
 
+## Failure Promotion
+
+PR-30 promotes selected evaluation failures into an active dataset as new cases. Promotion is idempotent by a deterministic promotion key derived from the source dataset/case, strategy, failure type, and question hash. Promoted metadata records the source run item, strategy, failure type, safe reason codes, numeric metric snapshot, promotion key, and question hash.
+
+Promotion copies the existing evaluation question and expected signals because they are already part of the dataset contract. It does not copy raw context, raw chunk text, prompts, full answer text, secrets, or trace payload dumps.
+
 ## API
 
 Admin-only APIs:
@@ -107,6 +113,7 @@ Admin-only APIs:
 - `POST /api/v1/evaluations/datasets/{dataset_id}/cases/{case_id}/archive`
 - `POST /api/v1/evaluations/datasets/import`
 - `GET /api/v1/evaluations/datasets/{dataset_id}/export`
+- `POST /api/v1/evaluations/runs/{evaluation_run_id}/promote-failures`
 
 Write APIs require CSRF. Viewer users receive `403`. Destructive delete is intentionally not added; archive is the lifecycle operation.
 

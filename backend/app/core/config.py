@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     router_no_context_after_budget_exhausted: bool = True
     router_fallback_strategy: str = "fallback_dense"
     router_store_decision_trace: bool = True
+    evaluation_failure_low_recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    evaluation_failure_low_mrr_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    evaluation_failure_low_citation_coverage_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    evaluation_failure_low_groundedness_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    evaluation_failure_low_faithfulness_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    evaluation_failure_high_latency_ms: int = Field(default=3000, ge=1, le=600000)
+    evaluation_failure_max_promotions_per_run: int = Field(default=100, ge=1, le=100)
+    evaluation_agentic_expected_strategy_required_for_accuracy: bool = False
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
     rerank_top_n_max: int = Field(default=5, ge=1, le=20)

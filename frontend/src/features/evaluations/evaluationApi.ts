@@ -4,6 +4,8 @@ import type {
   EvaluationCase,
   EvaluationDataset,
   EvaluationDatasetManifest,
+  EvaluationFailurePromotionRequest,
+  EvaluationFailurePromotionResponse,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
   EvaluationRunDetail,
@@ -47,6 +49,20 @@ export async function listEvaluationRuns(params: {
 export async function getEvaluationRunDetail(evaluationRunId: number): Promise<EvaluationRunDetail> {
   const response = await apiFetch<ApiResponse<EvaluationRunDetail>>(
     `/api/v1/evaluations/runs/${evaluationRunId}`
+  );
+  return response.data;
+}
+
+export async function promoteEvaluationFailures(
+  evaluationRunId: number,
+  payload: EvaluationFailurePromotionRequest
+): Promise<EvaluationFailurePromotionResponse> {
+  const response = await apiFetch<ApiResponse<EvaluationFailurePromotionResponse>>(
+    `/api/v1/evaluations/runs/${evaluationRunId}/promote-failures`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
   );
   return response.data;
 }

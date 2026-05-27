@@ -138,6 +138,15 @@
 - Direct dense, sparse, and hybrid strategy regressions remain green.
 - Agentic trace and score breakdown do not contain raw query, raw prompt, full context, raw chunk text, PII, secrets, or raw exception messages.
 
+## PR-30 Agentic Strategy Evaluation Tests
+
+- `EvaluationRunCreateRequest` accepts `dense`, `sparse`, `hybrid`, and `agentic_router` in the same run.
+- Agentic metric rows persist `strategy_selection_accuracy`, `fallback_rate`, `budget_exhausted_rate`, `sufficiency_score_avg`, and `retrieval_call_count_avg`.
+- `strategy_selection_accuracy` is numeric only when a case defines `expected_strategy` or `acceptable_strategies`.
+- Failure candidates are extracted for no-context, low-score, citation, strategy mismatch, budget, latency, and safe exception reasons.
+- Promotion into an active dataset is idempotent; duplicate promotion returns an existing/skipped result.
+- Failure candidate and promotion responses do not expose raw prompt, full context, raw chunk text, PII, or secrets.
+
 ## Checks
 
 - `ruff format --check .`

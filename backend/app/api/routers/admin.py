@@ -15,6 +15,7 @@ from app.schemas.evaluations import (
     EvaluationDatasetCreateRequest,
     EvaluationDatasetManifest,
     EvaluationDatasetUpdateRequest,
+    EvaluationFailurePromotionRequest,
     EvaluationRunCreateRequest,
 )
 from app.services.evaluation_service import EvaluationService
@@ -246,6 +247,37 @@ def evaluation_run_strategy_comparison(
     result = EvaluationService().get_strategy_comparison(
         db,
         evaluation_run_id=evaluation_run_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/runs/{evaluation_run_id}/failure-candidates")
+def evaluation_run_failure_candidates(
+    evaluation_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().list_failure_candidates(
+        db,
+        evaluation_run_id=evaluation_run_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/evaluations/runs/{evaluation_run_id}/promote-failures")
+def promote_evaluation_failures(
+    evaluation_run_id: int,
+    request: Request,
+    payload: EvaluationFailurePromotionRequest,
+    _csrf: None = Depends(require_csrf),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().promote_failures(
+        db,
+        evaluation_run_id=evaluation_run_id,
+        payload=payload,
     )
     return success_response(result.model_dump(mode="json"), request)
 

@@ -90,7 +90,7 @@ export function EvaluationListPage() {
         <div className="field-group">
           strategies
           <span className="inline-options">
-            {(["dense", "sparse", "hybrid"] as EvaluationRunnableStrategy[]).map((strategy) => (
+            {(["dense", "sparse", "hybrid", "agentic_router"] as EvaluationRunnableStrategy[]).map((strategy) => (
               <label key={strategy}>
                 <input
                   type="checkbox"
