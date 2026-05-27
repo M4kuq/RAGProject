@@ -1151,7 +1151,10 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
                     question="missing target retrieval",
                     expected_keywords=["missing"],
                     required_citation=True,
-                    metadata_json={"expected_strategy": "sparse"},
+                    metadata_json={
+                        "expected_strategy": "sparse",
+                        "acceptable_strategies": ["sparse", "hybrid"],
+                    },
                 ),
             )
             created = service.create_run(
@@ -1182,6 +1185,9 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
             assert run is not None
             assert run.strategy_metrics_summary_json is not None
             assert run.strategy_metrics_summary_json["agentic_summary"]["fallback_rate"] == 1.0
+            assert (
+                run.strategy_metrics_summary_json["agentic_summary"]["budget_exhausted_rate"] == 0.5
+            )
             items = db.scalars(
                 select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
             ).all()
@@ -1211,6 +1217,35 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
                 candidate.failure_type == "strategy_selection_incorrect"
                 for candidate in detail.failure_candidates
             )
+            eligible_candidates = [
+                candidate
+                for candidate in detail.failure_candidates
+                if candidate.severity.value in {"medium", "high"}
+            ]
+            unique_candidate_item_ids = {
+                candidate.evaluation_run_item_id for candidate in eligible_candidates
+            }
+            assert len(eligible_candidates) > len(unique_candidate_item_ids)
+            admin_user = db.scalar(select(User).where(User.email == "admin@example.com"))
+            assert admin_user is not None
+            bulk_target = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_bulk_failure_target",
+                    source_type="manual",
+                ),
+                user=admin_user,
+            )
+            bulk_promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=bulk_target.evaluation_dataset_id,
+                    min_severity="medium",
+                    limit=50,
+                ),
+            )
+            assert bulk_promoted.created_count == len(unique_candidate_item_ids)
             promoted = service.promote_failures(
                 db,
                 evaluation_run_id=created.evaluation_run_id,
@@ -1238,6 +1273,11 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
             assert promoted_case is not None
             assert promoted_case.metadata_json is not None
             assert promoted_case.metadata_json["source"] == "failure_promoted"
+            assert promoted_case.metadata_json["expected_strategy"] == "sparse"
+            assert promoted_case.metadata_json["acceptable_strategies"] == [
+                "sparse",
+                "hybrid",
+            ]
             assert "raw chunk" not in json.dumps(promoted_case.metadata_json).lower()
     finally:
         engine.dispose()
@@ -1760,13 +1800,9 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
 
         selected_strategy = "hybrid" if "hybrid" in question.lower() else "dense"
         has_context = "missing" not in question.lower()
-        retrieval_run = _create_fake_retrieval_run(
-            db,
-            question=question,
-            status="succeeded",
-            request_id=request_id,
-            strategy_type=strategy_type.value,
-            strategy_decision_json={
+        strategy_decision_json = None
+        if has_context:
+            strategy_decision_json = {
                 "schema_version": "phase2.router.v1",
                 "requested_strategy": "agentic_router",
                 "selected_strategy": selected_strategy,
@@ -1774,14 +1810,19 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 "fallback_used": True,
                 "fallback_strategy": "dense",
                 "fallback_reason": "insufficient_context",
-                "budget_exhausted": not has_context,
+                "budget_exhausted": False,
                 "retrieval_call_count": 2,
                 "max_retrieval_calls": 2,
-                "sufficiency_score": 0.82 if has_context else 0.1,
-                "sufficiency_reason_codes": (
-                    ["sufficient_after_fallback"] if has_context else ["budget_exhausted"]
-                ),
-            },
+                "sufficiency_score": 0.82,
+                "sufficiency_reason_codes": ["sufficient_after_fallback"],
+            }
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+            strategy_decision_json=strategy_decision_json,
             retrieval_score_summary={
                 "requested_top_k": 5,
                 "qdrant_candidate_count": 1 if has_context else 0,
@@ -1790,6 +1831,9 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 "excluded_by_rdb_check_count": 0,
                 "sufficiency_score": 0.82 if has_context else 0.1,
                 "retrieval_call_count": 2,
+                "max_retrieval_calls": 2,
+                "fallback_used": True,
+                "budget_exhausted": not has_context,
             },
         )
         snippet = "agentic_router hybrid safe target citation preview." if has_context else ""

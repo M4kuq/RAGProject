@@ -735,6 +735,8 @@ class EvaluationService:
             if (not selected_types or candidate.failure_type in selected_types)
             and _severity_rank(candidate.severity) >= _severity_rank(payload.min_severity)
         ]
+        if not selected_types:
+            candidates = _primary_failure_candidates(candidates)
         limit = min(payload.limit, self.settings.evaluation_failure_max_promotions_per_run)
         candidates = candidates[:limit]
         source_cases = self._promotion_source_cases(db, run)
@@ -793,7 +795,7 @@ class EvaluationService:
                         expected_chunk_ids=source_case.expected_chunk_ids,
                         required_citation=source_case.required_citation,
                         tags=_promotion_tags(source_case.tags, candidate.recommended_tags),
-                        metadata_json=_promotion_metadata(candidate),
+                        metadata_json=_promotion_metadata(candidate, source_case.metadata_json),
                         status="active",
                     )
             except IntegrityError as exc:
@@ -1245,8 +1247,14 @@ class EvaluationService:
             accuracy_label = "correct" if accuracy == 1.0 else "incorrect"
             not_applicable = False
 
-        fallback_used = bool(decision.get("fallback_used"))
-        budget_exhausted = bool(decision.get("budget_exhausted"))
+        fallback_used = _first_bool(
+            decision.get("fallback_used"),
+            score_summary.get("fallback_used"),
+        )
+        budget_exhausted = _first_bool(
+            decision.get("budget_exhausted"),
+            score_summary.get("budget_exhausted"),
+        )
         sufficiency_score = _float_or_none(
             decision.get("sufficiency_score") or score_summary.get("sufficiency_score")
         )
@@ -1289,7 +1297,10 @@ class EvaluationService:
                     "schema_version": EVALUATION_SCHEMA_VERSION,
                     "budget_exhausted": budget_exhausted,
                     "retrieval_call_count": retrieval_call_count,
-                    "max_retrieval_calls": _float_or_none(decision.get("max_retrieval_calls")),
+                    "max_retrieval_calls": _float_or_none(
+                        decision.get("max_retrieval_calls")
+                        or score_summary.get("max_retrieval_calls")
+                    ),
                 },
             ),
             MetricValue(
@@ -1702,6 +1713,13 @@ def _float_or_none(value: object) -> float | None:
     return None
 
 
+def _first_bool(*values: object) -> bool:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def _expected_strategy_hints(
     metadata_json: dict[str, object] | None,
 ) -> tuple[str | None, list[str]]:
@@ -1990,8 +2008,32 @@ def _promotion_tags(source_tags: list[str], recommended_tags: list[str]) -> list
     return tags[:20]
 
 
-def _promotion_metadata(candidate: EvaluationFailureCandidate) -> dict[str, object]:
-    return {
+def _primary_failure_candidates(
+    candidates: list[EvaluationFailureCandidate],
+) -> list[EvaluationFailureCandidate]:
+    by_item: dict[int, EvaluationFailureCandidate] = {}
+    for candidate in candidates:
+        existing = by_item.get(candidate.evaluation_run_item_id)
+        if existing is None or _failure_candidate_priority(candidate) < _failure_candidate_priority(
+            existing
+        ):
+            by_item[candidate.evaluation_run_item_id] = candidate
+    return sorted(by_item.values(), key=lambda candidate: candidate.evaluation_run_item_id)
+
+
+def _failure_candidate_priority(candidate: EvaluationFailureCandidate) -> tuple[int, str, str]:
+    return (
+        -_severity_rank(candidate.severity),
+        candidate.failure_type,
+        candidate.promotion_key,
+    )
+
+
+def _promotion_metadata(
+    candidate: EvaluationFailureCandidate,
+    source_metadata_json: dict[str, object] | None,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
         "source": "failure_promoted",
         "source_evaluation_run_id": candidate.evaluation_run_id,
         "source_evaluation_run_item_id": candidate.evaluation_run_item_id,
@@ -2003,6 +2045,12 @@ def _promotion_metadata(candidate: EvaluationFailureCandidate) -> dict[str, obje
         "promotion_key": candidate.promotion_key,
         "question_hash": candidate.question_hash,
     }
+    expected_strategy, acceptable_strategies = _expected_strategy_hints(source_metadata_json)
+    if expected_strategy is not None:
+        metadata["expected_strategy"] = expected_strategy
+    if acceptable_strategies:
+        metadata["acceptable_strategies"] = acceptable_strategies
+    return metadata
 
 
 def _failure_summary(candidates: list[EvaluationFailureCandidate]) -> dict[str, object]:

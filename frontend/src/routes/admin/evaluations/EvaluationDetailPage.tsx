@@ -185,7 +185,7 @@ export function EvaluationDetailPage() {
                 return;
               }
               const confirmed = window.confirm(
-                "Promote the current failure candidates to this evaluation dataset?"
+                "Promote one primary failure per source item to this evaluation dataset?"
               );
               if (!confirmed) {
                 return;
@@ -203,7 +203,7 @@ export function EvaluationDetailPage() {
                 });
             }}
           >
-            Promote failures
+            Promote primary failures
           </button>
         </div>
         {promotionMessage ? <InlineAlert tone="success">{promotionMessage}</InlineAlert> : null}
