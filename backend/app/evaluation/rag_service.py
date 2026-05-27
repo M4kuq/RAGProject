@@ -31,7 +31,7 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
     VectorSearchClient,
 )
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RagSearchRequestStrategy, RetrievalStrategy
 from app.schemas.rag import (
     RagAskCitation,
     RagAskConfidence,
@@ -259,7 +259,7 @@ class EvaluationRagQuestionService:
                     query=question,
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
-                    strategy=strategy_type,
+                    strategy=RagSearchRequestStrategy(strategy_type.value),
                 ),
                 request_id=request_id,
             )

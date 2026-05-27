@@ -17,6 +17,18 @@ class RetrievalStrategy(StrEnum):
     FALLBACK_DENSE = "fallback_dense"
 
 
+class RagSearchRequestStrategy(StrEnum):
+    DENSE = "dense"
+    SPARSE = "sparse"
+    HYBRID = "hybrid"
+    AGENTIC_ROUTER = "agentic_router"
+
+
+class RagAskRequestStrategy(StrEnum):
+    DENSE = "dense"
+    AGENTIC_ROUTER = "agentic_router"
+
+
 class RetrievalSource(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
@@ -55,10 +67,16 @@ class StrategyTraceSettings:
 
 
 DEFAULT_RETRIEVAL_STRATEGY: Final = RetrievalStrategy.DENSE
+DEFAULT_RAG_SEARCH_REQUEST_STRATEGY: Final = RagSearchRequestStrategy.DENSE
+DEFAULT_RAG_ASK_REQUEST_STRATEGY: Final = RagAskRequestStrategy.DENSE
 DEFAULT_FUSION_METHOD: Final = FusionMethod.RRF
 DEFAULT_ROUTER_FALLBACK_STRATEGY: Final = RouterFallbackStrategy.FALLBACK_DENSE
 
 RETRIEVAL_STRATEGY_VALUES: Final = tuple(strategy.value for strategy in RetrievalStrategy)
+RAG_SEARCH_REQUEST_STRATEGY_VALUES: Final = tuple(
+    strategy.value for strategy in RagSearchRequestStrategy
+)
+RAG_ASK_REQUEST_STRATEGY_VALUES: Final = tuple(strategy.value for strategy in RagAskRequestStrategy)
 RETRIEVAL_SOURCE_VALUES: Final = tuple(source.value for source in RetrievalSource)
 
 PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {

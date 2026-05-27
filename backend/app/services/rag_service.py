@@ -176,7 +176,7 @@ class RagService:
         top_k = self._effective_top_k(payload.top_k)
         rerank_top_n = self._effective_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
-        requested_strategy = payload.strategy
+        requested_strategy = RetrievalStrategy(payload.strategy.value)
         supported_strategies = {
             RetrievalStrategy.DENSE,
             RetrievalStrategy.SPARSE,
@@ -393,7 +393,7 @@ class RagService:
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
         filters = _retrieval_filters(payload)
-        requested_strategy = payload.strategy
+        requested_strategy = RetrievalStrategy(payload.strategy.value)
         if requested_strategy not in {
             RetrievalStrategy.DENSE,
             RetrievalStrategy.AGENTIC_ROUTER,

@@ -12,14 +12,15 @@ export type RetrievalStrategy =
   | "version_aware"
   | "agentic_router"
   | "fallback_dense";
+export type EvaluationRunnableStrategy = "dense" | "sparse" | "hybrid";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
 
 export type EvaluationRunCreateRequest = {
   dataset_name: string;
   evaluation_dataset_id?: number | null;
   case_limit: number | null;
-  strategy_type?: RetrievalStrategy;
-  strategies?: RetrievalStrategy[];
+  strategy_type?: EvaluationRunnableStrategy;
+  strategies?: EvaluationRunnableStrategy[];
   metrics?: string[];
   top_k?: number | null;
   rerank_top_n?: number | null;
@@ -30,7 +31,7 @@ export type EvaluationRunCreateResponse = {
   evaluation_run_id: number;
   job_id: number;
   status: "queued";
-  strategies: RetrievalStrategy[];
+  strategies: EvaluationRunnableStrategy[];
 };
 
 export type EvaluationMetricResult = {

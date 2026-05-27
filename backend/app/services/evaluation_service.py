@@ -1209,7 +1209,10 @@ def _filter_metrics(metrics: list[MetricValue], requested_metrics: set[str]) -> 
 
 
 def _selected_strategies(payload: EvaluationRunCreateRequest) -> list[RetrievalStrategy]:
-    return payload.strategies or [payload.strategy_type]
+    return [
+        RetrievalStrategy(strategy.value)
+        for strategy in (payload.strategies or [payload.strategy_type])
+    ]
 
 
 def _strategy_values(config: dict[str, object]) -> list[str]:

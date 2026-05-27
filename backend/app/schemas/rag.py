@@ -5,7 +5,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
+from app.rag.strategy import (
+    DEFAULT_RAG_ASK_REQUEST_STRATEGY,
+    DEFAULT_RAG_SEARCH_REQUEST_STRATEGY,
+    RagAskRequestStrategy,
+    RagSearchRequestStrategy,
+    RetrievalStrategy,
+)
 
 
 class RagSearchFilters(BaseModel):
@@ -32,7 +38,7 @@ class RagSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
-    strategy: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
+    strategy: RagSearchRequestStrategy = DEFAULT_RAG_SEARCH_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
 
     @field_validator("query")
@@ -51,7 +57,7 @@ class RagAskRequest(BaseModel):
     model_key: str | None = Field(default=None, max_length=128)
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
-    strategy: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
+    strategy: RagAskRequestStrategy = DEFAULT_RAG_ASK_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
 
     @field_validator("client_message_id")

@@ -1138,21 +1138,23 @@ def test_rag_search_hybrid_zero_dense_weight_skips_vector_backend(
         assert "sparse_search_ms" in run.latency_breakdown_json
 
 
-def test_rag_search_unsupported_strategy_returns_safe_error(
+@pytest.mark.parametrize("strategy", ["multi_query_dense", "version_aware", "fallback_dense"])
+def test_rag_search_request_rejects_non_public_strategies_without_persisting_run(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    strategy: str,
 ) -> None:
     client, session_factory, vector_client = rag_client
     csrf_token = _login(client)
 
     response = client.post(
         "/api/v1/rag/search",
-        json={"query": "alpha secret-token", "strategy": "multi_query_dense"},
+        json={"query": "alpha secret-token", "strategy": strategy},
         headers=_unsafe_headers(csrf_token),
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 422
     body = response.json()
-    assert body["error"]["code"] == "strategy_not_enabled"
+    assert body["error"]["code"] == "validation_error"
     assert "secret-token" not in str(body)
     assert vector_client.query_vectors == []
     with session_factory() as db:

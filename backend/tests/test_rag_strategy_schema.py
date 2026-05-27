@@ -8,11 +8,15 @@ import pytest
 
 from app.rag.strategy import (
     DEFAULT_RETRIEVAL_STRATEGY,
+    RAG_ASK_REQUEST_STRATEGY_VALUES,
+    RAG_SEARCH_REQUEST_STRATEGY_VALUES,
     RETRIEVAL_SOURCE_VALUES,
     RETRIEVAL_STRATEGY_VALUES,
     RetrievalSource,
     RetrievalStrategy,
 )
+from app.schemas.evaluations import EvaluationRunCreateRequest
+from app.schemas.rag import RagAskRequest, RagSearchRequest
 from app.schemas.rag_strategy import (
     LatencyBreakdown,
     QueryPlanTrace,
@@ -44,6 +48,39 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "rerank",
         "fallback_dense",
         "metadata_filter",
+    )
+
+
+def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> None:
+    assert RAG_SEARCH_REQUEST_STRATEGY_VALUES == (
+        "dense",
+        "sparse",
+        "hybrid",
+        "agentic_router",
+    )
+    assert RAG_ASK_REQUEST_STRATEGY_VALUES == (
+        "dense",
+        "agentic_router",
+    )
+    assert "fallback_dense" not in RAG_SEARCH_REQUEST_STRATEGY_VALUES
+    assert "fallback_dense" not in RAG_ASK_REQUEST_STRATEGY_VALUES
+
+
+def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
+    assert _field_enum_values(RagSearchRequest.model_json_schema(), "strategy") == (
+        "dense",
+        "sparse",
+        "hybrid",
+        "agentic_router",
+    )
+    assert _field_enum_values(RagAskRequest.model_json_schema(), "strategy") == (
+        "dense",
+        "agentic_router",
+    )
+    assert _field_enum_values(EvaluationRunCreateRequest.model_json_schema(), "strategy_type") == (
+        "dense",
+        "sparse",
+        "hybrid",
     )
 
 
@@ -140,3 +177,22 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         value = ast.literal_eval(node.value)
         constants[node.targets[0].id] = tuple(value)
     return constants
+
+
+def _field_enum_values(schema: dict[str, object], field_name: str) -> tuple[str, ...]:
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    field_schema = properties[field_name]
+    assert isinstance(field_schema, dict)
+    ref = field_schema.get("$ref")
+    if ref is None:
+        ref = field_schema["items"]["$ref"]
+    assert isinstance(ref, str)
+    definition_name = ref.rsplit("/", maxsplit=1)[-1]
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    definition = definitions[definition_name]
+    assert isinstance(definition, dict)
+    enum_values = definition["enum"]
+    assert isinstance(enum_values, list)
+    return tuple(str(value) for value in enum_values)
