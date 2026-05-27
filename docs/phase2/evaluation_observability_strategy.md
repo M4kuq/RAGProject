@@ -78,6 +78,10 @@ The Phase2 strategy metric schema includes:
 - `no_context_rate`
 - `p95_latency`
 - `strategy_selection_accuracy`
+- `fallback_rate`
+- `budget_exhausted_rate`
+- `sufficiency_score_avg`
+- `retrieval_call_count_avg`
 
 `evaluation_results.metric_value` stores the canonical metric value. `metric_score` remains for Phase1 ratio metrics. `metric_detail_json` stores safe details such as counts, units, labels, case key, and reason codes.
 
@@ -93,11 +97,15 @@ PR-22 stores this shape. PR-23 makes sparse search executable for `/rag/search`,
 
 PR-25 executes dataset-wide comparisons for dense / sparse / hybrid. Each case/strategy pair creates one `evaluation_run_items` row and one linked retrieval run. The aggregate comparison is stored in `evaluation_runs.strategy_metrics_summary_json` and exposed by the strategy comparison API.
 
-`agentic_router` is not executed in PR-25. `strategy_selection_accuracy` remains not-applicable until PR-30.
+PR-30 executes `agentic_router` in the same comparison shape. Agentic summaries are derived from safe router/loop trace fields such as `fallback_used`, `budget_exhausted`, `sufficiency_score`, and `retrieval_call_count`.
+
+## Failure Feedback Loop
+
+PR-30 extracts failure candidates from item status and metric rows, then allows admins to promote selected failures into an active evaluation dataset. Candidate payloads store hashes, failure types, strategy names, numeric metric snapshots, and reason codes only. Promotion metadata links back to the source evaluation run item and remains idempotent by promotion key.
 
 ## CI Direction
 
-CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-25 validation.
+CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-30 validation.
 
 ## Redaction Rules
 

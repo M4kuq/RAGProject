@@ -1,13 +1,19 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
-import { ErrorState, LoadingState } from "../../../components/common/States";
-import { useEvaluationRunDetail } from "../../../features/evaluations/evaluationHooks";
+import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
+import {
+  useEvaluationRunDetail,
+  usePromoteEvaluationFailures
+} from "../../../features/evaluations/evaluationHooks";
 import type { EvaluationMetricResult } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
 export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
+  const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
+  const [promotionMessage, setPromotionMessage] = useState<string | null>(null);
 
   if (run.isLoading) {
     return (
@@ -147,6 +153,95 @@ export function EvaluationDetailPage() {
       </section>
 
       <section className="admin-section">
+        <h2>Agentic Summary</h2>
+        <dl className="detail-grid">
+          {agenticSummaryEntries(run.data.strategy_metrics_summary_json).map(([name, value]) => (
+            <div key={name}>
+              <dt>{name}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+          {agenticSummaryEntries(run.data.strategy_metrics_summary_json).length === 0 ? (
+            <div>
+              <dt>agentic_router</dt>
+              <dd>No agentic summary yet.</dd>
+            </div>
+          ) : null}
+        </dl>
+      </section>
+
+      <section className="admin-section">
+        <div className="section-header-row">
+          <h2>Failure Candidates</h2>
+          <button
+            type="button"
+            disabled={
+              promoteFailures.isPending ||
+              !run.data.evaluation_dataset_id ||
+              run.data.failure_candidates.length === 0
+            }
+            onClick={() => {
+              if (!run.data.evaluation_dataset_id) {
+                return;
+              }
+              const confirmed = window.confirm(
+                "Promote the current failure candidates to this evaluation dataset?"
+              );
+              if (!confirmed) {
+                return;
+              }
+              void promoteFailures
+                .mutateAsync({
+                  target_dataset_id: run.data.evaluation_dataset_id,
+                  min_severity: "medium",
+                  limit: 50
+                })
+                .then((result) => {
+                  setPromotionMessage(
+                    `Promoted ${result.created_count} case(s), skipped ${result.skipped_count}.`
+                  );
+                });
+            }}
+          >
+            Promote failures
+          </button>
+        </div>
+        {promotionMessage ? <InlineAlert tone="success">{promotionMessage}</InlineAlert> : null}
+        {promoteFailures.error ? (
+          <InlineAlert tone="error">{promoteFailures.error.message}</InlineAlert>
+        ) : null}
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Case</th>
+              <th>Strategy</th>
+              <th>Failure</th>
+              <th>Severity</th>
+              <th>Reason</th>
+              <th>Promotion key</th>
+            </tr>
+          </thead>
+          <tbody>
+            {run.data.failure_candidates.map((candidate) => (
+              <tr key={candidate.promotion_key}>
+                <td>{candidate.case_key ?? `item-${candidate.evaluation_run_item_id}`}</td>
+                <td>{candidate.strategy_type}</td>
+                <td>{candidate.failure_type}</td>
+                <td>{candidate.severity}</td>
+                <td>{candidate.failure_reason_codes.map((code) => formatSafeText(code, 40)).join(", ")}</td>
+                <td>{truncateText(candidate.promotion_key, 18)}</td>
+              </tr>
+            ))}
+            {run.data.failure_candidates.length === 0 ? (
+              <tr>
+                <td colSpan={6}>No failure candidates.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="admin-section">
         <h2>Case Results</h2>
         <table className="admin-table">
           <thead>
@@ -209,4 +304,34 @@ function formatMetricDetails(metrics: EvaluationMetricResult[]) {
       return `${metric.metric_name}=${formatScore(metric.metric_score)}${label}`;
     })
     .join(", ");
+}
+
+function agenticSummaryEntries(summary: Record<string, unknown> | null): Array<[string, string]> {
+  const agentic = recordValue(summary, "agentic_summary");
+  if (!agentic) {
+    return [];
+  }
+  const names = [
+    "strategy_selection_accuracy",
+    "fallback_rate",
+    "budget_exhausted_rate",
+    "sufficiency_score_avg",
+    "retrieval_call_count_avg",
+    "no_context_rate",
+    "p95_latency"
+  ];
+  return names
+    .map((name) => [name, formatUnknownMetric(agentic[name])] as [string, string])
+    .filter(([, value]) => value !== "-");
+}
+
+function recordValue(value: Record<string, unknown> | null, key: string): Record<string, unknown> | null {
+  const nested = value?.[key];
+  return nested && typeof nested === "object" && !Array.isArray(nested)
+    ? (nested as Record<string, unknown>)
+    : null;
+}
+
+function formatUnknownMetric(value: unknown) {
+  return typeof value === "number" ? value.toFixed(3) : "-";
 }

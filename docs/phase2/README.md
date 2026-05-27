@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, and PR-30 adds agentic strategy evaluation plus failure dataset promotion.
 
 ## PR Plan
 
@@ -177,9 +177,21 @@ PR-29 adds:
 
 PR-29 still does not implement multi-query execution, metadata-filtered execution, version-aware retrieval execution, Graph-RAG, OCR, multi-agent architecture, external operation agents, LangSmith export, or SentenceTransformers experiments.
 
+## PR-30 Agentic Strategy Evaluation / Failure Dataset Promotion
+
+PR-30 adds:
+
+- `agentic_router` as an evaluation strategy beside `dense`, `sparse`, and `hybrid`
+- agentic metrics: `strategy_selection_accuracy`, `fallback_rate`, `budget_exhausted_rate`, `sufficiency_score_avg`, and `retrieval_call_count_avg`
+- failure candidate extraction from no-context, low score, citation, strategy mismatch, budget, latency, and safe exception signals
+- idempotent failure promotion back into active evaluation datasets
+- minimal Evaluation UI display for agentic summary, failure candidates, and promotion results
+
+PR-30 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, online evaluation, LLM-as-a-Judge, Graph-RAG, OCR, or external operation agents.
+
 ## Non-goals
 
-PR-29 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-30 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

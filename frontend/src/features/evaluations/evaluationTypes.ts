@@ -12,7 +12,7 @@ export type RetrievalStrategy =
   | "version_aware"
   | "agentic_router"
   | "fallback_dense";
-export type EvaluationRunnableStrategy = "dense" | "sparse" | "hybrid";
+export type EvaluationRunnableStrategy = "dense" | "sparse" | "hybrid" | "agentic_router";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
 
 export type EvaluationRunCreateRequest = {
@@ -90,6 +90,49 @@ export type EvaluationRunSummary = {
 
 export type EvaluationRunDetail = EvaluationRunSummary & {
   items: EvaluationRunItem[];
+  failure_candidates: EvaluationFailureCandidate[];
+};
+
+export type EvaluationFailureSeverity = "low" | "medium" | "high";
+
+export type EvaluationFailureCandidate = {
+  schema_version: "phase2.evaluation.v1";
+  evaluation_run_id: number;
+  evaluation_run_item_id: number;
+  evaluation_case_id: number | null;
+  case_key: string | null;
+  question_hash: string;
+  strategy_type: RetrievalStrategy;
+  failure_type: string;
+  severity: EvaluationFailureSeverity;
+  failure_reason_codes: string[];
+  metric_snapshot: Record<string, unknown>;
+  recommended_tags: string[];
+  promotion_key: string;
+};
+
+export type EvaluationFailurePromotionRequest = {
+  target_dataset_id: number;
+  failure_types?: string[] | null;
+  min_severity?: EvaluationFailureSeverity;
+  limit?: number;
+};
+
+export type EvaluationFailurePromotionResponse = {
+  evaluation_run_id: number;
+  target_dataset_id: number;
+  created_count: number;
+  skipped_count: number;
+  items: Array<{
+    promotion_key: string;
+    failure_type: string;
+    strategy_type: RetrievalStrategy;
+    evaluation_run_item_id: number;
+    evaluation_case_id: number | null;
+    promoted_case_id: number | null;
+    case_key: string | null;
+    result_code: "created" | "already_exists" | "source_case_missing";
+  }>;
 };
 
 export type StrategyComparisonMetric = {

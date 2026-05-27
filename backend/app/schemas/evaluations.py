@@ -63,6 +63,7 @@ class EvaluationRunRequestStrategy(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    AGENTIC_ROUTER = "agentic_router"
 
 
 class EvaluationMetricName(StrEnum):
@@ -74,6 +75,10 @@ class EvaluationMetricName(StrEnum):
     NO_CONTEXT_RATE = "no_context_rate"
     P95_LATENCY = "p95_latency"
     STRATEGY_SELECTION_ACCURACY = "strategy_selection_accuracy"
+    FALLBACK_RATE = "fallback_rate"
+    BUDGET_EXHAUSTED_RATE = "budget_exhausted_rate"
+    SUFFICIENCY_SCORE_AVG = "sufficiency_score_avg"
+    RETRIEVAL_CALL_COUNT_AVG = "retrieval_call_count_avg"
     CONTEXT_PRECISION = "context_precision"
 
 
@@ -89,6 +94,10 @@ DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.NO_CONTEXT_RATE,
     EvaluationMetricName.P95_LATENCY,
     EvaluationMetricName.STRATEGY_SELECTION_ACCURACY,
+    EvaluationMetricName.FALLBACK_RATE,
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE,
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG,
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG,
 )
 
 
@@ -98,7 +107,7 @@ class MetricSpec(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=500)
     higher_is_better: bool = True
-    value_unit: Literal["ratio", "ms"] = "ratio"
+    value_unit: Literal["ratio", "ms", "count"] = "ratio"
     min_value: float | None = None
     max_value: float | None = None
 
@@ -349,12 +358,12 @@ class EvaluationRunCreateRequest(BaseModel):
     case_limit: int | None = Field(default=10, ge=1, le=50)
     strategy_type: EvaluationRunRequestStrategy = DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY
     strategies: list[EvaluationRunRequestStrategy] | None = Field(
-        default=None, min_length=1, max_length=3
+        default=None, min_length=1, max_length=4
     )
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
-        max_length=8,
+        max_length=12,
     )
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
@@ -449,8 +458,74 @@ class EvaluationRunSummary(BaseModel):
     updated_at: datetime
 
 
+class EvaluationFailureSeverity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class EvaluationFailureCandidate(BaseModel):
+    schema_version: Literal["phase2.evaluation.v1"] = EVALUATION_SCHEMA_VERSION
+    evaluation_run_id: int
+    evaluation_run_item_id: int
+    evaluation_case_id: int | None = None
+    case_key: str | None = None
+    question_hash: str
+    strategy_type: RetrievalStrategy
+    failure_type: str = Field(min_length=1, max_length=80)
+    severity: EvaluationFailureSeverity
+    failure_reason_codes: list[str] = Field(default_factory=list, max_length=20)
+    metric_snapshot: dict[str, object] = Field(default_factory=dict)
+    recommended_tags: list[str] = Field(default_factory=list, max_length=20)
+    promotion_key: str = Field(min_length=1, max_length=64)
+
+
+class EvaluationFailureCandidatesResponse(BaseModel):
+    evaluation_run_id: int
+    candidates: list[EvaluationFailureCandidate] = Field(default_factory=list)
+
+
+class EvaluationFailurePromotionRequest(BaseModel):
+    target_dataset_id: int = Field(ge=1)
+    failure_types: list[str] | None = Field(default=None, min_length=1, max_length=20)
+    min_severity: EvaluationFailureSeverity = EvaluationFailureSeverity.MEDIUM
+    limit: int = Field(default=50, ge=1, le=100)
+
+    @field_validator("failure_types")
+    @classmethod
+    def validate_failure_types(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        deduped: list[str] = []
+        for item in value:
+            safe = _safe_key(item, field_name="failure_type")
+            if safe not in deduped:
+                deduped.append(safe)
+        return deduped
+
+
+class EvaluationFailurePromotionItem(BaseModel):
+    promotion_key: str
+    failure_type: str
+    strategy_type: RetrievalStrategy
+    evaluation_run_item_id: int
+    evaluation_case_id: int | None = None
+    promoted_case_id: int | None = None
+    case_key: str | None = None
+    result_code: Literal["created", "already_exists", "source_case_missing"]
+
+
+class EvaluationFailurePromotionResponse(BaseModel):
+    evaluation_run_id: int
+    target_dataset_id: int
+    created_count: int
+    skipped_count: int
+    items: list[EvaluationFailurePromotionItem] = Field(default_factory=list)
+
+
 class EvaluationRunDetail(EvaluationRunSummary):
     items: list[EvaluationRunItemResponse] = Field(default_factory=list)
+    failure_candidates: list[EvaluationFailureCandidate] = Field(default_factory=list)
 
 
 class EvaluationStrategyComparisonResponse(BaseModel):

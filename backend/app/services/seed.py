@@ -292,6 +292,38 @@ def _seed_system_settings(db: Session) -> None:
             False,
             "CI retrieval evaluation smoke workflow remains disabled until the Phase2 CI PR.",
         ),
+        "evaluation.failure.low_recall_threshold": (
+            {"value": 0.5},
+            "Failure promotion threshold for low recall_at_k.",
+        ),
+        "evaluation.failure.low_mrr_threshold": (
+            {"value": 0.5},
+            "Failure promotion threshold for low MRR.",
+        ),
+        "evaluation.failure.low_citation_coverage_threshold": (
+            {"value": 0.5},
+            "Failure promotion threshold for low citation coverage.",
+        ),
+        "evaluation.failure.low_groundedness_threshold": (
+            {"value": 0.5},
+            "Failure promotion threshold for low groundedness.",
+        ),
+        "evaluation.failure.low_faithfulness_threshold": (
+            {"value": 0.5},
+            "Failure promotion threshold for low faithfulness.",
+        ),
+        "evaluation.failure.high_latency_ms": (
+            {"value": 3000},
+            "Failure promotion threshold for high evaluation latency.",
+        ),
+        "evaluation.failure.max_promotions_per_run": (
+            {"value": 100},
+            "Maximum failure cases promoted from one evaluation run.",
+        ),
+        "evaluation.agentic.expected_strategy_required_for_accuracy": (
+            False,
+            "Keep strategy selection accuracy not-applicable unless expected strategy exists.",
+        ),
         **PHASE2_RETRIEVAL_SYSTEM_SETTINGS,
     }
     for key, (value, description) in defaults.items():

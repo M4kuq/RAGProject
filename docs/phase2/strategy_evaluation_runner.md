@@ -1,10 +1,11 @@
 # PR-25 Strategy Evaluation Runner
 
-PR-25 runs the same evaluation dataset across the standalone retrieval strategies that exist after PR-24:
+PR-25 runs the same evaluation dataset across the standalone retrieval strategies that exist after PR-24. PR-30 extends the same runner to include `agentic_router`:
 
 - `dense`
 - `sparse`
 - `hybrid`
+- `agentic_router` (PR-30)
 
 It depends on the PR-20 strategy schema, PR-21 safe retrieval trace fields, PR-22 dataset and metric schema, PR-23 sparse retrieval, and PR-24 hybrid score fusion.
 
@@ -32,7 +33,7 @@ Admin users can create a run with a strategy list:
 }
 ```
 
-If `strategies` is omitted, the runner uses `["dense"]` to preserve the Phase1-compatible default. PR-25 accepts only `dense`, `sparse`, and `hybrid`. `agentic_router` is not executed until PR-30.
+If `strategies` is omitted, the runner uses `["dense"]` to preserve the Phase1-compatible default. After PR-30, admin-created runs may include `dense`, `sparse`, `hybrid`, and `agentic_router`.
 
 ## Execution Flow
 
@@ -59,7 +60,11 @@ PR-25 avoids LLM-as-a-Judge and external model dependencies. Metrics are determi
 - `faithfulness`: expected keyword or expected answer signal found in safe snippets or answer text.
 - `no_context_rate`: `1.0` for no selected context, otherwise `0.0`; averaged by strategy.
 - `p95_latency`: percentile of item-level evaluation latency in milliseconds.
-- `strategy_selection_accuracy`: `not_applicable` in PR-25 because `agentic_router` is not implemented.
+- `strategy_selection_accuracy`: calculated for `agentic_router` when a case defines `metadata_json.expected_strategy` or `metadata_json.acceptable_strategies`; otherwise `not_applicable`.
+- `fallback_rate`: averaged from safe router decision trace.
+- `budget_exhausted_rate`: averaged from bounded retrieval budget trace.
+- `sufficiency_score_avg`: average safe sufficiency score from PR-29.
+- `retrieval_call_count_avg`: average bounded retrieval calls from PR-29.
 
 Metric details store only counts, ranks, labels, units, and reason codes. They do not store retrieved text, full answers, prompts, or trace payload dumps.
 
@@ -74,6 +79,11 @@ PR-25 extends:
 PR-25 adds:
 
 - `GET /api/v1/evaluations/runs/{evaluation_run_id}/strategy-comparison`
+
+PR-30 adds:
+
+- `GET /api/v1/evaluations/runs/{evaluation_run_id}/failure-candidates`
+- `POST /api/v1/evaluations/runs/{evaluation_run_id}/promote-failures`
 
 The comparison response returns strategy, metric name, average, p50, p95, count, failed count, and not-applicable count.
 
@@ -91,4 +101,4 @@ Evaluation cases keep safe questions and expectations only. Retrieval snippets m
 
 ## Handoff
 
-PR-30 can add `agentic_router` execution and real `strategy_selection_accuracy` using the same item/result schema. PR-31 can schedule CI evaluation runs without changing the metric persistence contract.
+PR-30 adds `agentic_router` execution, agentic metrics, failure candidate extraction, and idempotent failure promotion. PR-31 can schedule CI evaluation runs without changing the metric persistence contract.

@@ -51,6 +51,7 @@ from app.schemas.evaluations import (
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
     EvaluationDatasetManifest,
+    EvaluationFailurePromotionRequest,
     EvaluationRunCreateRequest,
 )
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
@@ -471,6 +472,10 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "no_context_rate",
                 "p95_latency",
                 "strategy_selection_accuracy",
+                "fallback_rate",
+                "budget_exhausted_rate",
+                "sufficiency_score_avg",
+                "retrieval_call_count_avg",
             ],
             "case_limit": 1,
             "top_k": None,
@@ -1105,6 +1110,139 @@ def test_evaluation_strategy_runner_treats_no_context_as_metric_outcome() -> Non
         engine.dispose()
 
 
+def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_eval_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_expected_hybrid",
+                    question="hybrid target retrieval",
+                    expected_keywords=["hybrid", "target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "hybrid",
+                        "acceptable_strategies": ["hybrid", "dense"],
+                    },
+                ),
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_missing_context",
+                    question="missing target retrieval",
+                    expected_keywords=["missing"],
+                    required_citation=True,
+                    metadata_json={"expected_strategy": "sparse"},
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid", "agentic_router"],
+                    case_limit=2,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-agentic-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["agentic_summary"]["fallback_rate"] == 1.0
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert len(items) == 8
+            assert {item.strategy_type for item in items} == {
+                "dense",
+                "sparse",
+                "hybrid",
+                "agentic_router",
+            }
+            agentic_results = db.scalars(
+                select(EvaluationResult).where(EvaluationResult.strategy_type == "agentic_router")
+            ).all()
+            assert {result.metric_name for result in agentic_results} >= {
+                "strategy_selection_accuracy",
+                "fallback_rate",
+                "budget_exhausted_rate",
+                "sufficiency_score_avg",
+                "retrieval_call_count_avg",
+            }
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert any(
+                metric.strategy_type == "agentic_router" and metric.metric_name == "fallback_rate"
+                for metric in detail.strategy_comparison
+            )
+            assert any(
+                candidate.failure_type == "strategy_selection_incorrect"
+                for candidate in detail.failure_candidates
+            )
+            promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=dataset.evaluation_dataset_id,
+                    failure_types=["strategy_selection_incorrect"],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted.created_count == 1
+            promoted_again = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=dataset.evaluation_dataset_id,
+                    failure_types=["strategy_selection_incorrect"],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted_again.created_count == 0
+            assert promoted_again.skipped_count == 1
+            promoted_case = db.get(EvaluationCaseModel, promoted.items[0].promoted_case_id)
+            assert promoted_case is not None
+            assert promoted_case.metadata_json is not None
+            assert promoted_case.metadata_json["source"] == "failure_promoted"
+            assert "raw chunk" not in json.dumps(promoted_case.metadata_json).lower()
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_handler_processes_job_and_case_failure() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -1154,7 +1292,7 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
-def test_evaluation_create_rejects_agentic_router_strategy() -> None:
+def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -1164,19 +1302,7 @@ def test_evaluation_create_rejects_agentic_router_strategy() -> None:
                 EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategy_type="agentic_router",
-                )
-            with pytest.raises(ValueError):
-                EvaluationRunCreateRequest(
-                    dataset_name="phase1_smoke",
-                    case_limit=1,
                     strategy_type="fallback_dense",
-                )
-            with pytest.raises(ValueError):
-                EvaluationRunCreateRequest(
-                    dataset_name="phase1_smoke",
-                    case_limit=1,
-                    strategies=["dense", "agentic_router"],
                 )
             with pytest.raises(ValueError):
                 EvaluationRunCreateRequest(
@@ -1189,7 +1315,7 @@ def test_evaluation_create_rejects_agentic_router_strategy() -> None:
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategies=["dense", "sparse", "hybrid"],
+                    strategies=["dense", "sparse", "hybrid", "agentic_router"],
                 ),
                 user=user,
             )
@@ -1197,28 +1323,38 @@ def test_evaluation_create_rejects_agentic_router_strategy() -> None:
             assert run is not None
             assert run.status == "queued"
             assert run.metrics_config is not None
-            assert run.metrics_config["strategies"] == ["dense", "sparse", "hybrid"]
+            assert run.metrics_config["strategies"] == [
+                "dense",
+                "sparse",
+                "hybrid",
+                "agentic_router",
+            ]
     finally:
         engine.dispose()
 
 
-def test_evaluation_api_rejects_agentic_router_and_fallback_dense_strategies(
+def test_evaluation_api_allows_agentic_router_and_rejects_fallback_dense_strategies(
     evaluation_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     client, _ = evaluation_client
     _login_as(client, "admin@example.com")
     csrf_token = _session_csrf(client)
 
-    for payload in (
-        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "agentic_router"},
-        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
-        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategies": ["agentic_router"]},
-        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategies": ["fallback_dense"]},
-        {
+    accepted = client.post(
+        "/api/v1/evaluations/runs",
+        json={
             "dataset_name": "phase1_smoke",
             "case_limit": 1,
             "strategies": ["dense", "agentic_router"],
         },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert accepted.status_code == 202
+    assert accepted.json()["data"]["strategies"] == ["dense", "agentic_router"]
+
+    for payload in (
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
+        {"dataset_name": "phase1_smoke", "case_limit": 1, "strategies": ["fallback_dense"]},
     ):
         response = client.post(
             "/api/v1/evaluations/runs",
@@ -1227,6 +1363,84 @@ def test_evaluation_api_rejects_agentic_router_and_fallback_dense_strategies(
         )
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_evaluation_failure_candidate_and_promotion_api(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    _login_as(client, "admin@example.com")
+    csrf_token = _session_csrf(client)
+
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert user is not None
+        service = EvaluationService(
+            rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+            settings=Settings(app_env="test"),
+        )
+        dataset = service.create_dataset(
+            db,
+            payload=EvaluationDatasetCreateRequest(
+                dataset_name="agentic_api_dataset",
+                source_type="manual",
+            ),
+            user=user,
+        )
+        service.create_case(
+            db,
+            evaluation_dataset_id=dataset.evaluation_dataset_id,
+            payload=EvaluationCaseCreateRequest(
+                case_key="agentic_api_missing",
+                question="missing target retrieval",
+                expected_keywords=["missing"],
+                required_citation=True,
+                metadata_json={"expected_strategy": "sparse"},
+            ),
+        )
+        created = service.create_run(
+            db,
+            payload=EvaluationRunCreateRequest(
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                strategies=["agentic_router"],
+                case_limit=1,
+            ),
+            user=user,
+        )
+        service.run_job(
+            db,
+            evaluation_run_id=created.evaluation_run_id,
+            request_id="test-agentic-api-eval",
+        )
+        dataset_id = dataset.evaluation_dataset_id
+        run_id = created.evaluation_run_id
+
+    candidates = client.get(f"/api/v1/evaluations/runs/{run_id}/failure-candidates")
+    assert candidates.status_code == 200
+    assert candidates.json()["data"]["candidates"]
+
+    missing_csrf = client.post(
+        f"/api/v1/evaluations/runs/{run_id}/promote-failures",
+        json={"target_dataset_id": dataset_id, "failure_types": ["no_context"]},
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing_csrf.status_code == 403
+
+    promoted = client.post(
+        f"/api/v1/evaluations/runs/{run_id}/promote-failures",
+        json={"target_dataset_id": dataset_id, "failure_types": ["no_context"]},
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["data"]["created_count"] == 1
+    promoted_again = client.post(
+        f"/api/v1/evaluations/runs/{run_id}/promote-failures",
+        json={"target_dataset_id": dataset_id, "failure_types": ["no_context"]},
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert promoted_again.status_code == 200
+    assert promoted_again.json()["data"]["created_count"] == 0
+    assert promoted_again.json()["data"]["skipped_count"] == 1
 
 
 def test_evaluation_service_marks_run_failed_when_setup_fails() -> None:
@@ -1523,6 +1737,101 @@ class _StrategyAwareFakeEvaluationRagService(_FakeEvaluationRagService):
         )
 
 
+class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        if strategy_type != RetrievalStrategy.AGENTIC_ROUTER:
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
+        selected_strategy = "hybrid" if "hybrid" in question.lower() else "dense"
+        has_context = "missing" not in question.lower()
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+            strategy_decision_json={
+                "schema_version": "phase2.router.v1",
+                "requested_strategy": "agentic_router",
+                "selected_strategy": selected_strategy,
+                "execution_strategy": selected_strategy,
+                "fallback_used": True,
+                "fallback_strategy": "dense",
+                "fallback_reason": "insufficient_context",
+                "budget_exhausted": not has_context,
+                "retrieval_call_count": 2,
+                "max_retrieval_calls": 2,
+                "sufficiency_score": 0.82 if has_context else 0.1,
+                "sufficiency_reason_codes": (
+                    ["sufficient_after_fallback"] if has_context else ["budget_exhausted"]
+                ),
+            },
+            retrieval_score_summary={
+                "requested_top_k": 5,
+                "qdrant_candidate_count": 1 if has_context else 0,
+                "post_filter_candidate_count": 1 if has_context else 0,
+                "selected_count": 1 if has_context else 0,
+                "excluded_by_rdb_check_count": 0,
+                "sufficiency_score": 0.82 if has_context else 0.1,
+                "retrieval_call_count": 2,
+            },
+        )
+        snippet = "agentic_router hybrid safe target citation preview." if has_context else ""
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=100,
+                    source_label="strategy-seed.md",
+                    snippet=snippet,
+                    old_version_flag=False,
+                )
+            ]
+            if has_context
+            else [],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1 if has_context else 0,
+                post_filter_candidate_count=1 if has_context else 0,
+                selected_count=1 if has_context else 0,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=100,
+                    logical_document_id=10,
+                    rank_order=1,
+                    snippet=snippet,
+                )
+            ]
+            if has_context
+            else [],
+            context_sources_for_safety=[],
+            error_code=None if has_context else "no_context_found",
+        )
+
+
 def _failing_rag_service_factory(settings: Settings, db: Session) -> _FakeEvaluationRagService:
     raise RuntimeError("synthetic evaluation setup failure")
 
@@ -1535,6 +1844,8 @@ def _create_fake_retrieval_run(
     request_id: str | None,
     error_code: str | None = None,
     strategy_type: str = "dense",
+    strategy_decision_json: dict[str, object] | None = None,
+    retrieval_score_summary: dict[str, object] | None = None,
 ) -> RetrievalRun:
     now = datetime.now(UTC)
     run = RetrievalRun(
@@ -1544,13 +1855,15 @@ def _create_fake_retrieval_run(
         finished_at=now,
         top_k=5,
         query_hash=hashlib.sha256(question.encode("utf-8")).hexdigest(),
-        retrieval_score_summary={
+        retrieval_score_summary=retrieval_score_summary
+        or {
             "requested_top_k": 5,
             "qdrant_candidate_count": 1,
             "post_filter_candidate_count": 1,
             "selected_count": 1 if status == "succeeded" else 0,
             "excluded_by_rdb_check_count": 0,
         },
+        strategy_decision_json=strategy_decision_json,
         answer_confidence=0.9 if status == "succeeded" else None,
         groundedness_score=0.9 if status == "succeeded" else None,
         confidence_label="High" if status == "succeeded" else None,
