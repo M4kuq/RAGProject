@@ -38,6 +38,8 @@ from app.rag.generation import (
 )
 from app.rag.rerank import FakeRerankerClient, RerankCandidate, RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
+from app.rag.strategy import RetrievalStrategy
+from app.schemas.rag_strategy import RouterDecisionTrace
 from app.services.rag_service import RagService
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -488,6 +490,71 @@ def test_rag_ask_agentic_router_budget_exhausted_returns_no_context_without_assi
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
+
+
+def test_rag_ask_agentic_router_no_context_skips_reranker_failure(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=2,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        generation_provider="fake",
+        router_max_retrieval_calls=1,
+        router_max_fallback_calls=0,
+        router_sufficiency_top_score_threshold=0.99,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_FailingReranker(),
+        strategy_router=cast(Any, _DenseRouter(settings)),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic low score")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-low-score-msg-1",
+            "message": "alpha policy low score",
+            "strategy": "agentic_router",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["no_context"] is True
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert items
+        assert all(item.rerank_score is None for item in items)
+        assert all(item.rerank_order is None for item in items)
+        assert all(not item.selected_flag for item in items)
 
 
 def test_rag_ask_agentic_router_respects_store_decision_trace_false(
@@ -993,6 +1060,24 @@ class _FailingReranker:
         candidates: Sequence[RerankCandidate],
     ) -> list[Any]:
         raise RerankError()
+
+
+class _DenseRouter:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def route(self, **_: object) -> RouterDecisionTrace:
+        return RouterDecisionTrace(
+            requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
+            selected_strategy=RetrievalStrategy.DENSE,
+            execution_strategy=RetrievalStrategy.DENSE,
+            decision_source="test",
+            fallback_used=False,
+            router_enabled=True,
+            confidence=1.0,
+            reason_codes=["test_dense"],
+            store_decision_trace=self.settings.router_store_decision_trace,
+        )
 
 
 class _FailingAnswerGenerator:

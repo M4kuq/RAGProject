@@ -1085,6 +1085,10 @@ def test_rag_search_agentic_router_preserves_retrieval_rank_when_rerank_reorders
     data = response.json()["data"]
     assert [item["document_chunk_id"] for item in data["items"][:2]] == [101, 100]
     with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.retrieval_score_summary is not None
+        assert run.retrieval_score_summary["top1_retrieval_score"] == 0.91
         promoted = (
             db.query(RetrievalRunItem)
             .filter_by(

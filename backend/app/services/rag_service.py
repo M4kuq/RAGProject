@@ -1313,6 +1313,53 @@ class RagService:
                 no_context=True,
             )
 
+        if agentic_result.no_context:
+            item_inputs = [
+                _agentic_run_item_input(
+                    candidate,
+                    rerank_score=None,
+                    rerank_order=None,
+                    final_rank=index,
+                    selected_flag=False,
+                    agentic_result=agentic_result,
+                )
+                for index, candidate in enumerate(final_candidates, start=1)
+            ]
+            with latency_tracker.span("retrieval_items_persist_ms"):
+                saved_items = self.repository.save_items(
+                    db,
+                    retrieval_run_id=retrieval_run_id,
+                    items=item_inputs,
+                )
+            summary = _agentic_score_summary(
+                requested_top_k=top_k,
+                checked_candidates=final_candidates,
+                selected_count=0,
+                top1_rerank_score=None,
+                agentic_result=agentic_result,
+            )
+            return RetrievalPipelineResult(
+                summary=summary,
+                items=[
+                    _response_item(
+                        candidate,
+                        saved_item_id=saved_item.retrieval_run_item_id,
+                        rerank_score=None,
+                        rerank_order=None,
+                        selected_flag=False,
+                        snippet_max_chars=self.settings.search_snippet_max_chars,
+                    )
+                    for candidate, saved_item in zip(
+                        final_candidates,
+                        saved_items,
+                        strict=True,
+                    )
+                ],
+                selected_candidates=[],
+                citation_sources=[],
+                no_context=True,
+            )
+
         with latency_tracker.span("rerank_after_merge_ms"):
             rerank_results = self.reranker.rerank(
                 query=query,
@@ -1361,7 +1408,7 @@ class RagService:
         ].rerank_score
         summary = _agentic_score_summary(
             requested_top_k=top_k,
-            checked_candidates=ordered_candidates,
+            checked_candidates=final_candidates,
             selected_count=selected_count,
             top1_rerank_score=top1_rerank_score,
             agentic_result=agentic_result,
@@ -1787,8 +1834,8 @@ def _hybrid_run_item_input(
 def _agentic_run_item_input(
     candidate: CheckedRetrievalCandidate,
     *,
-    rerank_score: float,
-    rerank_order: int,
+    rerank_score: float | None,
+    rerank_order: int | None,
     final_rank: int,
     selected_flag: bool,
     agentic_result: AgenticRetrievalResult,
@@ -1797,7 +1844,7 @@ def _agentic_run_item_input(
     return RetrievalRunItemInput(
         document_chunk_id=candidate.chunk.document_chunk_id,
         retrieval_score=_decimal_score(candidate.retrieval_score),
-        rerank_score=_decimal_score(rerank_score),
+        rerank_score=_decimal_score(rerank_score) if rerank_score is not None else None,
         rank_order=candidate.rank_order,
         rerank_order=rerank_order,
         selected_flag=selected_flag,
@@ -2026,8 +2073,8 @@ def _hybrid_score_breakdown(
 def _agentic_score_breakdown(
     candidate: CheckedRetrievalCandidate,
     *,
-    rerank_score: float,
-    rerank_order: int,
+    rerank_score: float | None,
+    rerank_order: int | None,
     final_rank: int,
     selected_flag: bool,
     agentic_result: AgenticRetrievalResult,
@@ -2061,7 +2108,7 @@ def _agentic_score_breakdown(
         "dense_score": _round_score(dense_score) if dense_score is not None else None,
         "sparse_score": _round_score(sparse_score) if sparse_score is not None else None,
         "fused_score": _round_score(fused_score) if fused_score is not None else None,
-        "rerank_score": _round_score(rerank_score),
+        "rerank_score": _round_score(rerank_score) if rerank_score is not None else None,
         "rank_order": candidate.rank_order,
         "rerank_order": rerank_order,
         "final_rank": final_rank,
