@@ -276,6 +276,26 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
       if (url.includes("/api/v1/evaluations/datasets")) {
+        if (!url.includes("page=2")) {
+          return jsonResponse({
+            data: [
+              {
+                evaluation_dataset_id: 41,
+                dataset_name: "archived_failures",
+                description: "Archived dataset",
+                version: "v1",
+                source_type: "manual",
+                status: "archived",
+                metadata_json: null,
+                case_count: 0,
+                created_by: 1,
+                created_at: "2026-05-01T00:00:00Z",
+                updated_at: "2026-05-01T00:00:00Z"
+              }
+            ],
+            meta: { pagination: { page: 1, page_size: 100, total: 2, has_next: true } }
+          });
+        }
         return jsonResponse({
           data: [
             {
@@ -292,7 +312,7 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
               updated_at: "2026-05-01T00:00:00Z"
             }
           ],
-          meta: { pagination: { page: 1, page_size: 50, total: 1, has_next: false } }
+          meta: { pagination: { page: 2, page_size: 100, total: 2, has_next: false } }
         });
       }
       if (url.endsWith("/api/v1/evaluations/runs/77/promote-failures")) {
@@ -373,6 +393,36 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
                 metric_snapshot: {},
                 recommended_tags: ["failure_promoted"],
                 promotion_key: "promotion-key-retrieval"
+              },
+              {
+                schema_version: "phase2.evaluation.v1",
+                evaluation_run_id: 77,
+                evaluation_run_item_id: 701,
+                evaluation_case_id: null,
+                case_key: "unknown_fixture_case",
+                question_hash: "b".repeat(64),
+                strategy_type: "agentic_router",
+                failure_type: "unknown_failure",
+                severity: "high",
+                failure_reason_codes: ["unknown_failure"],
+                metric_snapshot: {},
+                recommended_tags: ["failure_promoted"],
+                promotion_key: "promotion-key-unknown"
+              },
+              {
+                schema_version: "phase2.evaluation.v1",
+                evaluation_run_id: 77,
+                evaluation_run_item_id: 701,
+                evaluation_case_id: null,
+                case_key: "unknown_fixture_case",
+                question_hash: "b".repeat(64),
+                strategy_type: "agentic_router",
+                failure_type: "no_context",
+                severity: "high",
+                failure_reason_codes: ["no_context"],
+                metric_snapshot: {},
+                recommended_tags: ["failure_promoted"],
+                promotion_key: "promotion-key-known"
               }
             ]
           }
@@ -390,6 +440,8 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   );
 
   expect(await screen.findByRole("heading", { name: "Evaluation #77" })).toBeInTheDocument();
+  expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "archived_failures" })).not.toBeInTheDocument();
   fireEvent.change(await screen.findByLabelText("failure promotion target dataset"), {
     target: { value: "42" }
   });
@@ -398,7 +450,7 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   await waitFor(() => expect(promoteRequests.length).toBe(1));
   const body = JSON.parse(String(promoteRequests[0].body));
   expect(body.target_dataset_id).toBe(42);
-  expect(body.failure_types).toEqual(["retrieval_exception"]);
+  expect(body.failure_types).toEqual(["retrieval_exception", "no_context"]);
   expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
 });
 

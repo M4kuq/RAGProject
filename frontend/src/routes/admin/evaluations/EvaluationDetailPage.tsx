@@ -3,12 +3,13 @@ import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import {
-  useEvaluationDatasets,
+  useActiveEvaluationDatasets,
   useEvaluationRunDetail,
   usePromoteEvaluationFailures
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationFailureCandidate,
+  EvaluationFailureSeverity,
   EvaluationMetricResult
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
@@ -16,7 +17,7 @@ import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
-  const datasets = useEvaluationDatasets({ page: 1, page_size: 50 });
+  const datasets = useActiveEvaluationDatasets();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
   const [promotionMessage, setPromotionMessage] = useState<string | null>(null);
   const [promotionTargetDatasetId, setPromotionTargetDatasetId] = useState("");
@@ -37,7 +38,7 @@ export function EvaluationDetailPage() {
     );
   }
 
-  const activeDatasets = datasets.data?.items.filter((dataset) => dataset.status === "active") ?? [];
+  const activeDatasets = datasets.data ?? [];
   const selectedTargetDatasetId =
     promotionTargetDatasetId || (run.data.evaluation_dataset_id ? String(run.data.evaluation_dataset_id) : "");
 
@@ -330,7 +331,7 @@ function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[]
   const byItem = new Map<number, EvaluationFailureCandidate>();
   for (const candidate of candidates) {
     const existing = byItem.get(candidate.evaluation_run_item_id);
-    if (!existing || failurePriority(candidate) < failurePriority(existing)) {
+    if (!existing || compareFailureCandidates(candidate, existing) < 0) {
       byItem.set(candidate.evaluation_run_item_id, candidate);
     }
   }
@@ -339,9 +340,20 @@ function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[]
   );
 }
 
-function failurePriority(candidate: EvaluationFailureCandidate): string {
-  const severityRank = { high: 0, medium: 1, low: 2 }[candidate.severity];
-  return `${severityRank}:${failureTypePriority(candidate.failure_type)}:${candidate.failure_type}:${candidate.promotion_key}`;
+function compareFailureCandidates(
+  candidate: EvaluationFailureCandidate,
+  existing: EvaluationFailureCandidate
+): number {
+  return (
+    severityPriority(candidate.severity) - severityPriority(existing.severity) ||
+    failureTypePriority(candidate.failure_type) - failureTypePriority(existing.failure_type) ||
+    candidate.failure_type.localeCompare(existing.failure_type) ||
+    candidate.promotion_key.localeCompare(existing.promotion_key)
+  );
+}
+
+function severityPriority(severity: EvaluationFailureSeverity): number {
+  return { high: 0, medium: 1, low: 2 }[severity];
 }
 
 function failureTypePriority(failureType: string): number {
