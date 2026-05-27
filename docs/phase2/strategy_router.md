@@ -2,7 +2,7 @@
 
 ## Purpose
 
-PR-28 adds the first Agentic Control execution step after PR-27 query planning. It takes the safe query analysis and query plan, chooses one retrieval strategy, executes it once, and stores the redacted router decision for observability.
+PR-28 adds the first Agentic Control execution step after PR-27 query planning. It takes the safe query analysis and query plan, chooses one retrieval strategy, executes it once, and stores the redacted router decision for observability when enabled.
 
 This PR does not add a retrieval loop. Context sufficiency checks, fallback loops, multi-query execution, metadata-filtered execution, and version-aware execution are deferred to PR-29 and later.
 
@@ -21,7 +21,7 @@ It does not receive raw prompt, full context, raw chunk text, document payload d
 
 ## Output
 
-Router decisions are stored as `phase2.router.v1` in `retrieval_runs.strategy_decision_json`.
+Router decisions are stored as `phase2.router.v1` in `retrieval_runs.strategy_decision_json` when `ROUTER_STORE_DECISION_TRACE=true`. Setting `ROUTER_STORE_DECISION_TRACE=false` keeps the router execution behavior but suppresses `strategy_decision_json` persistence.
 
 ```json
 {
@@ -39,17 +39,17 @@ Router decisions are stored as `phase2.router.v1` in `retrieval_runs.strategy_de
 }
 ```
 
-`retrieval_runs.strategy_type` remains `agentic_router` when the router was requested. The executed strategy is recorded in `execution_strategy`.
+`retrieval_runs.strategy_type` remains `agentic_router` when the router was requested. The executed strategy is recorded in `execution_strategy` when decision trace persistence is enabled.
 
 ## Routing Rules
 
 PR-28 uses deterministic rule-based routing:
 
-- router disabled or unavailable: `fallback_dense`
+- router disabled or unavailable: configured fallback strategy (`fallback_dense` by default, or `dense` with `ROUTER_FALLBACK_STRATEGY=dense`)
 - version-specific query: prefer `hybrid`; `version_aware` remains disabled/planned
 - keyword-heavy query: prefer `hybrid`, then `sparse`, then `dense`
 - comparison intent: prefer `hybrid`
-- high ambiguity: prefer `hybrid`, then `fallback_dense`
+- high ambiguity: prefer `hybrid`, then the configured fallback strategy
 - normal factual lookup: `dense`
 
 Only `dense`, `sparse`, `hybrid`, and `fallback_dense` are executable in PR-28. `multi_query_dense`, `multi_query_hybrid`, `metadata_filtered`, and `version_aware` are recorded as disabled candidates and reduced to a safe executable strategy.
@@ -69,11 +69,11 @@ Only `dense`, `sparse`, `hybrid`, and `fallback_dense` are executable in PR-28. 
 
 `/api/v1/rag/ask` keeps the default dense behavior. It uses the router only when the request explicitly sets `strategy=agentic_router`.
 
-Router failures never expose exception messages. If routing fails, the service records `fallback_reason=router_error` and executes dense fallback.
+Router failures never expose exception messages. If routing fails, the service records `fallback_reason=router_error` and executes the configured fallback strategy.
 
 ## Trace and Debug UI
 
-PR-28 adds `strategy_router_ms` to latency breakdowns. Retrieval Debug UI displays requested, selected, and execution strategy, fallback status, confidence, reason codes, disabled candidates, and safety flags.
+PR-28 adds `strategy_router_ms` to latency breakdowns. Retrieval Debug UI displays requested, selected, and execution strategy, fallback status, confidence, reason codes, disabled candidates, and safety flags when router decision trace persistence is enabled.
 
 The UI and API continue to redact sensitive keys and values. Raw query text is not included in router decision JSON.
 
