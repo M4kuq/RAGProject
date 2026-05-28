@@ -31,6 +31,7 @@ export const queryKeys = {
     detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const,
     datasets: (params: { page: number; page_size: number }) =>
       ["evaluations", "datasets", params] as const,
+    activeDatasets: ["evaluations", "datasets", "active"] as const,
     dataset: (evaluationDatasetId: number) => ["evaluations", "dataset", evaluationDatasetId] as const,
     cases: (evaluationDatasetId: number, params: { page: number; page_size: number }) =>
       ["evaluations", "dataset", evaluationDatasetId, "cases", params] as const

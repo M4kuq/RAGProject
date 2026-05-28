@@ -3,11 +3,13 @@ import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import {
+  useActiveEvaluationDatasets,
   useEvaluationRunDetail,
   usePromoteEvaluationFailures
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationFailureCandidate,
+  EvaluationFailureSeverity,
   EvaluationMetricResult
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
@@ -15,8 +17,10 @@ import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
+  const datasets = useActiveEvaluationDatasets();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
   const [promotionMessage, setPromotionMessage] = useState<string | null>(null);
+  const [promotionTargetDatasetId, setPromotionTargetDatasetId] = useState("");
 
   if (run.isLoading) {
     return (
@@ -33,6 +37,10 @@ export function EvaluationDetailPage() {
       </main>
     );
   }
+
+  const activeDatasets = datasets.data ?? [];
+  const selectedTargetDatasetId =
+    promotionTargetDatasetId || (run.data.evaluation_dataset_id ? String(run.data.evaluation_dataset_id) : "");
 
   return (
     <main className="admin-main">
@@ -176,15 +184,34 @@ export function EvaluationDetailPage() {
       <section className="admin-section">
         <div className="section-header-row">
           <h2>Failure Candidates</h2>
+          <label>
+            Target dataset
+            <select
+              aria-label="failure promotion target dataset"
+              value={selectedTargetDatasetId}
+              onChange={(event) => setPromotionTargetDatasetId(event.target.value)}
+            >
+              <option value="">Select dataset</option>
+              {activeDatasets.map((dataset) => (
+                <option
+                  key={dataset.evaluation_dataset_id}
+                  value={dataset.evaluation_dataset_id}
+                >
+                  {truncateText(dataset.dataset_name, 80)}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             disabled={
               promoteFailures.isPending ||
-              !run.data.evaluation_dataset_id ||
+              !selectedTargetDatasetId ||
               run.data.failure_candidates.length === 0
             }
             onClick={() => {
-              if (!run.data.evaluation_dataset_id) {
+              const targetDatasetId = Number(selectedTargetDatasetId);
+              if (!Number.isSafeInteger(targetDatasetId) || targetDatasetId < 1) {
                 return;
               }
               const confirmed = window.confirm(
@@ -195,7 +222,7 @@ export function EvaluationDetailPage() {
               }
               void promoteFailures
                 .mutateAsync({
-                  target_dataset_id: run.data.evaluation_dataset_id,
+                  target_dataset_id: targetDatasetId,
                   failure_types: primaryFailureTypes(run.data.failure_candidates),
                   min_severity: "medium",
                   limit: 50
@@ -210,6 +237,9 @@ export function EvaluationDetailPage() {
             Promote primary failures
           </button>
         </div>
+        {datasets.error ? (
+          <InlineAlert tone="error">Unable to load promotion target datasets.</InlineAlert>
+        ) : null}
         {promotionMessage ? <InlineAlert tone="success">{promotionMessage}</InlineAlert> : null}
         {promoteFailures.error ? (
           <InlineAlert tone="error">{promoteFailures.error.message}</InlineAlert>
@@ -301,7 +331,7 @@ function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[]
   const byItem = new Map<number, EvaluationFailureCandidate>();
   for (const candidate of candidates) {
     const existing = byItem.get(candidate.evaluation_run_item_id);
-    if (!existing || failurePriority(candidate) < failurePriority(existing)) {
+    if (!existing || compareFailureCandidates(candidate, existing) < 0) {
       byItem.set(candidate.evaluation_run_item_id, candidate);
     }
   }
@@ -310,9 +340,33 @@ function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[]
   );
 }
 
-function failurePriority(candidate: EvaluationFailureCandidate): string {
-  const severityRank = { high: 0, medium: 1, low: 2 }[candidate.severity];
-  return `${severityRank}:${candidate.failure_type}:${candidate.promotion_key}`;
+function compareFailureCandidates(
+  candidate: EvaluationFailureCandidate,
+  existing: EvaluationFailureCandidate
+): number {
+  return (
+    severityPriority(candidate.severity) - severityPriority(existing.severity) ||
+    failureTypePriority(candidate.failure_type) - failureTypePriority(existing.failure_type) ||
+    candidate.failure_type.localeCompare(existing.failure_type) ||
+    candidate.promotion_key.localeCompare(existing.promotion_key)
+  );
+}
+
+function severityPriority(severity: EvaluationFailureSeverity): number {
+  return { high: 0, medium: 1, low: 2 }[severity];
+}
+
+function failureTypePriority(failureType: string): number {
+  const priority: Record<string, number> = {
+    retrieval_exception: 0,
+    generation_exception: 1,
+    citation_build_failed: 2,
+    fallback_failed: 3,
+    budget_exhausted: 4,
+    strategy_selection_incorrect: 5,
+    no_context: 6
+  };
+  return priority[failureType] ?? 100;
 }
 
 function formatMetricDetails(metrics: EvaluationMetricResult[]) {

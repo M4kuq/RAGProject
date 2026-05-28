@@ -12,10 +12,13 @@ import {
   promoteEvaluationFailures
 } from "./evaluationApi";
 import type {
+  EvaluationDataset,
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
   EvaluationRunCreateRequest
 } from "./evaluationTypes";
+
+const TARGET_DATASET_PAGE_SIZE = 100;
 
 export function useEvaluationRuns(params: { page: number; page_size: number }) {
   return useQuery({
@@ -50,6 +53,29 @@ export function useEvaluationDatasets(params: { page: number; page_size: number 
   return useQuery({
     queryKey: queryKeys.evaluations.datasets(params),
     queryFn: () => listEvaluationDatasets(params)
+  });
+}
+
+export function useActiveEvaluationDatasets() {
+  return useQuery({
+    queryKey: queryKeys.evaluations.activeDatasets,
+    queryFn: async () => {
+      const activeDatasets: EvaluationDataset[] = [];
+      let page = 1;
+      let hasNext = true;
+
+      while (hasNext) {
+        const result = await listEvaluationDatasets({
+          page,
+          page_size: TARGET_DATASET_PAGE_SIZE
+        });
+        activeDatasets.push(...result.items.filter((dataset) => dataset.status === "active"));
+        hasNext = Boolean(result.pagination?.has_next);
+        page += 1;
+      }
+
+      return activeDatasets;
+    }
   });
 }
 
