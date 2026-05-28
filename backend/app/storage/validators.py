@@ -49,6 +49,15 @@ _MIME_TYPES_BY_EXTENSION = {
     ".md": {"text/markdown", "text/plain", "application/octet-stream"},
     ".markdown": {"text/markdown", "text/plain", "application/octet-stream"},
     ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"},
+    ".html": {"text/html", "application/xhtml+xml", "application/octet-stream"},
+    ".htm": {"text/html", "application/xhtml+xml", "application/octet-stream"},
+    ".xml": {
+        "text/xml",
+        "application/xml",
+        "application/rss+xml",
+        "application/atom+xml",
+        "application/octet-stream",
+    },
 }
 _MACRO_ENABLED_EXTENSIONS = {".docm", ".xlsm", ".pptm"}
 _DOCX_MAX_ZIP_ENTRIES = 200
@@ -180,12 +189,17 @@ def _validate_magic_bytes(extension: str, content: bytes) -> None:
             main_xml_path="ppt/presentation.xml",
         )
         return
-    if extension in {".txt", ".md", ".markdown", ".csv"}:
+    if extension in {".txt", ".md", ".markdown", ".csv", ".html", ".htm", ".xml"}:
         if b"\x00" in content:
             raise UnsafeFileRejected()
+        decoded: str | None = None
         for encoding in ("utf-8", "utf-8-sig", "cp932"):
             try:
-                content.decode(encoding)
+                decoded = content.decode(encoding)
+                if extension == ".xml":
+                    _validate_xml_upload_text(decoded)
+                if extension in {".html", ".htm"}:
+                    _validate_html_upload_text(decoded)
                 return
             except UnicodeDecodeError:
                 continue
@@ -292,3 +306,17 @@ def _is_rejected_office_part(name: str) -> bool:
     return normalized_name.endswith("/vbaproject.bin") or any(
         marker.lower() in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
     )
+
+
+def _validate_html_upload_text(text: str) -> None:
+    lowered = text.lower()
+    if "<svg" in lowered:
+        raise UnsafeFileRejected()
+
+
+def _validate_xml_upload_text(text: str) -> None:
+    lowered = text.lower()
+    if "<!doctype" in lowered or "<!entity" in lowered:
+        raise UnsafeFileRejected()
+    if "<svg" in lowered:
+        raise UnsafeFileRejected()

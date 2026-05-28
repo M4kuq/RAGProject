@@ -10,6 +10,9 @@ class ExtractionInputMetadata:
     file_name: str
     mime_type: str
     file_size_bytes: int
+    source_type: str | None = None
+    source_url: str | None = None
+    final_url: str | None = None
 
 
 @dataclass(frozen=True)

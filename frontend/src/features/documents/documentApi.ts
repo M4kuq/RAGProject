@@ -7,6 +7,7 @@ import type {
   DocumentDetail,
   DocumentItem,
   DocumentListParams,
+  DocumentUrlIngestRequest,
   DocumentUploadResponse,
   DocumentVersionCreateResponse,
   DocumentVersionDetail,
@@ -78,6 +79,14 @@ export async function uploadDocument(values: { title: string; file: File }): Pro
   return response.data;
 }
 
+export async function ingestDocumentUrl(values: DocumentUrlIngestRequest): Promise<DocumentUploadResponse> {
+  const response = await apiFetch<ApiResponse<DocumentUploadResponse>>("/api/v1/documents/url", {
+    method: "POST",
+    body: JSON.stringify(values)
+  });
+  return response.data;
+}
+
 export async function uploadDocumentVersion(values: {
   logicalDocumentId: number;
   file: File;
@@ -112,4 +121,3 @@ export async function archiveDocument(logicalDocumentId: number): Promise<Docume
   );
   return response.data;
 }
-

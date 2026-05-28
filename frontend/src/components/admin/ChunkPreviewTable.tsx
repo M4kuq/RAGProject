@@ -62,5 +62,15 @@ function chunkSourceLabel(chunk: DocumentChunkItem): string {
     const title = typeof metadata.slide_title === "string" ? metadata.slide_title : null;
     return [slide, title].filter(Boolean).join(" / ") || "-";
   }
+  if (metadata.structure_type === "html_section") {
+    const heading = typeof metadata.heading_path === "string" ? metadata.heading_path : null;
+    const elementType = typeof metadata.element_type === "string" ? metadata.element_type : null;
+    return [heading, elementType].filter(Boolean).join(" / ") || "-";
+  }
+  if (metadata.structure_type === "xml_element") {
+    const path = typeof metadata.xml_path === "string" ? metadata.xml_path : null;
+    const name = typeof metadata.element_name === "string" ? metadata.element_name : null;
+    return [path, name].filter(Boolean).join(" / ") || "-";
+  }
   return chunk.section_title ?? "-";
 }

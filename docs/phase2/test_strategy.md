@@ -212,6 +212,32 @@
 - Logs, traces, responses, and artifacts do not expose raw file content, raw
   chunk text, PII, tokens, or secrets.
 
+## PR-35 HTML / XML / URL Ingest Tests
+
+- Upload validation accepts `.html`, `.htm`, and `.xml` with matching MIME types.
+- Upload validation rejects SVG, NUL bytes, XML DTD/entity declarations, and
+  unsupported/binary content.
+- HTML extraction removes `script`, `style`, `noscript`, `iframe`, `object`,
+  `embed`, and comments while preserving headings, paragraphs, lists, and table
+  text.
+- XML extraction rejects external/entity declarations and records safe root/path
+  metadata.
+- `POST /api/v1/documents/url` is admin-only and CSRF-protected.
+- URL fetch rejects non-HTTP schemes, userinfo/auth URLs, localhost, private IP,
+  link-local, metadata IP, metadata hostnames, unsafe redirects, too many
+  redirects, unsupported content types, timeout, and over-size responses.
+- URL fetch tests use mock HTTP transports and resolver stubs; CI must not
+  require external internet access.
+- URL ingest stores only safe `source_url` / `final_url` metadata without query
+  string, fragment, fetched body, raw HTML/XML, raw chunk text, PII, tokens, or
+  secrets.
+- Ingest worker processes uploaded HTML/XML and URL-derived documents into ready
+  document versions and chunks.
+- Search and citation source labels can include safe heading/XML path/URL
+  metadata.
+- Existing PDF/DOCX/TXT/Markdown/CSV/Excel/PowerPoint ingest regressions remain
+  green.
+
 ## Checks
 
 - `ruff format --check .`

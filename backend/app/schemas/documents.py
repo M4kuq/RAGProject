@@ -58,6 +58,7 @@ class DocumentVersionSummary(BaseModel):
     page_count: int | None = None
     content_hash: str | None = None
     error_code: str | None = None
+    metadata_json: dict[str, object] | None = None
     chunk_count: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -110,6 +111,27 @@ class DocumentUploadResponse(BaseModel):
     result_code: Literal["created"] = "created"
     document: DocumentItem
     version: DocumentVersionDetail
+
+
+class DocumentUrlIngestRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    title: str | None = Field(default=None, max_length=MAX_DOCUMENT_TITLE_LENGTH)
+
+    @field_validator("url")
+    @classmethod
+    def normalize_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("url must not be empty")
+        return normalized
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class DocumentVersionCreateResponse(BaseModel):

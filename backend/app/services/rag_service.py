@@ -2273,6 +2273,14 @@ def _metadata_source_suffix(value: object) -> str | None:
         if slide_title:
             parts.append(f"Title: {slide_title}")
         return " / ".join(parts) or None
+    if structure_type == "html_section":
+        heading_path = _metadata_str(metadata, "heading_path")
+        element_type = _metadata_str(metadata, "element_type")
+        return heading_path or element_type
+    if structure_type == "xml_element":
+        xml_path = _metadata_str(metadata, "xml_path")
+        element_name = _metadata_str(metadata, "element_name")
+        return xml_path or element_name
     return None
 
 
@@ -2303,6 +2311,15 @@ def _safe_chunk_metadata(value: object) -> dict[str, object]:
         "slide_title",
         "shape_count",
         "table_count",
+        "html_title",
+        "heading_path",
+        "element_type",
+        "element_index",
+        "xml_root",
+        "xml_path",
+        "element_name",
+        "source_type",
+        "source_url",
     }
     safe: dict[str, object] = {}
     for key, item in value.items():

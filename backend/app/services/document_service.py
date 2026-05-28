@@ -4,6 +4,7 @@ import hashlib
 import re
 from contextlib import suppress
 from datetime import UTC, datetime
+from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
 from app.schemas.documents import (
     MAX_CHUNK_PREVIEW_LENGTH,
+    MAX_DOCUMENT_TITLE_LENGTH,
     DocumentApproveResponse,
     DocumentArchiveResponse,
     DocumentChunkItem,
@@ -30,12 +32,14 @@ from app.schemas.documents import (
     DocumentDisplayStatus,
     DocumentItem,
     DocumentUploadResponse,
+    DocumentUrlIngestRequest,
     DocumentVersionCreateResponse,
     DocumentVersionDetail,
     DocumentVersionSummary,
     normalize_document_title,
 )
 from app.services.audit_service import audit
+from app.services.url_fetch_service import UrlFetchResult, UrlFetchService
 from app.storage.file_storage import LocalFileStorage
 from app.storage.validators import safe_title_from_file_name, validate_upload
 
@@ -48,16 +52,22 @@ _URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
+class UrlFetcher(Protocol):
+    def fetch(self, url: str) -> UrlFetchResult: ...
+
+
 class DocumentService:
     def __init__(
         self,
         repository: DocumentRepository | None = None,
         job_repository: JobRepository | None = None,
         storage: LocalFileStorage | None = None,
+        url_fetcher: UrlFetcher | None = None,
     ) -> None:
         self.repository = repository or DocumentRepository()
         self.job_repository = job_repository or JobRepository()
         self.storage = storage or LocalFileStorage()
+        self.url_fetcher = url_fetcher or UrlFetchService()
 
     def list_documents(
         self,
@@ -168,6 +178,86 @@ class DocumentService:
                     "document_version_id": version.document_version_id,
                     "file_size_bytes": upload.file_size_bytes,
                     "mime_type": upload.mime_type,
+                },
+            )
+            db.commit()
+            committed = True
+            db.refresh(document)
+            db.refresh(version)
+            db.refresh(job)
+        except Exception:
+            db.rollback()
+            if storage_saved and not committed:
+                with suppress(Exception):
+                    self.storage.delete(storage_key=storage_key)
+            raise
+        document_item = self._document_items(db, [document])[0]
+        version_detail = self._version_detail(document, version, chunk_count=0)
+        return DocumentUploadResponse(
+            logical_document_id=document.logical_document_id,
+            document_version_id=version.document_version_id,
+            job_id=job.job_id,
+            ingest_status="queued",
+            version_status=version.status,  # type: ignore[arg-type]
+            display_status=self.display_status(document, version),
+            document=document_item,
+            version=version_detail,
+        )
+
+    def ingest_url(
+        self,
+        db: Session,
+        *,
+        user: User,
+        payload: DocumentUrlIngestRequest,
+        request_id: str | None,
+    ) -> DocumentUploadResponse:
+        fetched = self.url_fetcher.fetch(payload.url)
+        normalized_title = self._normalize_title(
+            payload.title,
+            fallback=_title_from_fetched_url(fetched.safe_final_url, fetched.file_name),
+        )
+        content_hash = hashlib.sha256(fetched.content).hexdigest()
+        storage_key = self.storage.build_storage_key(file_name=fetched.file_name)
+        version_metadata = _url_version_metadata(fetched)
+        storage_saved = False
+        committed = False
+        try:
+            document = self.repository.create_logical_document(
+                db,
+                owner_user_id=user.user_id,
+                title=normalized_title,
+            )
+            version = self.repository.create_version(
+                db,
+                logical_document_id=document.logical_document_id,
+                version_no=1,
+                content_hash=content_hash,
+                file_name=fetched.file_name,
+                mime_type=fetched.content_type,
+                file_size_bytes=len(fetched.content),
+                storage_key=storage_key,
+                created_by=user.user_id,
+                metadata_json=version_metadata,
+            )
+            self.storage.save_bytes(storage_key=storage_key, content=fetched.content)
+            storage_saved = True
+            job = self._create_ingest_job(db, user=user, document=document, version=version)
+            audit(
+                db,
+                action="document.url_ingested",
+                actor_user_id=user.user_id,
+                request_id=request_id,
+                target_type="document_version",
+                target_id=version.document_version_id,
+                metadata={
+                    "logical_document_id": document.logical_document_id,
+                    "document_version_id": version.document_version_id,
+                    "source_type": "url",
+                    "source_url": fetched.safe_source_url,
+                    "final_url": fetched.safe_final_url,
+                    "file_size_bytes": len(fetched.content),
+                    "mime_type": fetched.content_type,
                 },
             )
             db.commit()
@@ -651,6 +741,7 @@ class DocumentService:
             page_count=version.page_count,
             content_hash=version.content_hash,
             error_code=version.error_code,
+            metadata_json=_safe_version_metadata(version.metadata_json),
             chunk_count=chunk_count,
             created_at=self._aware_utc(version.created_at),
             updated_at=self._aware_utc(version.updated_at),
@@ -778,12 +869,55 @@ def _safe_chunk_metadata(value: object) -> dict[str, object] | None:
         "slide_title",
         "shape_count",
         "table_count",
+        "html_title",
+        "heading_path",
+        "element_type",
+        "element_index",
+        "xml_root",
+        "xml_path",
+        "element_name",
+        "source_type",
+        "source_url",
     }
     for key, item in value.items():
         if key not in allowed_keys:
             continue
         if isinstance(item, str):
-            redacted = _safe_metadata_string(item)
+            redacted = (
+                _safe_url_metadata_string(item)
+                if key == "source_url"
+                else _safe_metadata_string(item)
+            )
+            if redacted:
+                safe[key] = redacted
+        elif isinstance(item, bool):
+            safe[key] = item
+        elif isinstance(item, int | float):
+            safe[key] = item
+    return safe or None
+
+
+def _safe_version_metadata(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    safe: dict[str, object] = {}
+    allowed_keys = {
+        "source_type",
+        "source_url",
+        "final_url",
+        "fetched_at",
+        "content_type",
+        "redirect_count",
+    }
+    for key, item in value.items():
+        if key not in allowed_keys:
+            continue
+        if isinstance(item, str):
+            redacted = (
+                _safe_url_metadata_string(item)
+                if key in {"source_url", "final_url"}
+                else _safe_metadata_string(item)
+            )
             if redacted:
                 safe[key] = redacted
         elif isinstance(item, bool):
@@ -802,3 +936,29 @@ def _safe_metadata_string(value: str) -> str:
     ):
         return "redacted"
     return normalized[:120]
+
+
+def _safe_url_metadata_string(value: str) -> str:
+    normalized = " ".join(value.replace("\x00", " ").split())
+    if _SECRET_ASSIGNMENT_RE.search(normalized) or _EMAIL_RE.search(normalized):
+        return "redacted"
+    return normalized[:200]
+
+
+def _url_version_metadata(fetched: UrlFetchResult) -> dict[str, object]:
+    return {
+        "source_type": "url",
+        "source_url": fetched.safe_source_url,
+        "final_url": fetched.safe_final_url,
+        "fetched_at": fetched.fetched_at.isoformat(),
+        "content_type": fetched.content_type,
+        "redirect_count": fetched.redirect_count,
+    }
+
+
+def _title_from_fetched_url(safe_url: str, file_name: str) -> str:
+    if safe_url and safe_url != "redacted":
+        without_scheme = safe_url.split("://", 1)[-1].strip("/")
+        if without_scheme:
+            return without_scheme[:MAX_DOCUMENT_TITLE_LENGTH]
+    return safe_title_from_file_name(file_name)

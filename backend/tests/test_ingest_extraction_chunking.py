@@ -19,6 +19,7 @@ from app.ingest.extractors.markdown import MarkdownExtractor
 from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
 from app.ingest.extractors.pdf import PdfTextExtractor
 from app.ingest.extractors.text import PlainTextExtractor
+from app.ingest.extractors.web import HtmlExtractor, XmlExtractor
 from app.ingest.hashing import chunk_hash, normalize_chunk_text
 from app.ingest.metadata import metadata_from_extracted_document
 from app.storage import extractors as legacy_storage_extractors
@@ -139,7 +140,7 @@ def test_pdf_text_layer_extraction(tmp_path: Path) -> None:
 def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx",".html",".htm",".xml"]',
     )
     get_settings.cache_clear()
     dispatcher = ExtractorDispatcher()
@@ -162,6 +163,8 @@ def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.M
         ).name
         == "pptx"
     )
+    assert dispatcher.select(file_name="a.html", mime_type="text/html").name == "html"
+    assert dispatcher.select(file_name="a.xml", mime_type="application/xml").name == "xml"
 
     with pytest.raises(ExtractionError) as unsupported:
         dispatcher.select(file_name="a.exe", mime_type="application/octet-stream")
@@ -235,6 +238,87 @@ def test_xlsx_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
     assert page.metadata["row_to"] == 2
     assert extracted.pages[1].metadata["sheet_name"] == "Hidden"
     assert "Hidden Value" in extracted.pages[1].text
+
+
+def test_html_upload_validation_and_extraction_removes_active_content(tmp_path: Path) -> None:
+    content = (
+        b"<!doctype html><html><head><title>Roadmap</title><style>.x{}</style>"
+        b"<script>secret()</script></head><body><h1>Phase 2</h1>"
+        b"<p>HTML ingest text</p><table><tr><th>Name</th><td>Value</td></tr></table>"
+        b"</body></html>"
+    )
+    validate_upload(
+        filename="page.html",
+        content_type="text/html",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".html"],
+    )
+    path = tmp_path / "page.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("page.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Phase 2" in joined
+    assert "HTML ingest text" in joined
+    assert "Name | Value" in joined
+    assert "secret()" not in joined
+    assert extracted.pages[0].metadata["structure_type"] == "html_section"
+    assert extracted.pages[0].metadata["parent_child_schema_version"] == "phase2.web_ingest.v1"
+
+
+def test_xml_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
+    content = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed><entry><title>Release</title><summary>XML ingest text</summary></entry></feed>"""
+    validate_upload(
+        filename="feed.xml",
+        content_type="application/xml",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".xml"],
+    )
+    path = tmp_path / "feed.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(path, _metadata("feed.xml", "application/xml", len(content)))
+
+    assert extracted.metadata.extractor_name == "xml"
+    assert any("XML ingest text" in page.text for page in extracted.pages)
+    first = extracted.pages[0]
+    assert first.metadata["structure_type"] == "xml_element"
+    assert "feed" in str(first.metadata["xml_path"])
+
+
+def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="vector.xml",
+            content_type="application/xml",
+            content=b"<svg><script>alert(1)</script></svg>",
+            max_bytes=1000,
+            allowed_extensions=[".xml"],
+        )
+
+    path = tmp_path / "entity.xml"
+    path.write_text(
+        """<?xml version="1.0"?><!DOCTYPE x [<!ENTITY unsafe "expanded">]><x>&unsafe;</x>""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ExtractionError) as exc:
+        XmlExtractor().extract(
+            path, _metadata("entity.xml", "application/xml", path.stat().st_size)
+        )
+    assert exc.value.error_code == "text_extraction_failed"
+
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="late-entity.xml",
+            content_type="application/xml",
+            content=(b"<root>" + (b"x" * 5000) + b"<!ENTITY unsafe 'expanded'></root>"),
+            max_bytes=6000,
+            allowed_extensions=[".xml"],
+        )
 
 
 def test_xlsx_extraction_skips_hidden_sheets(tmp_path: Path) -> None:

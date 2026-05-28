@@ -10,6 +10,7 @@ from app.ingest.extractors.markdown import MarkdownExtractor
 from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
 from app.ingest.extractors.pdf import PdfTextExtractor
 from app.ingest.extractors.text import PlainTextExtractor
+from app.ingest.extractors.web import HtmlExtractor, XmlExtractor
 from app.storage.validators import allowed_mime_types_for_extension, extension_from_file_name
 
 
@@ -24,6 +25,9 @@ class ExtractorDispatcher:
             ".csv": CsvExtractor(),
             ".xlsx": ExcelExtractor(),
             ".pptx": PowerPointExtractor(),
+            ".html": HtmlExtractor(),
+            ".htm": HtmlExtractor(),
+            ".xml": XmlExtractor(),
         }
 
     def select(self, *, file_name: str, mime_type: str) -> TextExtractor:

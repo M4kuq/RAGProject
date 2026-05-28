@@ -529,6 +529,14 @@ def _safe_chunk_metadata(value: object) -> dict[str, object]:
         "table_index",
         "slide_number",
         "slide_title",
+        "html_title",
+        "heading_path",
+        "element_type",
+        "element_index",
+        "xml_root",
+        "xml_path",
+        "element_name",
+        "source_type",
     }
     safe: dict[str, object] = {}
     for key, item in value.items():

@@ -83,6 +83,20 @@
 - Hidden sheets, speaker notes, embedded objects, images, and OCR are not ingested.
 - Parent-child chunk v1 is represented with safe metadata in `document_chunks.metadata_json`.
 - Search and citation source labels include sheet or slide information when available.
+
+## PR-35
+
+- Upload validation accepts `.html`, `.htm`, and `.xml`.
+- SVG, XML DTD/entity declarations, unsupported binary content, and dangerous file names are rejected.
+- HTML extraction removes active/non-visible elements and records title / heading metadata.
+- XML extraction rejects XXE/entity inputs and records root / element path metadata.
+- `POST /api/v1/documents/url` creates a document version and ingest job for a single safe URL.
+- URL fetch validates scheme, userinfo, DNS-resolved IPs, redirects, timeout, max bytes, and content type.
+- Localhost, private IPs, link-local IPs, metadata IPs, metadata hostnames, and `.local` hosts are rejected.
+- URL metadata stores safe source/final URLs without query strings or fragments.
+- HTML/XML/URL chunks can be searched and cited with safe source labels.
+- CI validation uses fixtures/mock HTTP transport and does not require external internet access.
+- Raw HTML/XML, full fetched body, raw chunk text, PII, tokens, and secrets are not logged, traced, or returned.
 - Existing PDF / DOCX / TXT / Markdown / CSV ingest remains compatible.
 - Raw file content, raw chunk text, PII, tokens, and secrets are not logged, traced, or returned.
 

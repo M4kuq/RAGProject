@@ -68,6 +68,7 @@ class _VersionSnapshot:
     content_hash: str
     is_active: bool
     storage_key: str | None
+    metadata_json: dict[str, object] | None
     status: str
     existing_chunk_ids: tuple[int, ...]
 
@@ -230,6 +231,7 @@ class DocumentIngestHandler:
                 content_hash=version.content_hash,
                 is_active=version.is_active,
                 storage_key=version.storage_key,
+                metadata_json=version.metadata_json,
                 status=version.status,
                 existing_chunk_ids=existing_chunk_ids,
             )
@@ -339,6 +341,9 @@ class DocumentIngestHandler:
                 file_name=snapshot.file_name,
                 mime_type=snapshot.mime_type,
                 file_size_bytes=snapshot.file_size_bytes,
+                source_type=_snapshot_metadata_str(snapshot.metadata_json, "source_type"),
+                source_url=_snapshot_metadata_str(snapshot.metadata_json, "source_url"),
+                final_url=_snapshot_metadata_str(snapshot.metadata_json, "final_url"),
             ),
         )
 
@@ -697,3 +702,10 @@ def _is_positive_int(value: object) -> bool:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _snapshot_metadata_str(value: object, key: str) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    item = value.get(key)
+    return item if isinstance(item, str) and item else None

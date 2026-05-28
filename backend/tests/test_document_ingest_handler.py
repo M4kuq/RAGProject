@@ -58,7 +58,7 @@ def ingest_session_factory(
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx",".html",".htm",".xml"]',
     )
     monkeypatch.setenv("INGEST_CHUNK_SIZE_TOKENS", "5")
     monkeypatch.setenv("INGEST_CHUNK_OVERLAP_TOKENS", "1")
@@ -106,6 +106,8 @@ def ingest_session_factory(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             None,
         ),
+        ("doc.html", "text/html", b"<html><body><h1>Intro</h1><p>alpha beta</p></body></html>"),
+        ("doc.xml", "application/xml", b"<root><item>alpha beta</item></root>"),
     ],
 )
 def test_document_ingest_handler_success_for_supported_types(
@@ -146,6 +148,37 @@ def test_document_ingest_handler_success_for_supported_types(
         assert chunks
         assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
         assert all(chunk.chunk_hash and len(chunk.chunk_hash) == 64 for chunk in chunks)
+
+
+def test_document_ingest_handler_preserves_url_source_metadata(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="example-page.html",
+        mime_type="text/html",
+        content=b"<html><body><h1>Guide</h1><p>URL ingest alpha beta</p></body></html>",
+        metadata_json={
+            "source_type": "url",
+            "source_url": "https://example.com/page",
+            "final_url": "https://example.com/page",
+        },
+    )
+
+    result = _handler(session_factory, storage).handle(_context(version_id))
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        chunk = db.scalar(
+            select(DocumentChunk).where(DocumentChunk.document_version_id == version_id)
+        )
+        assert chunk is not None
+        assert chunk.metadata_json is not None
+        assert chunk.metadata_json["source_type"] == "url"
+        assert chunk.metadata_json["source_url"] == "https://example.com/page"
+        assert "content_text" not in str(chunk.metadata_json)
 
 
 @pytest.mark.parametrize(
@@ -969,6 +1002,7 @@ def _create_document_version(
     content: bytes | None,
     status: str = "processing",
     error_code: str | None = None,
+    metadata_json: dict[str, object] | None = None,
 ) -> int:
     storage_key = storage.build_storage_key(file_name=file_name)
     if content is not None:
@@ -998,6 +1032,7 @@ def _create_document_version(
             mime_type=mime_type,
             file_size_bytes=len(content or b""),
             storage_key=storage_key,
+            metadata_json=metadata_json,
             created_by=user.user_id,
         )
         db.add(version)

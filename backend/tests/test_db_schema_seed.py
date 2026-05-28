@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0006_document_chunk_metadata"
+    assert version == "0007_document_version_metadata"
 
     expected_tables = {
         "roles",
@@ -462,6 +462,7 @@ def test_phase2_evaluation_dataset_strategy_columns_and_constraints(pg_engine: E
 
 
 def test_phase2_orm_fields_match_strategy_schema() -> None:
+    version_columns = DocumentVersion.__table__.columns
     chunk_columns = DocumentChunk.__table__.columns
     run_columns = RetrievalRun.__table__.columns
     item_columns = RetrievalRunItem.__table__.columns
@@ -483,6 +484,7 @@ def test_phase2_orm_fields_match_strategy_schema() -> None:
         "latency_breakdown_json",
         "retrieval_settings_json",
     } <= set(run_columns.keys())
+    assert {"metadata_json"} <= set(version_columns.keys())
     assert {"metadata_json"} <= set(chunk_columns.keys())
     assert {"retrieval_source", "score_breakdown_json"} <= set(item_columns.keys())
     assert all(value in run_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)

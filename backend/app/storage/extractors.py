@@ -9,8 +9,20 @@ from pypdf import PdfReader
 
 from app.ingest.extractors.base import ExtractionInputMetadata
 from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
+from app.ingest.extractors.web import HtmlExtractor, XmlExtractor
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".pptx"}
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".md",
+    ".csv",
+    ".xlsx",
+    ".pptx",
+    ".html",
+    ".htm",
+    ".xml",
+}
 
 
 def validate_extension(filename: str) -> str:
@@ -50,6 +62,26 @@ def extract_text(path: Path) -> str:
             ExtractionInputMetadata(
                 file_name=path.name,
                 mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                file_size_bytes=path.stat().st_size,
+            ),
+        )
+        return "\n\n".join(page.text for page in document.pages)
+    if ext in {".html", ".htm"}:
+        document = HtmlExtractor().extract(
+            path,
+            ExtractionInputMetadata(
+                file_name=path.name,
+                mime_type="text/html",
+                file_size_bytes=path.stat().st_size,
+            ),
+        )
+        return "\n\n".join(page.text for page in document.pages)
+    if ext == ".xml":
+        document = XmlExtractor().extract(
+            path,
+            ExtractionInputMetadata(
+                file_name=path.name,
+                mime_type="application/xml",
                 file_size_bytes=path.stat().st_size,
             ),
         )

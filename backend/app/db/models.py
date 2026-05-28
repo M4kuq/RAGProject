@@ -338,6 +338,7 @@ class DocumentVersion(Base, TimestampMixin):
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(big_int(), nullable=False)
     storage_key: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     page_count: Mapped[int | None] = mapped_column(Integer)
     extractor_name: Mapped[str | None] = mapped_column(String(100))
     extractor_version: Mapped[str | None] = mapped_column(String(100))

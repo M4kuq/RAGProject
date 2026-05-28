@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { DocumentUploadForm } from "../../../components/admin/DocumentUploadForm";
+import { DocumentUploadForm, DocumentUrlIngestForm } from "../../../components/admin/DocumentUploadForm";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, LoadingState, EmptyState, InlineAlert } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
@@ -69,6 +69,7 @@ export function DocumentListPage() {
       </header>
 
       <DocumentUploadForm onUploaded={(result) => setMessage(`Upload accepted. Job #${result.job_id}`)} />
+      <DocumentUrlIngestForm onIngested={(result) => setMessage(`URL accepted. Job #${result.job_id}`)} />
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {archive.error ? <InlineAlert tone="error">{archive.error.message}</InlineAlert> : null}
 
