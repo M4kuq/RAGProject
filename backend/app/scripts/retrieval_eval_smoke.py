@@ -827,7 +827,14 @@ def _check_local_embedding_model(
     try:
         from sentence_transformers import SentenceTransformer
     except Exception:
-        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "local"})
+        checks.append(
+            {
+                "name": "embedding_backend",
+                "status": "blocked",
+                "provider": "local",
+                "model": settings.embedding_model,
+            }
+        )
         reason_codes.append("local_embedding_dependency_missing")
         return
     try:
@@ -836,10 +843,24 @@ def _check_local_embedding_model(
         if len(vectors) != 1:
             raise SmokeError("local_embedding_model_unavailable")
     except Exception:
-        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "local"})
+        checks.append(
+            {
+                "name": "embedding_backend",
+                "status": "blocked",
+                "provider": "local",
+                "model": settings.embedding_model,
+            }
+        )
         reason_codes.append("local_embedding_model_or_cache_unavailable")
         return
-    checks.append({"name": "embedding_backend", "status": "ready", "provider": "local"})
+    checks.append(
+        {
+            "name": "embedding_backend",
+            "status": "ready",
+            "provider": "local",
+            "model": settings.embedding_model,
+        }
+    )
 
 
 def _check_lmstudio_embedding_backend(
