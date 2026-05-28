@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import os
-import queue
 import re
 import signal
 import sys
@@ -817,7 +816,7 @@ def _run_with_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
         raise SmokeError("timeout_exceeded")
     if _can_use_signal_timeout():
         return _run_with_signal_timeout(timeout_seconds, func)
-    return _run_with_thread_timeout(timeout_seconds, func)
+    return func()
 
 
 def _can_use_signal_timeout() -> bool:
@@ -844,29 +843,6 @@ def _run_with_signal_timeout(timeout_seconds: float, func: Callable[[], T]) -> T
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, previous_handler)
-
-
-def _run_with_thread_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
-    result_queue: queue.Queue[tuple[str, T | BaseException]] = queue.Queue(maxsize=1)
-
-    def _target() -> None:
-        try:
-            result_queue.put(("ok", func()))
-        except BaseException as exc:
-            result_queue.put(("error", exc))
-
-    thread = threading.Thread(target=_target, daemon=True)
-    thread.start()
-    thread.join(timeout_seconds)
-    if thread.is_alive():
-        raise SmokeError("timeout_exceeded")
-    try:
-        status, payload = result_queue.get_nowait()
-    except queue.Empty as exc:
-        raise SmokeError("timeout_exceeded") from exc
-    if status == "error":
-        raise cast(BaseException, payload)
-    return cast(T, payload)
 
 
 def _requires_vector_retrieval(config: SmokeConfig, settings: Settings) -> bool:

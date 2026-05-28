@@ -278,7 +278,7 @@ def test_signal_timeout_marks_created_run_failed(
     assert sessions[0].commits == 1
 
 
-def test_thread_timeout_evaluation_creates_session_inside_worker(
+def test_no_signal_timeout_runs_evaluation_on_caller_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     main_thread_id = threading.get_ident()
@@ -365,7 +365,7 @@ def test_thread_timeout_evaluation_creates_session_inside_worker(
 
     assert result is detail
     assert len(sessions) == 1
-    assert sessions[0].thread_id != main_thread_id
+    assert sessions[0].thread_id == main_thread_id
 
 
 def test_main_writes_failed_artifact_when_evaluation_raises(
