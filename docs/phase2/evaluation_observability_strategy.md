@@ -105,7 +105,9 @@ PR-30 extracts failure candidates from item status and metric rows, then allows 
 
 ## CI Direction
 
-CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-30 validation.
+CI should use deterministic fixtures and fake adapters for normal PR validation. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-30 validation.
+
+PR-31 adds `retrieval-eval-smoke.yml` as a lightweight manual/scheduled smoke layer. It runs the existing strategy evaluation runner with real local retrieval settings, cached small local embeddings, and no answer-generation dependency; writes only safe aggregate JSON/Markdown artifacts; supports manual strategy and threshold inputs; and keeps threshold failures configurable as warn-only or hard-fail. If local retrieval prerequisites are unavailable, the smoke reports a safe `blocked` artifact instead of falling back to fake adapters.
 
 ## Redaction Rules
 

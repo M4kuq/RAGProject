@@ -147,6 +147,20 @@
 - Promotion into an active dataset is idempotent; duplicate promotion returns an existing/skipped result.
 - Failure candidate and promotion responses do not expose raw prompt, full context, raw chunk text, PII, or secrets.
 
+## PR-31 CI Retrieval Evaluation Smoke Tests
+
+- `retrieval-eval-smoke.yml` exposes `workflow_dispatch`, low-frequency `schedule`, artifact upload, and GitHub step summary output.
+- The default path uses real local retrieval with PostgreSQL, Qdrant, and indexed demo documents.
+- Fake embedding, fake reranker, and fake evaluator behavior are not used by the PR-31 smoke itself; answer generation is not exercised.
+- Missing local model/cache prerequisites produce a safe blocked artifact instead of fake fallback.
+- The workflow is not a required pull-request gate.
+- The smoke script parses dataset, strategy, metric, threshold, and warn/fail options.
+- Threshold violations and failed evaluation items are warnings in `warn` mode and non-zero exits in `fail` mode.
+- `p95_latency_ms_max` is checked against the p95 latency value, not average latency.
+- JSON and Markdown artifacts contain only aggregate metrics, thresholds, failure counts, and limitations.
+- Artifacts and summaries redact raw prompt, full context, raw chunk text, PII, tokens, and secrets.
+- Local wrappers call the same backend module as the workflow.
+
 ## Checks
 
 - `ruff format --check .`
