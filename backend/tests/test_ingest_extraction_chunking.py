@@ -268,6 +268,31 @@ def test_html_upload_validation_and_extraction_removes_active_content(tmp_path: 
     assert extracted.pages[0].metadata["parent_child_schema_version"] == "phase2.web_ingest.v1"
 
 
+def test_web_extraction_preserves_long_body_text(tmp_path: Path) -> None:
+    long_text = "x" * 1200
+    html_content = f"<html><body><p>{long_text}</p></body></html>".encode()
+    html_path = tmp_path / "long.html"
+    html_path.write_bytes(html_content)
+
+    html_extracted = HtmlExtractor().extract(
+        html_path,
+        _metadata("long.html", "text/html", len(html_content)),
+    )
+
+    assert html_extracted.pages[0].text == long_text
+
+    xml_content = f"<root><entry>{long_text}</entry></root>".encode()
+    xml_path = tmp_path / "long.xml"
+    xml_path.write_bytes(xml_content)
+
+    xml_extracted = XmlExtractor().extract(
+        xml_path,
+        _metadata("long.xml", "application/xml", len(xml_content)),
+    )
+
+    assert xml_extracted.pages[0].text == long_text
+
+
 def test_xml_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
     content = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed><entry><title>Release</title><summary>XML ingest text</summary></entry></feed>"""
@@ -320,6 +345,15 @@ def test_xml_extraction_enforces_element_limit(
 
 
 def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="page.html",
+            content_type="application/xhtml+xml",
+            content=b"""<?xml version="1.0"?><!DOCTYPE html [<!ENTITY unsafe "x">]><html />""",
+            max_bytes=1000,
+            allowed_extensions=[".html"],
+        )
+
     with pytest.raises(UnsafeFileRejected):
         validate_upload(
             filename="vector.xml",

@@ -119,7 +119,7 @@ def validate_upload(
     if normalized_mime_type not in allowed_mimes:
         raise UnsupportedMediaType()
 
-    _validate_magic_bytes(extension, content)
+    _validate_magic_bytes(extension, content, mime_type=normalized_mime_type)
     return ValidatedUpload(
         file_name=safe_name,
         extension=extension,
@@ -184,7 +184,7 @@ def _reject_dangerous_suffixes(filename: str) -> None:
         raise UnsafeFileRejected()
 
 
-def _validate_magic_bytes(extension: str, content: bytes) -> None:
+def _validate_magic_bytes(extension: str, content: bytes, *, mime_type: str) -> None:
     if extension == ".pdf":
         if not content.startswith(b"%PDF-"):
             raise UnsafeFileRejected()
@@ -218,9 +218,9 @@ def _validate_magic_bytes(extension: str, content: bytes) -> None:
         for encoding in _TEXT_DECODINGS:
             try:
                 decoded = content.decode(encoding)
-                if extension == ".xml":
+                if extension == ".xml" or mime_type in _XML_CONTENT_TYPES:
                     _validate_xml_upload_text(decoded)
-                if extension in {".html", ".htm"}:
+                elif extension in {".html", ".htm"}:
                     _validate_html_upload_text(decoded)
                 return
             except UnicodeDecodeError:

@@ -18,7 +18,9 @@ def test_url_fetch_success_uses_safe_source_url(monkeypatch: pytest.MonkeyPatch)
     get_settings.cache_clear()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "example.com"
+        assert request.url.host == "93.184.216.34"
+        assert request.headers["host"] == "example.com"
+        assert request.extensions["sni_hostname"] == "example.com"
         return httpx.Response(
             200,
             headers={"content-type": "text/html; charset=utf-8"},
@@ -98,7 +100,7 @@ def test_url_fetch_rejects_private_local_and_metadata_targets(
 
 def test_url_fetch_revalidates_redirect_target() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "example.com":
+        if request.headers["host"] == "example.com":
             return httpx.Response(302, headers={"location": "http://localhost/private"})
         return httpx.Response(200, headers={"content-type": "text/html"}, content=b"blocked")
 

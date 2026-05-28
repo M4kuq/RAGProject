@@ -406,7 +406,7 @@ def _is_svg_xml_tag(tag: object) -> bool:
 
 def _safe_text(value: object) -> str:
     text = "" if value is None else str(value)
-    return " ".join(text.replace("\x00", " ").split())[:1000]
+    return " ".join(text.replace("\x00", " ").split())
 
 
 def _safe_metadata_text(value: object) -> str:

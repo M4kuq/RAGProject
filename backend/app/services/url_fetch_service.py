@@ -41,6 +41,14 @@ class UrlFetchResult:
     redirect_count: int
 
 
+@dataclass(frozen=True)
+class _ValidatedUrl:
+    url: str
+    connect_url: str
+    host_header: str
+    sni_hostname: str | None
+
+
 class UrlFetchService:
     def __init__(
         self,
@@ -78,7 +86,7 @@ class UrlFetchService:
                                 ]
                             )
                         try:
-                            redirect_url = str(httpx.URL(current_url).join(location))
+                            redirect_url = str(httpx.URL(current_url.url).join(location))
                         except httpx.InvalidURL as exc:
                             raise ValidationFailed(
                                 details=[{"field": "url", "reason": "Invalid redirect URL."}]
@@ -106,12 +114,12 @@ class UrlFetchService:
                     validate_web_content_safety(content_type=content_type, content=content)
                     return UrlFetchResult(
                         requested_url=url,
-                        final_url=current_url,
+                        final_url=current_url.url,
                         safe_source_url=redact_url_for_display(url),
-                        safe_final_url=redact_url_for_display(current_url),
+                        safe_final_url=redact_url_for_display(current_url.url),
                         content=content,
                         content_type=content_type,
-                        file_name=_file_name_for_url(current_url, content_type),
+                        file_name=_file_name_for_url(current_url.url, content_type),
                         fetched_at=datetime.now(UTC),
                         redirect_count=redirects,
                     )
@@ -138,7 +146,7 @@ def redact_url_for_display(url: str) -> str:
     return urlunsplit((parsed.scheme.lower(), f"{host}{port}", path, "", ""))
 
 
-def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> str:
+def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> _ValidatedUrl:
     try:
         parsed = urlsplit(url.strip())
     except ValueError as exc:
@@ -159,13 +167,30 @@ def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> str:
     except ValueError as exc:
         raise ValidationFailed(details=[{"field": "url", "reason": "Invalid URL port."}]) from exc
     port = explicit_port or (443 if scheme == "https" else 80)
-    for address in resolver(hostname, port):
-        _validate_ip_policy(address, block_private=settings.document_url_fetch_block_private_ips)
+    resolved_addresses = [
+        _validate_ip_policy(
+            address,
+            block_private=settings.document_url_fetch_block_private_ips,
+        )
+        for address in resolver(hostname, port)
+    ]
+    if not resolved_addresses:
+        raise UnsafeFileRejected()
     normalized_netloc = _host_for_netloc(hostname)
     if explicit_port is not None:
         normalized_netloc = f"{normalized_netloc}:{explicit_port}"
+    connect_netloc = _host_for_netloc(resolved_addresses[0])
+    if explicit_port is not None:
+        connect_netloc = f"{connect_netloc}:{explicit_port}"
     path = parsed.path or "/"
-    return urlunsplit((scheme, normalized_netloc, path, parsed.query, ""))
+    normalized_url = urlunsplit((scheme, normalized_netloc, path, parsed.query, ""))
+    connect_url = urlunsplit((scheme, connect_netloc, path, parsed.query, ""))
+    return _ValidatedUrl(
+        url=normalized_url,
+        connect_url=connect_url,
+        host_header=normalized_netloc,
+        sni_hostname=hostname if scheme == "https" else None,
+    )
 
 
 def _validate_hostname_policy(hostname: str) -> None:
@@ -176,7 +201,7 @@ def _validate_hostname_policy(hostname: str) -> None:
         raise UnsafeFileRejected()
 
 
-def _validate_ip_policy(address: str, *, block_private: bool) -> None:
+def _validate_ip_policy(address: str, *, block_private: bool) -> str:
     try:
         ip = ipaddress.ip_address(address)
     except ValueError as exc:
@@ -185,6 +210,7 @@ def _validate_ip_policy(address: str, *, block_private: bool) -> None:
         raise UnsafeFileRejected()
     if block_private and not ip.is_global:
         raise UnsafeFileRejected()
+    return ip.compressed
 
 
 def _default_resolver(hostname: str, port: int | None) -> list[str]:
@@ -201,9 +227,16 @@ def _default_resolver(hostname: str, port: int | None) -> list[str]:
 
 
 @contextmanager
-def _safe_stream(client: httpx.Client, url: str) -> Iterator[httpx.Response]:
+def _safe_stream(client: httpx.Client, target: _ValidatedUrl) -> Iterator[httpx.Response]:
+    extensions = {"sni_hostname": target.sni_hostname} if target.sni_hostname else None
     try:
-        with client.stream("GET", url, follow_redirects=False) as response:
+        with client.stream(
+            "GET",
+            target.connect_url,
+            follow_redirects=False,
+            headers={"Host": target.host_header},
+            extensions=extensions,
+        ) as response:
             yield response
     except httpx.TimeoutException as exc:
         raise ValidationFailed(
