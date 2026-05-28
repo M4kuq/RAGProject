@@ -203,10 +203,7 @@ def _validate_docx_archive(archive: zipfile.ZipFile) -> None:
         name = info.filename
         if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
             raise UnsafeFileRejected()
-        normalized_name = f"/{name}"
-        if normalized_name.endswith("/vbaProject.bin") or any(
-            marker in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
-        ):
+        if _is_rejected_office_part(name):
             raise UnsafeFileRejected()
         if info.flag_bits & 0x1:
             raise UnsafeFileRejected()
@@ -270,10 +267,7 @@ def _validate_office_archive(
         name = info.filename
         if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
             raise UnsafeFileRejected()
-        normalized_name = f"/{name}"
-        if normalized_name.endswith("/vbaProject.bin") or any(
-            marker in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
-        ):
+        if _is_rejected_office_part(name):
             raise UnsafeFileRejected()
         if info.flag_bits & 0x1:
             raise UnsafeFileRejected()
@@ -291,3 +285,10 @@ def _validate_office_archive(
             main_xml_size = info.file_size
     if main_xml_size is None or main_xml_size > _OFFICE_MAX_MAIN_XML_BYTES:
         raise UnsafeFileRejected()
+
+
+def _is_rejected_office_part(name: str) -> bool:
+    normalized_name = f"/{name}".lower()
+    return normalized_name.endswith("/vbaproject.bin") or any(
+        marker.lower() in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
+    )

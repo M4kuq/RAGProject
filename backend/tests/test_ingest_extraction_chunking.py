@@ -255,6 +255,30 @@ def test_xlsx_extraction_skips_hidden_sheets(tmp_path: Path) -> None:
     assert "Hidden" not in extracted.pages[0].text
 
 
+def test_xlsx_extraction_rejects_xml_entities(tmp_path: Path) -> None:
+    content = _minimal_xlsx(
+        workbook_xml="""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE workbook [<!ENTITY unsafe "expanded">]>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Sales" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+    )
+    path = tmp_path / "entities.xlsx"
+    path.write_bytes(content)
+
+    with pytest.raises(ExtractionError) as exc:
+        ExcelExtractor().extract(
+            path,
+            _metadata(
+                "entities.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                len(content),
+            ),
+        )
+    assert exc.value.error_code == "text_extraction_failed"
+
+
 def test_pptx_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
     content = _minimal_pptx()
     validate_upload(
@@ -325,7 +349,15 @@ def test_legacy_office_formats_are_not_supported(filename: str, content_type: st
         )
 
 
-@pytest.mark.parametrize("part_name", ["xl/vbaProject.bin", "xl/embeddings/oleObject1.bin"])
+@pytest.mark.parametrize(
+    "part_name",
+    [
+        "xl/vbaProject.bin",
+        "xl/VBAPROJECT.BIN",
+        "xl/embeddings/oleObject1.bin",
+        "xl/Embeddings/oleObject1.bin",
+    ],
+)
 def test_office_archives_with_macro_or_embedded_parts_are_rejected(part_name: str) -> None:
     with pytest.raises(UnsafeFileRejected):
         validate_upload(
@@ -368,6 +400,58 @@ def test_parent_child_metadata_is_preserved_on_chunks() -> None:
     assert chunks[0].metadata_json["parent_chunk_key"] == "xlsx:sheet:1"
     assert chunks[0].metadata_json["child_chunk_key"] == "xlsx:sheet:1:chunk:0"
     assert chunks[0].metadata_json["chunk_level"] == "child"
+
+
+def test_parent_child_chunking_does_not_cross_parent_boundaries() -> None:
+    document = ExtractedDocument(
+        pages=[
+            ExtractedPage(
+                "Region Revenue East 10",
+                section_title="Sheet: Sales",
+                metadata={
+                    "parent_child_schema_version": "phase2.parent_child.v1",
+                    "structure_type": "excel_sheet",
+                    "parent_chunk_key": "xlsx:sheet:1",
+                    "parent_title": "Sales",
+                    "sheet_name": "Sales",
+                    "row_from": 1,
+                    "row_to": 2,
+                    "column_from": 1,
+                    "column_to": 2,
+                    "table_index": 1,
+                },
+            ),
+            ExtractedPage(
+                "Owner Budget West 20",
+                section_title="Sheet: Budget",
+                metadata={
+                    "parent_child_schema_version": "phase2.parent_child.v1",
+                    "structure_type": "excel_sheet",
+                    "parent_chunk_key": "xlsx:sheet:2",
+                    "parent_title": "Budget",
+                    "sheet_name": "Budget",
+                    "row_from": 1,
+                    "row_to": 2,
+                    "column_from": 1,
+                    "column_to": 2,
+                    "table_index": 1,
+                },
+            ),
+        ],
+        metadata=_extraction_metadata(page_count=None),
+    )
+
+    chunks = FixedTokenChunker(ChunkingConfig(chunk_size_tokens=20, chunk_overlap_tokens=0)).chunk(
+        document, document_version_id=12
+    )
+
+    assert len(chunks) == 2
+    assert [chunk.section_title for chunk in chunks] == ["Sheet: Sales", "Sheet: Budget"]
+    metadata_keys = []
+    for chunk in chunks:
+        assert chunk.metadata_json is not None
+        metadata_keys.append(chunk.metadata_json["parent_chunk_key"])
+    assert metadata_keys == ["xlsx:sheet:1", "xlsx:sheet:2"]
 
 
 def test_chunking_rejects_invalid_config_and_no_chunks() -> None:
@@ -471,6 +555,7 @@ def _docx_zip_with_large_document_xml() -> bytes:
 def _minimal_xlsx(
     *,
     hidden_second_sheet: bool = False,
+    workbook_xml: str | None = None,
     extra_entries: dict[str, bytes] | None = None,
 ) -> bytes:
     buffer = BytesIO()
@@ -482,7 +567,8 @@ def _minimal_xlsx(
         )
         archive.writestr(
             "xl/workbook.xml",
-            f"""<?xml version="1.0" encoding="UTF-8"?>
+            workbook_xml
+            or f"""<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sales" sheetId="1" r:id="rId1"/>

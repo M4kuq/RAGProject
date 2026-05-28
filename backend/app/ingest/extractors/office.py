@@ -392,7 +392,11 @@ def _relationships(
 def _xml_root(archive: zipfile.ZipFile, path: str) -> ElementTree.Element:
     try:
         with archive.open(path) as handle:
-            return ElementTree.fromstring(handle.read())
+            payload = handle.read()
+            lowered = payload.lower()
+            if b"<!doctype" in lowered or b"<!entity" in lowered:
+                raise safe_extraction_failure()
+            return ElementTree.fromstring(payload)
     except Exception as exc:
         raise safe_extraction_failure() from exc
 

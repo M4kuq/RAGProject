@@ -86,8 +86,8 @@ services:
       POSTGRES_DB: rag
       POSTGRES_USER: rag
       POSTGRES_PASSWORD: rag
-    volumes:
-      - postgres_ci_data:/var/lib/postgresql/data
+    tmpfs:
+      - /var/lib/postgresql/data
     expose:
       - "5432"
     healthcheck:
@@ -98,8 +98,8 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.12.4
-    volumes:
-      - qdrant_ci_data:/qdrant/storage
+    tmpfs:
+      - /qdrant/storage
     expose:
       - "6333"
     healthcheck:
@@ -140,8 +140,6 @@ services:
       dockerfile: backend/Dockerfile
       target: backend
     environment: *backend-env
-    volumes:
-      - upload_ci_storage:/app/storage/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,8 +161,6 @@ services:
       dockerfile: backend/Dockerfile
       target: worker
     environment: *backend-env
-    volumes:
-      - upload_ci_storage:/app/storage/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -230,11 +226,3 @@ services:
         condition: service_healthy
       frontend-build:
         condition: service_completed_successfully
-
-volumes:
-  postgres_ci_data:
-    name: ragproject_ci_postgres_data
-  qdrant_ci_data:
-    name: ragproject_ci_qdrant_data
-  upload_ci_storage:
-    name: ragproject_ci_upload_storage

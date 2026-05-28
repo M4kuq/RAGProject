@@ -65,35 +65,36 @@ class FixedTokenChunker:
 
         chunks: list[Chunk] = []
         step = self.config.chunk_size_tokens - self.config.chunk_overlap_tokens
-        start = 0
-        while start < len(tokens):
-            window = tokens[start : start + self.config.chunk_size_tokens]
-            content_text = " ".join(token.value for token in window).strip()
-            normalized_text = normalize_chunk_text(content_text)
-            if normalized_text:
-                chunk_index = len(chunks)
-                page_numbers = [
-                    token.page_number for token in window if token.page_number is not None
-                ]
-                chunks.append(
-                    Chunk(
-                        document_version_id=document_version_id,
-                        chunk_index=chunk_index,
-                        chunk_hash=chunk_hash(
-                            normalized_chunk_text=normalized_text,
+        for segment in _token_segments(tokens):
+            start = 0
+            while start < len(segment):
+                window = segment[start : start + self.config.chunk_size_tokens]
+                content_text = " ".join(token.value for token in window).strip()
+                normalized_text = normalize_chunk_text(content_text)
+                if normalized_text:
+                    chunk_index = len(chunks)
+                    page_numbers = [
+                        token.page_number for token in window if token.page_number is not None
+                    ]
+                    chunks.append(
+                        Chunk(
                             document_version_id=document_version_id,
                             chunk_index=chunk_index,
-                        ),
-                        content_text=content_text,
-                        token_count=estimate_token_count(content_text),
-                        char_count=len(content_text),
-                        page_from=min(page_numbers) if page_numbers else None,
-                        page_to=max(page_numbers) if page_numbers else None,
-                        section_title=_first_section_title(window),
-                        metadata_json=_chunk_metadata(window, chunk_index=chunk_index),
+                            chunk_hash=chunk_hash(
+                                normalized_chunk_text=normalized_text,
+                                document_version_id=document_version_id,
+                                chunk_index=chunk_index,
+                            ),
+                            content_text=content_text,
+                            token_count=estimate_token_count(content_text),
+                            char_count=len(content_text),
+                            page_from=min(page_numbers) if page_numbers else None,
+                            page_to=max(page_numbers) if page_numbers else None,
+                            section_title=_first_section_title(window),
+                            metadata_json=_chunk_metadata(window, chunk_index=chunk_index),
+                        )
                     )
-                )
-            start += step
+                start += step
 
         if not chunks:
             raise ChunkingError("no_chunks_created", "No chunks were created.")
@@ -129,6 +130,41 @@ def _first_section_title(tokens: list[_Token]) -> str | None:
         if token.section_title:
             return token.section_title
     return None
+
+
+def _token_segments(tokens: list[_Token]) -> list[list[_Token]]:
+    segments: list[list[_Token]] = []
+    current: list[_Token] = []
+    current_key: tuple[object, ...] | None = None
+    has_current_key = False
+    for token in tokens:
+        key = _metadata_boundary_key(token.metadata)
+        if current and has_current_key and key != current_key:
+            segments.append(current)
+            current = []
+        current.append(token)
+        current_key = key
+        has_current_key = True
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _metadata_boundary_key(metadata: dict[str, object]) -> tuple[object, ...] | None:
+    parent_key = metadata.get("parent_chunk_key")
+    if not isinstance(parent_key, str) or not parent_key:
+        return None
+    structure_type = metadata.get("structure_type")
+    structure_key = structure_type if isinstance(structure_type, str) else "structured"
+    if structure_key == "excel_sheet":
+        table_index = metadata.get("table_index")
+        safe_table_index = (
+            table_index
+            if isinstance(table_index, int) and not isinstance(table_index, bool)
+            else None
+        )
+        return (structure_key, parent_key, safe_table_index)
+    return (structure_key, parent_key)
 
 
 def _chunk_metadata(tokens: list[_Token], *, chunk_index: int) -> dict[str, object] | None:
