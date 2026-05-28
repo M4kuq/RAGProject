@@ -378,7 +378,7 @@ def _parent_key(prefix: str, heading_path: tuple[str, ...], element_index: int) 
 
 def _xml_parent_key(path: list[str], element_index: int) -> str:
     if path:
-        digest = sha256("\0".join(path).encode("utf-8")).hexdigest()[:12]
+        digest = sha256("\0".join([str(element_index), *path]).encode("utf-8")).hexdigest()[:12]
         return f"xml:path:{digest}"
     return f"xml:element:{element_index}"
 

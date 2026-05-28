@@ -62,6 +62,32 @@ def test_url_fetch_preserves_ipv6_literal_brackets() -> None:
     assert result.safe_final_url == "https://[2606:4700:4700::1111]/"
 
 
+def test_url_fetch_tries_next_validated_address_after_connect_failure() -> None:
+    seen_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(str(request.url.host))
+        if request.url.host == "2001:4860:4860::8888":
+            raise httpx.ConnectError("unreachable", request=request)
+        assert request.url.host == "93.184.216.34"
+        assert request.headers["host"] == "example.com"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body>fallback address</body></html>",
+        )
+
+    service = UrlFetchService(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=lambda host, port: ["2001:4860:4860::8888", "93.184.216.34"],
+    )
+
+    result = service.fetch("https://example.com/")
+
+    assert result.content == b"<html><body>fallback address</body></html>"
+    assert seen_hosts == ["2001:4860:4860::8888", "93.184.216.34"]
+
+
 @pytest.mark.parametrize(
     "url",
     [

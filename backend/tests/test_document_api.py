@@ -493,6 +493,36 @@ class _FakeUrlFetcher:
         )
 
 
+def test_document_api_url_ingest_rejects_disabled_generated_extension(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_factory, storage_root = document_client
+    monkeypatch.setenv(
+        "UPLOAD_ALLOWED_EXTENSIONS",
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+    )
+    get_settings.cache_clear()
+    app = cast(FastAPI, client.app)
+    service = DocumentService(
+        storage=LocalFileStorage(storage_root),
+        url_fetcher=_FakeUrlFetcher(),
+    )
+    app.dependency_overrides[document_service] = lambda: service
+    csrf_token = login(client, email="admin@example.com")
+
+    response = client.post(
+        "/api/v1/documents/url",
+        json={"url": "https://example.com/page?token=secret", "title": "URL Page"},
+        headers=unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "unsupported_media_type"
+    with session_factory() as db:
+        assert db.query(LogicalDocument).count() == 0
+
+
 def test_document_api_upload_validation_errors(
     document_client: tuple[TestClient, sessionmaker[Session], Path],
 ) -> None:

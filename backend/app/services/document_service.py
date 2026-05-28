@@ -213,12 +213,20 @@ class DocumentService:
         request_id: str | None,
     ) -> DocumentUploadResponse:
         fetched = self.url_fetcher.fetch(payload.url)
+        settings = get_settings()
+        upload = validate_upload(
+            filename=fetched.file_name,
+            content_type=fetched.content_type,
+            content=fetched.content,
+            max_bytes=settings.document_url_fetch_max_bytes,
+            allowed_extensions=settings.upload_allowed_extensions,
+        )
         normalized_title = self._normalize_title(
             payload.title,
-            fallback=_title_from_fetched_url(fetched.safe_final_url, fetched.file_name),
+            fallback=_title_from_fetched_url(fetched.safe_final_url, upload.file_name),
         )
         content_hash = hashlib.sha256(fetched.content).hexdigest()
-        storage_key = self.storage.build_storage_key(file_name=fetched.file_name)
+        storage_key = self.storage.build_storage_key(file_name=upload.file_name)
         version_metadata = _url_version_metadata(fetched)
         storage_saved = False
         committed = False
@@ -233,9 +241,9 @@ class DocumentService:
                 logical_document_id=document.logical_document_id,
                 version_no=1,
                 content_hash=content_hash,
-                file_name=fetched.file_name,
-                mime_type=fetched.content_type,
-                file_size_bytes=len(fetched.content),
+                file_name=upload.file_name,
+                mime_type=upload.mime_type,
+                file_size_bytes=upload.file_size_bytes,
                 storage_key=storage_key,
                 created_by=user.user_id,
                 metadata_json=version_metadata,
@@ -256,8 +264,8 @@ class DocumentService:
                     "source_type": "url",
                     "source_url": fetched.safe_source_url,
                     "final_url": fetched.safe_final_url,
-                    "file_size_bytes": len(fetched.content),
-                    "mime_type": fetched.content_type,
+                    "file_size_bytes": upload.file_size_bytes,
+                    "mime_type": upload.mime_type,
                 },
             )
             db.commit()

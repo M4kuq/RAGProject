@@ -44,7 +44,7 @@ class UrlFetchResult:
 @dataclass(frozen=True)
 class _ValidatedUrl:
     url: str
-    connect_url: str
+    connect_urls: tuple[str, ...]
     host_header: str
     sni_hostname: str | None
 
@@ -179,15 +179,23 @@ def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> _Valid
     normalized_netloc = _host_for_netloc(hostname)
     if explicit_port is not None:
         normalized_netloc = f"{normalized_netloc}:{explicit_port}"
-    connect_netloc = _host_for_netloc(resolved_addresses[0])
-    if explicit_port is not None:
-        connect_netloc = f"{connect_netloc}:{explicit_port}"
     path = parsed.path or "/"
     normalized_url = urlunsplit((scheme, normalized_netloc, path, parsed.query, ""))
-    connect_url = urlunsplit((scheme, connect_netloc, path, parsed.query, ""))
+    connect_urls = tuple(
+        urlunsplit(
+            (
+                scheme,
+                _connect_netloc_for_address(address, explicit_port=explicit_port),
+                path,
+                parsed.query,
+                "",
+            )
+        )
+        for address in resolved_addresses
+    )
     return _ValidatedUrl(
         url=normalized_url,
-        connect_url=connect_url,
+        connect_urls=connect_urls,
         host_header=normalized_netloc,
         sni_hostname=hostname if scheme == "https" else None,
     )
@@ -220,7 +228,14 @@ def _default_resolver(hostname: str, port: int | None) -> list[str]:
         raise ValidationFailed(
             details=[{"field": "url", "reason": "URL host cannot be resolved."}]
         ) from exc
-    addresses = sorted({str(info[4][0]) for info in infos})
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for info in infos:
+        address = str(info[4][0])
+        if address in seen:
+            continue
+        seen.add(address)
+        addresses.append(address)
     if not addresses:
         raise UnsafeFileRejected()
     return addresses
@@ -229,23 +244,48 @@ def _default_resolver(hostname: str, port: int | None) -> list[str]:
 @contextmanager
 def _safe_stream(client: httpx.Client, target: _ValidatedUrl) -> Iterator[httpx.Response]:
     extensions = {"sni_hostname": target.sni_hostname} if target.sni_hostname else None
-    try:
-        with client.stream(
-            "GET",
-            target.connect_url,
-            follow_redirects=False,
-            headers={"Host": target.host_header},
-            extensions=extensions,
-        ) as response:
+    last_exc: httpx.InvalidURL | httpx.HTTPError | None = None
+    for connect_url in target.connect_urls:
+        try:
+            stream = client.stream(
+                "GET",
+                connect_url,
+                follow_redirects=False,
+                headers={"Host": target.host_header},
+                extensions=extensions,
+            )
+            response = stream.__enter__()
+        except (httpx.InvalidURL, httpx.HTTPError) as exc:
+            last_exc = exc
+            continue
+        try:
             yield response
-    except httpx.TimeoutException as exc:
+        except BaseException as exc:
+            if stream.__exit__(type(exc), exc, exc.__traceback__):
+                return
+            if isinstance(exc, httpx.TimeoutException):
+                raise ValidationFailed(
+                    details=[{"field": "url", "reason": "URL fetch timed out."}]
+                ) from exc
+            if isinstance(exc, httpx.InvalidURL):
+                raise ValidationFailed(
+                    details=[{"field": "url", "reason": "Invalid URL."}]
+                ) from exc
+            if isinstance(exc, httpx.HTTPError):
+                raise ValidationFailed(
+                    details=[{"field": "url", "reason": "URL fetch failed."}]
+                ) from exc
+            raise
+        else:
+            stream.__exit__(None, None, None)
+        return
+    if isinstance(last_exc, httpx.TimeoutException):
         raise ValidationFailed(
             details=[{"field": "url", "reason": "URL fetch timed out."}]
-        ) from exc
-    except httpx.InvalidURL as exc:
-        raise ValidationFailed(details=[{"field": "url", "reason": "Invalid URL."}]) from exc
-    except httpx.HTTPError as exc:
-        raise ValidationFailed(details=[{"field": "url", "reason": "URL fetch failed."}]) from exc
+        ) from last_exc
+    if isinstance(last_exc, httpx.InvalidURL):
+        raise ValidationFailed(details=[{"field": "url", "reason": "Invalid URL."}]) from last_exc
+    raise ValidationFailed(details=[{"field": "url", "reason": "URL fetch failed."}]) from last_exc
 
 
 def _validate_content_type(value: str | None, *, settings: Settings) -> str:
@@ -312,3 +352,10 @@ def _host_for_netloc(hostname: str) -> str:
     if ip.version == 6:
         return f"[{ip.compressed}]"
     return ip.compressed
+
+
+def _connect_netloc_for_address(address: str, *, explicit_port: int | None) -> str:
+    connect_netloc = _host_for_netloc(address)
+    if explicit_port is not None:
+        connect_netloc = f"{connect_netloc}:{explicit_port}"
+    return connect_netloc

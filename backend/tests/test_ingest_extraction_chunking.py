@@ -329,6 +329,22 @@ def test_xml_extraction_uses_parent_direct_text_without_child_duplicates(tmp_pat
     assert "intro A middle B end" not in texts
 
 
+def test_xml_extraction_parent_keys_include_element_occurrence(tmp_path: Path) -> None:
+    content = b"<feed><entry><title>A</title></entry><entry><title>B</title></entry></feed>"
+    path = tmp_path / "feed.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(path, _metadata("feed.xml", "application/xml", len(content)))
+
+    title_keys = [
+        page.metadata["parent_chunk_key"]
+        for page in extracted.pages
+        if page.metadata["xml_path"] == "feed / entry / title"
+    ]
+    assert len(title_keys) == 2
+    assert len(set(title_keys)) == 2
+
+
 def test_xml_extraction_enforces_element_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
