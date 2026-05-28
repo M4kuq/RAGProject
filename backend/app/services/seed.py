@@ -168,7 +168,7 @@ DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
 )
 
 
-def seed(db: Session) -> None:
+def seed(db: Session, *, index_documents: bool = True) -> None:
     settings = get_settings()
     if settings.app_env.lower() not in {"local", "ci", "test"}:
         raise RuntimeError("Seed is only allowed in local, ci, or test environments.")
@@ -187,10 +187,11 @@ def seed(db: Session) -> None:
             )
 
     db.commit()
-    _index_seed_documents(
-        db,
-        indexing_service=create_document_indexing_service(settings),
-    )
+    if index_documents:
+        _index_seed_documents(
+            db,
+            indexing_service=create_document_indexing_service(settings),
+        )
 
 
 def _seed_roles(db: Session) -> dict[str, Role]:

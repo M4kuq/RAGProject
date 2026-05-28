@@ -411,6 +411,30 @@ def test_main_writes_failed_artifact_when_evaluation_raises(
     assert "all_cases_failed" in md_path.read_text(encoding="utf-8")
 
 
+def test_seed_script_can_skip_document_indexing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.scripts.seed as seed_script
+
+    calls: list[bool] = []
+
+    class FakeSession:
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    monkeypatch.setattr(seed_script, "SessionLocal", FakeSession)
+    monkeypatch.setattr(
+        seed_script,
+        "seed",
+        lambda db, *, index_documents: calls.append(index_documents),
+    )
+
+    seed_script.main(["--skip-document-indexing"])
+
+    assert calls == [False]
+
+
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
     artifact: dict[str, object] = {
         "summary": {"failed_count": 0},
@@ -565,7 +589,9 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "sentence-transformers/all-MiniLM-L6-v2" in workflow
     assert "--output-json ../artifacts/retrieval_eval_smoke_preflight.json" in workflow
     assert "mv ../artifacts/retrieval_eval_smoke_preflight.json" in workflow
-    assert "--skip-document-indexing" not in workflow
+    assert "vector_required=${vector_required}" in workflow
+    assert "SMOKE_VECTOR_REQUIRED" in workflow
+    assert "--skip-document-indexing" in workflow
     assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}" in workflow
     assert "EMBEDDING_PROVIDER: fake" not in workflow
     assert "RERANK_PROVIDER: fake" not in workflow

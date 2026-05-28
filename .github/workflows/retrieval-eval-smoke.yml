@@ -218,6 +218,21 @@ jobs:
             --preflight-only \
             --output-json ../artifacts/retrieval_eval_smoke_preflight.json \
             --output-md ../artifacts/retrieval_eval_smoke_preflight.md
+          vector_required="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          artifact = json.loads(Path("../artifacts/retrieval_eval_smoke_preflight.json").read_text())
+          checks = artifact.get("preflight", {}).get("checks", [])
+          qdrant_not_applicable = any(
+              check.get("name") == "qdrant" and check.get("status") == "not_applicable"
+              for check in checks
+              if isinstance(check, dict)
+          )
+          print("false" if qdrant_not_applicable else "true")
+          PY
+          )"
+          echo "vector_required=${vector_required}" >> "${GITHUB_OUTPUT}"
           if grep -q '"status": "blocked"' ../artifacts/retrieval_eval_smoke_preflight.json; then
             mv ../artifacts/retrieval_eval_smoke_preflight.json ../artifacts/retrieval_eval_smoke.json
             mv ../artifacts/retrieval_eval_smoke_preflight.md ../artifacts/retrieval_eval_smoke.md
@@ -238,7 +253,14 @@ jobs:
       - name: Seed deterministic smoke data
         if: steps.preflight.outputs.blocked != 'true'
         working-directory: backend
-        run: uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.seed
+        env:
+          SMOKE_VECTOR_REQUIRED: ${{ steps.preflight.outputs.vector_required || 'true' }}
+        run: |
+          if [ "${SMOKE_VECTOR_REQUIRED}" = "false" ]; then
+            uv run python -m app.scripts.seed --skip-document-indexing
+          else
+            uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.seed
+          fi
 
       - name: Run retrieval evaluation smoke
         if: steps.preflight.outputs.blocked != 'true'
