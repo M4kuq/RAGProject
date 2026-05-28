@@ -1,8 +1,8 @@
 param(
     [string]$Dataset = "phase2_strategy_smoke",
     [string]$Strategies = "dense,hybrid,agentic_router",
-    [ValidateSet("fake", "local")]
-    [string]$Mode = "fake",
+    [ValidateSet("local")]
+    [string]$Mode = "local",
     [ValidateSet("warn", "fail")]
     [string]$ThresholdMode = "warn",
     [int]$CaseLimit = 5,

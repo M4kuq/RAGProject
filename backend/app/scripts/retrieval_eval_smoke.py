@@ -3,14 +3,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import signal
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import Literal, cast
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,6 +36,7 @@ from app.services.evaluation_service import EvaluationService
 SCHEMA_VERSION = "phase2.ci_eval.v1"
 DEFAULT_DATASET = "phase2_strategy_smoke"
 DEFAULT_STRATEGIES = "dense,hybrid,agentic_router"
+DEFAULT_MODE = "local"
 DEFAULT_CASE_LIMIT = 5
 DEFAULT_TOP_K = 10
 DEFAULT_RERANK_TOP_N = 5
@@ -94,7 +100,7 @@ class SmokeThresholds:
 class SmokeConfig:
     dataset: str
     strategies: list[str]
-    mode: Literal["fake", "local"]
+    mode: Literal["local"]
     threshold_mode: Literal["warn", "fail"]
     metrics: list[str]
     case_limit: int
@@ -105,6 +111,7 @@ class SmokeConfig:
     output_md: Path
     trigger_type: EvaluationTriggerType
     thresholds: SmokeThresholds
+    preflight_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,13 @@ class ThresholdResult:
     passed: bool
     violations: list[dict[str, object]]
     warnings: list[str]
+
+
+@dataclass(frozen=True)
+class PreflightResult:
+    status: Literal["ready", "blocked"]
+    reason_codes: list[str]
+    checks: list[dict[str, object]]
 
 
 def parse_strategies(value: str) -> list[str]:
@@ -160,8 +174,123 @@ def parse_thresholds(args: argparse.Namespace) -> SmokeThresholds:
 def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str, object]:
     started = time.perf_counter()
     settings = settings or get_settings()
-    if config.mode == "fake":
-        _assert_fake_mode(settings)
+    preflight = preflight_smoke(config, settings)
+    if config.preflight_only or preflight.status == "blocked":
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return cast(
+            dict[str, object],
+            redact_for_artifact(build_preflight_artifact(config, preflight, elapsed_ms)),
+        )
+    detail = _run_with_timeout(
+        config.timeout_seconds,
+        lambda: _run_evaluation(config, settings),
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if elapsed_ms > config.timeout_seconds * 1000:
+        raise SmokeError("timeout_exceeded")
+    artifact = build_artifact(config, detail, elapsed_ms)
+    threshold_result = evaluate_thresholds(artifact, config.thresholds, config.threshold_mode)
+    artifact["threshold_result"] = {
+        "passed": threshold_result.passed,
+        "mode": config.threshold_mode,
+        "violations": threshold_result.violations,
+        "warnings": threshold_result.warnings,
+    }
+    summary = _dict_or_empty(artifact.get("summary"))
+    summary["passed"] = threshold_result.passed
+    summary["warnings"] = threshold_result.warnings
+    artifact["summary"] = summary
+    return cast(dict[str, object], redact_for_artifact(artifact))
+
+
+def preflight_smoke(config: SmokeConfig, settings: Settings) -> PreflightResult:
+    checks: list[dict[str, object]] = []
+    reason_codes: list[str] = []
+    _reject_fake_provider(
+        checks,
+        reason_codes,
+        name="embedding_provider",
+        value=settings.embedding_provider,
+        reason_code="fake_embedding_provider_not_allowed",
+    )
+    _reject_fake_provider(
+        checks,
+        reason_codes,
+        name="rerank_provider",
+        value=settings.rerank_provider,
+        reason_code="fake_reranker_not_allowed",
+    )
+    _reject_fake_provider(
+        checks,
+        reason_codes,
+        name="generation_provider",
+        value=settings.generation_provider,
+        reason_code="fake_generator_not_allowed",
+    )
+    _check_qdrant(settings, checks, reason_codes)
+    _check_embedding_backend(config, settings, checks, reason_codes)
+    if settings.rerank_provider == "local":
+        _check_rerank_backend(settings, checks, reason_codes)
+    elif settings.rerank_provider == "none":
+        checks.append({"name": "rerank_backend", "status": "ready", "provider": "none"})
+    return PreflightResult(
+        status="blocked" if reason_codes else "ready",
+        reason_codes=reason_codes,
+        checks=checks,
+    )
+
+
+def build_preflight_artifact(
+    config: SmokeConfig,
+    preflight: PreflightResult,
+    elapsed_ms: int,
+) -> dict[str, object]:
+    warnings = [f"preflight_blocked:{reason_code}" for reason_code in preflight.reason_codes]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dataset": {"name": config.dataset, "evaluation_dataset_id": None},
+        "strategies": config.strategies,
+        "mode": config.mode,
+        "threshold_mode": config.threshold_mode,
+        "trigger_type": config.trigger_type.value,
+        "case_limit": config.case_limit,
+        "top_k": config.top_k,
+        "rerank_top_n": config.rerank_top_n,
+        "timeout_seconds": config.timeout_seconds,
+        "elapsed_ms": elapsed_ms,
+        "evaluation_run_id": None,
+        "summary": {
+            "case_count": 0,
+            "succeeded_count": 0,
+            "failed_count": 0,
+            "strategy_count": len(config.strategies),
+            "status": preflight.status,
+            "blocked": preflight.status == "blocked",
+            "blocked_reason_codes": preflight.reason_codes,
+            "passed": True,
+            "warnings": warnings,
+        },
+        "metrics_by_strategy": [],
+        "failure_summary": {},
+        "agentic_summary": None,
+        "thresholds": config.thresholds.__dict__,
+        "threshold_result": {
+            "passed": True,
+            "mode": config.threshold_mode,
+            "violations": [],
+            "warnings": warnings,
+        },
+        "preflight": {
+            "status": preflight.status,
+            "reason_codes": preflight.reason_codes,
+            "checks": preflight.checks,
+        },
+        "known_limitations": _known_limitations(),
+    }
+
+
+def _run_evaluation(config: SmokeConfig, settings: Settings) -> EvaluationRunDetail:
     with SessionLocal() as db:
         service = EvaluationService(settings=settings)
         user = _admin_user(db)
@@ -183,23 +312,7 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
             evaluation_run_id=created.evaluation_run_id,
             request_id=request_id,
         )
-        detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
-    if elapsed_ms > config.timeout_seconds * 1000:
-        raise SmokeError("timeout_exceeded")
-    artifact = build_artifact(config, detail, elapsed_ms)
-    threshold_result = evaluate_thresholds(artifact, config.thresholds, config.threshold_mode)
-    artifact["threshold_result"] = {
-        "passed": threshold_result.passed,
-        "mode": config.threshold_mode,
-        "violations": threshold_result.violations,
-        "warnings": threshold_result.warnings,
-    }
-    summary = _dict_or_empty(artifact.get("summary"))
-    summary["passed"] = threshold_result.passed
-    summary["warnings"] = threshold_result.warnings
-    artifact["summary"] = summary
-    return cast(dict[str, object], redact_for_artifact(artifact))
+        return service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
 
 
 def build_artifact(
@@ -240,12 +353,7 @@ def build_artifact(
             "agentic_summary"
         ),
         "thresholds": config.thresholds.__dict__,
-        "known_limitations": [
-            "fake deterministic adapters only",
-            "no external LLM judge",
-            "no LangSmith export",
-            "no production trace sampling",
-        ],
+        "known_limitations": _known_limitations(),
     }
 
 
@@ -319,6 +427,7 @@ def evaluate_thresholds(
 def render_markdown_summary(artifact: dict[str, object]) -> str:
     summary = _dict_or_empty(artifact.get("summary"))
     threshold = _dict_or_empty(artifact.get("threshold_result"))
+    status = _artifact_status(artifact)
     lines = [
         "# Retrieval Evaluation Smoke",
         "",
@@ -327,7 +436,7 @@ def render_markdown_summary(artifact: dict[str, object]) -> str:
         f"- strategies: `{', '.join(_string_list(artifact.get('strategies')))}`",
         f"- mode: `{_safe_string(artifact.get('mode'))}`",
         f"- threshold_mode: `{_safe_string(artifact.get('threshold_mode'))}`",
-        f"- status: `{'passed' if threshold.get('passed', True) else 'threshold_violation'}`",
+        f"- status: `{status}`",
         f"- cases: `{summary.get('succeeded_count', 0)}/{summary.get('case_count', 0)} succeeded`",
         "",
         "## Metrics",
@@ -367,6 +476,13 @@ def render_markdown_summary(artifact: dict[str, object]) -> str:
         lines.extend(f"- `{warning}`" for warning in warnings)
     else:
         lines.append("No threshold warnings.")
+    preflight = _dict_or_empty(artifact.get("preflight"))
+    if preflight:
+        lines.extend(["", "## Preflight", ""])
+        lines.append(f"- status: `{_safe_string(preflight.get('status'), fallback='unknown')}`")
+        reason_codes = _string_list(preflight.get("reason_codes"))
+        if reason_codes:
+            lines.append(f"- reason_codes: `{', '.join(reason_codes)}`")
     failure_summary = _dict_or_empty(artifact.get("failure_summary"))
     if failure_summary:
         lines.extend(["", "## Failure Summary", ""])
@@ -418,9 +534,10 @@ def main(argv: list[str] | None = None) -> int:
         write_outputs(config, artifact)
         threshold = _dict_or_empty(artifact.get("threshold_result"))
         warnings = _string_list(threshold.get("warnings"))
+        status = _artifact_status(artifact)
         print(
             "retrieval_eval_smoke "
-            f"status={'passed' if threshold.get('passed', True) else 'threshold_violation'} "
+            f"status={status} "
             f"dataset={_safe_dataset_name(artifact)} "
             f"strategies={','.join(config.strategies)} "
             f"warnings={len(warnings)} "
@@ -429,7 +546,11 @@ def main(argv: list[str] | None = None) -> int:
         if warnings:
             for warning in warnings:
                 print(f"threshold_warning {warning}")
-        if config.threshold_mode == "fail" and not threshold.get("passed", True):
+        if (
+            status == "threshold_violation"
+            and config.threshold_mode == "fail"
+            and not threshold.get("passed", True)
+        ):
             return 2
         return 0
     except SmokeError as exc:
@@ -445,7 +566,7 @@ def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--strategies", default=DEFAULT_STRATEGIES)
     parser.add_argument("--metrics", default=None)
-    parser.add_argument("--mode", choices=["fake", "local"], default="fake")
+    parser.add_argument("--mode", choices=["local"], default=DEFAULT_MODE)
     parser.add_argument("--threshold-mode", choices=["warn", "fail"], default="warn")
     parser.add_argument("--case-limit", type=int, default=DEFAULT_CASE_LIMIT)
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
@@ -466,6 +587,7 @@ def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
         choices=[EvaluationTriggerType.CI.value, EvaluationTriggerType.SCHEDULED.value],
         default=EvaluationTriggerType.CI.value,
     )
+    parser.add_argument("--preflight-only", action="store_true")
     for field in fields(SmokeThresholds):
         parser.add_argument(
             "--" + field.name.replace("_", "-"),
@@ -481,10 +603,10 @@ def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
         raise SmokeError("invalid_rerank_top_n")
     if args.timeout_seconds < 1:
         raise SmokeError("invalid_timeout_seconds")
-    return SmokeConfig(
+    config = SmokeConfig(
         dataset=args.dataset,
         strategies=parse_strategies(args.strategies),
-        mode=cast(Literal["fake", "local"], args.mode),
+        mode=cast(Literal["local"], args.mode),
         threshold_mode=cast(Literal["warn", "fail"], args.threshold_mode),
         metrics=parse_metrics(args.metrics),
         case_limit=args.case_limit,
@@ -495,16 +617,171 @@ def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
         output_md=args.output_md,
         trigger_type=EvaluationTriggerType(args.trigger_type),
         thresholds=parse_thresholds(args),
+        preflight_only=bool(args.preflight_only),
     )
+    return config
 
 
-def _assert_fake_mode(settings: Settings) -> None:
-    if (
-        settings.embedding_provider != "fake"
-        or settings.rerank_provider != "fake"
-        or settings.generation_provider != "fake"
-    ):
-        raise SmokeError("fake_mode_requires_fake_adapters")
+def _run_with_timeout(
+    timeout_seconds: int, func: Callable[[], EvaluationRunDetail]
+) -> EvaluationRunDetail:
+    if timeout_seconds < 1:
+        raise SmokeError("invalid_timeout_seconds")
+    if not hasattr(signal, "setitimer") or not hasattr(signal, "SIGALRM"):
+        return func()
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        raise SmokeError("timeout_exceeded")
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+    try:
+        return func()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _reject_fake_provider(
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+    *,
+    name: str,
+    value: str,
+    reason_code: str,
+) -> None:
+    status = "blocked" if value.lower() == "fake" else "ready"
+    checks.append({"name": name, "status": status, "provider": value.lower()})
+    if status == "blocked":
+        reason_codes.append(reason_code)
+
+
+def _check_qdrant(
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    try:
+        response = httpx.get(
+            f"{settings.qdrant_url.rstrip('/')}/healthz",
+            timeout=min(settings.qdrant_timeout_seconds, 5.0),
+        )
+    except httpx.HTTPError:
+        checks.append({"name": "qdrant", "status": "blocked"})
+        reason_codes.append("qdrant_unavailable")
+        return
+    if response.status_code >= 400:
+        checks.append({"name": "qdrant", "status": "blocked"})
+        reason_codes.append("qdrant_unavailable")
+        return
+    checks.append({"name": "qdrant", "status": "ready"})
+
+
+def _check_embedding_backend(
+    config: SmokeConfig,
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    del config
+    if settings.embedding_provider == "local":
+        _check_local_embedding_model(settings, checks, reason_codes)
+        return
+    if settings.embedding_provider == "lmstudio":
+        _check_lmstudio_embedding_backend(settings, checks, reason_codes)
+        return
+    if settings.embedding_provider != "fake":
+        checks.append(
+            {
+                "name": "embedding_backend",
+                "status": "blocked",
+                "provider": settings.embedding_provider,
+            }
+        )
+        reason_codes.append("embedding_provider_unavailable")
+
+
+def _check_local_embedding_model(
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    try:
+        from sentence_transformers import SentenceTransformer
+    except Exception:
+        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "local"})
+        reason_codes.append("local_embedding_dependency_missing")
+        return
+    try:
+        model = SentenceTransformer(settings.embedding_model)
+        vectors = model.encode(["retrieval smoke"], normalize_embeddings=True)
+        if len(vectors) != 1:
+            raise SmokeError("local_embedding_model_unavailable")
+    except Exception:
+        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "local"})
+        reason_codes.append("local_embedding_model_or_cache_unavailable")
+        return
+    checks.append({"name": "embedding_backend", "status": "ready", "provider": "local"})
+
+
+def _check_lmstudio_embedding_backend(
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    try:
+        response = httpx.post(
+            f"{settings.lmstudio_base_url}/embeddings",
+            headers={"Authorization": f"Bearer {settings.lmstudio_api_key}"},
+            json={"model": settings.embedding_model, "input": ["retrieval smoke"]},
+            timeout=min(settings.lmstudio_timeout_seconds, 5.0),
+        )
+    except httpx.HTTPError:
+        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "lmstudio"})
+        reason_codes.append("lmstudio_embedding_unavailable")
+        return
+    if response.status_code >= 400:
+        checks.append({"name": "embedding_backend", "status": "blocked", "provider": "lmstudio"})
+        reason_codes.append("lmstudio_embedding_unavailable")
+        return
+    checks.append({"name": "embedding_backend", "status": "ready", "provider": "lmstudio"})
+
+
+def _check_rerank_backend(
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    try:
+        from sentence_transformers import CrossEncoder
+    except Exception:
+        checks.append({"name": "rerank_backend", "status": "blocked", "provider": "local"})
+        reason_codes.append("local_reranker_dependency_missing")
+        return
+    try:
+        CrossEncoder(settings.reranker_model)
+    except Exception:
+        checks.append({"name": "rerank_backend", "status": "blocked", "provider": "local"})
+        reason_codes.append("local_reranker_model_or_cache_unavailable")
+        return
+    checks.append({"name": "rerank_backend", "status": "ready", "provider": "local"})
+
+
+def _known_limitations() -> list[str]:
+    return [
+        "workflow smoke uses real local retrieval with PostgreSQL, Qdrant, "
+        "and indexed demo documents",
+        "model/cache preflight blocks instead of falling back to fake adapters",
+        "no external LLM judge",
+        "no LangSmith export",
+        "no production trace sampling",
+    ]
 
 
 def _admin_user(db: Session) -> User:
@@ -608,6 +885,15 @@ def _safe_dataset_name(artifact: dict[str, object]) -> str:
         if isinstance(name, str):
             return _redact_string(name)
     return "unknown"
+
+
+def _artifact_status(artifact: dict[str, object]) -> str:
+    summary = _dict_or_empty(artifact.get("summary"))
+    status = summary.get("status")
+    if isinstance(status, str) and status:
+        return _redact_string(status)
+    threshold = _dict_or_empty(artifact.get("threshold_result"))
+    return "passed" if threshold.get("passed", True) else "threshold_violation"
 
 
 def _float_or_none(value: object) -> float | None:

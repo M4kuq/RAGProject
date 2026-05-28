@@ -622,6 +622,7 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.evaluation.ci_smoke_defaults") == {
             "dataset_name": "phase2_strategy_smoke",
             "strategies": ["dense", "hybrid", "agentic_router"],
+            "mode": "local",
             "case_limit": 5,
             "threshold_mode": "warn",
         }

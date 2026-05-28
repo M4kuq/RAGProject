@@ -150,7 +150,10 @@
 ## PR-31 CI Retrieval Evaluation Smoke Tests
 
 - `retrieval-eval-smoke.yml` exposes `workflow_dispatch`, low-frequency `schedule`, artifact upload, and GitHub step summary output.
-- The default path uses fake adapters and does not require GitHub secrets, external LLM/API keys, GPU, or heavy model downloads.
+- The default path uses real local retrieval with PostgreSQL, Qdrant, and indexed demo documents.
+- Fake embedding, fake reranker, fake generator, and fake evaluator behavior are not used by the PR-31 smoke itself.
+- Missing local model/cache prerequisites produce a safe blocked artifact instead of fake fallback or mandatory downloads.
+- The workflow is not a required pull-request gate.
 - The smoke script parses dataset, strategy, metric, threshold, and warn/fail options.
 - Threshold violations and failed evaluation items are warnings in `warn` mode and non-zero exits in `fail` mode.
 - `p95_latency_ms_max` is checked against the p95 latency value, not average latency.

@@ -296,6 +296,7 @@ def _seed_system_settings(db: Session) -> None:
             {
                 "dataset_name": "phase2_strategy_smoke",
                 "strategies": ["dense", "hybrid", "agentic_router"],
+                "mode": "local",
                 "case_limit": 5,
                 "threshold_mode": "warn",
             },

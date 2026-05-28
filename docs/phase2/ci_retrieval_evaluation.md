@@ -7,12 +7,15 @@ PR-31 adds a lightweight retrieval evaluation smoke workflow for GitHub Actions.
 The default workflow path uses:
 
 - `phase2_strategy_smoke`
-- fake embedding, fake reranker, and fake generation
+- real local retrieval with PostgreSQL, Qdrant, and indexed demo documents
 - `dense,hybrid,agentic_router`
 - warn-mode thresholds
 - JSON and Markdown artifacts
 
-`sparse` can be included through the workflow input or local script, but it is not part of the default strategy list to keep the scheduled smoke short.
+The workflow does not use fake embedding, fake reranker, fake generator, or a
+fake evaluator for the smoke itself. If the configured local embedding backend,
+model cache, or Qdrant endpoint is unavailable, the workflow writes a blocked
+artifact and summary instead of silently falling back to fake behavior.
 
 ## GitHub Actions
 
@@ -33,13 +36,14 @@ Manual inputs:
 
 - `dataset`: evaluation fixture name or persistent dataset id.
 - `strategies`: comma-separated list from `dense`, `sparse`, `hybrid`, `agentic_router`.
-- `mode`: `fake`; GitHub Actions does not expose `local` mode.
+- `mode`: `local`.
 - `threshold_mode`: `warn` or `fail`.
 - `case_limit`.
 - selected threshold overrides such as `recall_at_k_min` and `no_context_rate_max`.
 
-Use the local script for `--mode local` experiments so workflow results cannot
-be mistaken for real local adapter coverage.
+The workflow is intentionally not a required pull-request gate. It is available
+through manual dispatch and a low-frequency optional schedule so real local
+retrieval prerequisites can be handled explicitly.
 
 ## Local Command
 
@@ -55,7 +59,7 @@ On Unix-like shells:
 DATASET=phase2_strategy_smoke STRATEGIES=dense,hybrid,agentic_router scripts/run_retrieval_eval_smoke.sh
 ```
 
-The local command expects the backend environment to be initialized with migrated database tables, seeded demo data, and reachable dependencies matching the selected mode. For CI, the workflow runs migrations and seed before invoking the script.
+The local command expects the backend environment to be initialized with migrated database tables, seeded and indexed demo data, reachable Qdrant, and non-fake local retrieval dependencies. For GitHub Actions, the workflow runs a preflight before migrations and seed; if model/cache prerequisites are unavailable, it reports `blocked` and uploads the safe artifact.
 
 Direct backend command:
 
@@ -64,7 +68,7 @@ cd backend
 uv run python -m app.scripts.retrieval_eval_smoke \
   --dataset phase2_strategy_smoke \
   --strategies dense,hybrid,agentic_router \
-  --mode fake \
+  --mode local \
   --threshold-mode warn \
   --output-json ../artifacts/retrieval_eval_smoke.json \
   --output-md ../artifacts/retrieval_eval_smoke.md
@@ -103,19 +107,26 @@ artifacts/retrieval_eval_smoke.exitcode
 
 The JSON artifact includes safe run metadata, strategy-level metrics, aggregate failure counts, thresholds, warnings, and known limitations. It intentionally excludes case prompts, full context, raw chunk text, full answers, PII, tokens, credentials, API keys, and secrets.
 
-The Markdown artifact is also appended to the GitHub step summary.
+The Markdown artifact is also appended to the GitHub step summary. If preflight
+is blocked, the artifact includes only safe reason codes and check names; it
+does not include local filesystem paths, model payloads, raw prompts, or raw
+retrieval content.
 
 ## Privacy And Safety
 
 The smoke script redacts forbidden keys and secret-like string values before writing artifacts. It does not dump evaluation cases, retrieval payloads, prompt text, context items, or retrieval run item payloads.
 
-CI default mode does not require:
+CI default mode does not use fake adapters and does not require:
 
 - GitHub secrets
 - external LLM or judge API keys
-- BAAI/bge-m3 or reranker downloads
+- mandatory model downloads
 - GPU
 - LangSmith credentials
+
+The workflow sets Hugging Face/Transformers offline flags by default. A missing
+local model/cache is reported as `blocked` rather than downloaded or replaced
+with fake behavior.
 
 ## Handoff
 

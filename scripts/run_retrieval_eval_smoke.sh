@@ -3,7 +3,7 @@ set -eu
 
 DATASET="${DATASET:-phase2_strategy_smoke}"
 STRATEGIES="${STRATEGIES:-dense,hybrid,agentic_router}"
-MODE="${MODE:-fake}"
+MODE="${MODE:-local}"
 THRESHOLD_MODE="${THRESHOLD_MODE:-warn}"
 CASE_LIMIT="${CASE_LIMIT:-5}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"

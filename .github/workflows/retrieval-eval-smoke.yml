@@ -12,12 +12,12 @@ on:
         required: false
         default: "dense,hybrid,agentic_router"
       mode:
-        description: "Evaluation mode; GitHub Actions supports fake only"
+        description: "Evaluation mode; real local retrieval only"
         required: false
-        default: "fake"
+        default: "local"
         type: choice
         options:
-          - fake
+          - local
       threshold_mode:
         description: "Threshold behavior"
         required: false
@@ -109,26 +109,26 @@ env:
   QDRANT_REQUIRED: "false"
   QDRANT_UPSERT_BATCH_SIZE: "64"
   QDRANT_TIMEOUT_SECONDS: "5"
-  USE_FAKE_LLM: "true"
-  MODEL_NAME: fake-ci-model
-  EMBEDDING_PROVIDER: fake
-  EMBEDDING_MODEL: fake-ci-embedding
+  EMBEDDING_PROVIDER: local
+  EMBEDDING_MODEL: BAAI/bge-m3
   EMBEDDING_VECTOR_DIMENSION: "1024"
-  EMBEDDING_FAKE_DIMENSION: "8"
   EMBEDDING_BATCH_SIZE: "32"
-  RERANK_PROVIDER: fake
+  RERANK_PROVIDER: none
   RERANK_TOP_N_DEFAULT: "5"
   RERANK_TOP_N_MAX: "5"
   RERANK_SCORE_MIN: "0"
   RERANK_SCORE_MAX: "1"
-  RERANKER_MODEL: fake-ci-reranker
+  RERANKER_MODEL: ci-sparse-unused
   SEARCH_SNIPPET_MAX_CHARS: "240"
   ASK_TOP_K_DEFAULT: "5"
   ASK_RERANK_TOP_N_DEFAULT: "2"
-  GENERATION_PROVIDER: fake
-  GENERATION_MODEL_NAME: fake-rag-answer
+  GENERATION_PROVIDER: ollama
+  GENERATION_MODEL_NAME: qwen2.5:7b-instruct
   GENERATION_MAX_CONTEXT_CHARS: "6000"
   GENERATION_MAX_OUTPUT_CHARS: "2000"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
 
 jobs:
   retrieval-eval-smoke:
@@ -158,7 +158,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
-
     defaults:
       run:
         shell: bash
@@ -181,21 +180,54 @@ jobs:
       - name: Validate CI compose config
         run: docker compose -f docker-compose.ci.yml config --quiet
 
+      - name: Preflight retrieval evaluation smoke
+        id: preflight
+        working-directory: backend
+        env:
+          SMOKE_DATASET: ${{ github.event.inputs.dataset || 'phase2_strategy_smoke' }}
+          SMOKE_STRATEGIES: ${{ github.event.inputs.strategies || 'dense,hybrid,agentic_router' }}
+          SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}
+          SMOKE_THRESHOLD_MODE: ${{ github.event.inputs.threshold_mode || 'warn' }}
+          SMOKE_CASE_LIMIT: ${{ github.event.inputs.case_limit || '5' }}
+          SMOKE_TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
+        run: |
+          mkdir -p ../artifacts
+          uv run python -m app.scripts.retrieval_eval_smoke \
+            --dataset "${SMOKE_DATASET}" \
+            --strategies "${SMOKE_STRATEGIES}" \
+            --mode "${SMOKE_MODE}" \
+            --threshold-mode "${SMOKE_THRESHOLD_MODE}" \
+            --case-limit "${SMOKE_CASE_LIMIT}" \
+            --trigger-type "${SMOKE_TRIGGER_TYPE}" \
+            --preflight-only \
+            --output-json ../artifacts/retrieval_eval_smoke.json \
+            --output-md ../artifacts/retrieval_eval_smoke.md
+          if grep -q '"status": "blocked"' ../artifacts/retrieval_eval_smoke.json; then
+            echo "blocked=true" >> "${GITHUB_OUTPUT}"
+            echo "0" > ../artifacts/retrieval_eval_smoke.exitcode
+            cat ../artifacts/retrieval_eval_smoke.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "blocked=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Migrate database
+        if: steps.preflight.outputs.blocked != 'true'
         working-directory: backend
         run: uv run alembic upgrade head
 
       - name: Seed deterministic smoke data
+        if: steps.preflight.outputs.blocked != 'true'
         working-directory: backend
         run: uv run python -m app.scripts.seed
 
       - name: Run retrieval evaluation smoke
+        if: steps.preflight.outputs.blocked != 'true'
         id: retrieval_eval
         working-directory: backend
         env:
           SMOKE_DATASET: ${{ github.event.inputs.dataset || 'phase2_strategy_smoke' }}
           SMOKE_STRATEGIES: ${{ github.event.inputs.strategies || 'dense,hybrid,agentic_router' }}
-          SMOKE_MODE: ${{ github.event.inputs.mode || 'fake' }}
+          SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}
           SMOKE_THRESHOLD_MODE: ${{ github.event.inputs.threshold_mode || 'warn' }}
           SMOKE_CASE_LIMIT: ${{ github.event.inputs.case_limit || '5' }}
           SMOKE_RECALL_AT_K_MIN: ${{ github.event.inputs.recall_at_k_min || '0' }}

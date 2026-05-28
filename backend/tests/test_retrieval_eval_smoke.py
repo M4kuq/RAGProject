@@ -4,13 +4,17 @@ from pathlib import Path
 
 import pytest
 
+import app.scripts.retrieval_eval_smoke as smoke_module
+from app.core.config import Settings
 from app.scripts.retrieval_eval_smoke import (
     SCHEMA_VERSION,
     SmokeError,
     SmokeThresholds,
+    config_from_args,
     evaluate_thresholds,
     parse_metrics,
     parse_strategies,
+    preflight_smoke,
     redact_for_artifact,
     render_markdown_summary,
 )
@@ -35,6 +39,48 @@ def test_parse_metrics_defaults_and_rejects_unknown() -> None:
     assert parse_metrics("recall_at_k,mrr,recall_at_k") == ["recall_at_k", "mrr"]
     with pytest.raises(SmokeError, match="invalid_metric:raw_prompt"):
         parse_metrics("recall_at_k,raw_prompt")
+
+
+def test_config_defaults_to_real_local_retrieval_strategies() -> None:
+    config = config_from_args([])
+
+    assert config.mode == "local"
+    assert config.strategies == ["dense", "hybrid", "agentic_router"]
+
+
+def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = config_from_args(["--preflight-only"])
+    settings = Settings(
+        embedding_provider="fake",
+        rerank_provider="fake",
+        generation_provider="fake",
+    )
+
+    def ready_qdrant(
+        settings: Settings,
+        checks: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        del settings, reason_codes
+        checks.append({"name": "qdrant", "status": "ready"})
+
+    def skip_embedding(
+        config: object,
+        settings: Settings,
+        checks: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        del config, settings, checks, reason_codes
+
+    monkeypatch.setattr(smoke_module, "_check_qdrant", ready_qdrant)
+    monkeypatch.setattr(smoke_module, "_check_embedding_backend", skip_embedding)
+
+    result = preflight_smoke(config, settings)
+
+    assert result.status == "blocked"
+    assert "fake_embedding_provider_not_allowed" in result.reason_codes
+    assert "fake_reranker_not_allowed" in result.reason_codes
+    assert "fake_generator_not_allowed" in result.reason_codes
 
 
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
@@ -141,8 +187,8 @@ def test_markdown_summary_contains_safe_tables_without_raw_payload() -> None:
     markdown = render_markdown_summary(
         {
             "dataset": {"name": "phase2_strategy_smoke"},
-            "strategies": ["dense", "agentic_router"],
-            "mode": "fake",
+            "strategies": ["agentic_router"],
+            "mode": "local",
             "threshold_mode": "warn",
             "summary": {"case_count": 2, "succeeded_count": 2},
             "threshold_result": {"passed": True, "warnings": []},
@@ -184,6 +230,11 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "secrets." not in workflow
     assert "SESSION_SECRET:" not in workflow
     assert "POSTGRES_PASSWORD:" not in workflow
-    assert "- local" not in workflow
-    assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'fake' }}" in workflow
-    assert "BAAI/" not in workflow
+    assert "pull_request:" not in workflow
+    assert "- local" in workflow
+    assert "qdrant:" in workflow
+    assert "--skip-document-indexing" not in workflow
+    assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}" in workflow
+    assert "EMBEDDING_PROVIDER: fake" not in workflow
+    assert "RERANK_PROVIDER: fake" not in workflow
+    assert "GENERATION_PROVIDER: fake" not in workflow
