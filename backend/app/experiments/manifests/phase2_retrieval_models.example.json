@@ -1,0 +1,53 @@
+{
+  "schema_version": "phase2.experiment.v1",
+  "experiment_name": "phase2_retrieval_model_comparison",
+  "dataset": "phase2_strategy_smoke",
+  "case_limit": 20,
+  "strategies": ["dense", "hybrid", "agentic_router"],
+  "embedding_models": [
+    {
+      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+      "provider": "sentence_transformers",
+      "enabled": true,
+      "required": false,
+      "expected_dimension": 384,
+      "download_policy": "if-cached",
+      "notes": "Small local opt-in baseline. Not required by normal CI."
+    },
+    {
+      "model_id": "BAAI/bge-m3",
+      "provider": "sentence_transformers",
+      "enabled": false,
+      "required": false,
+      "expected_dimension": 1024,
+      "download_policy": "if-cached",
+      "notes": "Optional heavier multilingual candidate."
+    }
+  ],
+  "reranker_models": [
+    {
+      "model_id": "cross-encoder/ms-marco-MiniLM-L6-v2",
+      "provider": "sentence_transformers",
+      "enabled": true,
+      "required": false,
+      "download_policy": "if-cached",
+      "notes": "Small local opt-in reranker baseline."
+    },
+    {
+      "model_id": "BAAI/bge-reranker-v2-m3",
+      "provider": "sentence_transformers",
+      "enabled": false,
+      "required": false,
+      "download_policy": "if-cached",
+      "notes": "Optional heavier multilingual reranker candidate."
+    }
+  ],
+  "metrics": [
+    "recall_at_k",
+    "mrr",
+    "citation_coverage",
+    "no_context_rate",
+    "p95_latency"
+  ],
+  "mode": "local_opt_in"
+}

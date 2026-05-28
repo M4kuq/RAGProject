@@ -172,6 +172,25 @@
 - Export failures return safe status codes and remain non-fatal.
 - PR-31 JSON/Markdown artifacts record only safe trace export status.
 
+## PR-33 SentenceTransformers Experiment Harness Tests
+
+- Manifest parsing accepts `phase2.experiment.v1` and rejects unknown fields,
+  unsupported strategies, unsupported metrics, local paths, and secret-like
+  model ids.
+- Model registry lookup distinguishes embedding and reranker candidates.
+- Availability checks do not download models under `never` or `if-cached`.
+- Missing optional models are `skipped`; missing required models are `blocked`.
+- Dry-run validates the manifest, registry, availability status, artifact shape,
+  and Markdown report without invoking heavy model evaluation.
+- Local mode can call the existing Strategy Evaluation Runner through the PR-31
+  retrieval smoke path when models are available.
+- JSON and Markdown artifacts contain model ids, counts, aggregate metrics, and
+  reason codes only.
+- Artifacts and reports redact raw prompt, full context, raw chunk text, full
+  answer text, PII, secrets, tokens, credentials, and local cache paths.
+- Normal CI does not require SentenceTransformers, model downloads, GPU, or
+  external API keys.
+
 ## Checks
 
 - `ruff format --check .`
