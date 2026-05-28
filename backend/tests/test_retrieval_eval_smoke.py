@@ -54,6 +54,22 @@ def test_config_defaults_to_real_local_retrieval_strategies() -> None:
     assert config.strategies == ["dense", "hybrid", "agentic_router"]
 
 
+@pytest.mark.parametrize(
+    ("option", "value", "error_code"),
+    [
+        ("--recall-at-k-min", "nan", "invalid_threshold:recall_at_k_min"),
+        ("--p95-latency-ms-max", "inf", "invalid_threshold:p95_latency_ms_max"),
+    ],
+)
+def test_config_rejects_non_finite_thresholds(
+    option: str,
+    value: str,
+    error_code: str,
+) -> None:
+    with pytest.raises(SmokeError, match=error_code):
+        config_from_args([option, value])
+
+
 def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     config = config_from_args(["--preflight-only"])
     settings = Settings(
@@ -95,6 +111,42 @@ def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> Non
     } in result.checks
 
 
+def test_sparse_only_preflight_skips_vector_backend_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_from_args(["--strategies", "sparse", "--preflight-only"])
+    settings = Settings(embedding_provider="fake", rerank_provider="fake")
+
+    def unexpected_check(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("sparse-only smoke should not require vector backends")
+
+    monkeypatch.setattr(smoke_module, "_check_qdrant", unexpected_check)
+    monkeypatch.setattr(smoke_module, "_check_embedding_backend", unexpected_check)
+
+    result = preflight_smoke(config, settings)
+
+    assert result.status == "ready"
+    assert result.reason_codes == []
+    assert {
+        "name": "embedding_provider",
+        "status": "not_applicable",
+        "provider": "fake",
+        "reason": "sparse_only_smoke",
+    } in result.checks
+    assert {
+        "name": "qdrant",
+        "status": "not_applicable",
+        "provider": "qdrant",
+        "reason": "sparse_only_smoke",
+    } in result.checks
+    assert {
+        "name": "sparse_backend",
+        "status": "ready",
+        "provider": "postgres_fts",
+    } in result.checks
+
+
 def test_actual_smoke_uses_search_only_http_qdrant_retrieval_client() -> None:
     service = smoke_module._create_smoke_rag_service(Settings(), cast(Session, object()))
 
@@ -109,6 +161,121 @@ def test_timeout_wrapper_raises_before_blocking_call_returns() -> None:
         smoke_module._run_with_timeout(0.01, lambda: time.sleep(0.2))
 
     assert time.perf_counter() - started < 0.5
+
+
+def test_signal_timeout_marks_created_run_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_from_args(["--timeout-seconds", "1"])
+    settings = Settings()
+
+    class CreatedRun:
+        evaluation_run_id = 123
+
+    class FakeRun:
+        pass
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.rollbacks = 0
+
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+    sessions: list[FakeSession] = []
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.failed_error_codes: list[str] = []
+
+        def get_run(
+            self,
+            db: FakeSession,
+            *,
+            evaluation_run_id: int,
+            for_update: bool,
+        ) -> FakeRun:
+            del db, evaluation_run_id, for_update
+            return FakeRun()
+
+        def mark_run_failed(
+            self,
+            db: FakeSession,
+            *,
+            run: FakeRun,
+            error_code: str,
+            error_message: object,
+            finished_at: object,
+        ) -> None:
+            del db, run, error_message, finished_at
+            self.failed_error_codes.append(error_code)
+
+    repository = FakeRepository()
+
+    class FakeEvaluationService:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.repository = repository
+
+        def create_run(
+            self,
+            db: FakeSession,
+            *,
+            payload: object,
+            user: object,
+        ) -> CreatedRun:
+            del db, payload, user
+            return CreatedRun()
+
+        def run_job(
+            self,
+            db: FakeSession,
+            *,
+            evaluation_run_id: int,
+            request_id: str | None,
+        ) -> dict[str, object]:
+            del db, evaluation_run_id, request_id
+            raise smoke_module._SmokeTimeout()
+
+        def get_run_detail(
+            self,
+            db: FakeSession,
+            *,
+            evaluation_run_id: int,
+        ) -> object:
+            del db, evaluation_run_id
+            raise AssertionError("timeout must not fetch a run detail")
+
+    def session_factory() -> FakeSession:
+        session = FakeSession()
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(smoke_module, "SessionLocal", session_factory)
+    monkeypatch.setattr(smoke_module, "EvaluationService", FakeEvaluationService)
+    monkeypatch.setattr(smoke_module, "_admin_user", lambda db: object())
+    monkeypatch.setattr(
+        smoke_module,
+        "_resolve_dataset",
+        lambda db, service, dataset: (dataset, None),
+    )
+
+    with pytest.raises(smoke_module._SmokeTimeout):
+        smoke_module._run_evaluation_in_session(config, settings)
+
+    assert repository.failed_error_codes == ["timeout_exceeded"]
+    assert sessions[0].rollbacks == 1
+    assert sessions[0].commits == 1
 
 
 def test_thread_timeout_evaluation_creates_session_inside_worker(
@@ -396,6 +563,8 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "qdrant:" in workflow
     assert "Install and cache local embedding prerequisites" in workflow
     assert "sentence-transformers/all-MiniLM-L6-v2" in workflow
+    assert "--output-json ../artifacts/retrieval_eval_smoke_preflight.json" in workflow
+    assert "mv ../artifacts/retrieval_eval_smoke_preflight.json" in workflow
     assert "--skip-document-indexing" not in workflow
     assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}" in workflow
     assert "EMBEDDING_PROVIDER: fake" not in workflow
