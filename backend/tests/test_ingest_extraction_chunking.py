@@ -255,6 +255,33 @@ def test_xlsx_extraction_skips_hidden_sheets(tmp_path: Path) -> None:
     assert "Hidden" not in extracted.pages[0].text
 
 
+def test_xlsx_extraction_uses_formula_text_when_cached_value_missing(
+    tmp_path: Path,
+) -> None:
+    content = _minimal_xlsx(
+        sheet1_xml="""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1"><f>SUM(B1:C1)</f></c></row>
+  </sheetData>
+</worksheet>""",
+    )
+    path = tmp_path / "formula.xlsx"
+    path.write_bytes(content)
+
+    extracted = ExcelExtractor().extract(
+        path,
+        _metadata(
+            "formula.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            len(content),
+        ),
+    )
+
+    assert len(extracted.pages) == 2
+    assert "A=SUM(B1:C1)" in extracted.pages[0].text
+
+
 def test_xlsx_extraction_rejects_xml_entities(tmp_path: Path) -> None:
     content = _minimal_xlsx(
         workbook_xml="""<?xml version="1.0" encoding="UTF-8"?>
@@ -556,6 +583,7 @@ def _minimal_xlsx(
     *,
     hidden_second_sheet: bool = False,
     workbook_xml: str | None = None,
+    sheet1_xml: str | None = None,
     extra_entries: dict[str, bytes] | None = None,
 ) -> bytes:
     buffer = BytesIO()
@@ -597,7 +625,8 @@ def _minimal_xlsx(
         )
         archive.writestr(
             "xl/worksheets/sheet1.xml",
-            """<?xml version="1.0" encoding="UTF-8"?>
+            sheet1_xml
+            or """<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
