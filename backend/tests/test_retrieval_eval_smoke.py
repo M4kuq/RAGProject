@@ -111,6 +111,46 @@ def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> Non
     } in result.checks
 
 
+def test_run_smoke_attaches_noop_trace_export_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_from_args(["--preflight-only"])
+    settings = Settings(
+        embedding_provider="fake",
+        rerank_provider="fake",
+        generation_provider="fake",
+    )
+
+    def ready_qdrant(
+        settings: Settings,
+        checks: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        del settings, reason_codes
+        checks.append({"name": "qdrant", "status": "ready"})
+
+    def skip_embedding(
+        config: object,
+        settings: Settings,
+        checks: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        del config, settings, checks, reason_codes
+
+    monkeypatch.setattr(smoke_module, "_check_qdrant", ready_qdrant)
+    monkeypatch.setattr(smoke_module, "_check_embedding_backend", skip_embedding)
+
+    artifact = smoke_module.run_smoke(config, settings)
+
+    assert artifact["trace_export"] == {
+        "schema_version": "phase2.trace_export.v1",
+        "status": "skipped",
+        "provider": "none",
+        "reason_code": "disabled",
+    }
+    assert "fake_embedding_provider_not_allowed" in str(artifact)
+
+
 def test_sparse_only_preflight_skips_vector_backend_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

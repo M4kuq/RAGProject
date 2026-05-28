@@ -109,6 +109,25 @@ CI should use deterministic fixtures and fake adapters for normal PR validation.
 
 PR-31 adds `retrieval-eval-smoke.yml` as a lightweight manual/scheduled smoke layer. It runs the existing strategy evaluation runner with real local retrieval settings, cached small local embeddings, and no answer-generation dependency; writes only safe aggregate JSON/Markdown artifacts; supports manual strategy and threshold inputs; and keeps threshold failures configurable as warn-only or hard-fail. If local retrieval prerequisites are unavailable, the smoke reports a safe `blocked` artifact instead of falling back to fake adapters.
 
+## External Trace Export
+
+PR-32 adds an optional external trace export layer on top of the safe Phase2
+trace and evaluation summaries.
+
+- The default exporter is no-op.
+- `TRACE_EXPORT_PROVIDER=langsmith` is optional and requires explicit
+  `TRACE_EXPORT_ENABLED=true`, `LANGSMITH_TRACING_ENABLED=true`, and an
+  out-of-repository `LANGSMITH_API_KEY`.
+- Search, ask, evaluation, and CI smoke flows keep working when the exporter is
+  disabled, missing dependencies, missing secrets, or the external provider
+  fails.
+- Export payloads are minimized summaries: run ids, strategy names, hashes,
+  counts, numeric scores, safe reason codes, latency, status, and safe error
+  codes.
+- Export payloads never include raw query, raw prompt, full context, raw chunk
+  text, full answer text, raw external request/response bodies, paths, PII,
+  tokens, cookies, sessions, credentials, API keys, or secrets.
+
 ## Redaction Rules
 
 Do not store or display:

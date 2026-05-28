@@ -184,6 +184,26 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         True,
         "Allow storing redacted latency breakdown metadata.",
     ),
+    "rag.trace.external_export_enabled": (
+        False,
+        "Enable optional redacted trace export to an external observability provider.",
+    ),
+    "rag.trace.external_export_provider": (
+        "none",
+        "External trace export provider. PR-32 supports none and optional LangSmith.",
+    ),
+    "rag.trace.external_export_include_retrieval": (
+        True,
+        "Allow exporting minimized retrieval trace summaries when external export is enabled.",
+    ),
+    "rag.trace.external_export_include_evaluation": (
+        True,
+        "Allow exporting minimized evaluation summaries when external export is enabled.",
+    ),
+    "rag.trace.external_export_include_previews": (
+        False,
+        "Keep query/text previews out of external trace exports by default.",
+    ),
     "rag.sparse.enabled": (
         True,
         "Enable standalone sparse lexical retrieval for Phase2 PR-23.",
