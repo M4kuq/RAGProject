@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, and PR-31 adds lightweight CI retrieval evaluation smoke runs.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, and PR-32 adds optional no-op-by-default external trace export.
 
 ## PR Plan
 
@@ -206,9 +206,24 @@ PR-31 adds:
 The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow does not require GitHub secrets, external LLM/API keys, BAAI/heavyweight model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
 The workflow caches a small local embedding model, does not exercise answer generation, and does not fall back to fake embedding, reranker, or evaluator behavior; missing local retrieval prerequisites are reported as a safe `blocked` artifact.
 
+## PR-32 LangSmith Optional Adapter / Trace Export
+
+PR-32 adds:
+
+- provider-neutral `TraceExporter` interface
+- `NoOpTraceExporter` as the default behavior
+- optional lazy LangSmith adapter
+- minimized retrieval trace payloads for `/api/v1/rag/search` and `/api/v1/rag/ask`
+- minimized strategy evaluation summary export
+- optional PR-31 CI retrieval smoke summary export hook
+- export redaction for raw prompts, full context, raw chunk text, PII, secrets, tokens, paths, and raw payload dumps
+- non-fatal export failure handling
+
+PR-32 does not require LangSmith credentials, external trace export, heavy model downloads, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth. Normal CI remains secret-free and external-export-free.
+
 ## Non-goals
 
-PR-31 does not implement LangSmith export, SentenceTransformers experiments, online evaluation, production trace sampling, external LLM/API-required evaluation, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-32 does not implement SentenceTransformers experiments, online evaluation, production trace sampling, external LLM/API-required evaluation, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

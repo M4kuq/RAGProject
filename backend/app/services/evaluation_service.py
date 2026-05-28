@@ -31,6 +31,7 @@ from app.evaluation.metrics import (
     failure_metrics,
 )
 from app.evaluation.rag_service import RagEvaluationResult, create_evaluation_rag_service
+from app.observability.trace_export import TraceExportService
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository, EvaluationResultInput
 from app.repositories.job_repository import JobRepository
@@ -229,11 +230,13 @@ class EvaluationService:
             EvaluationRagService,
         ] = create_evaluation_rag_service,
         settings: Settings | None = None,
+        trace_export_service: TraceExportService | None = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.job_repository = job_repository or JobRepository()
         self.rag_service_factory = rag_service_factory
         self.settings = settings or get_settings()
+        self.trace_export_service = trace_export_service or TraceExportService(self.settings)
 
     def create_run(
         self,
@@ -988,9 +991,11 @@ class EvaluationService:
                 finished_at=datetime.now(UTC),
             )
             db.commit()
+            self._export_evaluation_trace_safely(db, evaluation_run_id=evaluation_run_id)
             raise EvaluationFixtureError("all_cases_failed")
         self.repository.mark_run_succeeded(db, run=run, finished_at=datetime.now(UTC))
         db.commit()
+        self._export_evaluation_trace_safely(db, evaluation_run_id=evaluation_run_id)
         return {
             "status": "succeeded",
             "evaluation_run_id": evaluation_run_id,
@@ -998,6 +1003,19 @@ class EvaluationService:
             "succeeded_count": succeeded_count,
             "failed_count": failed_count,
         }
+
+    def _export_evaluation_trace_safely(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> None:
+        try:
+            run = self._require_run(db, evaluation_run_id)
+            summary = self._summary(db, run)
+            self.trace_export_service.export_evaluation_summary(summary)
+        except Exception:
+            return
 
     def _run_case(
         self,

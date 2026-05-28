@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     evaluation_failure_high_latency_ms: int = Field(default=3000, ge=1, le=600000)
     evaluation_failure_max_promotions_per_run: int = Field(default=100, ge=1, le=100)
     evaluation_agentic_expected_strategy_required_for_accuracy: bool = False
+    trace_export_enabled: bool = False
+    trace_export_provider: str = "none"
+    trace_export_timeout_seconds: float = Field(default=3.0, gt=0.0, le=30.0)
+    trace_export_include_retrieval: bool = True
+    trace_export_include_evaluation: bool = True
+    trace_export_include_ci_summary: bool = True
+    trace_export_include_previews: bool = False
+    trace_export_preview_max_chars: int = Field(default=0, ge=0, le=240)
+    langsmith_tracing_enabled: bool = False
+    langsmith_project: str = "ragproject-phase2"
+    langsmith_endpoint: str = ""
+    langsmith_api_key: str | None = None
     rerank_provider: str = "fake"
     rerank_top_n_default: int = Field(default=5, ge=1, le=20)
     rerank_top_n_max: int = Field(default=5, ge=1, le=20)
@@ -221,6 +233,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ROUTER_SUFFICIENCY_MIN_SELECTED must be <= ROUTER_SUFFICIENCY_MIN_CANDIDATES"
             )
+        self.trace_export_provider = self.trace_export_provider.lower()
+        if self.trace_export_provider not in {"none", "langsmith"}:
+            raise ValueError("TRACE_EXPORT_PROVIDER must be none or langsmith")
+        if self.trace_export_preview_max_chars > 0 and not self.trace_export_include_previews:
+            raise ValueError(
+                "TRACE_EXPORT_INCLUDE_PREVIEWS=true is required when preview chars are enabled"
+            )
+        self.langsmith_endpoint = self.langsmith_endpoint.rstrip("/")
+        self.langsmith_api_key = self.langsmith_api_key.strip() if self.langsmith_api_key else None
+        self.langsmith_project = self.langsmith_project.strip() or "ragproject-phase2"
         if self.rerank_top_n_default > self.rerank_top_n_max:
             raise ValueError("RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         if self.rerank_score_max <= self.rerank_score_min:

@@ -132,4 +132,8 @@ reported as `blocked` rather than replaced with fake behavior.
 
 ## Handoff
 
-PR-32 can add optional LangSmith trace export on top of these safe evaluation summaries. Production online evaluation, alerting, and trace sampling remain separate later work.
+PR-32 adds optional trace export on top of these safe evaluation summaries. The
+smoke script attaches only a safe export status to artifacts by default, and
+external LangSmith export remains disabled unless explicit trace export settings
+and a secret are provided. Production online evaluation, alerting, and trace
+sampling remain separate later work.

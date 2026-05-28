@@ -253,6 +253,18 @@ GitHub Actions は次の workflow を使う。
 
 Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents、小型 local embedding model cache を使い、answer generation は実行しません。fake embedding / fake reranker / fake evaluator には fallback せず、local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
 
+Optional trace export:
+
+```text
+TRACE_EXPORT_ENABLED=false
+TRACE_EXPORT_PROVIDER=none
+```
+
+LangSmith export is opt-in only. Normal CI and local smoke runs do not require
+LangSmith secrets, and exported payloads are minimized/redacted summaries rather
+than raw prompts, full context, raw chunk text, answers, PII, tokens, or
+credentials. See `docs/phase2/langsmith_optional_adapter.md`.
+
 ## Demo / Test Docs
 
 - [5min demo](docs/demo/5min_demo.md)

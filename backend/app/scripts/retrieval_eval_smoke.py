@@ -26,6 +26,7 @@ from app.db.models import Role, User
 from app.db.session import SessionLocal
 from app.evaluation.rag_service import EvaluationRagQuestionService, RagEvaluationResult
 from app.ingest.embedding import create_embedding_adapter
+from app.observability.trace_export import TraceExportService
 from app.rag.generation import FakeAnswerGenerator
 from app.rag.rerank import create_reranker
 from app.rag.retrieval import HttpQdrantSearchClient
@@ -191,16 +192,17 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
     preflight = preflight_smoke(config, settings)
     if config.preflight_only or preflight.status == "blocked":
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return cast(
+        artifact = cast(
             dict[str, object],
             redact_for_artifact(build_preflight_artifact(config, preflight, elapsed_ms)),
         )
+        return _attach_trace_export_status(artifact, settings)
     deadline = time.perf_counter() + config.timeout_seconds
     try:
         detail = _run_evaluation(config, settings, deadline=deadline)
     except Exception as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return cast(
+        artifact = cast(
             dict[str, object],
             redact_for_artifact(
                 build_failure_artifact(
@@ -211,9 +213,10 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
                 )
             ),
         )
+        return _attach_trace_export_status(artifact, settings)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if elapsed_ms > config.timeout_seconds * 1000:
-        return cast(
+        artifact = cast(
             dict[str, object],
             redact_for_artifact(
                 build_failure_artifact(
@@ -224,6 +227,7 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
                 )
             ),
         )
+        return _attach_trace_export_status(artifact, settings)
     artifact = build_artifact(config, detail, elapsed_ms)
     threshold_result = evaluate_thresholds(artifact, config.thresholds, config.threshold_mode)
     artifact["threshold_result"] = {
@@ -236,7 +240,17 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
     summary["passed"] = threshold_result.passed
     summary["warnings"] = threshold_result.warnings
     artifact["summary"] = summary
-    return cast(dict[str, object], redact_for_artifact(artifact))
+    artifact = cast(dict[str, object], redact_for_artifact(artifact))
+    return _attach_trace_export_status(artifact, settings)
+
+
+def _attach_trace_export_status(
+    artifact: dict[str, object],
+    settings: Settings,
+) -> dict[str, object]:
+    result = TraceExportService(settings).export_ci_evaluation_summary(artifact)
+    artifact["trace_export"] = result.model_dump()
+    return artifact
 
 
 def preflight_smoke(config: SmokeConfig, settings: Settings) -> PreflightResult:
@@ -668,6 +682,16 @@ def render_markdown_summary(artifact: dict[str, object]) -> str:
         lines.extend(["", "## Failure Summary", ""])
         for failure_type, count in sorted(failure_summary.items()):
             lines.append(f"- `{failure_type}`: `{count}`")
+    trace_export = _dict_or_empty(artifact.get("trace_export"))
+    if trace_export:
+        lines.extend(["", "## Trace Export", ""])
+        lines.append(f"- status: `{_safe_string(trace_export.get('status'), fallback='unknown')}`")
+        lines.append(
+            f"- provider: `{_safe_string(trace_export.get('provider'), fallback='unknown')}`"
+        )
+        reason_code = _safe_string(trace_export.get("reason_code"), fallback="")
+        if reason_code:
+            lines.append(f"- reason_code: `{reason_code}`")
     lines.extend(
         [
             "",

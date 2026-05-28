@@ -25,6 +25,7 @@ from app.ingest.embedding import (
     EmbeddingAdapterError,
     create_embedding_adapter,
 )
+from app.observability.trace_export import TraceExportService
 from app.rag.agentic import (
     AgenticRetrievalExecutor,
     AgenticRetrievalResult,
@@ -160,6 +161,7 @@ class RagService:
         query_plan_builder: QueryPlanBuilder | None = None,
         strategy_router: StrategyRouter | None = None,
         agentic_executor: AgenticRetrievalExecutor | None = None,
+        trace_export_service: TraceExportService | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -176,6 +178,7 @@ class RagService:
             settings,
             ContextSufficiencyChecker(settings),
         )
+        self.trace_export_service = trace_export_service or TraceExportService(settings)
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -349,6 +352,7 @@ class RagService:
                 latency_breakdown_json=latency_tracker.snapshot(),
             )
             db.commit()
+            self._export_retrieval_trace_safely(db, retrieval_run_id=run_id)
             return RagSearchResponse(
                 retrieval_run_id=run_id,
                 status="succeeded",
@@ -648,6 +652,7 @@ class RagService:
                 updated_at=datetime.now(UTC),
             )
             db.commit()
+            self._export_retrieval_trace_safely(db, retrieval_run_id=run_id)
             db.refresh(assistant_message)
             db.refresh(user_message)
             return _ask_response(
@@ -1578,6 +1583,21 @@ class RagService:
             ),
         )
         db.commit()
+        self._export_retrieval_trace_safely(db, retrieval_run_id=retrieval_run_id)
+
+    def _export_retrieval_trace_safely(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+    ) -> None:
+        try:
+            self.trace_export_service.export_retrieval_run(
+                db,
+                retrieval_run_id=retrieval_run_id,
+            )
+        except Exception:
+            return
 
     def _answer_generator_for_request(self, payload: RagAskRequest) -> AnswerGenerator:
         if payload.model_key is None:

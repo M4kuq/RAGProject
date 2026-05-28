@@ -161,6 +161,17 @@
 - Artifacts and summaries redact raw prompt, full context, raw chunk text, PII, tokens, and secrets.
 - Local wrappers call the same backend module as the workflow.
 
+## PR-32 LangSmith Optional Adapter / Trace Export Tests
+
+- `TRACE_EXPORT_PROVIDER` accepts `none` and `langsmith` only.
+- Default settings select the no-op exporter and do not require secrets.
+- Missing LangSmith SDK or API key skips export without failing search, ask, evaluation, or CI smoke.
+- LangSmith export uses a minimized safe payload with hashes, counts, scores, status, and reason codes only.
+- Retrieval export payloads exclude raw query, raw prompt, full context, raw chunk text, snippets, raw payload snapshots, PII, paths, tokens, cookies, sessions, credentials, API keys, and secrets.
+- Evaluation and CI smoke export payloads include aggregate strategy metrics and failure counts only.
+- Export failures return safe status codes and remain non-fatal.
+- PR-31 JSON/Markdown artifacts record only safe trace export status.
+
 ## Checks
 
 - `ruff format --check .`
