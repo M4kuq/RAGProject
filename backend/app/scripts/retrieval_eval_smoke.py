@@ -4,16 +4,18 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import signal
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import Literal, cast
+from typing import Literal, TypeVar, cast
 
 import httpx
 from sqlalchemy import select
@@ -22,7 +24,12 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.models import Role, User
 from app.db.session import SessionLocal
-from app.rag.strategy import RetrievalStrategy
+from app.evaluation.rag_service import EvaluationRagQuestionService, RagEvaluationResult
+from app.ingest.embedding import create_embedding_adapter
+from app.rag.generation import FakeAnswerGenerator
+from app.rag.rerank import create_reranker
+from app.rag.retrieval import HttpQdrantSearchClient
+from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.schemas.evaluations import (
     DEFAULT_EVALUATION_METRICS,
     EvaluationMetricName,
@@ -32,6 +39,7 @@ from app.schemas.evaluations import (
     EvaluationTriggerType,
 )
 from app.services.evaluation_service import EvaluationService
+from app.services.rag_service import RagService
 
 SCHEMA_VERSION = "phase2.ci_eval.v1"
 DEFAULT_DATASET = "phase2_strategy_smoke"
@@ -74,9 +82,14 @@ _FORBIDDEN_KEYS = {
     "session",
     "token",
 }
+T = TypeVar("T")
 
 
 class SmokeError(RuntimeError):
+    pass
+
+
+class _SmokeTimeout(BaseException):
     pass
 
 
@@ -181,10 +194,8 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
             dict[str, object],
             redact_for_artifact(build_preflight_artifact(config, preflight, elapsed_ms)),
         )
-    detail = _run_with_timeout(
-        config.timeout_seconds,
-        lambda: _run_evaluation(config, settings),
-    )
+    deadline = time.perf_counter() + config.timeout_seconds
+    detail = _run_evaluation(config, settings, deadline=deadline)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if elapsed_ms > config.timeout_seconds * 1000:
         raise SmokeError("timeout_exceeded")
@@ -220,13 +231,7 @@ def preflight_smoke(config: SmokeConfig, settings: Settings) -> PreflightResult:
         value=settings.rerank_provider,
         reason_code="fake_reranker_not_allowed",
     )
-    _reject_fake_provider(
-        checks,
-        reason_codes,
-        name="generation_provider",
-        value=settings.generation_provider,
-        reason_code="fake_generator_not_allowed",
-    )
+    _note_generation_backend_not_applicable(checks, settings)
     _check_qdrant(settings, checks, reason_codes)
     _check_embedding_backend(config, settings, checks, reason_codes)
     if settings.rerank_provider == "local":
@@ -290,9 +295,17 @@ def build_preflight_artifact(
     }
 
 
-def _run_evaluation(config: SmokeConfig, settings: Settings) -> EvaluationRunDetail:
+def _run_evaluation(
+    config: SmokeConfig,
+    settings: Settings,
+    *,
+    deadline: float,
+) -> EvaluationRunDetail:
     with SessionLocal() as db:
-        service = EvaluationService(settings=settings)
+        service = EvaluationService(
+            settings=settings,
+            rag_service_factory=_create_smoke_rag_service,
+        )
         user = _admin_user(db)
         dataset_name, evaluation_dataset_id = _resolve_dataset(db, service, config.dataset)
         payload = EvaluationRunCreateRequest(
@@ -307,12 +320,57 @@ def _run_evaluation(config: SmokeConfig, settings: Settings) -> EvaluationRunDet
         )
         created = service.create_run(db, payload=payload, user=user)
         request_id = _request_id(created.evaluation_run_id, config.strategies)
-        service.run_job(
-            db,
-            evaluation_run_id=created.evaluation_run_id,
-            request_id=request_id,
+        _run_with_timeout(
+            _remaining_timeout_seconds(deadline),
+            lambda: service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id=request_id,
+            ),
         )
-        return service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+        return _run_with_timeout(
+            _remaining_timeout_seconds(deadline),
+            lambda: service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id),
+        )
+
+
+class SmokeEvaluationRagQuestionService(EvaluationRagQuestionService):
+    def evaluate_question(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        return self.evaluate_strategy(
+            db,
+            question=question,
+            request_id=request_id,
+            strategy_type=strategy_type,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+        )
+
+
+def _create_smoke_rag_service(
+    settings: Settings,
+    db: Session,
+) -> EvaluationRagQuestionService:
+    del db
+    service = RagService(
+        settings=settings,
+        embedding_adapter=create_embedding_adapter(settings),
+        vector_client=HttpQdrantSearchClient(
+            url=settings.qdrant_url,
+            timeout_seconds=settings.qdrant_timeout_seconds,
+        ),
+        reranker=create_reranker(settings),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    return SmokeEvaluationRagQuestionService(service)
 
 
 def build_artifact(
@@ -622,26 +680,68 @@ def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
     return config
 
 
-def _run_with_timeout(
-    timeout_seconds: int, func: Callable[[], EvaluationRunDetail]
-) -> EvaluationRunDetail:
-    if timeout_seconds < 1:
-        raise SmokeError("invalid_timeout_seconds")
-    if not hasattr(signal, "setitimer") or not hasattr(signal, "SIGALRM"):
-        return func()
+def _remaining_timeout_seconds(deadline: float) -> float:
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0:
+        raise SmokeError("timeout_exceeded")
+    return remaining
+
+
+def _run_with_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
+    if timeout_seconds <= 0:
+        raise SmokeError("timeout_exceeded")
+    if _can_use_signal_timeout():
+        return _run_with_signal_timeout(timeout_seconds, func)
+    return _run_with_thread_timeout(timeout_seconds, func)
+
+
+def _can_use_signal_timeout() -> bool:
+    return (
+        threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "setitimer")
+        and hasattr(signal, "SIGALRM")
+    )
+
+
+def _run_with_signal_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
     previous_handler = signal.getsignal(signal.SIGALRM)
 
     def _handle_timeout(signum: int, frame: FrameType | None) -> None:
         del signum, frame
-        raise SmokeError("timeout_exceeded")
+        raise _SmokeTimeout()
 
     signal.signal(signal.SIGALRM, _handle_timeout)
     signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
     try:
         return func()
+    except _SmokeTimeout as exc:
+        raise SmokeError("timeout_exceeded") from exc
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _run_with_thread_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
+    result_queue: queue.Queue[tuple[str, T | BaseException]] = queue.Queue(maxsize=1)
+
+    def _target() -> None:
+        try:
+            result_queue.put(("ok", func()))
+        except BaseException as exc:
+            result_queue.put(("error", exc))
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        raise SmokeError("timeout_exceeded")
+    try:
+        status, payload = result_queue.get_nowait()
+    except queue.Empty as exc:
+        raise SmokeError("timeout_exceeded") from exc
+    if status == "error":
+        raise cast(BaseException, payload)
+    return cast(T, payload)
 
 
 def _reject_fake_provider(
@@ -656,6 +756,20 @@ def _reject_fake_provider(
     checks.append({"name": name, "status": status, "provider": value.lower()})
     if status == "blocked":
         reason_codes.append(reason_code)
+
+
+def _note_generation_backend_not_applicable(
+    checks: list[dict[str, object]],
+    settings: Settings,
+) -> None:
+    checks.append(
+        {
+            "name": "generation_backend",
+            "status": "not_applicable",
+            "provider": settings.generation_provider,
+            "reason": "retrieval_only_smoke",
+        }
+    )
 
 
 def _check_qdrant(
@@ -778,6 +892,7 @@ def _known_limitations() -> list[str]:
         "workflow smoke uses real local retrieval with PostgreSQL, Qdrant, "
         "and indexed demo documents",
         "model/cache preflight blocks instead of falling back to fake adapters",
+        "answer generation is not exercised",
         "no external LLM judge",
         "no LangSmith export",
         "no production trace sampling",

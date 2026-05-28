@@ -251,7 +251,7 @@ GitHub Actions は次の workflow を使う。
 | Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
 | Retrieval Evaluation Smoke | manual/scheduled deterministic strategy evaluation | `scripts/run_retrieval_eval_smoke.*` |
 
-Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents を使い、fake embedding / fake reranker / fake generator / fake evaluator には fallback しません。local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
+Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents、小型 local embedding model cache を使い、answer generation は実行しません。fake embedding / fake reranker / fake evaluator には fallback せず、local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
 
 ## Demo / Test Docs
 

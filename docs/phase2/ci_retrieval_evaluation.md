@@ -2,20 +2,22 @@
 
 ## Purpose
 
-PR-31 adds a lightweight retrieval evaluation smoke workflow for GitHub Actions. It runs the existing Phase2 evaluation runner against a small deterministic dataset so regressions in strategy evaluation can be caught without external LLM APIs, GPU, LangSmith, or heavy model downloads.
+PR-31 adds a lightweight retrieval evaluation smoke workflow for GitHub Actions. It runs the existing Phase2 evaluation runner against a small deterministic dataset so regressions in strategy evaluation can be caught without external LLM APIs, GPU, LangSmith, or heavyweight BAAI model downloads.
 
 The default workflow path uses:
 
 - `phase2_strategy_smoke`
 - real local retrieval with PostgreSQL, Qdrant, and indexed demo documents
+- cached `sentence-transformers/all-MiniLM-L6-v2` local embeddings
 - `dense,hybrid,agentic_router`
 - warn-mode thresholds
 - JSON and Markdown artifacts
 
-The workflow does not use fake embedding, fake reranker, fake generator, or a
-fake evaluator for the smoke itself. If the configured local embedding backend,
-model cache, or Qdrant endpoint is unavailable, the workflow writes a blocked
-artifact and summary instead of silently falling back to fake behavior.
+The workflow does not use fake embedding, fake reranker, or a fake evaluator for
+the smoke itself. The smoke is retrieval-only and does not exercise answer
+generation. If the configured local embedding backend, model cache, or Qdrant
+endpoint is unavailable, the workflow writes a blocked artifact and summary
+instead of silently falling back to fake behavior.
 
 ## GitHub Actions
 
@@ -59,13 +61,13 @@ On Unix-like shells:
 DATASET=phase2_strategy_smoke STRATEGIES=dense,hybrid,agentic_router scripts/run_retrieval_eval_smoke.sh
 ```
 
-The local command expects the backend environment to be initialized with migrated database tables, seeded and indexed demo data, reachable Qdrant, and non-fake local retrieval dependencies. For GitHub Actions, the workflow runs a preflight before migrations and seed; if model/cache prerequisites are unavailable, it reports `blocked` and uploads the safe artifact.
+The local command expects the backend environment to be initialized with migrated database tables, seeded and indexed demo data, reachable Qdrant, and non-fake local retrieval dependencies. For GitHub Actions, the workflow installs and caches the small local embedding prerequisite before preflight; if model/cache prerequisites are still unavailable, it reports `blocked` and uploads the safe artifact.
 
 Direct backend command:
 
 ```sh
 cd backend
-uv run python -m app.scripts.retrieval_eval_smoke \
+uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke \
   --dataset phase2_strategy_smoke \
   --strategies dense,hybrid,agentic_router \
   --mode local \
@@ -116,17 +118,17 @@ retrieval content.
 
 The smoke script redacts forbidden keys and secret-like string values before writing artifacts. It does not dump evaluation cases, retrieval payloads, prompt text, context items, or retrieval run item payloads.
 
-CI default mode does not use fake adapters and does not require:
+CI default mode does not use fake retrieval adapters and does not require:
 
 - GitHub secrets
 - external LLM or judge API keys
-- mandatory model downloads
+- BAAI/heavyweight model downloads
 - GPU
 - LangSmith credentials
 
-The workflow sets Hugging Face/Transformers offline flags by default. A missing
-local model/cache is reported as `blocked` rather than downloaded or replaced
-with fake behavior.
+The workflow caches the small local embedding model first, then sets Hugging
+Face/Transformers offline flags for the smoke. A missing local model/cache is
+reported as `blocked` rather than replaced with fake behavior.
 
 ## Handoff
 

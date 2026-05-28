@@ -110,8 +110,8 @@ env:
   QDRANT_UPSERT_BATCH_SIZE: "64"
   QDRANT_TIMEOUT_SECONDS: "5"
   EMBEDDING_PROVIDER: local
-  EMBEDDING_MODEL: BAAI/bge-m3
-  EMBEDDING_VECTOR_DIMENSION: "1024"
+  EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+  EMBEDDING_VECTOR_DIMENSION: "384"
   EMBEDDING_BATCH_SIZE: "32"
   RERANK_PROVIDER: none
   RERANK_TOP_N_DEFAULT: "5"
@@ -122,17 +122,13 @@ env:
   SEARCH_SNIPPET_MAX_CHARS: "240"
   ASK_TOP_K_DEFAULT: "5"
   ASK_RERANK_TOP_N_DEFAULT: "2"
-  GENERATION_PROVIDER: ollama
-  GENERATION_MODEL_NAME: qwen2.5:7b-instruct
-  GENERATION_MAX_CONTEXT_CHARS: "6000"
-  GENERATION_MAX_OUTPUT_CHARS: "2000"
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
   HF_HUB_DISABLE_TELEMETRY: "1"
 
 jobs:
   retrieval-eval-smoke:
-    name: deterministic retrieval evaluation
+    name: local retrieval evaluation
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -177,6 +173,23 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/pyproject.toml
 
+      - name: Cache Hugging Face model files
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: retrieval-eval-smoke-${{ runner.os }}-all-MiniLM-L6-v2
+
+      - name: Install and cache local embedding prerequisites
+        continue-on-error: true
+        working-directory: backend
+        run: |
+          unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+          uv run --with "sentence-transformers>=2.7.0,<4" python - <<'PY'
+          from sentence_transformers import SentenceTransformer
+
+          SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+          PY
+
       - name: Validate CI compose config
         run: docker compose -f docker-compose.ci.yml config --quiet
 
@@ -192,7 +205,7 @@ jobs:
           SMOKE_TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
         run: |
           mkdir -p ../artifacts
-          uv run python -m app.scripts.retrieval_eval_smoke \
+          uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke \
             --dataset "${SMOKE_DATASET}" \
             --strategies "${SMOKE_STRATEGIES}" \
             --mode "${SMOKE_MODE}" \
@@ -218,7 +231,7 @@ jobs:
       - name: Seed deterministic smoke data
         if: steps.preflight.outputs.blocked != 'true'
         working-directory: backend
-        run: uv run python -m app.scripts.seed
+        run: uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.seed
 
       - name: Run retrieval evaluation smoke
         if: steps.preflight.outputs.blocked != 'true'
@@ -246,7 +259,7 @@ jobs:
         run: |
           mkdir -p ../artifacts
           set +e
-          uv run python -m app.scripts.retrieval_eval_smoke \
+          uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke \
             --dataset "${SMOKE_DATASET}" \
             --strategies "${SMOKE_STRATEGIES}" \
             --mode "${SMOKE_MODE}" \

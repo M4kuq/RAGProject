@@ -196,14 +196,15 @@ PR-31 adds:
 - `.github/workflows/retrieval-eval-smoke.yml`
 - manual `workflow_dispatch` inputs for dataset, strategies, mode, threshold behavior, and case limit
 - weekly low-frequency scheduled smoke execution
-- deterministic fake-mode execution using the existing Strategy Evaluation Runner
+- real local retrieval execution using the existing Strategy Evaluation Runner
 - `backend/app/scripts/retrieval_eval_smoke.py`
 - local wrapper scripts for PowerShell and Unix-like shells
 - JSON and Markdown artifacts
 - GitHub step summary output
 - configurable warn/fail threshold checks
 
-The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow does not require GitHub secrets, external LLM/API keys, BAAI model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
+The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow does not require GitHub secrets, external LLM/API keys, BAAI/heavyweight model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
+The workflow caches a small local embedding model, does not exercise answer generation, and does not fall back to fake embedding, reranker, or evaluator behavior; missing local retrieval prerequisites are reported as a safe `blocked` artifact.
 
 ## Non-goals
 

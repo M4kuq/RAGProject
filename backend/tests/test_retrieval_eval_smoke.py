@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import cast
 
 import pytest
+from sqlalchemy.orm import Session
 
 import app.scripts.retrieval_eval_smoke as smoke_module
 from app.core.config import Settings
+from app.rag.retrieval import HttpQdrantSearchClient
 from app.scripts.retrieval_eval_smoke import (
     SCHEMA_VERSION,
     SmokeError,
@@ -80,7 +84,29 @@ def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.status == "blocked"
     assert "fake_embedding_provider_not_allowed" in result.reason_codes
     assert "fake_reranker_not_allowed" in result.reason_codes
-    assert "fake_generator_not_allowed" in result.reason_codes
+    assert "fake_generator_not_allowed" not in result.reason_codes
+    assert {
+        "name": "generation_backend",
+        "status": "not_applicable",
+        "provider": "fake",
+        "reason": "retrieval_only_smoke",
+    } in result.checks
+
+
+def test_actual_smoke_uses_search_only_http_qdrant_retrieval_client() -> None:
+    service = smoke_module._create_smoke_rag_service(Settings(), cast(Session, object()))
+
+    assert isinstance(service, smoke_module.SmokeEvaluationRagQuestionService)
+    assert isinstance(service.service.vector_client, HttpQdrantSearchClient)
+
+
+def test_timeout_wrapper_raises_before_blocking_call_returns() -> None:
+    started = time.perf_counter()
+
+    with pytest.raises(SmokeError, match="timeout_exceeded"):
+        smoke_module._run_with_timeout(0.01, lambda: time.sleep(0.2))
+
+    assert time.perf_counter() - started < 0.5
 
 
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
@@ -233,8 +259,11 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "pull_request:" not in workflow
     assert "- local" in workflow
     assert "qdrant:" in workflow
+    assert "Install and cache local embedding prerequisites" in workflow
+    assert "sentence-transformers/all-MiniLM-L6-v2" in workflow
     assert "--skip-document-indexing" not in workflow
     assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'local' }}" in workflow
     assert "EMBEDDING_PROVIDER: fake" not in workflow
     assert "RERANK_PROVIDER: fake" not in workflow
     assert "GENERATION_PROVIDER: fake" not in workflow
+    assert "GENERATION_PROVIDER: ollama" not in workflow
