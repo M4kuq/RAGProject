@@ -284,7 +284,12 @@ def _cell_value(cell_element: ElementTree.Element, *, shared_strings: list[str])
     else:
         value_element = cell_element.find("s:v", NS)
         if value_element is None or value_element.text is None:
-            return None
+            formula_element = cell_element.find("s:f", NS)
+            if formula_element is None or formula_element.text is None:
+                return None
+            value = formula_element.text
+            value = _safe_text(value)
+            return value or None
         value = value_element.text
         if cell_type == "s":
             index = _safe_int(value)

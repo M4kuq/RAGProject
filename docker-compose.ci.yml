@@ -140,6 +140,8 @@ services:
       dockerfile: backend/Dockerfile
       target: backend
     environment: *backend-env
+    volumes:
+      - upload_ci_storage:/app/storage/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,6 +163,8 @@ services:
       dockerfile: backend/Dockerfile
       target: worker
     environment: *backend-env
+    volumes:
+      - upload_ci_storage:/app/storage/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -226,3 +230,6 @@ services:
         condition: service_healthy
       frontend-build:
         condition: service_completed_successfully
+
+volumes:
+  upload_ci_storage:
