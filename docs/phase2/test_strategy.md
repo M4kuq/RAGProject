@@ -152,7 +152,8 @@
 - `retrieval-eval-smoke.yml` exposes `workflow_dispatch`, low-frequency `schedule`, artifact upload, and GitHub step summary output.
 - The default path uses fake adapters and does not require GitHub secrets, external LLM/API keys, GPU, or heavy model downloads.
 - The smoke script parses dataset, strategy, metric, threshold, and warn/fail options.
-- Threshold violations are warnings in `warn` mode and non-zero exits in `fail` mode.
+- Threshold violations and failed evaluation items are warnings in `warn` mode and non-zero exits in `fail` mode.
+- `p95_latency_ms_max` is checked against the p95 latency value, not average latency.
 - JSON and Markdown artifacts contain only aggregate metrics, thresholds, failure counts, and limitations.
 - Artifacts and summaries redact raw prompt, full context, raw chunk text, PII, tokens, and secrets.
 - Local wrappers call the same backend module as the workflow.

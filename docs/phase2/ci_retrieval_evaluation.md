@@ -33,10 +33,13 @@ Manual inputs:
 
 - `dataset`: evaluation fixture name or persistent dataset id.
 - `strategies`: comma-separated list from `dense`, `sparse`, `hybrid`, `agentic_router`.
-- `mode`: `fake` or `local`; CI default is `fake`.
+- `mode`: `fake`; GitHub Actions does not expose `local` mode.
 - `threshold_mode`: `warn` or `fail`.
 - `case_limit`.
 - selected threshold overrides such as `recall_at_k_min` and `no_context_rate_max`.
+
+Use the local script for `--mode local` experiments so workflow results cannot
+be mistaken for real local adapter coverage.
 
 ## Local Command
 
@@ -86,7 +89,7 @@ Supported threshold fields include:
 - `sufficiency_score_avg_min`
 - `retrieval_call_count_avg_max`
 
-In `warn` mode, threshold violations are written to the JSON artifact and Markdown summary, but the workflow exits successfully. In `fail` mode, threshold violations make the script exit non-zero after artifacts and summary are written.
+In `warn` mode, threshold violations and failed evaluation items are written to the JSON artifact and Markdown summary, but the workflow exits successfully. In `fail` mode, threshold violations or any failed evaluation item make the script exit non-zero after artifacts and summary are written. The `p95_latency_ms_max` threshold is compared against each strategy's p95 value, not its mean latency.
 
 ## Artifacts
 

@@ -39,6 +39,7 @@ def test_parse_metrics_defaults_and_rejects_unknown() -> None:
 
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
     artifact: dict[str, object] = {
+        "summary": {"failed_count": 0},
         "metrics_by_strategy": [
             {
                 "strategy": "dense",
@@ -47,7 +48,7 @@ def test_threshold_warn_result_does_not_depend_on_mode() -> None:
                     "no_context_rate": {"average": 0.75},
                 },
             }
-        ]
+        ],
     }
     result = evaluate_thresholds(
         artifact,
@@ -61,6 +62,55 @@ def test_threshold_warn_result_does_not_depend_on_mode() -> None:
         "no_context_rate",
     ]
     assert "dense recall_at_k" in result.warnings[0]
+
+
+def test_threshold_uses_p95_latency_value() -> None:
+    artifact: dict[str, object] = {
+        "summary": {"failed_count": 0},
+        "metrics_by_strategy": [
+            {
+                "strategy": "agentic_router",
+                "metrics": {
+                    "p95_latency": {"average": 1000.0, "p95": 9000.0},
+                },
+            }
+        ],
+    }
+    result = evaluate_thresholds(
+        artifact,
+        SmokeThresholds(p95_latency_ms_max=8000.0),
+        "fail",
+    )
+
+    assert result.passed is False
+    assert result.violations == [
+        {
+            "strategy": "agentic_router",
+            "metric": "p95_latency",
+            "operator": "max",
+            "threshold": 8000.0,
+            "actual": 9000.0,
+        }
+    ]
+
+
+def test_threshold_flags_failed_evaluation_items() -> None:
+    artifact: dict[str, object] = {
+        "summary": {"failed_count": 2},
+        "metrics_by_strategy": [],
+    }
+    result = evaluate_thresholds(artifact, SmokeThresholds(), "fail")
+
+    assert result.passed is False
+    assert result.violations == [
+        {
+            "strategy": "all",
+            "metric": "failed_count",
+            "operator": "max",
+            "threshold": 0,
+            "actual": 2,
+        }
+    ]
 
 
 def test_redaction_removes_forbidden_keys_and_secret_like_values() -> None:
@@ -132,4 +182,8 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "actions/upload-artifact@v4" in workflow
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert "secrets." not in workflow
+    assert "SESSION_SECRET:" not in workflow
+    assert "POSTGRES_PASSWORD:" not in workflow
+    assert "- local" not in workflow
+    assert "SMOKE_MODE: ${{ github.event.inputs.mode || 'fake' }}" in workflow
     assert "BAAI/" not in workflow

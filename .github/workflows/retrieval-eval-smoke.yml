@@ -12,13 +12,12 @@ on:
         required: false
         default: "dense,hybrid,agentic_router"
       mode:
-        description: "Evaluation mode"
+        description: "Evaluation mode; GitHub Actions supports fake only"
         required: false
         default: "fake"
         type: choice
         options:
           - fake
-          - local
       threshold_mode:
         description: "Threshold behavior"
         required: false
@@ -91,9 +90,8 @@ concurrency:
 
 env:
   APP_ENV: ci
-  DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag
+  DATABASE_URL: postgresql+psycopg://rag@localhost:5432/rag
   CORS_ALLOWED_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
-  SESSION_SECRET: ci-only-change-me
   SESSION_COOKIE_NAME: rag_session
   CSRF_COOKIE_NAME: rag_csrf
   SESSION_TOKEN_BYTES: "32"
@@ -143,7 +141,7 @@ jobs:
         env:
           POSTGRES_DB: rag
           POSTGRES_USER: rag
-          POSTGRES_PASSWORD: rag
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-

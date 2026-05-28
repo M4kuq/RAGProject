@@ -270,6 +270,18 @@ def evaluate_thresholds(
         "retrieval_call_count_avg": ("max", thresholds.retrieval_call_count_avg_max),
     }
     violations: list[dict[str, object]] = []
+    summary = _dict_or_empty(artifact.get("summary"))
+    failed_count = _int_or_none(summary.get("failed_count")) or 0
+    if failed_count > 0:
+        violations.append(
+            {
+                "strategy": "all",
+                "metric": "failed_count",
+                "operator": "max",
+                "threshold": 0,
+                "actual": failed_count,
+            }
+        )
     for strategy in _list_of_dicts(artifact.get("metrics_by_strategy")):
         strategy_name = _safe_string(strategy.get("strategy"), fallback="unknown")
         metrics = strategy.get("metrics")
@@ -279,10 +291,11 @@ def evaluate_thresholds(
             metric = metrics.get(metric_name)
             if not isinstance(metric, dict):
                 continue
-            average = _float_or_none(metric.get("average"))
-            if average is None:
+            value_key = "p95" if metric_name == "p95_latency" else "average"
+            metric_value = _float_or_none(metric.get(value_key))
+            if metric_value is None:
                 continue
-            failed = average < threshold if operator == "min" else average > threshold
+            failed = metric_value < threshold if operator == "min" else metric_value > threshold
             if failed:
                 violations.append(
                     {
@@ -290,7 +303,7 @@ def evaluate_thresholds(
                         "metric": metric_name,
                         "operator": operator,
                         "threshold": threshold,
-                        "actual": round(average, 6),
+                        "actual": round(metric_value, 6),
                     }
                 )
     warnings = [
@@ -601,6 +614,12 @@ def _float_or_none(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def _fmt(value: object) -> str:
