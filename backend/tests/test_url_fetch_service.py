@@ -40,6 +40,26 @@ def test_url_fetch_success_uses_safe_source_url(monkeypatch: pytest.MonkeyPatch)
     get_settings.cache_clear()
 
 
+def test_url_fetch_preserves_ipv6_literal_brackets() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://[2606:4700:4700::1111]/"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body>IPv6</body></html>",
+        )
+
+    service = UrlFetchService(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=lambda host, port: [host],
+    )
+
+    result = service.fetch("https://[2606:4700:4700::1111]/")
+
+    assert result.final_url == "https://[2606:4700:4700::1111]/"
+    assert result.safe_final_url == "https://[2606:4700:4700::1111]/"
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -91,6 +111,19 @@ def test_url_fetch_revalidates_redirect_target() -> None:
         service.fetch("https://example.com/start")
 
 
+def test_url_fetch_rejects_malformed_redirect_location() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://[::1"})
+
+    service = UrlFetchService(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+
+    with pytest.raises(ValidationFailed):
+        service.fetch("https://example.com/start")
+
+
 def test_url_fetch_enforces_redirect_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOCUMENT_URL_FETCH_MAX_REDIRECTS", "1")
     get_settings.cache_clear()
@@ -106,6 +139,37 @@ def test_url_fetch_enforces_redirect_limit(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(ValidationFailed):
         service.fetch("https://example.com/a")
     get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        ("application/xml", b"""<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e "x">]><x />"""),
+        (
+            "application/xhtml+xml",
+            b'<x:svg xmlns:x="http://www.w3.org/2000/svg"><x:text>unsafe</x:text></x:svg>',
+        ),
+    ],
+)
+def test_url_fetch_rejects_unsafe_xml_or_xhtml_body(
+    content_type: str,
+    body: bytes,
+) -> None:
+    service = UrlFetchService(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": content_type},
+                    content=body,
+                )
+            )
+        ),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+
+    with pytest.raises(UnsafeFileRejected):
+        service.fetch("https://example.com/feed")
 
 
 def test_url_fetch_enforces_content_type_and_max_bytes(monkeypatch: pytest.MonkeyPatch) -> None:

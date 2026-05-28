@@ -35,6 +35,7 @@ _BLOCKED_HTML_TAGS = {"script", "style", "noscript", "iframe", "object", "embed"
 _BLOCK_TAGS = {"p", "div", "section", "article", "li", "tr", "br", "table", "ul", "ol"}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _TABLE_CELL_TAGS = {"td", "th"}
+_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 
 
 @dataclass(frozen=True)
@@ -283,9 +284,15 @@ def _html_blocks_to_pages(
 
 def _safe_xml_root(text: str) -> ElementTree.Element:
     lowered = text.lower()
-    if "<!doctype" in lowered or "<!entity" in lowered or "<svg" in lowered:
+    if "<!doctype" in lowered or "<!entity" in lowered:
         raise ExtractionError("text_extraction_failed", "Text extraction failed.")
-    return ElementTree.fromstring(text)
+    try:
+        root = ElementTree.fromstring(text.lstrip("\ufeff"))
+    except ElementTree.ParseError as exc:
+        raise ExtractionError("text_extraction_failed", "Text extraction failed.") from exc
+    if _xml_tree_contains_svg(root):
+        raise ExtractionError("text_extraction_failed", "Text extraction failed.")
+    return root
 
 
 def _xml_pages(
@@ -293,11 +300,11 @@ def _xml_pages(
 ) -> list[ExtractedPage]:
     settings = get_settings()
     pages: list[ExtractedPage] = []
-    for index, (path, element) in enumerate(
+    for index, (path, element, element_text) in enumerate(
         _walk_xml(root, max_elements=settings.ingest_xml_max_elements),
         start=1,
     ):
-        text = _safe_text(" ".join(element.itertext()))
+        text = _safe_text(element_text)
         if not text:
             continue
         safe_path = " / ".join(path)
@@ -331,26 +338,35 @@ def _walk_xml(
     root: ElementTree.Element,
     *,
     max_elements: int,
-) -> list[tuple[list[str], ElementTree.Element]]:
-    rows: list[tuple[list[str], ElementTree.Element]] = []
+) -> list[tuple[list[str], ElementTree.Element, str]]:
+    rows: list[tuple[list[str], ElementTree.Element, str]] = []
+    visited_count = 0
 
     def visit(element: ElementTree.Element, path: list[str]) -> None:
-        if len(rows) >= max_elements:
-            return
+        nonlocal visited_count
+        visited_count += 1
+        if visited_count > max_elements:
+            raise ExtractionError("text_extraction_failed", "Text extraction failed.")
         current_name = _safe_tag_name(element.tag)
         current_path = [*path, current_name]
         children = list(element)
+        own_text = _xml_direct_text(element)
         if not children:
-            rows.append((current_path, element))
+            rows.append((current_path, element, own_text))
             return
-        own_text = _safe_text(element.text)
         if own_text:
-            rows.append((current_path, element))
+            rows.append((current_path, element, own_text))
         for child in children:
             visit(child, current_path)
 
     visit(root, [])
     return rows
+
+
+def _xml_direct_text(element: ElementTree.Element) -> str:
+    parts = [element.text or ""]
+    parts.extend(child.tail or "" for child in element)
+    return _safe_text(" ".join(parts))
 
 
 def _parent_key(prefix: str, heading_path: tuple[str, ...], element_index: int) -> str:
@@ -372,6 +388,20 @@ def _safe_tag_name(value: object) -> str:
     if "}" in text:
         text = text.rsplit("}", 1)[1]
     return _safe_metadata_text(text) or "element"
+
+
+def _xml_tree_contains_svg(root: ElementTree.Element) -> bool:
+    return any(_is_svg_xml_tag(element.tag) for element in root.iter())
+
+
+def _is_svg_xml_tag(tag: object) -> bool:
+    text = str(tag)
+    if text.startswith("{"):
+        namespace, _, local_name = text[1:].partition("}")
+        return local_name.lower() == "svg" or namespace.lower() == _SVG_NAMESPACE
+    if ":" in text:
+        return text.rsplit(":", 1)[1].lower() == "svg"
+    return text.lower() == "svg"
 
 
 def _safe_text(value: object) -> str:

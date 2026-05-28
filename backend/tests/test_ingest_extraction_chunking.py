@@ -290,6 +290,35 @@ def test_xml_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
     assert "feed" in str(first.metadata["xml_path"])
 
 
+def test_xml_extraction_uses_parent_direct_text_without_child_duplicates(tmp_path: Path) -> None:
+    content = b"<root>intro<child>A</child>middle<child>B</child>end</root>"
+    path = tmp_path / "nested.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(
+        path, _metadata("nested.xml", "application/xml", len(content))
+    )
+
+    texts = [page.text for page in extracted.pages]
+    assert texts == ["intro middle end", "A", "B"]
+    assert "intro A middle B end" not in texts
+
+
+def test_xml_extraction_enforces_element_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", "2")
+    get_settings.cache_clear()
+    content = b"<root><child>A</child><child>B</child></root>"
+    path = tmp_path / "too-many.xml"
+    path.write_bytes(content)
+
+    with pytest.raises(ExtractionError):
+        XmlExtractor().extract(path, _metadata("too-many.xml", "application/xml", len(content)))
+
+    get_settings.cache_clear()
+
+
 def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(UnsafeFileRejected):
         validate_upload(
@@ -298,6 +327,25 @@ def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
             content=b"<svg><script>alert(1)</script></svg>",
             max_bytes=1000,
             allowed_extensions=[".xml"],
+        )
+
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="prefixed-vector.xml",
+            content_type="application/xml",
+            content=b'<x:svg xmlns:x="http://www.w3.org/2000/svg"><x:text>unsafe</x:text></x:svg>',
+            max_bytes=1000,
+            allowed_extensions=[".xml"],
+        )
+
+    svg_path = tmp_path / "prefixed-vector.xml"
+    svg_path.write_text(
+        '<x:svg xmlns:x="http://www.w3.org/2000/svg"><x:text>unsafe</x:text></x:svg>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ExtractionError):
+        XmlExtractor().extract(
+            svg_path, _metadata("prefixed-vector.xml", "application/xml", svg_path.stat().st_size)
         )
 
     path = tmp_path / "entity.xml"

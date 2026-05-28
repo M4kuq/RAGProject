@@ -17,7 +17,7 @@ from app.core.errors import (
     UnsupportedMediaType,
     ValidationFailed,
 )
-from app.storage.validators import sanitize_file_name
+from app.storage.validators import sanitize_file_name, validate_web_content_safety
 
 Resolver = Callable[[str, int | None], Sequence[str]]
 
@@ -77,8 +77,14 @@ class UrlFetchService:
                                     {"field": "url", "reason": "Redirect location is missing."}
                                 ]
                             )
+                        try:
+                            redirect_url = str(httpx.URL(current_url).join(location))
+                        except httpx.InvalidURL as exc:
+                            raise ValidationFailed(
+                                details=[{"field": "url", "reason": "Invalid redirect URL."}]
+                            ) from exc
                         current_url = _validate_url(
-                            str(httpx.URL(current_url).join(location)),
+                            redirect_url,
                             settings=self.settings,
                             resolver=self.resolver,
                         )
@@ -97,6 +103,7 @@ class UrlFetchService:
                         response,
                         max_bytes=self.settings.document_url_fetch_max_bytes,
                     )
+                    validate_web_content_safety(content_type=content_type, content=content)
                     return UrlFetchResult(
                         requested_url=url,
                         final_url=current_url,
@@ -126,6 +133,7 @@ def redact_url_for_display(url: str) -> str:
     except ValueError:
         return "redacted"
     port = f":{parsed_port}" if parsed_port is not None else ""
+    host = _host_for_netloc(host)
     path = parsed.path or "/"
     return urlunsplit((parsed.scheme.lower(), f"{host}{port}", path, "", ""))
 
@@ -153,7 +161,7 @@ def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> str:
     port = explicit_port or (443 if scheme == "https" else 80)
     for address in resolver(hostname, port):
         _validate_ip_policy(address, block_private=settings.document_url_fetch_block_private_ips)
-    normalized_netloc = hostname
+    normalized_netloc = _host_for_netloc(hostname)
     if explicit_port is not None:
         normalized_netloc = f"{normalized_netloc}:{explicit_port}"
     path = parsed.path or "/"
@@ -201,6 +209,8 @@ def _safe_stream(client: httpx.Client, url: str) -> Iterator[httpx.Response]:
         raise ValidationFailed(
             details=[{"field": "url", "reason": "URL fetch timed out."}]
         ) from exc
+    except httpx.InvalidURL as exc:
+        raise ValidationFailed(details=[{"field": "url", "reason": "Invalid URL."}]) from exc
     except httpx.HTTPError as exc:
         raise ValidationFailed(details=[{"field": "url", "reason": "URL fetch failed."}]) from exc
 
@@ -252,6 +262,20 @@ def _is_redirect(status_code: int) -> bool:
 
 def _normalized_hostname(hostname: str) -> str:
     try:
+        return ipaddress.ip_address(hostname.rstrip(".")).compressed.lower()
+    except ValueError:
+        pass
+    try:
         return hostname.encode("idna").decode("ascii").lower()
     except UnicodeError as exc:
         raise ValidationFailed(details=[{"field": "url", "reason": "Invalid URL host."}]) from exc
+
+
+def _host_for_netloc(hostname: str) -> str:
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return hostname
+    if ip.version == 6:
+        return f"[{ip.compressed}]"
+    return ip.compressed

@@ -5,6 +5,7 @@ import zipfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PureWindowsPath
+from xml.etree import ElementTree
 
 from app.core.errors import (
     PayloadTooLarge,
@@ -69,6 +70,17 @@ _OFFICE_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024
 _OFFICE_MAX_MAIN_XML_BYTES = 10 * 1024 * 1024
 _OFFICE_MAX_COMPRESSION_RATIO = 100
 _OFFICE_REJECTED_PART_DIR_MARKERS = ("/activeX/", "/embeddings/")
+_TEXT_DECODINGS = ("utf-8", "utf-8-sig", "cp932")
+_HTML_SVG_TAG_PATTERN = re.compile(r"<\s*(?:[A-Za-z_][\w.-]*:)?svg(?:[\s>/]|$)", re.I)
+_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+_XML_CONTENT_TYPES = {
+    "application/xhtml+xml",
+    "text/xml",
+    "application/xml",
+    "application/rss+xml",
+    "application/atom+xml",
+}
+_HTML_CONTENT_TYPES = {"text/html"}
 
 
 @dataclass(frozen=True)
@@ -149,6 +161,17 @@ def allowed_mime_types_for_extension(extension: str) -> set[str]:
     return set(_MIME_TYPES_BY_EXTENSION.get(extension.lower(), {"application/octet-stream"}))
 
 
+def validate_web_content_safety(*, content_type: str, content: bytes) -> None:
+    normalized_content_type = content_type.split(";", 1)[0].strip().lower()
+    if normalized_content_type not in _XML_CONTENT_TYPES | _HTML_CONTENT_TYPES:
+        return
+    text = _decode_text_for_validation(content)
+    if normalized_content_type in _XML_CONTENT_TYPES:
+        _validate_xml_upload_text(text)
+        return
+    _validate_html_upload_text(text)
+
+
 def _extension(filename: str) -> str:
     if "." not in filename:
         raise UnsupportedMediaType()
@@ -192,8 +215,7 @@ def _validate_magic_bytes(extension: str, content: bytes) -> None:
     if extension in {".txt", ".md", ".markdown", ".csv", ".html", ".htm", ".xml"}:
         if b"\x00" in content:
             raise UnsafeFileRejected()
-        decoded: str | None = None
-        for encoding in ("utf-8", "utf-8-sig", "cp932"):
+        for encoding in _TEXT_DECODINGS:
             try:
                 decoded = content.decode(encoding)
                 if extension == ".xml":
@@ -309,8 +331,7 @@ def _is_rejected_office_part(name: str) -> bool:
 
 
 def _validate_html_upload_text(text: str) -> None:
-    lowered = text.lower()
-    if "<svg" in lowered:
+    if _HTML_SVG_TAG_PATTERN.search(text):
         raise UnsafeFileRejected()
 
 
@@ -318,5 +339,34 @@ def _validate_xml_upload_text(text: str) -> None:
     lowered = text.lower()
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise UnsafeFileRejected()
-    if "<svg" in lowered:
+    try:
+        root = ElementTree.fromstring(text.lstrip("\ufeff"))
+    except ElementTree.ParseError as exc:
+        raise UnsafeFileRejected() from exc
+    if _xml_tree_contains_svg(root):
         raise UnsafeFileRejected()
+
+
+def _decode_text_for_validation(content: bytes) -> str:
+    if b"\x00" in content:
+        raise UnsafeFileRejected()
+    for encoding in _TEXT_DECODINGS:
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise UnsafeFileRejected()
+
+
+def _xml_tree_contains_svg(root: ElementTree.Element) -> bool:
+    return any(_is_svg_xml_tag(element.tag) for element in root.iter())
+
+
+def _is_svg_xml_tag(tag: object) -> bool:
+    text = str(tag)
+    if text.startswith("{"):
+        namespace, _, local_name = text[1:].partition("}")
+        return local_name.lower() == "svg" or namespace.lower() == _SVG_NAMESPACE
+    if ":" in text:
+        return text.rsplit(":", 1)[1].lower() == "svg"
+    return text.lower() == "svg"
