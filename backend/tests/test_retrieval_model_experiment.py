@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -70,6 +72,21 @@ class _DownloadPolicyProbeLoader:
         raise AssertionError("reranker should not be probed")
 
 
+class _MixedRequiredLoader:
+    def package_available(self) -> bool:
+        return True
+
+    def probe_embedding(self, model_id: str, *, local_files_only: bool) -> int | None:
+        del local_files_only
+        if model_id == "sentence-transformers/all-MiniLM-L6-v2":
+            return 384
+        raise RuntimeError("model unavailable")
+
+    def probe_reranker(self, model_id: str, *, local_files_only: bool) -> None:
+        del model_id, local_files_only
+        raise AssertionError("reranker should not be probed")
+
+
 def test_manifest_parse_and_validation(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(_manifest_payload()), encoding="utf-8")
@@ -88,6 +105,14 @@ def test_manifest_rejects_secret_like_model_id() -> None:
     first_model = embedding_models[0]
     assert isinstance(first_model, dict)
     first_model["model_id"] = "sk-secret-token"
+
+    with pytest.raises(ValueError):
+        ExperimentManifest.model_validate(payload)
+
+
+def test_manifest_rejects_case_limit_above_evaluation_runner_limit() -> None:
+    payload = _manifest_payload()
+    payload["case_limit"] = 51
 
     with pytest.raises(ValueError):
         ExperimentManifest.model_validate(payload)
@@ -403,6 +428,133 @@ def test_cli_local_skipped_exits_nonzero(
     assert result == 2
 
 
+def test_required_blocked_candidate_keeps_overall_status_blocked() -> None:
+    payload = _manifest_payload(include_reranker=False)
+    payload["embedding_models"] = [
+        {
+            "model_id": "BAAI/bge-small-en-v1.5",
+            "provider": "sentence_transformers",
+            "enabled": True,
+            "required": True,
+            "expected_dimension": 384,
+        },
+        {
+            "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+            "provider": "sentence_transformers",
+            "enabled": True,
+            "required": False,
+            "expected_dimension": 384,
+        },
+    ]
+    manifest = ExperimentManifest.model_validate(payload)
+
+    def executor(*args: object, **kwargs: object) -> ExperimentEvaluationOutcome:
+        del args, kwargs
+        return ExperimentEvaluationOutcome(
+            status="succeeded",
+            metrics_by_strategy=[],
+            metrics={},
+            case_count=1,
+            evaluation_run_id=123,
+            failure_summary={},
+            reason_codes=[],
+            elapsed_ms=10,
+        )
+
+    runner = RetrievalModelExperimentRunner(
+        settings=Settings(),
+        loader=_MixedRequiredLoader(),
+        evaluation_executor=executor,
+    )
+
+    artifact = runner.run(manifest, _options(mode=ExperimentMode.LOCAL))
+
+    assert artifact["summary"]["status"] == "blocked"  # type: ignore[index]
+    assert artifact["summary"]["succeeded_count"] == 1  # type: ignore[index]
+    assert artifact["summary"]["blocked_count"] == 1  # type: ignore[index]
+
+
+def test_smoke_preflight_blocks_before_seed_indexing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_smoke(config: Any, settings: Settings) -> dict[str, object]:
+        del settings
+        assert config.preflight_only is True
+        return {
+            "summary": {
+                "status": "blocked",
+                "case_count": 0,
+                "blocked_reason_codes": ["qdrant_unavailable"],
+            },
+            "preflight": {
+                "status": "blocked",
+                "reason_codes": ["qdrant_unavailable"],
+            },
+            "metrics_by_strategy": [],
+            "failure_summary": {},
+        }
+
+    monkeypatch.setattr(smoke_module, "run_smoke", fake_smoke)
+    monkeypatch.setattr(
+        "app.experiments.runner.SessionLocal",
+        lambda: pytest.fail("seed indexing should not run after blocked preflight"),
+    )
+
+    outcome = run_local_strategy_evaluation(
+        ExperimentManifest.model_validate(_manifest_payload(include_reranker=False)),
+        _options(mode=ExperimentMode.LOCAL, index_seed_documents=True),
+        Settings(),
+        ExperimentModelCandidate(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            expected_dimension=384,
+        ),
+        None,
+        _available_embedding_availability(),
+    )
+
+    assert outcome.status == "blocked"
+    assert "qdrant_unavailable" in outcome.reason_codes
+
+
+def test_run_smoke_restores_huggingface_offline_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "original")
+
+    def fake_smoke(config: object, settings: Settings) -> dict[str, object]:
+        del config, settings
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        return {
+            "summary": {
+                "case_count": 1,
+                "succeeded_count": 1,
+                "failed_count": 0,
+            },
+            "metrics_by_strategy": [],
+            "failure_summary": {},
+        }
+
+    monkeypatch.setattr(smoke_module, "run_smoke", fake_smoke)
+
+    outcome = run_local_strategy_evaluation(
+        ExperimentManifest.model_validate(_manifest_payload(include_reranker=False)),
+        _options(mode=ExperimentMode.LOCAL),
+        Settings(),
+        ExperimentModelCandidate(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            expected_dimension=384,
+        ),
+        None,
+        _available_embedding_availability(),
+    )
+
+    assert outcome.status == "succeeded"
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "original"
+
+
 def test_local_mode_executor_failure_is_safe_result() -> None:
     manifest = ExperimentManifest.model_validate(_manifest_payload(include_reranker=False))
 
@@ -515,6 +667,40 @@ def test_cli_rejects_invalid_strategy(tmp_path: Path) -> None:
     assert result == 2
 
 
+def test_cli_rejects_case_limit_above_evaluation_runner_limit(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_manifest_payload()), encoding="utf-8")
+
+    result = experiment_main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--mode",
+            "dry-run",
+            "--case-limit",
+            "51",
+        ]
+    )
+
+    assert result == 2
+
+
+def test_wrappers_do_not_override_manifest_download_policy_by_default() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    shell_wrapper_path = repo_root / "scripts" / "run_retrieval_model_experiment.sh"
+    ps_wrapper_path = repo_root / "scripts" / "run_retrieval_model_experiment.ps1"
+    if not shell_wrapper_path.exists() or not ps_wrapper_path.exists():
+        pytest.skip("repository-level wrapper scripts are not copied into backend test image")
+
+    shell_wrapper = shell_wrapper_path.read_text(encoding="utf-8")
+    ps_wrapper = ps_wrapper_path.read_text(encoding="utf-8")
+
+    assert 'DOWNLOAD_POLICY="${DOWNLOAD_POLICY:-}"' in shell_wrapper
+    assert '--download-policy "${DOWNLOAD_POLICY}"' not in shell_wrapper
+    assert '[string]$DownloadPolicy = ""' in ps_wrapper
+    assert 'if ($DownloadPolicy -ne "")' in ps_wrapper
+
+
 def test_dataset_check_reports_unavailable_db_safely(monkeypatch: pytest.MonkeyPatch) -> None:
     class BrokenSession:
         def __enter__(self) -> object:
@@ -547,6 +733,7 @@ def _options(
     *,
     download_policy: DownloadPolicy = DownloadPolicy.IF_CACHED,
     download_policy_is_explicit: bool = False,
+    index_seed_documents: bool = False,
 ) -> ExperimentRunOptions:
     return ExperimentRunOptions(
         mode=mode,
@@ -555,8 +742,23 @@ def _options(
         strategies=None,
         metrics=None,
         timeout_seconds=60,
-        index_seed_documents=False,
+        index_seed_documents=index_seed_documents,
         download_policy_is_explicit=download_policy_is_explicit,
+    )
+
+
+def _available_embedding_availability() -> ModelAvailability:
+    candidate = ExperimentModelCandidate(model_id="sentence-transformers/all-MiniLM-L6-v2")
+    return ModelAvailability(
+        model_id="sentence-transformers/all-MiniLM-L6-v2",
+        model_type=ModelKind.EMBEDDING,
+        provider=candidate.provider,
+        status="available",
+        reason_codes=("available",),
+        required=False,
+        download_policy=DownloadPolicy.IF_CACHED,
+        expected_dimension=384,
+        actual_dimension=384,
     )
 
 

@@ -12,7 +12,12 @@ from app.experiments.runner import (
     load_manifest,
     write_experiment_artifacts,
 )
-from app.experiments.schemas import ALLOWED_EXPERIMENT_STRATEGIES, DownloadPolicy, ExperimentMode
+from app.experiments.schemas import (
+    ALLOWED_EXPERIMENT_STRATEGIES,
+    MAX_EXPERIMENT_CASE_LIMIT,
+    DownloadPolicy,
+    ExperimentMode,
+)
 from app.schemas.evaluations import EvaluationMetricName
 
 DEFAULT_MANIFEST = Path("app/experiments/manifests/phase2_retrieval_models.example.json")
@@ -51,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             download_policy=DownloadPolicy(args.download_policy)
             if args.download_policy is not None
             else DownloadPolicy.IF_CACHED,
-            case_limit=_positive_int_or_none(args.case_limit, "case_limit"),
+            case_limit=_case_limit_or_none(args.case_limit),
             strategies=_parse_strategies(args.strategies),
             metrics=_parse_metrics(args.metrics),
             timeout_seconds=_positive_int(args.timeout_seconds, "timeout_seconds"),
@@ -112,6 +117,13 @@ def _positive_int_or_none(value: int | None, name: str) -> int | None:
     if value is None:
         return None
     return _positive_int(value, name)
+
+
+def _case_limit_or_none(value: int | None) -> int | None:
+    case_limit = _positive_int_or_none(value, "case_limit")
+    if case_limit is not None and case_limit > MAX_EXPERIMENT_CASE_LIMIT:
+        raise ValueError("invalid_case_limit")
+    return case_limit
 
 
 def _positive_int(value: int, name: str) -> int:

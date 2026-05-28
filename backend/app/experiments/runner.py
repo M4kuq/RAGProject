@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -66,6 +67,9 @@ class ExperimentEvaluationOutcome:
     failure_summary: dict[str, int]
     reason_codes: list[str]
     elapsed_ms: int
+
+
+_HF_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
 
 EvaluationExecutor = Callable[
@@ -205,7 +209,10 @@ class RetrievalModelExperimentRunner:
             "embedding_model_id": embedding.model_id,
             "embedding_expected_dimension": embedding_availability.expected_dimension,
             "embedding_actual_dimension": embedding_availability.actual_dimension,
+            "embedding_required": embedding.required,
             "reranker_model_id": reranker.model_id if reranker else "none",
+            "reranker_required": reranker.required if reranker else False,
+            "required": embedding.required or (reranker.required if reranker else False),
             "reason_codes": sorted(set(reason_codes)),
             "case_count": None,
             "evaluation_run_id": None,
@@ -263,13 +270,9 @@ def run_local_strategy_evaluation(
         embedding_availability,
         manifest.experiment_name,
     )
-    if options.index_seed_documents:
-        with SessionLocal() as db:
-            _seed_and_index(db, experiment_settings)
     from app.scripts.retrieval_eval_smoke import (
         SmokeConfig,
         SmokeThresholds,
-        run_smoke,
     )
 
     config = SmokeConfig(
@@ -288,8 +291,38 @@ def run_local_strategy_evaluation(
         thresholds=SmokeThresholds(),
         preflight_only=False,
     )
-    artifact = run_smoke(config, experiment_settings)
+    if options.index_seed_documents:
+        preflight_artifact = _run_smoke_preserving_hf_env(
+            replace(config, preflight_only=True),
+            experiment_settings,
+        )
+        if _local_smoke_status(_as_dict(preflight_artifact.get("summary"))) == "blocked":
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return _outcome_from_smoke_artifact(preflight_artifact, elapsed_ms)
+        try:
+            with SessionLocal() as db:
+                _seed_and_index(db, experiment_settings)
+        except Exception:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return ExperimentEvaluationOutcome(
+                status="blocked",
+                metrics_by_strategy=[],
+                metrics={},
+                case_count=None,
+                evaluation_run_id=None,
+                failure_summary={},
+                reason_codes=["seed_indexing_failed"],
+                elapsed_ms=elapsed_ms,
+            )
+    artifact = _run_smoke_preserving_hf_env(config, experiment_settings)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return _outcome_from_smoke_artifact(artifact, elapsed_ms)
+
+
+def _outcome_from_smoke_artifact(
+    artifact: dict[str, object],
+    elapsed_ms: int,
+) -> ExperimentEvaluationOutcome:
     summary = _as_dict(artifact.get("summary"))
     status = _local_smoke_status(summary)
     metrics_by_strategy = _list_of_dicts(artifact.get("metrics_by_strategy"))
@@ -303,6 +336,23 @@ def run_local_strategy_evaluation(
         reason_codes=_artifact_reason_codes(artifact),
         elapsed_ms=elapsed_ms,
     )
+
+
+def _run_smoke_preserving_hf_env(
+    config: Any,
+    settings: Settings,
+) -> dict[str, object]:
+    previous = {key: os.environ.get(key) for key in _HF_OFFLINE_ENV_VARS}
+    try:
+        from app.scripts.retrieval_eval_smoke import run_smoke
+
+        return cast(dict[str, object], run_smoke(config, settings))
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def write_experiment_artifacts(
@@ -404,6 +454,8 @@ def _summary(results: Sequence[dict[str, object]], elapsed_ms: int) -> dict[str,
     }
     if counts["failed_count"]:
         status = "failed"
+    elif _has_required_blocked_result(results):
+        status = "blocked"
     elif counts["blocked_count"] and counts["succeeded_count"] == 0 and counts["ready_count"] == 0:
         status = "blocked"
     elif counts["succeeded_count"]:
@@ -417,6 +469,10 @@ def _summary(results: Sequence[dict[str, object]], elapsed_ms: int) -> dict[str,
 
 def _count_status(results: Sequence[dict[str, object]], status: str) -> int:
     return sum(1 for item in results if item.get("status") == status)
+
+
+def _has_required_blocked_result(results: Sequence[dict[str, object]]) -> bool:
+    return any(item.get("status") == "blocked" and item.get("required") is True for item in results)
 
 
 def _aggregate_metrics(metrics_by_strategy: Sequence[dict[str, object]]) -> dict[str, float | None]:

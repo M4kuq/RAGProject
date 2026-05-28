@@ -14,6 +14,7 @@ EXPERIMENT_RESULT_SCHEMA_VERSION: Literal["phase2.st_experiment_result.v1"] = (
 )
 
 ALLOWED_EXPERIMENT_STRATEGIES = {"dense", "sparse", "hybrid", "agentic_router"}
+MAX_EXPERIMENT_CASE_LIMIT = 50
 DEFAULT_EXPERIMENT_METRICS = (
     "recall_at_k",
     "mrr",
@@ -78,7 +79,7 @@ class ExperimentManifest(BaseModel):
     schema_version: Literal["phase2.experiment.v1"] = MANIFEST_SCHEMA_VERSION
     experiment_name: str = Field(min_length=1, max_length=120)
     dataset: str = Field(min_length=1, max_length=120)
-    case_limit: int = Field(default=20, ge=1, le=200)
+    case_limit: int = Field(default=20, ge=1, le=MAX_EXPERIMENT_CASE_LIMIT)
     strategies: list[str] = Field(default_factory=lambda: ["dense", "hybrid"])
     embedding_models: list[ExperimentModelCandidate] = Field(min_length=1)
     reranker_models: list[ExperimentModelCandidate] = Field(default_factory=list)

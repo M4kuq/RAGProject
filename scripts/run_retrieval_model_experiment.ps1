@@ -2,8 +2,8 @@ param(
     [string]$Manifest = "app\experiments\manifests\phase2_retrieval_models.example.json",
     [ValidateSet("validate", "dry-run", "local")]
     [string]$Mode = "dry-run",
-    [ValidateSet("never", "if-cached", "opt-in-download")]
-    [string]$DownloadPolicy = "if-cached",
+    [ValidateSet("", "never", "if-cached", "opt-in-download")]
+    [string]$DownloadPolicy = "",
     [int]$TimeoutSeconds = 600,
     [string]$OutputJson = "..\artifacts\experiments\retrieval_model_comparison.json",
     [string]$OutputMd = "..\artifacts\experiments\retrieval_model_comparison.md",
@@ -27,8 +27,6 @@ try {
         $Manifest,
         "--mode",
         $Mode,
-        "--download-policy",
-        $DownloadPolicy,
         "--timeout-seconds",
         $TimeoutSeconds,
         "--output-json",
@@ -36,6 +34,9 @@ try {
         "--output-md",
         $OutputMd
     )
+    if ($DownloadPolicy -ne "") {
+        $argsList += @("--download-policy", $DownloadPolicy)
+    }
     if ($SkipSeedIndexing) {
         $argsList += "--skip-seed-indexing"
     }
