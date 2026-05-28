@@ -17,7 +17,7 @@ $BackendDir = Join-Path $RepoRoot "backend"
 
 Push-Location $BackendDir
 try {
-    uv run python -m app.scripts.retrieval_eval_smoke `
+    uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke `
         --dataset $Dataset `
         --strategies $Strategies `
         --mode $Mode `

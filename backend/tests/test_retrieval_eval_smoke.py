@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import threading
 import time
 from pathlib import Path
 from typing import cast
@@ -107,6 +109,139 @@ def test_timeout_wrapper_raises_before_blocking_call_returns() -> None:
         smoke_module._run_with_timeout(0.01, lambda: time.sleep(0.2))
 
     assert time.perf_counter() - started < 0.5
+
+
+def test_thread_timeout_evaluation_creates_session_inside_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_thread_id = threading.get_ident()
+    config = config_from_args(["--timeout-seconds", "1"])
+    settings = Settings()
+    detail = object()
+
+    class CreatedRun:
+        evaluation_run_id = 123
+
+    class ThreadBoundSession:
+        def __init__(self) -> None:
+            self.thread_id = -1
+
+        def __enter__(self) -> ThreadBoundSession:
+            self.thread_id = threading.get_ident()
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            self.assert_current_thread()
+
+        def assert_current_thread(self) -> None:
+            assert threading.get_ident() == self.thread_id
+
+    sessions: list[ThreadBoundSession] = []
+
+    class FakeEvaluationService:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.repository = object()
+
+        def create_run(
+            self,
+            db: ThreadBoundSession,
+            *,
+            payload: object,
+            user: object,
+        ) -> CreatedRun:
+            del payload, user
+            db.assert_current_thread()
+            return CreatedRun()
+
+        def run_job(
+            self,
+            db: ThreadBoundSession,
+            *,
+            evaluation_run_id: int,
+            request_id: str | None,
+        ) -> dict[str, object]:
+            del evaluation_run_id, request_id
+            db.assert_current_thread()
+            return {"status": "succeeded"}
+
+        def get_run_detail(
+            self,
+            db: ThreadBoundSession,
+            *,
+            evaluation_run_id: int,
+        ) -> object:
+            del evaluation_run_id
+            db.assert_current_thread()
+            return detail
+
+    def session_factory() -> ThreadBoundSession:
+        session = ThreadBoundSession()
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(smoke_module, "_can_use_signal_timeout", lambda: False)
+    monkeypatch.setattr(smoke_module, "SessionLocal", session_factory)
+    monkeypatch.setattr(smoke_module, "EvaluationService", FakeEvaluationService)
+    monkeypatch.setattr(smoke_module, "_admin_user", lambda db: object())
+    monkeypatch.setattr(
+        smoke_module,
+        "_resolve_dataset",
+        lambda db, service, dataset: (dataset, None),
+    )
+
+    result = smoke_module._run_evaluation(
+        config,
+        settings,
+        deadline=time.perf_counter() + 1,
+    )
+
+    assert result is detail
+    assert len(sessions) == 1
+    assert sessions[0].thread_id != main_thread_id
+
+
+def test_main_writes_failed_artifact_when_evaluation_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    json_path = tmp_path / "retrieval_eval_smoke.json"
+    md_path = tmp_path / "retrieval_eval_smoke.md"
+
+    monkeypatch.setattr(
+        smoke_module,
+        "preflight_smoke",
+        lambda config, settings: smoke_module.PreflightResult(
+            status="ready",
+            reason_codes=[],
+            checks=[{"name": "qdrant", "status": "ready"}],
+        ),
+    )
+
+    def fail_evaluation(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise SmokeError("all_cases_failed")
+
+    monkeypatch.setattr(smoke_module, "_run_evaluation", fail_evaluation)
+
+    exit_code = smoke_module.main(
+        [
+            "--timeout-seconds",
+            "1",
+            "--output-json",
+            str(json_path),
+            "--output-md",
+            str(md_path),
+        ]
+    )
+
+    assert exit_code == 1
+    artifact = json.loads(json_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["status"] == "failed"
+    assert artifact["summary"]["passed"] is False
+    assert artifact["failure_summary"] == {"all_cases_failed": 1}
+    assert artifact["threshold_result"]["passed"] is False
+    assert "all_cases_failed" in md_path.read_text(encoding="utf-8")
 
 
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
@@ -267,3 +402,12 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
     assert "RERANK_PROVIDER: fake" not in workflow
     assert "GENERATION_PROVIDER: fake" not in workflow
     assert "GENERATION_PROVIDER: ollama" not in workflow
+
+    for wrapper_path in [
+        Path("../scripts/run_retrieval_eval_smoke.ps1"),
+        Path("../scripts/run_retrieval_eval_smoke.sh"),
+    ]:
+        if not wrapper_path.exists():
+            pytest.skip("local wrapper scripts are not copied into the backend Docker test image")
+        wrapper = wrapper_path.read_text(encoding="utf-8")
+        assert 'uv run --with "sentence-transformers>=2.7.0,<4" python' in wrapper

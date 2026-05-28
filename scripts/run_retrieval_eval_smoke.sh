@@ -14,7 +14,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_ROOT}/backend"
-uv run python -m app.scripts.retrieval_eval_smoke \
+uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke \
   --dataset "${DATASET}" \
   --strategies "${STRATEGIES}" \
   --mode "${MODE}" \

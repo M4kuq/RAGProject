@@ -61,6 +61,7 @@ _SECRET_VALUE_RE = re.compile(
     r"|bearer\s+[A-Za-z0-9._-]+"
     r"|sk-[A-Za-z0-9]+"
 )
+_SAFE_ERROR_CODE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 _FORBIDDEN_KEYS = {
     "api_key",
     "answer_text",
@@ -195,10 +196,34 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
             redact_for_artifact(build_preflight_artifact(config, preflight, elapsed_ms)),
         )
     deadline = time.perf_counter() + config.timeout_seconds
-    detail = _run_evaluation(config, settings, deadline=deadline)
+    try:
+        detail = _run_evaluation(config, settings, deadline=deadline)
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return cast(
+            dict[str, object],
+            redact_for_artifact(
+                build_failure_artifact(
+                    config,
+                    reason_code=_failure_reason_code(exc),
+                    elapsed_ms=elapsed_ms,
+                    preflight=preflight,
+                )
+            ),
+        )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if elapsed_ms > config.timeout_seconds * 1000:
-        raise SmokeError("timeout_exceeded")
+        return cast(
+            dict[str, object],
+            redact_for_artifact(
+                build_failure_artifact(
+                    config,
+                    reason_code="timeout_exceeded",
+                    elapsed_ms=elapsed_ms,
+                    preflight=preflight,
+                )
+            ),
+        )
     artifact = build_artifact(config, detail, elapsed_ms)
     threshold_result = evaluate_thresholds(artifact, config.thresholds, config.threshold_mode)
     artifact["threshold_result"] = {
@@ -295,11 +320,83 @@ def build_preflight_artifact(
     }
 
 
+def build_failure_artifact(
+    config: SmokeConfig,
+    *,
+    reason_code: str,
+    elapsed_ms: int,
+    preflight: PreflightResult | None = None,
+) -> dict[str, object]:
+    warning = f"evaluation_failed:{reason_code}"
+    artifact: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dataset": {"name": config.dataset, "evaluation_dataset_id": None},
+        "strategies": config.strategies,
+        "mode": config.mode,
+        "threshold_mode": config.threshold_mode,
+        "trigger_type": config.trigger_type.value,
+        "case_limit": config.case_limit,
+        "top_k": config.top_k,
+        "rerank_top_n": config.rerank_top_n,
+        "timeout_seconds": config.timeout_seconds,
+        "elapsed_ms": elapsed_ms,
+        "evaluation_run_id": None,
+        "summary": {
+            "case_count": 0,
+            "succeeded_count": 0,
+            "failed_count": 1,
+            "strategy_count": len(config.strategies),
+            "status": "failed",
+            "blocked": False,
+            "blocked_reason_codes": [],
+            "passed": False,
+            "warnings": [warning],
+        },
+        "metrics_by_strategy": [],
+        "failure_summary": {reason_code: 1},
+        "agentic_summary": None,
+        "thresholds": config.thresholds.__dict__,
+        "threshold_result": {
+            "passed": False,
+            "mode": config.threshold_mode,
+            "violations": [
+                {
+                    "strategy": "all",
+                    "metric": "evaluation_status",
+                    "operator": "eq",
+                    "threshold": "succeeded",
+                    "actual": reason_code,
+                }
+            ],
+            "warnings": [warning],
+        },
+        "known_limitations": _known_limitations(),
+    }
+    if preflight is not None:
+        artifact["preflight"] = {
+            "status": preflight.status,
+            "reason_codes": preflight.reason_codes,
+            "checks": preflight.checks,
+        }
+    return artifact
+
+
 def _run_evaluation(
     config: SmokeConfig,
     settings: Settings,
     *,
     deadline: float,
+) -> EvaluationRunDetail:
+    return _run_with_timeout(
+        _remaining_timeout_seconds(deadline),
+        lambda: _run_evaluation_in_session(config, settings),
+    )
+
+
+def _run_evaluation_in_session(
+    config: SmokeConfig,
+    settings: Settings,
 ) -> EvaluationRunDetail:
     with SessionLocal() as db:
         service = EvaluationService(
@@ -320,18 +417,12 @@ def _run_evaluation(
         )
         created = service.create_run(db, payload=payload, user=user)
         request_id = _request_id(created.evaluation_run_id, config.strategies)
-        _run_with_timeout(
-            _remaining_timeout_seconds(deadline),
-            lambda: service.run_job(
-                db,
-                evaluation_run_id=created.evaluation_run_id,
-                request_id=request_id,
-            ),
+        service.run_job(
+            db,
+            evaluation_run_id=created.evaluation_run_id,
+            request_id=request_id,
         )
-        return _run_with_timeout(
-            _remaining_timeout_seconds(deadline),
-            lambda: service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id),
-        )
+        return service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
 
 
 class SmokeEvaluationRagQuestionService(EvaluationRagQuestionService):
@@ -610,6 +701,8 @@ def main(argv: list[str] | None = None) -> int:
             and not threshold.get("passed", True)
         ):
             return 2
+        if status == "failed":
+            return 1
         return 0
     except SmokeError as exc:
         print(f"retrieval_eval_smoke_error code={_redact_string(str(exc))}", file=sys.stderr)
@@ -756,6 +849,15 @@ def _reject_fake_provider(
     checks.append({"name": name, "status": status, "provider": value.lower()})
     if status == "blocked":
         reason_codes.append(reason_code)
+
+
+def _failure_reason_code(exc: BaseException) -> str:
+    value = str(exc).strip()
+    if value and _SAFE_ERROR_CODE_RE.fullmatch(value):
+        return value
+    if isinstance(exc, SmokeError):
+        return "smoke_failed"
+    return "evaluation_run_failed"
 
 
 def _note_generation_backend_not_applicable(
