@@ -1,0 +1,647 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+import time
+from dataclasses import dataclass, fields
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal, cast
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings, get_settings
+from app.db.models import Role, User
+from app.db.session import SessionLocal
+from app.rag.strategy import RetrievalStrategy
+from app.schemas.evaluations import (
+    DEFAULT_EVALUATION_METRICS,
+    EvaluationMetricName,
+    EvaluationRunCreateRequest,
+    EvaluationRunDetail,
+    EvaluationRunRequestStrategy,
+    EvaluationTriggerType,
+)
+from app.services.evaluation_service import EvaluationService
+
+SCHEMA_VERSION = "phase2.ci_eval.v1"
+DEFAULT_DATASET = "phase2_strategy_smoke"
+DEFAULT_STRATEGIES = "dense,hybrid,agentic_router"
+DEFAULT_CASE_LIMIT = 5
+DEFAULT_TOP_K = 10
+DEFAULT_RERANK_TOP_N = 5
+DEFAULT_TIMEOUT_SECONDS = 300
+ALLOWED_STRATEGIES = {
+    RetrievalStrategy.DENSE.value,
+    RetrievalStrategy.SPARSE.value,
+    RetrievalStrategy.HYBRID.value,
+    RetrievalStrategy.AGENTIC_ROUTER.value,
+}
+_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|password|credential|token|cookie|csrf|session)\s*[:=]\s*[^,\s;]+"
+    r"|bearer\s+[A-Za-z0-9._-]+"
+    r"|sk-[A-Za-z0-9]+"
+)
+_FORBIDDEN_KEYS = {
+    "api_key",
+    "answer_text",
+    "content_text",
+    "context_items",
+    "context_sources",
+    "cookie",
+    "credential",
+    "csrf",
+    "full_answer",
+    "full_context",
+    "password",
+    "prompt",
+    "raw_chunk",
+    "raw_context",
+    "raw_prompt",
+    "raw_text",
+    "secret",
+    "session",
+    "token",
+}
+
+
+class SmokeError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SmokeThresholds:
+    recall_at_k_min: float = 0.0
+    mrr_min: float = 0.0
+    citation_coverage_min: float = 0.0
+    groundedness_min: float = 0.0
+    faithfulness_min: float = 0.0
+    no_context_rate_max: float = 1.0
+    p95_latency_ms_max: float = 30000.0
+    strategy_selection_accuracy_min: float = 0.0
+    fallback_rate_max: float = 1.0
+    budget_exhausted_rate_max: float = 1.0
+    sufficiency_score_avg_min: float = 0.0
+    retrieval_call_count_avg_max: float = 3.0
+
+
+@dataclass(frozen=True)
+class SmokeConfig:
+    dataset: str
+    strategies: list[str]
+    mode: Literal["fake", "local"]
+    threshold_mode: Literal["warn", "fail"]
+    metrics: list[str]
+    case_limit: int
+    top_k: int
+    rerank_top_n: int
+    timeout_seconds: int
+    output_json: Path
+    output_md: Path
+    trigger_type: EvaluationTriggerType
+    thresholds: SmokeThresholds
+
+
+@dataclass(frozen=True)
+class ThresholdResult:
+    passed: bool
+    violations: list[dict[str, object]]
+    warnings: list[str]
+
+
+def parse_strategies(value: str) -> list[str]:
+    strategies: list[str] = []
+    for raw in value.split(","):
+        strategy = raw.strip()
+        if not strategy:
+            continue
+        if strategy not in ALLOWED_STRATEGIES:
+            raise SmokeError(f"invalid_strategy:{strategy}")
+        if strategy not in strategies:
+            strategies.append(strategy)
+    if not strategies:
+        raise SmokeError("strategies_required")
+    return strategies
+
+
+def parse_metrics(value: str | None) -> list[str]:
+    if value is None or not value.strip():
+        return [metric.value for metric in DEFAULT_EVALUATION_METRICS]
+    known = {metric.value for metric in EvaluationMetricName}
+    metrics: list[str] = []
+    for raw in value.split(","):
+        metric = raw.strip()
+        if not metric:
+            continue
+        if metric not in known:
+            raise SmokeError(f"invalid_metric:{metric}")
+        if metric not in metrics:
+            metrics.append(metric)
+    if not metrics:
+        raise SmokeError("metrics_required")
+    return metrics
+
+
+def parse_thresholds(args: argparse.Namespace) -> SmokeThresholds:
+    values = {}
+    for field in fields(SmokeThresholds):
+        value = getattr(args, field.name)
+        if value < 0:
+            raise SmokeError(f"invalid_threshold:{field.name}")
+        values[field.name] = float(value)
+    return SmokeThresholds(**values)
+
+
+def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str, object]:
+    started = time.perf_counter()
+    settings = settings or get_settings()
+    if config.mode == "fake":
+        _assert_fake_mode(settings)
+    with SessionLocal() as db:
+        service = EvaluationService(settings=settings)
+        user = _admin_user(db)
+        dataset_name, evaluation_dataset_id = _resolve_dataset(db, service, config.dataset)
+        payload = EvaluationRunCreateRequest(
+            dataset_name=dataset_name,
+            evaluation_dataset_id=evaluation_dataset_id,
+            strategies=[
+                EvaluationRunRequestStrategy(strategy) for strategy in config.strategies
+            ],
+            metrics=[EvaluationMetricName(metric) for metric in config.metrics],
+            case_limit=config.case_limit,
+            top_k=config.top_k,
+            rerank_top_n=config.rerank_top_n,
+            trigger_type=config.trigger_type,
+        )
+        created = service.create_run(db, payload=payload, user=user)
+        request_id = _request_id(created.evaluation_run_id, config.strategies)
+        service.run_job(
+            db,
+            evaluation_run_id=created.evaluation_run_id,
+            request_id=request_id,
+        )
+        detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if elapsed_ms > config.timeout_seconds * 1000:
+        raise SmokeError("timeout_exceeded")
+    artifact = build_artifact(config, detail, elapsed_ms)
+    threshold_result = evaluate_thresholds(artifact, config.thresholds, config.threshold_mode)
+    artifact["threshold_result"] = {
+        "passed": threshold_result.passed,
+        "mode": config.threshold_mode,
+        "violations": threshold_result.violations,
+        "warnings": threshold_result.warnings,
+    }
+    summary = _dict_or_empty(artifact.get("summary"))
+    summary["passed"] = threshold_result.passed
+    summary["warnings"] = threshold_result.warnings
+    artifact["summary"] = summary
+    return cast(dict[str, object], redact_for_artifact(artifact))
+
+
+def build_artifact(
+    config: SmokeConfig,
+    detail: EvaluationRunDetail,
+    elapsed_ms: int,
+) -> dict[str, object]:
+    metrics_by_strategy = _metrics_by_strategy(detail)
+    failure_summary = _failure_summary(detail)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dataset": {
+            "name": detail.dataset_name,
+            "evaluation_dataset_id": detail.evaluation_dataset_id,
+        },
+        "strategies": config.strategies,
+        "mode": config.mode,
+        "threshold_mode": config.threshold_mode,
+        "trigger_type": config.trigger_type.value,
+        "case_limit": config.case_limit,
+        "top_k": config.top_k,
+        "rerank_top_n": config.rerank_top_n,
+        "timeout_seconds": config.timeout_seconds,
+        "elapsed_ms": elapsed_ms,
+        "evaluation_run_id": detail.evaluation_run_id,
+        "summary": {
+            "case_count": detail.case_count,
+            "succeeded_count": detail.succeeded_count,
+            "failed_count": detail.failed_count,
+            "strategy_count": len(detail.strategies),
+            "passed": True,
+            "warnings": [],
+        },
+        "metrics_by_strategy": metrics_by_strategy,
+        "failure_summary": failure_summary,
+        "agentic_summary": _safe_json(detail.strategy_metrics_summary_json or {}).get(
+            "agentic_summary"
+        ),
+        "thresholds": config.thresholds.__dict__,
+        "known_limitations": [
+            "fake deterministic adapters only",
+            "no external LLM judge",
+            "no LangSmith export",
+            "no production trace sampling",
+        ],
+    }
+
+
+def evaluate_thresholds(
+    artifact: dict[str, object],
+    thresholds: SmokeThresholds,
+    threshold_mode: Literal["warn", "fail"],
+) -> ThresholdResult:
+    del threshold_mode
+    rules = {
+        "recall_at_k": ("min", thresholds.recall_at_k_min),
+        "mrr": ("min", thresholds.mrr_min),
+        "citation_coverage": ("min", thresholds.citation_coverage_min),
+        "groundedness": ("min", thresholds.groundedness_min),
+        "faithfulness": ("min", thresholds.faithfulness_min),
+        "no_context_rate": ("max", thresholds.no_context_rate_max),
+        "p95_latency": ("max", thresholds.p95_latency_ms_max),
+        "strategy_selection_accuracy": ("min", thresholds.strategy_selection_accuracy_min),
+        "fallback_rate": ("max", thresholds.fallback_rate_max),
+        "budget_exhausted_rate": ("max", thresholds.budget_exhausted_rate_max),
+        "sufficiency_score_avg": ("min", thresholds.sufficiency_score_avg_min),
+        "retrieval_call_count_avg": ("max", thresholds.retrieval_call_count_avg_max),
+    }
+    violations: list[dict[str, object]] = []
+    for strategy in _list_of_dicts(artifact.get("metrics_by_strategy")):
+        strategy_name = _safe_string(strategy.get("strategy"), fallback="unknown")
+        metrics = strategy.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        for metric_name, (operator, threshold) in rules.items():
+            metric = metrics.get(metric_name)
+            if not isinstance(metric, dict):
+                continue
+            average = _float_or_none(metric.get("average"))
+            if average is None:
+                continue
+            failed = average < threshold if operator == "min" else average > threshold
+            if failed:
+                violations.append(
+                    {
+                        "strategy": strategy_name,
+                        "metric": metric_name,
+                        "operator": operator,
+                        "threshold": threshold,
+                        "actual": round(average, 6),
+                    }
+                )
+    warnings = [
+        (
+            f"{item['strategy']} {item['metric']} {item['operator']} "
+            f"{item['threshold']} actual={item['actual']}"
+        )
+        for item in violations
+    ]
+    return ThresholdResult(passed=not violations, violations=violations, warnings=warnings)
+
+
+def render_markdown_summary(artifact: dict[str, object]) -> str:
+    summary = _dict_or_empty(artifact.get("summary"))
+    threshold = _dict_or_empty(artifact.get("threshold_result"))
+    lines = [
+        "# Retrieval Evaluation Smoke",
+        "",
+        f"- schema_version: `{SCHEMA_VERSION}`",
+        f"- dataset: `{_safe_dataset_name(artifact)}`",
+        f"- strategies: `{', '.join(_string_list(artifact.get('strategies')))}`",
+        f"- mode: `{_safe_string(artifact.get('mode'))}`",
+        f"- threshold_mode: `{_safe_string(artifact.get('threshold_mode'))}`",
+        f"- status: `{'passed' if threshold.get('passed', True) else 'threshold_violation'}`",
+        f"- cases: `{summary.get('succeeded_count', 0)}/{summary.get('case_count', 0)} succeeded`",
+        "",
+        "## Metrics",
+        "",
+        "| strategy | metric | average | p50 | p95 | count | failed | n/a |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for strategy in _list_of_dicts(artifact.get("metrics_by_strategy")):
+        strategy_name = _safe_string(strategy.get("strategy"), fallback="unknown")
+        metrics = strategy.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        for metric_name in sorted(metrics):
+            metric = metrics[metric_name]
+            if not isinstance(metric, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        strategy_name,
+                        metric_name,
+                        _fmt(metric.get("average")),
+                        _fmt(metric.get("p50")),
+                        _fmt(metric.get("p95")),
+                        str(metric.get("count", 0)),
+                        str(metric.get("failed_count", 0)),
+                        str(metric.get("not_applicable_count", 0)),
+                    ]
+                )
+                + " |"
+            )
+    warnings = _string_list(threshold.get("warnings"))
+    lines.extend(["", "## Thresholds", ""])
+    if warnings:
+        lines.append("Threshold warnings:")
+        lines.extend(f"- `{warning}`" for warning in warnings)
+    else:
+        lines.append("No threshold warnings.")
+    failure_summary = _dict_or_empty(artifact.get("failure_summary"))
+    if failure_summary:
+        lines.extend(["", "## Failure Summary", ""])
+        for failure_type, count in sorted(failure_summary.items()):
+            lines.append(f"- `{failure_type}`: `{count}`")
+    lines.extend(
+        [
+            "",
+            "## Privacy",
+            "",
+            "This summary intentionally excludes raw prompts, full context, raw chunk text, "
+            "PII, tokens, and secrets.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def redact_for_artifact(value: object) -> object:
+    if isinstance(value, dict):
+        safe: dict[str, object] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            if _is_forbidden_key(key_text):
+                safe[key_text] = "[REDACTED]"
+            else:
+                safe[key_text] = redact_for_artifact(child)
+        return safe
+    if isinstance(value, list):
+        return [redact_for_artifact(item) for item in value]
+    if isinstance(value, str):
+        return _redact_string(value)
+    return value
+
+
+def write_outputs(config: SmokeConfig, artifact: dict[str, object]) -> None:
+    config.output_json.parent.mkdir(parents=True, exist_ok=True)
+    config.output_md.parent.mkdir(parents=True, exist_ok=True)
+    config.output_json.write_text(
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    config.output_md.write_text(render_markdown_summary(artifact), encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        config = config_from_args(argv)
+        artifact = run_smoke(config)
+        write_outputs(config, artifact)
+        threshold = _dict_or_empty(artifact.get("threshold_result"))
+        warnings = _string_list(threshold.get("warnings"))
+        print(
+            "retrieval_eval_smoke "
+            f"status={'passed' if threshold.get('passed', True) else 'threshold_violation'} "
+            f"dataset={_safe_dataset_name(artifact)} "
+            f"strategies={','.join(config.strategies)} "
+            f"warnings={len(warnings)} "
+            f"output_json={config.output_json}"
+        )
+        if warnings:
+            for warning in warnings:
+                print(f"threshold_warning {warning}")
+        if config.threshold_mode == "fail" and not threshold.get("passed", True):
+            return 2
+        return 0
+    except SmokeError as exc:
+        print(f"retrieval_eval_smoke_error code={_redact_string(str(exc))}", file=sys.stderr)
+        return 1
+    except Exception:
+        print("retrieval_eval_smoke_error code=internal_error", file=sys.stderr)
+        return 1
+
+
+def config_from_args(argv: list[str] | None = None) -> SmokeConfig:
+    parser = argparse.ArgumentParser(description="Run a safe deterministic retrieval eval smoke.")
+    parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    parser.add_argument("--strategies", default=DEFAULT_STRATEGIES)
+    parser.add_argument("--metrics", default=None)
+    parser.add_argument("--mode", choices=["fake", "local"], default="fake")
+    parser.add_argument("--threshold-mode", choices=["warn", "fail"], default="warn")
+    parser.add_argument("--case-limit", type=int, default=DEFAULT_CASE_LIMIT)
+    parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    parser.add_argument("--rerank-top-n", type=int, default=DEFAULT_RERANK_TOP_N)
+    parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=Path("artifacts/retrieval_eval_smoke.json"),
+    )
+    parser.add_argument(
+        "--output-md",
+        type=Path,
+        default=Path("artifacts/retrieval_eval_smoke.md"),
+    )
+    parser.add_argument(
+        "--trigger-type",
+        choices=[EvaluationTriggerType.CI.value, EvaluationTriggerType.SCHEDULED.value],
+        default=EvaluationTriggerType.CI.value,
+    )
+    for field in fields(SmokeThresholds):
+        parser.add_argument(
+            "--" + field.name.replace("_", "-"),
+            type=float,
+            default=field.default,
+        )
+    args = parser.parse_args(argv)
+    if args.case_limit < 1 or args.case_limit > 50:
+        raise SmokeError("invalid_case_limit")
+    if args.top_k < 1 or args.top_k > 20:
+        raise SmokeError("invalid_top_k")
+    if args.rerank_top_n < 1 or args.rerank_top_n > 20:
+        raise SmokeError("invalid_rerank_top_n")
+    if args.timeout_seconds < 1:
+        raise SmokeError("invalid_timeout_seconds")
+    return SmokeConfig(
+        dataset=args.dataset,
+        strategies=parse_strategies(args.strategies),
+        mode=cast(Literal["fake", "local"], args.mode),
+        threshold_mode=cast(Literal["warn", "fail"], args.threshold_mode),
+        metrics=parse_metrics(args.metrics),
+        case_limit=args.case_limit,
+        top_k=args.top_k,
+        rerank_top_n=args.rerank_top_n,
+        timeout_seconds=args.timeout_seconds,
+        output_json=args.output_json,
+        output_md=args.output_md,
+        trigger_type=EvaluationTriggerType(args.trigger_type),
+        thresholds=parse_thresholds(args),
+    )
+
+
+def _assert_fake_mode(settings: Settings) -> None:
+    if (
+        settings.embedding_provider != "fake"
+        or settings.rerank_provider != "fake"
+        or settings.generation_provider != "fake"
+    ):
+        raise SmokeError("fake_mode_requires_fake_adapters")
+
+
+def _admin_user(db: Session) -> User:
+    user = db.scalar(
+        select(User)
+        .join(Role, Role.role_id == User.role_id)
+        .where(User.status == "active", Role.role_name == "admin")
+        .order_by(User.user_id.asc())
+    )
+    if user is None:
+        raise SmokeError("seed_admin_user_missing")
+    return user
+
+
+def _resolve_dataset(
+    db: Session,
+    service: EvaluationService,
+    dataset: str,
+) -> tuple[str, int | None]:
+    dataset = dataset.strip()
+    if not dataset:
+        raise SmokeError("dataset_required")
+    if dataset.isdigit():
+        dataset_id = int(dataset)
+        model = service.repository.get_dataset(db, evaluation_dataset_id=dataset_id)
+        if model is None:
+            raise SmokeError("dataset_not_found")
+        if model.status != "active":
+            raise SmokeError("dataset_archived")
+        return model.dataset_name, model.evaluation_dataset_id
+    model = service.repository.get_dataset_by_name(db, dataset_name=dataset)
+    if model is not None:
+        if model.status != "active":
+            raise SmokeError("dataset_archived")
+        return model.dataset_name, model.evaluation_dataset_id
+    return dataset, None
+
+
+def _request_id(evaluation_run_id: int, strategies: list[str]) -> str:
+    digest = hashlib.sha256(",".join(strategies).encode("utf-8")).hexdigest()[:12]
+    return f"ci-smoke:{evaluation_run_id}:{digest}"
+
+
+def _metrics_by_strategy(detail: EvaluationRunDetail) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for metric in detail.strategy_comparison:
+        strategy = metric.strategy_type.value
+        entry = grouped.setdefault(strategy, {"strategy": strategy, "metrics": {}})
+        metrics = entry["metrics"]
+        if not isinstance(metrics, dict):
+            continue
+        metrics[str(metric.metric_name)] = {
+            "average": metric.average,
+            "p50": metric.p50,
+            "p95": metric.p95,
+            "count": metric.count,
+            "failed_count": metric.failed_count,
+            "not_applicable_count": metric.not_applicable_count,
+        }
+    return [grouped[strategy] for strategy in sorted(grouped)]
+
+
+def _failure_summary(detail: EvaluationRunDetail) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for candidate in detail.failure_candidates:
+        counts[candidate.failure_type] = counts.get(candidate.failure_type, 0) + 1
+    return counts
+
+
+def _safe_json(value: object) -> dict[str, object]:
+    redacted = redact_for_artifact(value)
+    return redacted if isinstance(redacted, dict) else {}
+
+
+def _list_of_dicts(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _dict_or_empty(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str)]
+
+
+def _safe_string(value: object, *, fallback: str = "") -> str:
+    if not isinstance(value, str) or not value:
+        return fallback
+    return _redact_string(value)
+
+
+def _safe_dataset_name(artifact: dict[str, object]) -> str:
+    dataset = artifact.get("dataset")
+    if isinstance(dataset, dict):
+        name = dataset.get("name")
+        if isinstance(name, str):
+            return _redact_string(name)
+    return "unknown"
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _fmt(value: object) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "N/A"
+    return f"{number:.4f}"
+
+
+def _is_forbidden_key(key: str) -> bool:
+    lowered = key.lower()
+    if lowered in _FORBIDDEN_KEYS:
+        return True
+    return any(
+        part in lowered
+        for part in (
+            "api_key",
+            "chunk_text",
+            "content_text",
+            "credential",
+            "csrf",
+            "cookie",
+            "full_context",
+            "password",
+            "raw_chunk",
+            "raw_context",
+            "raw_prompt",
+            "secret",
+            "session",
+            "token",
+        )
+    )
+
+
+def _redact_string(value: str) -> str:
+    value = _EMAIL_RE.sub("[REDACTED_EMAIL]", value)
+    value = _SECRET_VALUE_RE.sub("[REDACTED]", value)
+    return value
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

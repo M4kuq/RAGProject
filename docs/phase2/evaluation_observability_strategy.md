@@ -107,6 +107,8 @@ PR-30 extracts failure candidates from item status and metric rows, then allows 
 
 CI should use deterministic fixtures and fake adapters. Heavy model downloads, external API keys, LangSmith credentials, and external trace export must not be required for PR-30 validation.
 
+PR-31 adds `retrieval-eval-smoke.yml` as a lightweight CI/scheduled smoke layer. It runs the existing strategy evaluation runner in fake mode, writes only safe aggregate JSON/Markdown artifacts, supports manual strategy and threshold inputs, and keeps threshold failures configurable as warn-only or hard-fail.
+
 ## Redaction Rules
 
 Do not store or display:

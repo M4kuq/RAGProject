@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, and PR-30 adds agentic strategy evaluation plus failure dataset promotion.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, and PR-31 adds lightweight CI retrieval evaluation smoke runs.
 
 ## PR Plan
 
@@ -189,9 +189,25 @@ PR-30 adds:
 
 PR-30 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, online evaluation, LLM-as-a-Judge, Graph-RAG, OCR, or external operation agents.
 
+## PR-31 CI Retrieval Evaluation / Scheduled Smoke
+
+PR-31 adds:
+
+- `.github/workflows/retrieval-eval-smoke.yml`
+- manual `workflow_dispatch` inputs for dataset, strategies, mode, threshold behavior, and case limit
+- weekly low-frequency scheduled smoke execution
+- deterministic fake-mode execution using the existing Strategy Evaluation Runner
+- `backend/app/scripts/retrieval_eval_smoke.py`
+- local wrapper scripts for PowerShell and Unix-like shells
+- JSON and Markdown artifacts
+- GitHub step summary output
+- configurable warn/fail threshold checks
+
+The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow does not require GitHub secrets, external LLM/API keys, BAAI model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
+
 ## Non-goals
 
-PR-30 does not implement CI evaluation workflow, LangSmith export, SentenceTransformers experiments, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+PR-31 does not implement LangSmith export, SentenceTransformers experiments, online evaluation, production trace sampling, external LLM/API-required evaluation, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

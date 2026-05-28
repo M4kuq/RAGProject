@@ -289,8 +289,17 @@ def _seed_system_settings(db: Session) -> None:
             "Default Phase2 strategy evaluation fixture metadata.",
         ),
         "rag.evaluation.ci_smoke_enabled": (
-            False,
-            "CI retrieval evaluation smoke workflow remains disabled until the Phase2 CI PR.",
+            {"enabled": True},
+            "Enable deterministic CI retrieval evaluation smoke metadata.",
+        ),
+        "rag.evaluation.ci_smoke_defaults": (
+            {
+                "dataset_name": "phase2_strategy_smoke",
+                "strategies": ["dense", "hybrid", "agentic_router"],
+                "case_limit": 5,
+                "threshold_mode": "warn",
+            },
+            "Default options for PR-31 retrieval evaluation smoke workflow.",
         ),
         "evaluation.failure.low_recall_threshold": (
             {"value": 0.5},

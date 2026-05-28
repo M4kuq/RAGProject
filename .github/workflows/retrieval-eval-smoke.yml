@@ -1,0 +1,255 @@
+name: Retrieval Evaluation Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Evaluation dataset name or id"
+        required: false
+        default: "phase2_strategy_smoke"
+      strategies:
+        description: "Comma-separated strategies"
+        required: false
+        default: "dense,hybrid,agentic_router"
+      mode:
+        description: "Evaluation mode"
+        required: false
+        default: "fake"
+        type: choice
+        options:
+          - fake
+          - local
+      threshold_mode:
+        description: "Threshold behavior"
+        required: false
+        default: "warn"
+        type: choice
+        options:
+          - warn
+          - fail
+      case_limit:
+        description: "Maximum cases to run"
+        required: false
+        default: "5"
+      recall_at_k_min:
+        description: "Minimum recall_at_k"
+        required: false
+        default: "0"
+      mrr_min:
+        description: "Minimum MRR"
+        required: false
+        default: "0"
+      citation_coverage_min:
+        description: "Minimum citation_coverage"
+        required: false
+        default: "0"
+      groundedness_min:
+        description: "Minimum groundedness"
+        required: false
+        default: "0"
+      faithfulness_min:
+        description: "Minimum faithfulness"
+        required: false
+        default: "0"
+      no_context_rate_max:
+        description: "Maximum no_context_rate"
+        required: false
+        default: "1"
+      p95_latency_ms_max:
+        description: "Maximum p95 latency in ms"
+        required: false
+        default: "30000"
+      strategy_selection_accuracy_min:
+        description: "Minimum strategy_selection_accuracy"
+        required: false
+        default: "0"
+      fallback_rate_max:
+        description: "Maximum fallback_rate"
+        required: false
+        default: "1"
+      budget_exhausted_rate_max:
+        description: "Maximum budget_exhausted_rate"
+        required: false
+        default: "1"
+      sufficiency_score_avg_min:
+        description: "Minimum sufficiency_score_avg"
+        required: false
+        default: "0"
+      retrieval_call_count_avg_max:
+        description: "Maximum retrieval_call_count_avg"
+        required: false
+        default: "3"
+  schedule:
+    - cron: "0 18 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retrieval-eval-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_ENV: ci
+  DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag
+  CORS_ALLOWED_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+  SESSION_SECRET: ci-only-change-me
+  SESSION_COOKIE_NAME: rag_session
+  CSRF_COOKIE_NAME: rag_csrf
+  SESSION_TOKEN_BYTES: "32"
+  SESSION_COOKIE_SECURE: "false"
+  SESSION_COOKIE_SAMESITE: lax
+  SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
+  CSRF_HEADER_NAME: X-CSRF-Token
+  CSRF_TOKEN_BYTES: "32"
+  CSRF_PRE_AUTH_MAX_AGE_SECONDS: "600"
+  STORAGE_ROOT: /tmp/ragproject/uploads
+  QDRANT_URL: http://localhost:6333
+  QDRANT_COLLECTION_NAME: document_chunks_ci_eval
+  QDRANT_DISTANCE: Cosine
+  QDRANT_CREATE_COLLECTION: "true"
+  QDRANT_REQUIRED: "false"
+  QDRANT_UPSERT_BATCH_SIZE: "64"
+  QDRANT_TIMEOUT_SECONDS: "5"
+  USE_FAKE_LLM: "true"
+  MODEL_NAME: fake-ci-model
+  EMBEDDING_PROVIDER: fake
+  EMBEDDING_MODEL: fake-ci-embedding
+  EMBEDDING_VECTOR_DIMENSION: "1024"
+  EMBEDDING_FAKE_DIMENSION: "8"
+  EMBEDDING_BATCH_SIZE: "32"
+  RERANK_PROVIDER: fake
+  RERANK_TOP_N_DEFAULT: "5"
+  RERANK_TOP_N_MAX: "5"
+  RERANK_SCORE_MIN: "0"
+  RERANK_SCORE_MAX: "1"
+  RERANKER_MODEL: fake-ci-reranker
+  SEARCH_SNIPPET_MAX_CHARS: "240"
+  ASK_TOP_K_DEFAULT: "5"
+  ASK_RERANK_TOP_N_DEFAULT: "2"
+  GENERATION_PROVIDER: fake
+  GENERATION_MODEL_NAME: fake-rag-answer
+  GENERATION_MAX_CONTEXT_CHARS: "6000"
+  GENERATION_MAX_OUTPUT_CHARS: "2000"
+
+jobs:
+  retrieval-eval-smoke:
+    name: deterministic retrieval evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: rag
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c '</dev/tcp/127.0.0.1/6333'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/pyproject.toml
+
+      - name: Validate CI compose config
+        run: docker compose -f docker-compose.ci.yml config --quiet
+
+      - name: Migrate database
+        working-directory: backend
+        run: uv run alembic upgrade head
+
+      - name: Seed deterministic smoke data
+        working-directory: backend
+        run: uv run python -m app.scripts.seed
+
+      - name: Run retrieval evaluation smoke
+        id: retrieval_eval
+        working-directory: backend
+        env:
+          SMOKE_DATASET: ${{ github.event.inputs.dataset || 'phase2_strategy_smoke' }}
+          SMOKE_STRATEGIES: ${{ github.event.inputs.strategies || 'dense,hybrid,agentic_router' }}
+          SMOKE_MODE: ${{ github.event.inputs.mode || 'fake' }}
+          SMOKE_THRESHOLD_MODE: ${{ github.event.inputs.threshold_mode || 'warn' }}
+          SMOKE_CASE_LIMIT: ${{ github.event.inputs.case_limit || '5' }}
+          SMOKE_RECALL_AT_K_MIN: ${{ github.event.inputs.recall_at_k_min || '0' }}
+          SMOKE_MRR_MIN: ${{ github.event.inputs.mrr_min || '0' }}
+          SMOKE_CITATION_COVERAGE_MIN: ${{ github.event.inputs.citation_coverage_min || '0' }}
+          SMOKE_GROUNDEDNESS_MIN: ${{ github.event.inputs.groundedness_min || '0' }}
+          SMOKE_FAITHFULNESS_MIN: ${{ github.event.inputs.faithfulness_min || '0' }}
+          SMOKE_NO_CONTEXT_RATE_MAX: ${{ github.event.inputs.no_context_rate_max || '1' }}
+          SMOKE_P95_LATENCY_MS_MAX: ${{ github.event.inputs.p95_latency_ms_max || '30000' }}
+          SMOKE_STRATEGY_SELECTION_ACCURACY_MIN: ${{ github.event.inputs.strategy_selection_accuracy_min || '0' }}
+          SMOKE_FALLBACK_RATE_MAX: ${{ github.event.inputs.fallback_rate_max || '1' }}
+          SMOKE_BUDGET_EXHAUSTED_RATE_MAX: ${{ github.event.inputs.budget_exhausted_rate_max || '1' }}
+          SMOKE_SUFFICIENCY_SCORE_AVG_MIN: ${{ github.event.inputs.sufficiency_score_avg_min || '0' }}
+          SMOKE_RETRIEVAL_CALL_COUNT_AVG_MAX: ${{ github.event.inputs.retrieval_call_count_avg_max || '3' }}
+          SMOKE_TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
+        run: |
+          mkdir -p ../artifacts
+          set +e
+          uv run python -m app.scripts.retrieval_eval_smoke \
+            --dataset "${SMOKE_DATASET}" \
+            --strategies "${SMOKE_STRATEGIES}" \
+            --mode "${SMOKE_MODE}" \
+            --threshold-mode "${SMOKE_THRESHOLD_MODE}" \
+            --case-limit "${SMOKE_CASE_LIMIT}" \
+            --recall-at-k-min "${SMOKE_RECALL_AT_K_MIN}" \
+            --mrr-min "${SMOKE_MRR_MIN}" \
+            --citation-coverage-min "${SMOKE_CITATION_COVERAGE_MIN}" \
+            --groundedness-min "${SMOKE_GROUNDEDNESS_MIN}" \
+            --faithfulness-min "${SMOKE_FAITHFULNESS_MIN}" \
+            --no-context-rate-max "${SMOKE_NO_CONTEXT_RATE_MAX}" \
+            --p95-latency-ms-max "${SMOKE_P95_LATENCY_MS_MAX}" \
+            --strategy-selection-accuracy-min "${SMOKE_STRATEGY_SELECTION_ACCURACY_MIN}" \
+            --fallback-rate-max "${SMOKE_FALLBACK_RATE_MAX}" \
+            --budget-exhausted-rate-max "${SMOKE_BUDGET_EXHAUSTED_RATE_MAX}" \
+            --sufficiency-score-avg-min "${SMOKE_SUFFICIENCY_SCORE_AVG_MIN}" \
+            --retrieval-call-count-avg-max "${SMOKE_RETRIEVAL_CALL_COUNT_AVG_MAX}" \
+            --trigger-type "${SMOKE_TRIGGER_TYPE}" \
+            --output-json ../artifacts/retrieval_eval_smoke.json \
+            --output-md ../artifacts/retrieval_eval_smoke.md
+          status=$?
+          set -e
+          echo "${status}" > ../artifacts/retrieval_eval_smoke.exitcode
+          cat ../artifacts/retrieval_eval_smoke.md >> "${GITHUB_STEP_SUMMARY}"
+          exit "${status}"
+
+      - name: Upload retrieval evaluation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-eval-smoke
+          path: |
+            artifacts/retrieval_eval_smoke.json
+            artifacts/retrieval_eval_smoke.md
+            artifacts/retrieval_eval_smoke.exitcode
+          if-no-files-found: error

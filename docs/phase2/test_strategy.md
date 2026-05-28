@@ -147,6 +147,16 @@
 - Promotion into an active dataset is idempotent; duplicate promotion returns an existing/skipped result.
 - Failure candidate and promotion responses do not expose raw prompt, full context, raw chunk text, PII, or secrets.
 
+## PR-31 CI Retrieval Evaluation Smoke Tests
+
+- `retrieval-eval-smoke.yml` exposes `workflow_dispatch`, low-frequency `schedule`, artifact upload, and GitHub step summary output.
+- The default path uses fake adapters and does not require GitHub secrets, external LLM/API keys, GPU, or heavy model downloads.
+- The smoke script parses dataset, strategy, metric, threshold, and warn/fail options.
+- Threshold violations are warnings in `warn` mode and non-zero exits in `fail` mode.
+- JSON and Markdown artifacts contain only aggregate metrics, thresholds, failure counts, and limitations.
+- Artifacts and summaries redact raw prompt, full context, raw chunk text, PII, tokens, and secrets.
+- Local wrappers call the same backend module as the workflow.
+
 ## Checks
 
 - `ruff format --check .`

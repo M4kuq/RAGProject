@@ -618,7 +618,13 @@ def test_seed_can_run_twice_without_duplicates(
             "strategy_type": "dense",
             "case_limit": 5,
         }
-        assert _setting_value(db, "rag.evaluation.ci_smoke_enabled") is False
+        assert _setting_value(db, "rag.evaluation.ci_smoke_enabled") == {"enabled": True}
+        assert _setting_value(db, "rag.evaluation.ci_smoke_defaults") == {
+            "dataset_name": "phase2_strategy_smoke",
+            "strategies": ["dense", "hybrid", "agentic_router"],
+            "case_limit": 5,
+            "threshold_mode": "warn",
+        }
         logical = db.query(LogicalDocument).filter_by(title=DEMO_DOCUMENT_TITLE).one()
         versions = (
             db.query(DocumentVersion)

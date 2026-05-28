@@ -229,6 +229,16 @@ docker compose -f docker-compose.ci.yml run --rm frontend-test
 docker compose -f docker-compose.ci.yml run --rm --no-deps smoke
 ```
 
+Retrieval evaluation smoke:
+
+```powershell
+.\scripts\run_retrieval_eval_smoke.ps1 -Dataset phase2_strategy_smoke -Strategies dense,hybrid,agentic_router -ThresholdMode warn
+```
+
+```bash
+sh scripts/run_retrieval_eval_smoke.sh
+```
+
 ## CI/CD
 
 GitHub Actions は次の workflow を使う。
@@ -239,6 +249,7 @@ GitHub Actions は次の workflow を使う。
 | Frontend CI | npm install、lint、typecheck、Vitest、build | `cd frontend && npm run build` など |
 | Docker CI | compose config、image build | `docker compose -f docker-compose.ci.yml build ...` |
 | Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
+| Retrieval Evaluation Smoke | manual/scheduled deterministic strategy evaluation | `scripts/run_retrieval_eval_smoke.*` |
 
 CI は `USE_FAKE_LLM=true`、fake embedding、fake reranker、fake generation を前提にできる。通常確認で Ollama model pull、external LLM API、`BAAI/bge-m3`、`BAAI/bge-reranker-v2-m3` の download を必須にしない。
 
