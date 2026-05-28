@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import queue
 import re
@@ -179,7 +180,7 @@ def parse_thresholds(args: argparse.Namespace) -> SmokeThresholds:
     values = {}
     for field in fields(SmokeThresholds):
         value = getattr(args, field.name)
-        if value < 0:
+        if not math.isfinite(value) or value < 0:
             raise SmokeError(f"invalid_threshold:{field.name}")
         values[field.name] = float(value)
     return SmokeThresholds(**values)
@@ -242,26 +243,53 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
 def preflight_smoke(config: SmokeConfig, settings: Settings) -> PreflightResult:
     checks: list[dict[str, object]] = []
     reason_codes: list[str] = []
-    _reject_fake_provider(
-        checks,
-        reason_codes,
-        name="embedding_provider",
-        value=settings.embedding_provider,
-        reason_code="fake_embedding_provider_not_allowed",
-    )
-    _reject_fake_provider(
-        checks,
-        reason_codes,
-        name="rerank_provider",
-        value=settings.rerank_provider,
-        reason_code="fake_reranker_not_allowed",
-    )
+    requires_vector_retrieval = _requires_vector_retrieval(config, settings)
+    requires_rerank = _requires_rerank(config)
+    if requires_vector_retrieval:
+        _reject_fake_provider(
+            checks,
+            reason_codes,
+            name="embedding_provider",
+            value=settings.embedding_provider,
+            reason_code="fake_embedding_provider_not_allowed",
+        )
+    else:
+        _note_backend_not_applicable(
+            checks,
+            name="embedding_provider",
+            provider=settings.embedding_provider,
+            reason="sparse_only_smoke",
+        )
+    if requires_rerank:
+        _reject_fake_provider(
+            checks,
+            reason_codes,
+            name="rerank_provider",
+            value=settings.rerank_provider,
+            reason_code="fake_reranker_not_allowed",
+        )
+    else:
+        _note_backend_not_applicable(
+            checks,
+            name="rerank_provider",
+            provider=settings.rerank_provider,
+            reason="strategy_does_not_rerank",
+        )
     _note_generation_backend_not_applicable(checks, settings)
-    _check_qdrant(settings, checks, reason_codes)
-    _check_embedding_backend(config, settings, checks, reason_codes)
-    if settings.rerank_provider == "local":
+    _check_sparse_settings(config, settings, checks, reason_codes)
+    if requires_vector_retrieval:
+        _check_qdrant(settings, checks, reason_codes)
+        _check_embedding_backend(config, settings, checks, reason_codes)
+    else:
+        _note_backend_not_applicable(
+            checks,
+            name="qdrant",
+            provider="qdrant",
+            reason="sparse_only_smoke",
+        )
+    if requires_rerank and settings.rerank_provider == "local":
         _check_rerank_backend(settings, checks, reason_codes)
-    elif settings.rerank_provider == "none":
+    elif requires_rerank and settings.rerank_provider == "none":
         checks.append({"name": "rerank_backend", "status": "ready", "provider": "none"})
     return PreflightResult(
         status="blocked" if reason_codes else "ready",
@@ -417,11 +445,15 @@ def _run_evaluation_in_session(
         )
         created = service.create_run(db, payload=payload, user=user)
         request_id = _request_id(created.evaluation_run_id, config.strategies)
-        service.run_job(
-            db,
-            evaluation_run_id=created.evaluation_run_id,
-            request_id=request_id,
-        )
+        try:
+            service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id=request_id,
+            )
+        except _SmokeTimeout:
+            _mark_run_failed_after_timeout(db, service, created.evaluation_run_id)
+            raise
         return service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
 
 
@@ -837,6 +869,72 @@ def _run_with_thread_timeout(timeout_seconds: float, func: Callable[[], T]) -> T
     return cast(T, payload)
 
 
+def _requires_vector_retrieval(config: SmokeConfig, settings: Settings) -> bool:
+    strategies = set(config.strategies)
+    return (
+        RetrievalStrategy.DENSE.value in strategies
+        or RetrievalStrategy.AGENTIC_ROUTER.value in strategies
+        or (
+            RetrievalStrategy.HYBRID.value in strategies
+            and settings.hybrid_dense_weight > 0
+        )
+    )
+
+
+def _requires_sparse_retrieval(config: SmokeConfig, settings: Settings) -> bool:
+    strategies = set(config.strategies)
+    return (
+        RetrievalStrategy.SPARSE.value in strategies
+        or (
+            RetrievalStrategy.HYBRID.value in strategies
+            and settings.hybrid_sparse_weight > 0
+        )
+    )
+
+
+def _requires_rerank(config: SmokeConfig) -> bool:
+    strategies = set(config.strategies)
+    return bool(
+        strategies
+        & {
+            RetrievalStrategy.DENSE.value,
+            RetrievalStrategy.AGENTIC_ROUTER.value,
+        }
+    )
+
+
+def _check_sparse_settings(
+    config: SmokeConfig,
+    settings: Settings,
+    checks: list[dict[str, object]],
+    reason_codes: list[str],
+) -> None:
+    if not _requires_sparse_retrieval(config, settings):
+        return
+    if settings.sparse_enabled:
+        checks.append({"name": "sparse_backend", "status": "ready", "provider": "postgres_fts"})
+        return
+    checks.append({"name": "sparse_backend", "status": "blocked", "provider": "postgres_fts"})
+    reason_codes.append("sparse_retrieval_disabled")
+
+
+def _note_backend_not_applicable(
+    checks: list[dict[str, object]],
+    *,
+    name: str,
+    provider: str,
+    reason: str,
+) -> None:
+    checks.append(
+        {
+            "name": name,
+            "status": "not_applicable",
+            "provider": provider,
+            "reason": reason,
+        }
+    )
+
+
 def _reject_fake_provider(
     checks: list[dict[str, object]],
     reason_codes: list[str],
@@ -849,6 +947,28 @@ def _reject_fake_provider(
     checks.append({"name": name, "status": status, "provider": value.lower()})
     if status == "blocked":
         reason_codes.append(reason_code)
+
+
+def _mark_run_failed_after_timeout(
+    db: Session,
+    service: EvaluationService,
+    evaluation_run_id: int,
+) -> None:
+    try:
+        db.rollback()
+        run = service.repository.get_run(db, evaluation_run_id=evaluation_run_id, for_update=True)
+        if run is None:
+            return
+        service.repository.mark_run_failed(
+            db,
+            run=run,
+            error_code="timeout_exceeded",
+            error_message=None,
+            finished_at=datetime.now(UTC),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 def _failure_reason_code(exc: BaseException) -> str:

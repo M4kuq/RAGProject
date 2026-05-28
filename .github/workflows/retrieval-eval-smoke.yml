@@ -205,6 +205,9 @@ jobs:
           SMOKE_TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
         run: |
           mkdir -p ../artifacts
+          rm -f ../artifacts/retrieval_eval_smoke.json \
+            ../artifacts/retrieval_eval_smoke.md \
+            ../artifacts/retrieval_eval_smoke.exitcode
           uv run --with "sentence-transformers>=2.7.0,<4" python -m app.scripts.retrieval_eval_smoke \
             --dataset "${SMOKE_DATASET}" \
             --strategies "${SMOKE_STRATEGIES}" \
@@ -213,13 +216,17 @@ jobs:
             --case-limit "${SMOKE_CASE_LIMIT}" \
             --trigger-type "${SMOKE_TRIGGER_TYPE}" \
             --preflight-only \
-            --output-json ../artifacts/retrieval_eval_smoke.json \
-            --output-md ../artifacts/retrieval_eval_smoke.md
-          if grep -q '"status": "blocked"' ../artifacts/retrieval_eval_smoke.json; then
+            --output-json ../artifacts/retrieval_eval_smoke_preflight.json \
+            --output-md ../artifacts/retrieval_eval_smoke_preflight.md
+          if grep -q '"status": "blocked"' ../artifacts/retrieval_eval_smoke_preflight.json; then
+            mv ../artifacts/retrieval_eval_smoke_preflight.json ../artifacts/retrieval_eval_smoke.json
+            mv ../artifacts/retrieval_eval_smoke_preflight.md ../artifacts/retrieval_eval_smoke.md
             echo "blocked=true" >> "${GITHUB_OUTPUT}"
             echo "0" > ../artifacts/retrieval_eval_smoke.exitcode
             cat ../artifacts/retrieval_eval_smoke.md >> "${GITHUB_STEP_SUMMARY}"
           else
+            rm -f ../artifacts/retrieval_eval_smoke_preflight.json \
+              ../artifacts/retrieval_eval_smoke_preflight.md
             echo "blocked=false" >> "${GITHUB_OUTPUT}"
           fi
 
