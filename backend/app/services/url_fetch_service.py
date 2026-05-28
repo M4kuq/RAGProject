@@ -76,6 +76,7 @@ class UrlFetchService:
             timeout=self.settings.document_url_fetch_timeout_seconds,
             follow_redirects=False,
             headers={"User-Agent": self.settings.document_url_fetch_user_agent},
+            limits=httpx.Limits(max_keepalive_connections=0),
             trust_env=False,
         )
         try:
@@ -238,6 +239,8 @@ def _validate_ip_policy(address: str, *, block_private: bool) -> str:
         raise UnsafeFileRejected() from exc
     if ip == ipaddress.ip_address("169.254.169.254"):
         raise UnsafeFileRejected()
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+        raise UnsafeFileRejected()
     if block_private and not ip.is_global:
         raise UnsafeFileRejected()
     return ip.compressed
@@ -273,7 +276,7 @@ def _safe_stream(client: httpx.Client, target: _ValidatedUrl) -> Iterator[httpx.
                 "GET",
                 connect_url,
                 follow_redirects=False,
-                headers={"Host": target.host_header},
+                headers={"Host": target.host_header, "Connection": "close"},
                 extensions=extensions,
             )
             response = stream.__enter__()

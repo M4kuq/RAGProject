@@ -21,6 +21,7 @@ def test_url_fetch_success_uses_safe_source_url(monkeypatch: pytest.MonkeyPatch)
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "93.184.216.34"
         assert request.headers["host"] == "example.com"
+        assert request.headers["connection"] == "close"
         assert request.extensions["sni_hostname"] == "example.com"
         return httpx.Response(
             200,
@@ -77,6 +78,9 @@ def test_url_fetch_default_client_disables_environment_proxies(
 
     assert result.content_type == "text/html"
     assert created_kwargs["trust_env"] is False
+    limits = created_kwargs["limits"]
+    assert isinstance(limits, httpx.Limits)
+    assert limits.max_keepalive_connections == 0
 
 
 def test_url_fetch_preserves_ipv6_literal_brackets() -> None:
@@ -159,6 +163,35 @@ def test_url_fetch_rejects_private_local_and_metadata_targets(
 
     with pytest.raises(UnsafeFileRejected):
         service.fetch(url)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "127.0.0.1",
+        "::1",
+        "169.254.1.1",
+        "fe80::1",
+        "224.0.0.1",
+        "ff00::1",
+        "0.0.0.0",
+        "::",
+        "240.0.0.1",
+    ],
+)
+def test_url_fetch_rejects_special_use_addresses_when_private_block_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    address: str,
+) -> None:
+    monkeypatch.setenv("DOCUMENT_URL_FETCH_BLOCK_PRIVATE_IPS", "false")
+    get_settings.cache_clear()
+    service = UrlFetchService(resolver=lambda host, port: [address])
+
+    try:
+        with pytest.raises(UnsafeFileRejected):
+            service.fetch("http://example.com/page")
+    finally:
+        get_settings.cache_clear()
 
 
 def test_url_fetch_revalidates_redirect_target() -> None:
