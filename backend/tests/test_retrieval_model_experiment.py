@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+import app.experiments.run_retrieval_model_experiment as experiment_cli
+import app.scripts.retrieval_eval_smoke as smoke_module
 from app.core.config import Settings
-from app.experiments.availability import check_model_availability
+from app.experiments.availability import ModelAvailability, check_model_availability
 from app.experiments.model_registry import lookup_model
 from app.experiments.reporting import redact_experiment_artifact, render_markdown_report
 from app.experiments.run_retrieval_model_experiment import main as experiment_main
@@ -16,6 +18,7 @@ from app.experiments.runner import (
     RetrievalModelExperimentRunner,
     check_dataset_availability,
     load_manifest,
+    run_local_strategy_evaluation,
 )
 from app.experiments.schemas import (
     DownloadPolicy,
@@ -49,6 +52,22 @@ class _MissingLoader:
 
     def probe_reranker(self, model_id: str, *, local_files_only: bool) -> None:
         raise AssertionError("package missing should short-circuit")
+
+
+class _DownloadPolicyProbeLoader:
+    def __init__(self) -> None:
+        self.embedding_local_files_only: list[bool] = []
+
+    def package_available(self) -> bool:
+        return True
+
+    def probe_embedding(self, model_id: str, *, local_files_only: bool) -> int | None:
+        assert model_id == "sentence-transformers/all-MiniLM-L6-v2"
+        self.embedding_local_files_only.append(local_files_only)
+        return 384
+
+    def probe_reranker(self, model_id: str, *, local_files_only: bool) -> None:
+        raise AssertionError("reranker should not be probed")
 
 
 def test_manifest_parse_and_validation(tmp_path: Path) -> None:
@@ -185,6 +204,203 @@ def test_local_mode_uses_evaluation_executor_and_summarizes_metrics() -> None:
     assert first_result["status"] == "succeeded"
     assert first_result["evaluation_run_id"] == 123
     assert first_result["metrics"]["recall_at_k"] == 0.75
+
+
+def test_explicit_cli_download_policy_overrides_manifest_default() -> None:
+    payload = _manifest_payload(include_reranker=False)
+    embedding_models = payload["embedding_models"]
+    assert isinstance(embedding_models, list)
+    first_model = embedding_models[0]
+    assert isinstance(first_model, dict)
+    first_model["download_policy"] = "if-cached"
+    manifest = ExperimentManifest.model_validate(payload)
+    loader = _DownloadPolicyProbeLoader()
+
+    def executor(*args: object, **kwargs: object) -> ExperimentEvaluationOutcome:
+        del args, kwargs
+        return ExperimentEvaluationOutcome(
+            status="succeeded",
+            metrics_by_strategy=[],
+            metrics={},
+            case_count=1,
+            evaluation_run_id=123,
+            failure_summary={},
+            reason_codes=[],
+            elapsed_ms=10,
+        )
+
+    runner = RetrievalModelExperimentRunner(
+        settings=Settings(),
+        loader=loader,
+        evaluation_executor=executor,
+    )
+
+    artifact = runner.run(
+        manifest,
+        _options(
+            mode=ExperimentMode.LOCAL,
+            download_policy=DownloadPolicy.OPT_IN_DOWNLOAD,
+            download_policy_is_explicit=True,
+        ),
+    )
+
+    assert loader.embedding_local_files_only == [False]
+    assert artifact["model_availability"][0]["download_policy"] == "opt-in-download"  # type: ignore[index]
+
+
+def test_local_smoke_summary_without_status_counts_as_succeeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_smoke(*args: object, **kwargs: object) -> dict[str, object]:
+        del args, kwargs
+        return {
+            "summary": {
+                "case_count": 2,
+                "succeeded_count": 2,
+                "failed_count": 0,
+                "passed": True,
+            },
+            "evaluation_run_id": 456,
+            "metrics_by_strategy": [
+                {
+                    "strategy": "dense",
+                    "metrics": {
+                        "recall_at_k": {"average": 0.75},
+                        "p95_latency": {"average": 1000.0, "p95": 9000.0},
+                    },
+                }
+            ],
+            "failure_summary": {},
+        }
+
+    monkeypatch.setattr(smoke_module, "run_smoke", fake_smoke)
+
+    outcome = run_local_strategy_evaluation(
+        ExperimentManifest.model_validate(_manifest_payload(include_reranker=False)),
+        _options(mode=ExperimentMode.LOCAL),
+        Settings(),
+        ExperimentModelCandidate(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            expected_dimension=384,
+        ),
+        None,
+        ModelAvailability(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            model_type=ModelKind.EMBEDDING,
+            provider=ExperimentModelCandidate(
+                model_id="sentence-transformers/all-MiniLM-L6-v2"
+            ).provider,
+            status="available",
+            reason_codes=("available",),
+            required=False,
+            download_policy=DownloadPolicy.IF_CACHED,
+            expected_dimension=384,
+            actual_dimension=384,
+        ),
+    )
+
+    assert outcome.status == "succeeded"
+    assert outcome.metrics["recall_at_k"] == 0.75
+    assert outcome.metrics["p95_latency"] == 9000.0
+
+
+def test_local_smoke_preflight_reasons_are_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_smoke(*args: object, **kwargs: object) -> dict[str, object]:
+        del args, kwargs
+        return {
+            "summary": {
+                "status": "blocked",
+                "case_count": 0,
+                "blocked_reason_codes": ["qdrant_unavailable"],
+                "warnings": ["preflight_blocked:qdrant_unavailable"],
+            },
+            "preflight": {
+                "status": "blocked",
+                "reason_codes": ["qdrant_unavailable"],
+            },
+            "metrics_by_strategy": [],
+            "failure_summary": {},
+        }
+
+    monkeypatch.setattr(smoke_module, "run_smoke", fake_smoke)
+
+    outcome = run_local_strategy_evaluation(
+        ExperimentManifest.model_validate(_manifest_payload(include_reranker=False)),
+        _options(mode=ExperimentMode.LOCAL),
+        Settings(),
+        ExperimentModelCandidate(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            expected_dimension=384,
+        ),
+        None,
+        ModelAvailability(
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+            model_type=ModelKind.EMBEDDING,
+            provider=ExperimentModelCandidate(
+                model_id="sentence-transformers/all-MiniLM-L6-v2"
+            ).provider,
+            status="available",
+            reason_codes=("available",),
+            required=False,
+            download_policy=DownloadPolicy.IF_CACHED,
+            expected_dimension=384,
+            actual_dimension=384,
+        ),
+    )
+
+    assert outcome.status == "blocked"
+    assert "qdrant_unavailable" in outcome.reason_codes
+    assert "preflight_blocked:qdrant_unavailable" in outcome.reason_codes
+
+
+def test_local_mode_all_skipped_is_not_ready() -> None:
+    manifest = ExperimentManifest.model_validate(_manifest_payload(include_reranker=False))
+    runner = RetrievalModelExperimentRunner(settings=Settings(), loader=_MissingLoader())
+
+    artifact = runner.run(manifest, _options(mode=ExperimentMode.LOCAL))
+
+    assert artifact["summary"]["status"] == "skipped"  # type: ignore[index]
+    assert artifact["results"][0]["status"] == "skipped"  # type: ignore[index]
+
+
+def test_cli_local_skipped_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_manifest_payload()), encoding="utf-8")
+
+    class FakeRunner:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def run(
+            self,
+            manifest: ExperimentManifest,
+            options: ExperimentRunOptions,
+        ) -> dict[str, object]:
+            assert manifest.experiment_name == "phase2_retrieval_model_comparison"
+            assert options.mode == ExperimentMode.LOCAL
+            return {"summary": {"status": "skipped"}}
+
+    monkeypatch.setattr(experiment_cli, "RetrievalModelExperimentRunner", FakeRunner)
+
+    result = experiment_cli.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--mode",
+            "local",
+            "--output-json",
+            str(tmp_path / "result.json"),
+            "--output-md",
+            str(tmp_path / "result.md"),
+        ]
+    )
+
+    assert result == 2
 
 
 def test_local_mode_executor_failure_is_safe_result() -> None:
@@ -326,15 +542,21 @@ def test_dataset_check_does_not_create_missing_sqlite_file(tmp_path: Path) -> No
     assert not db_path.exists()
 
 
-def _options(mode: ExperimentMode = ExperimentMode.DRY_RUN) -> ExperimentRunOptions:
+def _options(
+    mode: ExperimentMode = ExperimentMode.DRY_RUN,
+    *,
+    download_policy: DownloadPolicy = DownloadPolicy.IF_CACHED,
+    download_policy_is_explicit: bool = False,
+) -> ExperimentRunOptions:
     return ExperimentRunOptions(
         mode=mode,
-        download_policy=DownloadPolicy.IF_CACHED,
+        download_policy=download_policy,
         case_limit=None,
         strategies=None,
         metrics=None,
         timeout_seconds=60,
         index_seed_documents=False,
+        download_policy_is_explicit=download_policy_is_explicit,
     )
 
 

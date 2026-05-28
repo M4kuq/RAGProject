@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--download-policy",
         choices=[policy.value for policy in DownloadPolicy],
-        default=DownloadPolicy.IF_CACHED.value,
+        default=None,
     )
     parser.add_argument("--case-limit", type=int, default=None)
     parser.add_argument("--strategies", type=str, default=None)
@@ -48,12 +48,15 @@ def main(argv: list[str] | None = None) -> int:
         manifest = load_manifest(args.manifest)
         options = ExperimentRunOptions(
             mode=ExperimentMode(args.mode),
-            download_policy=DownloadPolicy(args.download_policy),
+            download_policy=DownloadPolicy(args.download_policy)
+            if args.download_policy is not None
+            else DownloadPolicy.IF_CACHED,
             case_limit=_positive_int_or_none(args.case_limit, "case_limit"),
             strategies=_parse_strategies(args.strategies),
             metrics=_parse_metrics(args.metrics),
             timeout_seconds=_positive_int(args.timeout_seconds, "timeout_seconds"),
             index_seed_documents=not args.skip_seed_indexing,
+            download_policy_is_explicit=args.download_policy is not None,
         )
         runner = RetrievalModelExperimentRunner(settings=get_settings())
         artifact = runner.run(manifest, options)
@@ -72,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = artifact.get("summary")
     status = summary.get("status") if isinstance(summary, dict) else None
     print(f"experiment_status={status}")
-    if options.mode == ExperimentMode.LOCAL and status in {"blocked", "failed"}:
+    if options.mode == ExperimentMode.LOCAL and status in {"blocked", "failed", "skipped"}:
         return 2
     return 0
 

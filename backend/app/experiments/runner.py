@@ -53,6 +53,7 @@ class ExperimentRunOptions:
     metrics: list[str] | None
     timeout_seconds: int
     index_seed_documents: bool
+    download_policy_is_explicit: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,9 +116,9 @@ class RetrievalModelExperimentRunner:
         availability_rows: list[dict[str, object]] = []
         embeddings = [candidate for candidate in manifest.embedding_models if candidate.enabled]
         rerankers = [candidate for candidate in manifest.reranker_models if candidate.enabled]
-        reranker_matrix: list[ExperimentModelCandidate | None] = (
-            list(rerankers) if rerankers else [None]
-        )
+        reranker_matrix: list[ExperimentModelCandidate | None] = list(rerankers)
+        if not reranker_matrix:
+            reranker_matrix = [None]
 
         for embedding in embeddings:
             embedding_availability = self._availability(
@@ -148,7 +149,7 @@ class RetrievalModelExperimentRunner:
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         dataset_check = check_dataset_availability(manifest.dataset, self.settings)
-        artifact = {
+        artifact: dict[str, object] = {
             "schema_version": EXPERIMENT_RESULT_SCHEMA_VERSION,
             "generated_at": datetime.now(UTC).isoformat(),
             "experiment_name": manifest.experiment_name,
@@ -176,7 +177,7 @@ class RetrievalModelExperimentRunner:
         options: ExperimentRunOptions,
     ) -> ModelAvailability:
         registered = lookup_model(candidate.model_id, model_type)
-        policy = candidate.download_policy or options.download_policy
+        policy = _download_policy_for_candidate(candidate, options)
         return check_model_availability(
             candidate,
             model_type=model_type,
@@ -290,10 +291,10 @@ def run_local_strategy_evaluation(
     artifact = run_smoke(config, experiment_settings)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     summary = _as_dict(artifact.get("summary"))
-    status = str(summary.get("status") or "unknown")
+    status = _local_smoke_status(summary)
     metrics_by_strategy = _list_of_dicts(artifact.get("metrics_by_strategy"))
     return ExperimentEvaluationOutcome(
-        status="succeeded" if status == "succeeded" else status,
+        status=status,
         metrics_by_strategy=metrics_by_strategy,
         metrics=_aggregate_metrics(metrics_by_strategy),
         case_count=_int_or_none(summary.get("case_count")),
@@ -407,6 +408,8 @@ def _summary(results: Sequence[dict[str, object]], elapsed_ms: int) -> dict[str,
         status = "blocked"
     elif counts["succeeded_count"]:
         status = "succeeded"
+    elif counts["skipped_count"] and counts["ready_count"] == 0:
+        status = "skipped"
     else:
         status = "ready"
     return {"status": status, **counts}
@@ -421,7 +424,8 @@ def _aggregate_metrics(metrics_by_strategy: Sequence[dict[str, object]]) -> dict
     for strategy in metrics_by_strategy:
         metrics = _as_dict(strategy.get("metrics"))
         for metric_name, value in metrics.items():
-            metric_value = _as_dict(value).get("average")
+            value_key = "p95" if metric_name == "p95_latency" else "average"
+            metric_value = _as_dict(value).get(value_key)
             if isinstance(metric_value, int | float):
                 collected.setdefault(str(metric_name), []).append(float(metric_value))
     return {
@@ -446,12 +450,49 @@ def _artifact_reason_codes(artifact: dict[str, object]) -> list[str]:
         value = artifact.get(key)
         if isinstance(value, list):
             reason_codes.extend(str(item) for item in value if isinstance(item, str))
+    summary = _as_dict(artifact.get("summary"))
+    for key in ("reason_codes", "warnings", "blocked_reason_codes"):
+        value = summary.get(key)
+        if isinstance(value, list):
+            reason_codes.extend(str(item) for item in value if isinstance(item, str))
+    preflight = _as_dict(artifact.get("preflight"))
+    value = preflight.get("reason_codes")
+    if isinstance(value, list):
+        reason_codes.extend(str(item) for item in value if isinstance(item, str))
     threshold = _as_dict(artifact.get("threshold_result"))
+    value = threshold.get("warnings")
+    if isinstance(value, list):
+        reason_codes.extend(str(item) for item in value if isinstance(item, str))
     for violation in _list_of_dicts(threshold.get("violations")):
         metric = violation.get("metric")
         if isinstance(metric, str):
             reason_codes.append(f"threshold_violation:{metric}")
     return reason_codes
+
+
+def _download_policy_for_candidate(
+    candidate: ExperimentModelCandidate,
+    options: ExperimentRunOptions,
+) -> DownloadPolicy:
+    if options.download_policy_is_explicit:
+        return options.download_policy
+    if candidate.download_policy == DownloadPolicy.OPT_IN_DOWNLOAD:
+        return options.download_policy
+    return candidate.download_policy or options.download_policy
+
+
+def _local_smoke_status(summary: dict[str, object]) -> str:
+    status = summary.get("status")
+    if isinstance(status, str) and status:
+        return status
+    failed_count = _int_or_none(summary.get("failed_count")) or 0
+    succeeded_count = _int_or_none(summary.get("succeeded_count")) or 0
+    case_count = _int_or_none(summary.get("case_count")) or 0
+    if failed_count:
+        return "failed"
+    if case_count > 0 and succeeded_count >= case_count:
+        return "succeeded"
+    return "unknown"
 
 
 def _known_limitations() -> list[str]:
