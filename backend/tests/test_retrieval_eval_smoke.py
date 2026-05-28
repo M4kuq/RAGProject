@@ -38,7 +38,7 @@ def test_parse_metrics_defaults_and_rejects_unknown() -> None:
 
 
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
-    artifact = {
+    artifact: dict[str, object] = {
         "metrics_by_strategy": [
             {
                 "strategy": "dense",
