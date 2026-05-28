@@ -250,6 +250,7 @@ GitHub Actions は次の workflow を使う。
 | Docker CI | compose config、image build | `docker compose -f docker-compose.ci.yml build ...` |
 | Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
 | Retrieval Evaluation Smoke | manual/scheduled deterministic strategy evaluation | `scripts/run_retrieval_eval_smoke.*` |
+| Retrieval Model Experiment | local opt-in embedding/reranker comparison | `scripts/run_retrieval_model_experiment.*` |
 
 Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents、小型 local embedding model cache を使い、answer generation は実行しません。fake embedding / fake reranker / fake evaluator には fallback せず、local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
 
@@ -264,6 +265,24 @@ LangSmith export is opt-in only. Normal CI and local smoke runs do not require
 LangSmith secrets, and exported payloads are minimized/redacted summaries rather
 than raw prompts, full context, raw chunk text, answers, PII, tokens, or
 credentials. See `docs/phase2/langsmith_optional_adapter.md`.
+
+SentenceTransformers experiment harness:
+
+```powershell
+.\scripts\run_retrieval_model_experiment.ps1 -Mode dry-run
+.\scripts\run_retrieval_model_experiment.ps1 -Mode local -DownloadPolicy if-cached
+```
+
+```bash
+sh scripts/run_retrieval_model_experiment.sh
+```
+
+Experiments are local opt-in only. Normal CI does not download models, require a
+GPU, or require external API keys. Dry-run validates the manifest, model
+registry, availability status, and safe artifact/report shape. Local mode uses
+cached public SentenceTransformers models by default and writes only aggregate
+metrics and reason codes. See
+`docs/phase2/sentence_transformers_experiment_harness.md`.
 
 ## Demo / Test Docs
 

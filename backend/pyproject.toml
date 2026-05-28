@@ -28,6 +28,9 @@ dev = [
 observability = [
   "langsmith>=0.1.0",
 ]
+experiments = [
+  "sentence-transformers>=2.7.0,<4",
+]
 
 [tool.ruff]
 line-length = 100

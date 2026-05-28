@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, and PR-32 adds optional no-op-by-default external trace export.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, and PR-33 adds a local opt-in SentenceTransformers experiment harness.
 
 ## PR Plan
 
@@ -224,6 +224,26 @@ PR-32 does not require LangSmith credentials, external trace export, heavy model
 ## Non-goals
 
 PR-32 does not implement SentenceTransformers experiments, online evaluation, production trace sampling, external LLM/API-required evaluation, Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+
+## PR-33 SentenceTransformers Experiment Harness
+
+PR-33 adds:
+
+- `backend/app/experiments` with manifest schema, model registry, availability checks, runner, and report generation
+- `backend/app/experiments/manifests/phase2_retrieval_models.example.json`
+- local wrapper scripts for dry-run and local opt-in execution
+- JSON and Markdown experiment artifacts under `artifacts/experiments`
+- optional `backend[experiments]` dependency extra for SentenceTransformers
+
+The default command is dry-run and does not download models. Local mode uses
+cached public SentenceTransformers models by default, can opt into downloads only
+with `DownloadPolicy=opt-in-download`, and indexes deterministic seed documents
+into experiment-specific Qdrant collections before calling the existing Strategy
+Evaluation Runner through the PR-31 retrieval smoke path.
+
+PR-33 does not implement fine-tuning, production model cutover, required CI heavy
+model downloads, GPU-required evaluation, external API-required evaluation,
+Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
 ## Security
 

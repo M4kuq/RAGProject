@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db.models import (
     DocumentChunk,
@@ -192,6 +192,14 @@ def seed(db: Session, *, index_documents: bool = True) -> None:
             db,
             indexing_service=create_document_indexing_service(settings),
         )
+
+
+def index_seed_documents(db: Session, *, settings: Settings | None = None) -> None:
+    """Index only deterministic seed documents using the provided retrieval settings."""
+    _index_seed_documents(
+        db,
+        indexing_service=create_document_indexing_service(settings or get_settings()),
+    )
 
 
 def _seed_roles(db: Session) -> dict[str, Role]:

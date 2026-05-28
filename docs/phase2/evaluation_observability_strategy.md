@@ -128,6 +128,24 @@ trace and evaluation summaries.
   text, full answer text, raw external request/response bodies, paths, PII,
   tokens, cookies, sessions, credentials, API keys, or secrets.
 
+## Experiment Harness
+
+PR-33 adds a local opt-in SentenceTransformers experiment harness for comparing
+embedding and reranker model candidates against existing evaluation datasets.
+The harness emits artifact-first JSON and Markdown reports with:
+
+- manifest name, dataset, strategies, and metric names
+- public model ids, provider, model type, and dimension metadata
+- availability status and reason codes
+- aggregate strategy evaluation metrics by model pair
+- skipped, blocked, and failure counts
+
+Dry-run and validation modes do not download models. Local mode checks cached
+models by default, can opt into public model download only through
+`opt-in-download`, and does not change production model settings. Artifacts and
+reports never include raw prompts, full context, raw chunk text, PII, secrets,
+tokens, local cache paths, or full answer text.
+
 ## Redaction Rules
 
 Do not store or display:
