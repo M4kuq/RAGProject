@@ -169,9 +169,7 @@ def run_smoke(config: SmokeConfig, settings: Settings | None = None) -> dict[str
         payload = EvaluationRunCreateRequest(
             dataset_name=dataset_name,
             evaluation_dataset_id=evaluation_dataset_id,
-            strategies=[
-                EvaluationRunRequestStrategy(strategy) for strategy in config.strategies
-            ],
+            strategies=[EvaluationRunRequestStrategy(strategy) for strategy in config.strategies],
             metrics=[EvaluationMetricName(metric) for metric in config.metrics],
             case_limit=config.case_limit,
             top_k=config.top_k,
