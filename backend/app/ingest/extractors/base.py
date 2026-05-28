@@ -25,6 +25,7 @@ class ExtractedPage:
     text: str
     page_number: int | None = None
     section_title: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

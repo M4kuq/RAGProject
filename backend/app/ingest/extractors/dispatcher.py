@@ -7,6 +7,7 @@ from app.ingest.extractors.base import ExtractionError, TextExtractor
 from app.ingest.extractors.csv import CsvExtractor
 from app.ingest.extractors.docx import DocxExtractor
 from app.ingest.extractors.markdown import MarkdownExtractor
+from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
 from app.ingest.extractors.pdf import PdfTextExtractor
 from app.ingest.extractors.text import PlainTextExtractor
 from app.storage.validators import allowed_mime_types_for_extension, extension_from_file_name
@@ -21,6 +22,8 @@ class ExtractorDispatcher:
             ".md": MarkdownExtractor(),
             ".markdown": MarkdownExtractor(),
             ".csv": CsvExtractor(),
+            ".xlsx": ExcelExtractor(),
+            ".pptx": PowerPointExtractor(),
         }
 
     def select(self, *, file_name: str, mime_type: str) -> TextExtractor:

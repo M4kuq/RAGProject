@@ -1292,8 +1292,9 @@ email / password によりログインする。
 | `.txt` | yes | plain text |
 | `.md` | yes | markdown text |
 | `.png` / `.jpg` / `.jpeg` | no | OCR は Phase3 |
-| `.docx` | no | Phase2 以降候補 |
-| `.xlsx` | no | Phase2 以降候補 |
+| `.docx` | yes | Word text |
+| `.xlsx` | yes | Excel sheet / row text, macro-enabled files are rejected |
+| `.pptx` | yes | PowerPoint slide text, OCR is not performed |
 
 ### バリデーション
 

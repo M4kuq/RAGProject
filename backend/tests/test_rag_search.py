@@ -506,6 +506,39 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
         assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
+def test_rag_search_source_label_uses_safe_office_metadata(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    csrf_token = _login(client)
+    with session_factory() as db:
+        chunk = db.get(DocumentChunk, 100)
+        assert chunk is not None
+        chunk.metadata_json = {
+            "parent_child_schema_version": "phase2.parent_child.v1",
+            "structure_type": "excel_sheet",
+            "sheet_name": "Sales",
+            "row_from": 1,
+            "row_to": 2,
+            "secret": "do-not-return",
+        }
+        db.commit()
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "top_k": 5, "rerank_top_n": 1},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    first = response.json()["data"]["items"][0]
+    assert first["source_label"] == "hand book.pdf / Sheet: Sales / Rows 1-2"
+    assert first["payload_snapshot"]["sheet_name"] == "Sales"
+    assert first["payload_snapshot"]["row_from"] == 1
+    assert "secret" not in first["payload_snapshot"]
+    assert "content_text" not in str(first["payload_snapshot"])
+
+
 def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

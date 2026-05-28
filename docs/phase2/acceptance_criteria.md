@@ -74,6 +74,18 @@
 - Existing default dense evaluation runs still work.
 - External LLM judge, heavy model downloads, CI workflow scheduling, QueryAnalyzer, StrategyRouter, and Agentic Retrieval Loop remain out of scope.
 
+## PR-34
+
+- Upload validation accepts `.xlsx` and `.pptx`.
+- Legacy `.xls` / `.ppt` and macro-enabled Office files are rejected.
+- Excel extraction reads visible sheets and records sheet / row / column metadata.
+- PowerPoint extraction reads slide text and records slide metadata.
+- Hidden sheets, speaker notes, embedded objects, images, and OCR are not ingested.
+- Parent-child chunk v1 is represented with safe metadata in `document_chunks.metadata_json`.
+- Search and citation source labels include sheet or slide information when available.
+- Existing PDF / DOCX / TXT / Markdown / CSV ingest remains compatible.
+- Raw file content, raw chunk text, PII, tokens, and secrets are not logged, traced, or returned.
+
 ## Security
 
 The following must not be stored in dataset, case, metric detail, trace, score breakdown, logs, or normal responses:

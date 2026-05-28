@@ -273,6 +273,7 @@ CREATE TABLE document_chunks (
     page_from INTEGER,
     page_to INTEGER,
     section_title TEXT,
+    metadata_json JSONB,
     modality VARCHAR(30) NOT NULL DEFAULT 'text',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_document_chunks_version_index
@@ -297,6 +298,7 @@ CREATE TABLE document_chunks (
 
 COMMENT ON TABLE document_chunks IS 'document_version 配下の chunk。Phase1 では chunk 単位 is_active は持たず、version active と logical document status を正とする。';
 COMMENT ON COLUMN document_chunks.content_text IS 'RAG retrieval/generation/sparse retrieval 用の chunk text。application log / audit log / trace JSON / score_breakdown JSON には出さない。';
+COMMENT ON COLUMN document_chunks.metadata_json IS 'Office parent-child chunk v1 の safe metadata。sheet/slide/row/column/source label 用の構造情報のみを保存し、raw chunk text や raw file content は保存しない。';
 
 -- ============================================================
 -- 4. Jobs

@@ -385,6 +385,7 @@ class DocumentChunk(Base):
     page_from: Mapped[int | None] = mapped_column(Integer)
     page_to: Mapped[int | None] = mapped_column(Integer)
     section_title: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     modality: Mapped[str] = mapped_column(
         String(30), server_default=text("'text'"), default="text", nullable=False
     )

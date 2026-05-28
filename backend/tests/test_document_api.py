@@ -47,7 +47,7 @@ def document_client(
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "64")
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
     )
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("EMBEDDING_FAKE_DIMENSION", "4")

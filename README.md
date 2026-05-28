@@ -49,7 +49,7 @@ Phase1 は Docker Compose ローカル検証環境を基準にする。AWS deplo
 - Session cookie は HttpOnly にし、CSRF token を別に扱う。
 - Admin / viewer の RBAC で管理 API と閲覧系導線を分ける。
 - login rate limit、session expiry、CSRF pre-auth flow を使う。
-- upload は拡張子 allowlist と size limit を使う。
+- upload は拡張子 allowlist と size limit を使う。PR-34 時点の通常取り込みは PDF / DOCX / TXT / Markdown / CSV / XLSX / PPTX を対象にし、macro-enabled Office files、legacy `.xls` / `.ppt`、OCR は対象外とする。
 - audit log には action と target の要約だけを残す。
 - UI と MCP は raw token、credential、password_hash、session、csrf、full prompt、full context を表示しない。
 - MCP は `MCP_LOCAL_ONLY=true` と stdio を前提にし、write tools を Phase1 で提供しない。

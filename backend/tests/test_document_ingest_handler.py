@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+import zipfile
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 
@@ -56,7 +58,7 @@ def ingest_session_factory(
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
     )
     monkeypatch.setenv("INGEST_CHUNK_SIZE_TOKENS", "5")
     monkeypatch.setenv("INGEST_CHUNK_OVERLAP_TOKENS", "1")
@@ -144,6 +146,80 @@ def test_document_ingest_handler_success_for_supported_types(
         assert chunks
         assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
         assert all(chunk.chunk_hash and len(chunk.chunk_hash) == 64 for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    ("file_name", "mime_type", "content", "structure_type", "expected_label"),
+    [
+        (
+            "sales.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            lambda: _minimal_xlsx(),
+            "excel_sheet",
+            "Sales",
+        ),
+        (
+            "deck.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            lambda: _minimal_pptx(),
+            "powerpoint_slide",
+            "Architecture",
+        ),
+    ],
+)
+def test_document_ingest_handler_success_for_office_parent_child_chunks(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+    file_name: str,
+    mime_type: str,
+    content: Callable[[], bytes],
+    structure_type: str,
+    expected_label: str,
+) -> None:
+    session_factory, storage = ingest_session_factory
+    content_bytes = content()
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name=file_name,
+        mime_type=mime_type,
+        content=content_bytes,
+    )
+    qdrant_client = InMemoryQdrantClient()
+
+    result = _handler(
+        session_factory,
+        storage,
+        indexing_service=_indexing_service(qdrant_client=qdrant_client),
+    ).handle(_context(version_id))
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        version = db.get(DocumentVersion, version_id)
+        chunks = db.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_version_id == version_id)
+            .order_by(DocumentChunk.chunk_index)
+        ).all()
+        assert version is not None
+        assert version.status == "ready"
+        assert version.extractor_name in {"xlsx", "pptx"}
+        assert chunks
+        metadata = chunks[0].metadata_json
+        assert metadata is not None
+        assert metadata["parent_child_schema_version"] == "phase2.parent_child.v1"
+        assert metadata["structure_type"] == structure_type
+        assert metadata["chunk_level"] == "child"
+        assert expected_label in (chunks[0].section_title or "")
+        points = qdrant_client.points["test_document_chunks"]
+        assert points
+        first_payload = next(iter(points.values())).payload
+        assert first_payload["structure_type"] == structure_type
+        assert "content_text" not in first_payload
+        assert "raw_chunk_text" not in first_payload
+        if structure_type == "excel_sheet":
+            assert first_payload["sheet_name"] == "Sales"
+        else:
+            assert first_payload["slide_number"] == 1
 
 
 def test_document_ingest_handler_missing_storage_file_fails_safely(
@@ -1080,6 +1156,81 @@ def _minimal_pdf(text: str) -> bytes:
         ).encode("ascii")
     )
     return bytes(content)
+
+
+def _minimal_xlsx() -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />',
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Sales" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "xl/sharedStrings.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>Region</t></si><si><t>Revenue</t></si><si><t>East</t></si><si><t>10</t></si>
+</sst>""",
+        )
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row>
+  </sheetData>
+</worksheet>""",
+        )
+    return buffer.getvalue()
+
+
+def _minimal_pptx() -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />',
+        )
+        archive.writestr(
+            "ppt/presentation.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+</p:presentation>""",
+        )
+        archive.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="slides/slide1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "ppt/slides/slide1.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody><a:p><a:r><a:t>Architecture</a:t></a:r></a:p></p:txBody></p:sp>
+    <p:sp><p:txBody><a:p><a:r><a:t>Hybrid retrieval</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>""",
+        )
+    return buffer.getvalue()
 
 
 def _worker_config(batch_size: int = 1) -> WorkerConfig:

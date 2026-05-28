@@ -7,7 +7,10 @@ from pathlib import Path
 from docx import Document
 from pypdf import PdfReader
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv"}
+from app.ingest.extractors.base import ExtractionInputMetadata
+from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
+
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".pptx"}
 
 
 def validate_extension(filename: str) -> str:
@@ -31,6 +34,26 @@ def extract_text(path: Path) -> str:
     if ext == ".pdf":
         reader = PdfReader(str(path))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
+    if ext == ".xlsx":
+        document = ExcelExtractor().extract(
+            path,
+            ExtractionInputMetadata(
+                file_name=path.name,
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_size_bytes=path.stat().st_size,
+            ),
+        )
+        return "\n\n".join(page.text for page in document.pages)
+    if ext == ".pptx":
+        document = PowerPointExtractor().extract(
+            path,
+            ExtractionInputMetadata(
+                file_name=path.name,
+                mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                file_size_bytes=path.stat().st_size,
+            ),
+        )
+        return "\n\n".join(page.text for page in document.pages)
     raise ValueError("unsupported_file_type")
 
 
