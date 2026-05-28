@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 
@@ -26,6 +27,12 @@ _METADATA_HOSTNAMES = {
     "metadata",
     "169.254.169.254",
 }
+_SECRET_PATH_SEGMENT_RE = re.compile(
+    r"(?i)(?:^|[._~!$&'()*+,;=:-])"
+    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|"
+    r"secret|password|passwd|credential|bearer|signature|signed|jwt|session)"
+    r"(?:$|[._~!$&'()*+,;=:-])"
+)
 
 
 @dataclass(frozen=True)
@@ -143,8 +150,22 @@ def redact_url_for_display(url: str) -> str:
         return "redacted"
     port = f":{parsed_port}" if parsed_port is not None else ""
     host = _host_for_netloc(host)
-    path = parsed.path or "/"
+    path = _redact_url_path_for_display(parsed.path or "/")
     return urlunsplit((parsed.scheme.lower(), f"{host}{port}", path, "", ""))
+
+
+def _redact_url_path_for_display(path: str) -> str:
+    redacted_segments = [
+        "redacted" if _is_secret_path_segment(segment) else segment for segment in path.split("/")
+    ]
+    redacted_path = "/".join(redacted_segments)
+    return redacted_path or "/"
+
+
+def _is_secret_path_segment(segment: str) -> bool:
+    if not segment:
+        return False
+    return _SECRET_PATH_SEGMENT_RE.search(unquote(segment)) is not None
 
 
 def _validate_url(url: str, *, settings: Settings, resolver: Resolver) -> _ValidatedUrl:

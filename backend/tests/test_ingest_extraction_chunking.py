@@ -291,6 +291,32 @@ def test_html_extraction_skips_hidden_subtrees(tmp_path: Path) -> None:
     assert "screen reader duplicate" not in joined
 
 
+def test_html_repeated_heading_sections_keep_separate_parent_keys(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><h2>Overview</h2><p>First section</p>"
+        b"<h2>Overview</h2><p>Second section</p></body></html>"
+    )
+    path = tmp_path / "repeated-headings.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(
+        path, _metadata("repeated-headings.html", "text/html", len(content))
+    )
+
+    parent_keys = [page.metadata["parent_chunk_key"] for page in extracted.pages]
+    assert parent_keys[0] == parent_keys[1]
+    assert parent_keys[2] == parent_keys[3]
+    assert parent_keys[0] != parent_keys[2]
+
+    chunks = FixedTokenChunker(ChunkingConfig(chunk_size_tokens=100, chunk_overlap_tokens=0)).chunk(
+        extracted, document_version_id=12
+    )
+    assert [chunk.content_text for chunk in chunks] == [
+        "Overview First section",
+        "Overview Second section",
+    ]
+
+
 def test_web_extraction_preserves_long_body_text(tmp_path: Path) -> None:
     long_text = "x" * 1200
     html_content = f"<html><body><p>{long_text}</p></body></html>".encode()

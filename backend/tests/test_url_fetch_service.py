@@ -291,9 +291,17 @@ def test_url_fetch_uses_neutral_filename_for_sensitive_url_paths() -> None:
     assert result.file_name == "example.com-url-document.html"
     assert "api_key" not in result.file_name
     assert "abc123" not in result.file_name
+    assert result.safe_source_url == "https://example.com/download/redacted"
+    assert result.safe_final_url == "https://example.com/download/redacted"
+    assert "api_key" not in result.safe_source_url
+    assert "abc123" not in result.safe_source_url
 
 
 def test_url_redaction_removes_query_and_userinfo() -> None:
     assert redact_url_for_display("https://user:secret@example.com/path?token=abc#frag") == (
         "https://example.com/path"
+    )
+    assert (
+        redact_url_for_display("https://example.com/download/access-token%3Dabc123.html?x=1")
+        == "https://example.com/download/redacted"
     )

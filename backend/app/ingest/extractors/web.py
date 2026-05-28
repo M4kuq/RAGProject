@@ -60,6 +60,7 @@ class _HtmlBlock:
     heading_path: tuple[str, ...]
     element_type: str
     element_index: int
+    parent_index: int
 
 
 class HtmlExtractor:
@@ -140,6 +141,7 @@ class _SafeHtmlTextParser(HTMLParser):
         self._current_type: str = "body"
         self._current_heading_level: int | None = None
         self._headings: list[str] = []
+        self._current_parent_index: int | None = None
         self._in_title = False
         self._title_text: list[str] = []
         self._table_row_cells: list[str] | None = None
@@ -209,12 +211,15 @@ class _SafeHtmlTextParser(HTMLParser):
                 level = self._current_heading_level or 1
                 self._headings = self._headings[: level - 1]
                 self._headings.append(heading)
+                element_index = len(self.blocks) + 1
+                self._current_parent_index = element_index
                 self.blocks.append(
                     _HtmlBlock(
                         text=heading,
                         heading_path=tuple(self._headings),
                         element_type=tag,
-                        element_index=len(self.blocks) + 1,
+                        element_index=element_index,
+                        parent_index=element_index,
                     )
                 )
             self._current_text = []
@@ -251,12 +256,19 @@ class _SafeHtmlTextParser(HTMLParser):
     def _flush_current(self, *, element_type: str | None = None) -> None:
         text = _safe_text(" ".join(self._current_text))
         if text:
+            element_index = len(self.blocks) + 1
+            parent_index = (
+                self._current_parent_index
+                if self._headings and self._current_parent_index is not None
+                else element_index
+            )
             self.blocks.append(
                 _HtmlBlock(
                     text=text,
                     heading_path=tuple(self._headings),
                     element_type=element_type or self._current_type,
-                    element_index=len(self.blocks) + 1,
+                    element_index=element_index,
+                    parent_index=parent_index,
                 )
             )
         self._current_text = []
@@ -307,7 +319,7 @@ def _html_blocks_to_pages(
             "parent_child_schema_version": WEB_INGEST_SCHEMA_VERSION,
             "structure_type": "html_section",
             "chunk_level": "child",
-            "parent_chunk_key": _parent_key("html", block.heading_path, block.element_index),
+            "parent_chunk_key": _parent_key("html", block.heading_path, block.parent_index),
             "parent_title": heading_path or _safe_metadata_text(metadata.file_name),
             "html_title": safe_html_title,
             "heading_path": heading_path,
@@ -417,7 +429,9 @@ def _xml_direct_text(element: ElementTree.Element) -> str:
 
 def _parent_key(prefix: str, heading_path: tuple[str, ...], element_index: int) -> str:
     if heading_path:
-        digest = sha256("\0".join(heading_path).encode("utf-8")).hexdigest()[:12]
+        digest = sha256("\0".join([str(element_index), *heading_path]).encode("utf-8")).hexdigest()[
+            :12
+        ]
         return f"{prefix}:section:{digest}"
     return f"{prefix}:element:{element_index}"
 
