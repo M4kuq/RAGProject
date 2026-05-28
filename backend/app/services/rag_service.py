@@ -1949,6 +1949,8 @@ def _payload_snapshot(candidate: CheckedRetrievalCandidate) -> dict[str, object]
     _add_optional(snapshot, "page_from", candidate.chunk.page_from)
     _add_optional(snapshot, "page_to", candidate.chunk.page_to)
     _add_optional(snapshot, "section_title", _safe_display_text(candidate.chunk.section_title))
+    for key, value in _safe_chunk_metadata(candidate.chunk.metadata_json).items():
+        _add_optional(snapshot, key, value)
     return snapshot
 
 
@@ -2243,7 +2245,78 @@ def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     label = _sanitize_label(PurePosixPath(normalized).name)
     fallback = _sanitize_label(candidate.logical_document.title)
     safe_label = label or fallback or f"document:{candidate.logical_document.logical_document_id}"
+    metadata_label = _metadata_source_suffix(candidate.chunk.metadata_json)
+    if metadata_label:
+        return f"{safe_label} / {metadata_label}"[:255]
     return safe_label[:255]
+
+
+def _metadata_source_suffix(value: object) -> str | None:
+    metadata = _safe_chunk_metadata(value)
+    structure_type = metadata.get("structure_type")
+    if structure_type == "excel_sheet":
+        sheet_name = _metadata_str(metadata, "sheet_name")
+        row_from = metadata.get("row_from")
+        row_to = metadata.get("row_to")
+        parts = []
+        if sheet_name:
+            parts.append(f"Sheet: {sheet_name}")
+        if isinstance(row_from, int) and isinstance(row_to, int):
+            parts.append(f"Rows {row_from}-{row_to}" if row_from != row_to else f"Row {row_from}")
+        return " / ".join(parts) or None
+    if structure_type == "powerpoint_slide":
+        slide_number = metadata.get("slide_number")
+        slide_title = _metadata_str(metadata, "slide_title")
+        parts = []
+        if isinstance(slide_number, int):
+            parts.append(f"Slide {slide_number}")
+        if slide_title:
+            parts.append(f"Title: {slide_title}")
+        return " / ".join(parts) or None
+    return None
+
+
+def _metadata_str(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    return _safe_display_text(value)
+
+
+def _safe_chunk_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    allowed_keys = {
+        "parent_child_schema_version",
+        "structure_type",
+        "chunk_level",
+        "parent_chunk_key",
+        "child_chunk_key",
+        "parent_title",
+        "sheet_name",
+        "row_from",
+        "row_to",
+        "column_from",
+        "column_to",
+        "table_index",
+        "slide_number",
+        "slide_title",
+        "shape_count",
+        "table_count",
+    }
+    safe: dict[str, object] = {}
+    for key, item in value.items():
+        if key not in allowed_keys:
+            continue
+        if isinstance(item, str):
+            redacted = TraceRedactor.safe_string(item, max_length=120)
+            if redacted:
+                safe[key] = redacted
+        elif isinstance(item, bool):
+            safe[key] = item
+        elif isinstance(item, int | float):
+            safe[key] = item
+    return safe
 
 
 def _assemble_context(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.ingest.extractors.base import ExtractedDocument, ExtractedPage
 from app.ingest.hashing import chunk_hash, normalize_chunk_text
@@ -42,6 +43,7 @@ class Chunk:
     page_to: int | None
     section_title: str | None
     modality: str = "text"
+    metadata_json: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class _Token:
     value: str
     page_number: int | None
     section_title: str | None
+    metadata: dict[str, object]
 
 
 class FixedTokenChunker:
@@ -87,6 +90,7 @@ class FixedTokenChunker:
                         page_from=min(page_numbers) if page_numbers else None,
                         page_to=max(page_numbers) if page_numbers else None,
                         section_title=_first_section_title(window),
+                        metadata_json=_chunk_metadata(window, chunk_index=chunk_index),
                     )
                 )
             start += step
@@ -109,6 +113,7 @@ def _document_tokens(pages: list[ExtractedPage]) -> list[_Token]:
                 value=match.group(0),
                 page_number=page.page_number,
                 section_title=page.section_title,
+                metadata=page.metadata,
             )
             for match in _TOKEN_RE.finditer(text)
         )
@@ -124,3 +129,56 @@ def _first_section_title(tokens: list[_Token]) -> str | None:
         if token.section_title:
             return token.section_title
     return None
+
+
+def _chunk_metadata(tokens: list[_Token], *, chunk_index: int) -> dict[str, object] | None:
+    metadata_items = [token.metadata for token in tokens if token.metadata]
+    if not metadata_items:
+        return None
+    base = dict(metadata_items[0])
+    safe: dict[str, object] = {
+        key: value
+        for key, value in base.items()
+        if isinstance(key, str) and _is_safe_metadata_value(value)
+    }
+    if not safe:
+        return None
+    safe["chunk_level"] = "child"
+    safe["chunk_index"] = chunk_index
+    parent_key = safe.get("parent_chunk_key")
+    if isinstance(parent_key, str) and parent_key:
+        safe["child_chunk_key"] = f"{parent_key}:chunk:{chunk_index}"
+    _merge_int_range(safe, metadata_items, "row_from", min)
+    _merge_int_range(safe, metadata_items, "row_to", max)
+    _merge_int_range(safe, metadata_items, "column_from", min)
+    _merge_int_range(safe, metadata_items, "column_to", max)
+    _merge_int_range(safe, metadata_items, "slide_number", min)
+    return safe
+
+
+def _merge_int_range(
+    target: dict[str, object],
+    metadata_items: list[dict[str, object]],
+    key: str,
+    reducer: Any,
+) -> None:
+    values = [item.get(key) for item in metadata_items]
+    int_values = [
+        value for value in values if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    if int_values:
+        target[key] = int(reducer(int_values))
+
+
+def _is_safe_metadata_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip()) and len(value) <= 255
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int | float):
+        return True
+    if isinstance(value, list):
+        return all(_is_safe_metadata_value(item) for item in value[:20])
+    return False

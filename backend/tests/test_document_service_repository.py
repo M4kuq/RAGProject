@@ -31,7 +31,7 @@ def document_session_factory(
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "1024")
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
     )
     get_settings.cache_clear()
     engine = create_engine(

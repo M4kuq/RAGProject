@@ -12,7 +12,12 @@ x-backend-env: &backend-env
   SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
   STORAGE_ROOT: /app/storage/uploads
   UPLOAD_MAX_BYTES: "20971520"
-  UPLOAD_ALLOWED_EXTENSIONS: '[".pdf",".docx",".txt",".md",".markdown",".csv"]'
+  UPLOAD_ALLOWED_EXTENSIONS: '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]'
+  INGEST_OFFICE_MAX_PAGES: "200"
+  INGEST_OFFICE_MAX_ROWS_PER_SHEET: "5000"
+  INGEST_OFFICE_MAX_CELLS: "100000"
+  INGEST_OFFICE_ROWS_PER_CHUNK: "25"
+  INGEST_OFFICE_MAX_SLIDES: "300"
   TEMP_CHAT_TTL_MINUTES: "1440"
   JOB_LEASE_SECONDS: "300"
   WORKER_POLL_INTERVAL_MS: "1000"

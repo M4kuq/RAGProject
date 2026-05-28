@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,14 @@ from app.ingest.embedding import (
     EmbeddingAdapterError,
     create_document_embedding_service,
 )
+
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|\s)(?:export\s+)?"
+    r"([A-Z0-9_.-]*(?:api[_-]?key|secret|password|token|credential)[A-Z0-9_.-]*)"
+    r"\s*[:=]\s*\S+"
+)
+_URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://")
+_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
 class QdrantStoreError(RuntimeError):
@@ -464,6 +473,10 @@ def build_qdrant_payload(
     }
     _add_optional(payload, "page_from", chunk_obj.page_from)
     _add_optional(payload, "page_to", chunk_obj.page_to)
+    metadata = _safe_chunk_metadata(getattr(chunk_obj, "metadata_json", None))
+    if metadata:
+        for key, value in metadata.items():
+            payload[key] = value
     created_at = chunk_obj.created_at
     if isinstance(created_at, datetime):
         payload["created_at"] = created_at.isoformat()
@@ -501,3 +514,43 @@ def _positive_int(value: object) -> int:
 def _add_optional(payload: dict[str, object], key: str, value: object) -> None:
     if value is not None:
         payload[key] = value
+
+
+def _safe_chunk_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "structure_type",
+        "sheet_name",
+        "row_from",
+        "row_to",
+        "column_from",
+        "column_to",
+        "table_index",
+        "slide_number",
+        "slide_title",
+    }
+    safe: dict[str, object] = {}
+    for key, item in value.items():
+        if key not in allowed:
+            continue
+        if isinstance(item, str):
+            redacted = _safe_metadata_string(item)
+            if redacted:
+                safe[key] = redacted
+        elif isinstance(item, bool):
+            safe[key] = item
+        elif isinstance(item, int | float):
+            safe[key] = item
+    return safe
+
+
+def _safe_metadata_string(value: str) -> str:
+    normalized = " ".join(value.replace("\x00", " ").split())
+    if (
+        _SECRET_ASSIGNMENT_RE.search(normalized)
+        or _URL_RE.search(normalized)
+        or _EMAIL_RE.search(normalized)
+    ):
+        return "redacted"
+    return normalized[:120]

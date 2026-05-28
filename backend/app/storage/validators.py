@@ -35,15 +35,31 @@ _MIME_TYPES_BY_EXTENSION = {
         "application/zip",
         "application/octet-stream",
     },
+    ".xlsx": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/zip",
+        "application/octet-stream",
+    },
+    ".pptx": {
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/zip",
+        "application/octet-stream",
+    },
     ".txt": {"text/plain", "application/octet-stream"},
     ".md": {"text/markdown", "text/plain", "application/octet-stream"},
     ".markdown": {"text/markdown", "text/plain", "application/octet-stream"},
     ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"},
 }
+_MACRO_ENABLED_EXTENSIONS = {".docm", ".xlsm", ".pptm"}
 _DOCX_MAX_ZIP_ENTRIES = 200
 _DOCX_MAX_UNCOMPRESSED_BYTES = 10 * 1024 * 1024
 _DOCX_MAX_DOCUMENT_XML_BYTES = 5 * 1024 * 1024
 _DOCX_MAX_COMPRESSION_RATIO = 100
+_OFFICE_MAX_ZIP_ENTRIES = 1000
+_OFFICE_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024
+_OFFICE_MAX_MAIN_XML_BYTES = 10 * 1024 * 1024
+_OFFICE_MAX_COMPRESSION_RATIO = 100
+_OFFICE_REJECTED_PART_DIR_MARKERS = ("/activeX/", "/embeddings/")
 
 
 @dataclass(frozen=True)
@@ -71,6 +87,7 @@ def validate_upload(
 
     safe_name = sanitize_file_name(filename)
     extension = _extension(safe_name)
+    _reject_macro_enabled_extension(extension)
     allowed = {item.lower() for item in allowed_extensions}
     if extension not in allowed:
         raise UnsupportedMediaType()
@@ -149,6 +166,20 @@ def _validate_magic_bytes(extension: str, content: bytes) -> None:
         except zipfile.BadZipFile as exc:
             raise UnsafeFileRejected() from exc
         return
+    if extension == ".xlsx":
+        _validate_office_zip(
+            content,
+            required_entries={"[Content_Types].xml", "xl/workbook.xml"},
+            main_xml_path="xl/workbook.xml",
+        )
+        return
+    if extension == ".pptx":
+        _validate_office_zip(
+            content,
+            required_entries={"[Content_Types].xml", "ppt/presentation.xml"},
+            main_xml_path="ppt/presentation.xml",
+        )
+        return
     if extension in {".txt", ".md", ".markdown", ".csv"}:
         if b"\x00" in content:
             raise UnsafeFileRejected()
@@ -172,6 +203,11 @@ def _validate_docx_archive(archive: zipfile.ZipFile) -> None:
         name = info.filename
         if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
             raise UnsafeFileRejected()
+        normalized_name = f"/{name}"
+        if normalized_name.endswith("/vbaProject.bin") or any(
+            marker in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
+        ):
+            raise UnsafeFileRejected()
         if info.flag_bits & 0x1:
             raise UnsafeFileRejected()
         total_uncompressed += info.file_size
@@ -188,4 +224,70 @@ def _validate_docx_archive(archive: zipfile.ZipFile) -> None:
             document_xml_size = info.file_size
 
     if document_xml_size is None or document_xml_size > _DOCX_MAX_DOCUMENT_XML_BYTES:
+        raise UnsafeFileRejected()
+
+
+def _reject_macro_enabled_extension(extension: str) -> None:
+    if extension.lower() in _MACRO_ENABLED_EXTENSIONS:
+        raise UnsafeFileRejected()
+
+
+def _validate_office_zip(
+    content: bytes,
+    *,
+    required_entries: set[str],
+    main_xml_path: str,
+) -> None:
+    if not content.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        raise UnsafeFileRejected()
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            _validate_office_archive(
+                archive,
+                required_entries=required_entries,
+                main_xml_path=main_xml_path,
+            )
+    except zipfile.BadZipFile as exc:
+        raise UnsafeFileRejected() from exc
+
+
+def _validate_office_archive(
+    archive: zipfile.ZipFile,
+    *,
+    required_entries: set[str],
+    main_xml_path: str,
+) -> None:
+    infos = archive.infolist()
+    if not infos or len(infos) > _OFFICE_MAX_ZIP_ENTRIES:
+        raise UnsafeFileRejected()
+    names = {info.filename for info in infos}
+    if not required_entries.issubset(names):
+        raise UnsafeFileRejected()
+
+    total_uncompressed = 0
+    main_xml_size: int | None = None
+    for info in infos:
+        name = info.filename
+        if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
+            raise UnsafeFileRejected()
+        normalized_name = f"/{name}"
+        if normalized_name.endswith("/vbaProject.bin") or any(
+            marker in normalized_name for marker in _OFFICE_REJECTED_PART_DIR_MARKERS
+        ):
+            raise UnsafeFileRejected()
+        if info.flag_bits & 0x1:
+            raise UnsafeFileRejected()
+        total_uncompressed += info.file_size
+        if total_uncompressed > _OFFICE_MAX_UNCOMPRESSED_BYTES:
+            raise UnsafeFileRejected()
+        if info.compress_size == 0 and info.file_size > 0:
+            raise UnsafeFileRejected()
+        if (
+            info.compress_size > 0
+            and info.file_size / info.compress_size > _OFFICE_MAX_COMPRESSION_RATIO
+        ):
+            raise UnsafeFileRejected()
+        if name == main_xml_path:
+            main_xml_size = info.file_size
+    if main_xml_size is None or main_xml_size > _OFFICE_MAX_MAIN_XML_BYTES:
         raise UnsafeFileRejected()

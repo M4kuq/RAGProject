@@ -35,7 +35,16 @@ class Settings(BaseSettings):
     storage_root: Path = Path("storage/uploads")
     upload_max_bytes: int = 20 * 1024 * 1024
     upload_allowed_extensions: list[str] = Field(
-        default_factory=lambda: [".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"]
+        default_factory=lambda: [
+            ".pdf",
+            ".docx",
+            ".txt",
+            ".md",
+            ".markdown",
+            ".csv",
+            ".xlsx",
+            ".pptx",
+        ]
     )
     temp_chat_ttl_minutes: int = 120
     job_lease_seconds: int = 300
@@ -50,6 +59,11 @@ class Settings(BaseSettings):
     ingest_chunk_overlap_tokens: int = Field(default=128, ge=0)
     ingest_max_extracted_text_chars: int = Field(default=5_000_000, ge=1)
     ingest_chunk_preview_chars: int = Field(default=200, ge=1, le=2000)
+    ingest_office_max_pages: int = Field(default=200, ge=1, le=1000)
+    ingest_office_max_rows_per_sheet: int = Field(default=5000, ge=1, le=100000)
+    ingest_office_max_cells: int = Field(default=100000, ge=1, le=1000000)
+    ingest_office_rows_per_chunk: int = Field(default=25, ge=1, le=200)
+    ingest_office_max_slides: int = Field(default=300, ge=1, le=1000)
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"

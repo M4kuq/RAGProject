@@ -12,6 +12,7 @@ export function ChunkPreviewTable({ chunks }: { chunks: DocumentChunkItem[] }) {
         <tr>
           <th>Index</th>
           <th>Page</th>
+          <th>Source</th>
           <th>Modality</th>
           <th>Preview</th>
           <th>Chars</th>
@@ -21,9 +22,16 @@ export function ChunkPreviewTable({ chunks }: { chunks: DocumentChunkItem[] }) {
         {chunks.map((chunk) => (
           <tr key={chunk.document_chunk_id}>
             <td>{chunk.chunk_index}</td>
-            <td>{chunk.page_from ?? "-"}{chunk.page_to && chunk.page_to !== chunk.page_from ? `-${chunk.page_to}` : ""}</td>
+            <td>
+              {chunk.page_from ?? "-"}
+              {chunk.page_to && chunk.page_to !== chunk.page_from ? `-${chunk.page_to}` : ""}
+            </td>
+            <td>{truncateText(chunkSourceLabel(chunk), 120)}</td>
             <td>{chunk.modality}</td>
-            <td>{truncateText(chunk.preview, 160)}{chunk.preview_truncated ? " [truncated]" : ""}</td>
+            <td>
+              {truncateText(chunk.preview, 160)}
+              {chunk.preview_truncated ? " [truncated]" : ""}
+            </td>
             <td>{chunk.char_count ?? "-"}</td>
           </tr>
         ))}
@@ -32,3 +40,27 @@ export function ChunkPreviewTable({ chunks }: { chunks: DocumentChunkItem[] }) {
   );
 }
 
+function chunkSourceLabel(chunk: DocumentChunkItem): string {
+  const metadata = chunk.metadata_json;
+  if (!metadata) {
+    return chunk.section_title ?? "-";
+  }
+  if (metadata.structure_type === "excel_sheet") {
+    const sheet = typeof metadata.sheet_name === "string" ? metadata.sheet_name : null;
+    const rowFrom = typeof metadata.row_from === "number" ? metadata.row_from : null;
+    const rowTo = typeof metadata.row_to === "number" ? metadata.row_to : null;
+    const rowLabel =
+      rowFrom && rowTo
+        ? rowFrom === rowTo
+          ? `Row ${rowFrom}`
+          : `Rows ${rowFrom}-${rowTo}`
+        : null;
+    return [sheet ? `Sheet: ${sheet}` : null, rowLabel].filter(Boolean).join(" / ") || "-";
+  }
+  if (metadata.structure_type === "powerpoint_slide") {
+    const slide = typeof metadata.slide_number === "number" ? `Slide ${metadata.slide_number}` : null;
+    const title = typeof metadata.slide_title === "string" ? metadata.slide_title : null;
+    return [slide, title].filter(Boolean).join(" / ") || "-";
+  }
+  return chunk.section_title ?? "-";
+}

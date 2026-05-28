@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from contextlib import suppress
 from datetime import UTC, datetime
 
@@ -37,6 +38,14 @@ from app.schemas.documents import (
 from app.services.audit_service import audit
 from app.storage.file_storage import LocalFileStorage
 from app.storage.validators import safe_title_from_file_name, validate_upload
+
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|\s)(?:export\s+)?"
+    r"([A-Z0-9_.-]*(?:api[_-]?key|secret|password|token|credential)[A-Z0-9_.-]*)"
+    r"\s*[:=]\s*\S+"
+)
+_URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://")
+_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
 class DocumentService:
@@ -671,6 +680,7 @@ class DocumentService:
             page_from=chunk.page_from,
             page_to=chunk.page_to,
             section_title=chunk.section_title,
+            metadata_json=_safe_chunk_metadata(chunk.metadata_json),
             token_count=chunk.token_count,
             char_count=chunk.char_count,
             modality=chunk.modality,  # type: ignore[arg-type]
@@ -745,3 +755,50 @@ class DocumentService:
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
+
+
+def _safe_chunk_metadata(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    safe: dict[str, object] = {}
+    allowed_keys = {
+        "parent_child_schema_version",
+        "structure_type",
+        "chunk_level",
+        "parent_chunk_key",
+        "child_chunk_key",
+        "parent_title",
+        "sheet_name",
+        "row_from",
+        "row_to",
+        "column_from",
+        "column_to",
+        "table_index",
+        "slide_number",
+        "slide_title",
+        "shape_count",
+        "table_count",
+    }
+    for key, item in value.items():
+        if key not in allowed_keys:
+            continue
+        if isinstance(item, str):
+            redacted = _safe_metadata_string(item)
+            if redacted:
+                safe[key] = redacted
+        elif isinstance(item, bool):
+            safe[key] = item
+        elif isinstance(item, int | float):
+            safe[key] = item
+    return safe or None
+
+
+def _safe_metadata_string(value: str) -> str:
+    normalized = " ".join(value.replace("\x00", " ").split())
+    if (
+        _SECRET_ASSIGNMENT_RE.search(normalized)
+        or _URL_RE.search(normalized)
+        or _EMAIL_RE.search(normalized)
+    ):
+        return "redacted"
+    return normalized[:120]

@@ -90,6 +90,7 @@ class _ChunkSnapshot:
     page_from: int | None
     page_to: int | None
     section_title: str | None
+    metadata_json: dict[str, object] | None
     modality: str
     created_at: datetime | None
 
@@ -660,6 +661,7 @@ def _chunk_row(chunk: Chunk) -> dict[str, object]:
         "page_from": chunk.page_from,
         "page_to": chunk.page_to,
         "section_title": chunk.section_title,
+        "metadata_json": chunk.metadata_json,
         "modality": chunk.modality,
     }
 
@@ -676,6 +678,7 @@ def _chunk_snapshot(chunk: DocumentChunk) -> _ChunkSnapshot:
         page_from=chunk.page_from,
         page_to=chunk.page_to,
         section_title=chunk.section_title,
+        metadata_json=chunk.metadata_json,
         modality=chunk.modality,
         created_at=chunk.created_at,
     )

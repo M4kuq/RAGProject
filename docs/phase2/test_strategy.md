@@ -191,6 +191,27 @@
 - Normal CI does not require SentenceTransformers, model downloads, GPU, or
   external API keys.
 
+## PR-34 Advanced Import / Parent-child Chunk Tests
+
+- Upload validation accepts `.xlsx` and `.pptx` with valid OOXML ZIP structure.
+- Legacy `.xls` / `.ppt`, macro-enabled Office files, embedded object parts,
+  encrypted ZIP entries, path traversal entries, and compression bombs are
+  rejected.
+- Excel extraction reads visible sheets, skips hidden sheets, renders rows
+  deterministically, and records sheet / row / column metadata.
+- PowerPoint extraction reads slides in presentation order, extracts shape/table
+  text, excludes speaker notes and OCR, and records slide metadata.
+- Parent-child chunk v1 stores metadata-only child relationships in
+  `document_chunks.metadata_json`.
+- `payload_snapshot`, Qdrant payloads, API chunk preview, source labels, search
+  results, and citations expose only allowlisted structural metadata.
+- Ingest worker processes `.xlsx` and `.pptx` into ready document versions and
+  document chunks.
+- Existing PDF/DOCX/TXT/Markdown/CSV ingest regressions remain green.
+- Dense, sparse, hybrid, agentic_router search and ask regressions remain green.
+- Logs, traces, responses, and artifacts do not expose raw file content, raw
+  chunk text, PII, tokens, or secrets.
+
 ## Checks
 
 - `ruff format --check .`

@@ -92,6 +92,7 @@ class DocumentChunkItem(BaseModel):
     page_from: int | None = None
     page_to: int | None = None
     section_title: str | None = None
+    metadata_json: dict[str, object] | None = None
     token_count: int | None = None
     char_count: int | None = None
     modality: Literal["text"] = "text"

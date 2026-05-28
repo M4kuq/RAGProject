@@ -8,7 +8,7 @@ import pytest
 from docx import Document
 
 from app.core.config import get_settings
-from app.core.errors import UnsafeFileRejected
+from app.core.errors import UnsafeFileRejected, UnsupportedMediaType
 from app.core.job_utils import redact_error_message
 from app.ingest.chunking import ChunkingConfig, ChunkingError, FixedTokenChunker
 from app.ingest.extractors.base import ExtractedDocument, ExtractedPage, ExtractionError
@@ -16,10 +16,12 @@ from app.ingest.extractors.csv import CsvExtractor
 from app.ingest.extractors.dispatcher import ExtractorDispatcher
 from app.ingest.extractors.docx import DocxExtractor
 from app.ingest.extractors.markdown import MarkdownExtractor
+from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
 from app.ingest.extractors.pdf import PdfTextExtractor
 from app.ingest.extractors.text import PlainTextExtractor
 from app.ingest.hashing import chunk_hash, normalize_chunk_text
 from app.ingest.metadata import metadata_from_extracted_document
+from app.storage import extractors as legacy_storage_extractors
 from app.storage.validators import validate_upload
 
 
@@ -27,7 +29,7 @@ def test_text_extractor_decodes_utf8_utf8_sig_and_cp932(tmp_path: Path) -> None:
     extractor = PlainTextExtractor()
     cases = [
         ("utf8.txt", b"hello utf8", "hello utf8"),
-        ("bom.txt", "\ufeffhello bom".encode("utf-8"), "hello bom"),
+        ("bom.txt", "\ufeffhello bom".encode(), "hello bom"),
         ("cp932.txt", b"\x82\xa0", "\u3042"),
     ]
 
@@ -74,7 +76,7 @@ def test_csv_extraction_and_malformed_handling(tmp_path: Path) -> None:
     assert extracted.pages[0].text == "name | value\nalpha | 1"
 
     bom_path = tmp_path / "bom.csv"
-    bom_path.write_bytes("\ufeffname,value\nalpha,1\n".encode("utf-8"))
+    bom_path.write_bytes("\ufeffname,value\nalpha,1\n".encode())
     bom_extracted = CsvExtractor().extract(bom_path, _metadata("bom.csv", "text/csv", 22))
     assert bom_extracted.pages[0].text.startswith("name | value")
 
@@ -137,7 +139,7 @@ def test_pdf_text_layer_extraction(tmp_path: Path) -> None:
 def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
     )
     get_settings.cache_clear()
     dispatcher = ExtractorDispatcher()
@@ -146,6 +148,20 @@ def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.M
         dispatcher.select(file_name="a.pdf", mime_type="application/pdf").name == "pdf_text_layer"
     )
     assert dispatcher.select(file_name="a.markdown", mime_type="text/markdown").name == "markdown"
+    assert (
+        dispatcher.select(
+            file_name="a.xlsx",
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ).name
+        == "xlsx"
+    )
+    assert (
+        dispatcher.select(
+            file_name="a.pptx",
+            mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ).name
+        == "pptx"
+    )
 
     with pytest.raises(ExtractionError) as unsupported:
         dispatcher.select(file_name="a.exe", mime_type="application/octet-stream")
@@ -184,6 +200,174 @@ def test_metadata_and_chunking_are_deterministic() -> None:
         document_version_id=10,
         chunk_index=0,
     )
+
+
+def test_xlsx_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
+    content = _minimal_xlsx()
+    validate_upload(
+        filename="book.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".xlsx"],
+    )
+    path = tmp_path / "book.xlsx"
+    path.write_bytes(content)
+
+    extracted = ExcelExtractor().extract(
+        path,
+        _metadata(
+            "book.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            len(content),
+        ),
+    )
+
+    assert extracted.metadata.extractor_name == "xlsx"
+    assert len(extracted.pages) == 2
+    page = extracted.pages[0]
+    assert "Sheet: Sales" in page.text
+    assert "A=Region | B=Revenue" in page.text
+    assert page.section_title == "Sheet: Sales"
+    assert page.metadata["structure_type"] == "excel_sheet"
+    assert page.metadata["sheet_name"] == "Sales"
+    assert page.metadata["row_from"] == 1
+    assert page.metadata["row_to"] == 2
+    assert extracted.pages[1].metadata["sheet_name"] == "Hidden"
+    assert "Hidden Value" in extracted.pages[1].text
+
+
+def test_xlsx_extraction_skips_hidden_sheets(tmp_path: Path) -> None:
+    content = _minimal_xlsx(hidden_second_sheet=True)
+    path = tmp_path / "hidden.xlsx"
+    path.write_bytes(content)
+
+    extracted = ExcelExtractor().extract(
+        path,
+        _metadata(
+            "hidden.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            len(content),
+        ),
+    )
+
+    assert len(extracted.pages) == 1
+    assert "Hidden" not in extracted.pages[0].text
+
+
+def test_pptx_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
+    content = _minimal_pptx()
+    validate_upload(
+        filename="deck.pptx",
+        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".pptx"],
+    )
+    path = tmp_path / "deck.pptx"
+    path.write_bytes(content)
+
+    extracted = PowerPointExtractor().extract(
+        path,
+        _metadata(
+            "deck.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            len(content),
+        ),
+    )
+
+    assert extracted.metadata.extractor_name == "pptx"
+    assert extracted.metadata.page_count == 1
+    page = extracted.pages[0]
+    assert "Slide 1: Architecture" in page.text
+    assert "Shape 2: Hybrid retrieval" in page.text
+    assert page.page_number == 1
+    assert page.metadata["structure_type"] == "powerpoint_slide"
+    assert page.metadata["slide_number"] == 1
+
+
+def test_legacy_storage_extractor_supports_office_text(tmp_path: Path) -> None:
+    xlsx_path = tmp_path / "book.xlsx"
+    pptx_path = tmp_path / "deck.pptx"
+    xlsx_path.write_bytes(_minimal_xlsx())
+    pptx_path.write_bytes(_minimal_pptx())
+
+    assert "Sheet: Sales" in legacy_storage_extractors.extract_text(xlsx_path)
+    assert "Slide 1: Architecture" in legacy_storage_extractors.extract_text(pptx_path)
+
+
+def test_macro_enabled_office_files_are_rejected() -> None:
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="macro.xlsm",
+            content_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+            content=_minimal_xlsx(),
+            max_bytes=100000,
+            allowed_extensions=[".xlsx", ".xlsm"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type"),
+    [
+        ("legacy.xls", "application/vnd.ms-excel"),
+        ("legacy.ppt", "application/vnd.ms-powerpoint"),
+    ],
+)
+def test_legacy_office_formats_are_not_supported(filename: str, content_type: str) -> None:
+    with pytest.raises(UnsupportedMediaType):
+        validate_upload(
+            filename=filename,
+            content_type=content_type,
+            content=b"legacy office content",
+            max_bytes=100000,
+            allowed_extensions=[".xlsx", ".pptx"],
+        )
+
+
+@pytest.mark.parametrize("part_name", ["xl/vbaProject.bin", "xl/embeddings/oleObject1.bin"])
+def test_office_archives_with_macro_or_embedded_parts_are_rejected(part_name: str) -> None:
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="book.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            content=_minimal_xlsx(extra_entries={part_name: b"unsafe"}),
+            max_bytes=100000,
+            allowed_extensions=[".xlsx"],
+        )
+
+
+def test_parent_child_metadata_is_preserved_on_chunks() -> None:
+    document = ExtractedDocument(
+        pages=[
+            ExtractedPage(
+                "Region Revenue East 10",
+                section_title="Sheet: Sales",
+                metadata={
+                    "parent_child_schema_version": "phase2.parent_child.v1",
+                    "structure_type": "excel_sheet",
+                    "parent_chunk_key": "xlsx:sheet:1",
+                    "parent_title": "Sales",
+                    "sheet_name": "Sales",
+                    "row_from": 1,
+                    "row_to": 2,
+                    "column_from": 1,
+                    "column_to": 2,
+                    "table_index": 1,
+                },
+            )
+        ],
+        metadata=_extraction_metadata(page_count=None),
+    )
+
+    chunks = FixedTokenChunker(ChunkingConfig(chunk_size_tokens=4, chunk_overlap_tokens=0)).chunk(
+        document, document_version_id=12
+    )
+
+    assert chunks[0].metadata_json is not None
+    assert chunks[0].metadata_json["parent_chunk_key"] == "xlsx:sheet:1"
+    assert chunks[0].metadata_json["child_chunk_key"] == "xlsx:sheet:1:chunk:0"
+    assert chunks[0].metadata_json["chunk_level"] == "child"
 
 
 def test_chunking_rejects_invalid_config_and_no_chunks() -> None:
@@ -281,4 +465,103 @@ def _docx_zip_with_large_document_xml() -> bytes:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", "<Types />")
         archive.writestr("word/document.xml", "x" * (5 * 1024 * 1024 + 1))
+    return buffer.getvalue()
+
+
+def _minimal_xlsx(
+    *,
+    hidden_second_sheet: bool = False,
+    extra_entries: dict[str, bytes] | None = None,
+) -> bytes:
+    buffer = BytesIO()
+    second_sheet_state = ' state="hidden"' if hidden_second_sheet else ""
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />',
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sales" sheetId="1" r:id="rId1"/>
+    <sheet name="Hidden" sheetId="2" r:id="rId2"{second_sheet_state}/>
+  </sheets>
+</workbook>""",
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>
+  <Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "xl/sharedStrings.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>Region</t></si>
+  <si><t>Revenue</t></si>
+  <si><t>East</t></si>
+  <si><t>10</t></si>
+  <si><t>Hidden Value</t></si>
+</sst>""",
+        )
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row>
+  </sheetData>
+</worksheet>""",
+        )
+        archive.writestr(
+            "xl/worksheets/sheet2.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>4</v></c></row>
+  </sheetData>
+</worksheet>""",
+        )
+        for name, payload in (extra_entries or {}).items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def _minimal_pptx() -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />',
+        )
+        archive.writestr(
+            "ppt/presentation.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+</p:presentation>""",
+        )
+        archive.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="slides/slide1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "ppt/slides/slide1.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody><a:p><a:r><a:t>Architecture</a:t></a:r></a:p></p:txBody></p:sp>
+    <p:sp><p:txBody><a:p><a:r><a:t>Hybrid retrieval</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>""",
+        )
     return buffer.getvalue()

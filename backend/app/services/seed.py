@@ -249,8 +249,8 @@ def _seed_system_settings(db: Session) -> None:
             "Use deterministic fake adapters in CI and local smoke tests.",
         ),
         "rag.allowed_file_extensions": (
-            {"items": [".pdf", ".docx", ".txt", ".md", ".csv"]},
-            "Phase1 upload allowlist.",
+            {"items": [".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".pptx"]},
+            "Phase2 upload allowlist.",
         ),
         "chat.memory_message_limit": (
             {"value": 8},

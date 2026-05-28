@@ -58,6 +58,7 @@ export type DocumentChunkItem = {
   page_from: number | null;
   page_to: number | null;
   section_title: string | null;
+  metadata_json: Record<string, unknown> | null;
   token_count: number | null;
   char_count: number | null;
   modality: "text";
@@ -117,4 +118,3 @@ export type PagedResult<T> = {
   items: T[];
   pagination?: PaginationMeta;
 };
-

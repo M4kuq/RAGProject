@@ -4,7 +4,16 @@ import { useUploadDocument } from "../../features/documents/documentHooks";
 import type { DocumentUploadResponse } from "../../features/documents/documentTypes";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"];
+const ALLOWED_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".xlsx",
+  ".pptx",
+];
 
 export function validateDocumentFile(file: File | null): string | null {
   if (!file) {
