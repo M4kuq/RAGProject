@@ -69,6 +69,7 @@ class UrlFetchService:
             timeout=self.settings.document_url_fetch_timeout_seconds,
             follow_redirects=False,
             headers={"User-Agent": self.settings.document_url_fetch_user_agent},
+            trust_env=False,
         )
         try:
             while True:
@@ -314,10 +315,8 @@ def _read_limited(response: httpx.Response, *, max_bytes: int) -> bytes:
 def _file_name_for_url(url: str, content_type: str) -> str:
     parsed = urlsplit(url)
     host = parsed.hostname or "document"
-    path_name = parsed.path.rsplit("/", 1)[-1].strip() or "index"
-    stem = path_name.rsplit(".", 1)[0] or "index"
     extension = ".xml" if _is_xml_content_type(content_type) else ".html"
-    return sanitize_file_name(f"{host}-{stem}{extension}")
+    return sanitize_file_name(f"{host}-url-document{extension}")
 
 
 def _is_xml_content_type(content_type: str) -> bool:

@@ -10,6 +10,7 @@ from app.core.errors import (
     UnsupportedMediaType,
     ValidationFailed,
 )
+from app.services import url_fetch_service as url_fetch_module
 from app.services.url_fetch_service import UrlFetchService, redact_url_for_display
 
 
@@ -37,9 +38,45 @@ def test_url_fetch_success_uses_safe_source_url(monkeypatch: pytest.MonkeyPatch)
     assert result.safe_source_url == "https://example.com/page"
     assert result.safe_final_url == "https://example.com/page"
     assert result.content_type == "text/html"
-    assert result.file_name == "example.com-page.html"
+    assert result.file_name == "example.com-url-document.html"
     assert b"Safe" in result.content
     get_settings.cache_clear()
+
+
+def test_url_fetch_default_client_disables_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_kwargs: dict[str, object] = {}
+
+    class _Stream:
+        def __enter__(self) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                content=b"<html><body>proxy-safe</body></html>",
+            )
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            created_kwargs.update(kwargs)
+
+        def stream(self, *args: object, **kwargs: object) -> _Stream:
+            return _Stream()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(url_fetch_module.httpx, "Client", _Client)
+
+    service = UrlFetchService(resolver=lambda host, port: ["93.184.216.34"])
+
+    result = service.fetch("https://example.com/page")
+
+    assert result.content_type == "text/html"
+    assert created_kwargs["trust_env"] is False
 
 
 def test_url_fetch_preserves_ipv6_literal_brackets() -> None:
@@ -233,6 +270,27 @@ def test_url_fetch_enforces_content_type_and_max_bytes(monkeypatch: pytest.Monke
     with pytest.raises(UnsupportedMediaType):
         bad_type_service.fetch("https://example.com/file")
     get_settings.cache_clear()
+
+
+def test_url_fetch_uses_neutral_filename_for_sensitive_url_paths() -> None:
+    service = UrlFetchService(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/html"},
+                    content=b"<html><body>Safe</body></html>",
+                )
+            )
+        ),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+
+    result = service.fetch("https://example.com/download/api_key=abc123.html")
+
+    assert result.file_name == "example.com-url-document.html"
+    assert "api_key" not in result.file_name
+    assert "abc123" not in result.file_name
 
 
 def test_url_redaction_removes_query_and_userinfo() -> None:

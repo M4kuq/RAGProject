@@ -35,6 +35,22 @@ _BLOCKED_HTML_TAGS = {"script", "style", "noscript", "iframe", "object", "embed"
 _BLOCK_TAGS = {"p", "div", "section", "article", "li", "tr", "br", "table", "ul", "ol"}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _TABLE_CELL_TAGS = {"td", "th"}
+_VOID_HTML_TAGS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+}
 _SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 
 
@@ -119,7 +135,7 @@ class _SafeHtmlTextParser(HTMLParser):
         self.element_count = 0
         self.title: str | None = None
         self.blocks: list[_HtmlBlock] = []
-        self._blocked_depth = 0
+        self._suppressed_tags: list[str] = []
         self._current_text: list[str] = []
         self._current_type: str = "body"
         self._current_heading_level: int | None = None
@@ -130,15 +146,17 @@ class _SafeHtmlTextParser(HTMLParser):
         self._table_cell_text: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
         tag = tag.lower()
         self.element_count += 1
         if self.element_count > self.max_elements:
             raise ExtractionError("text_extraction_failed", "Text extraction failed.")
-        if tag in _BLOCKED_HTML_TAGS:
-            self._blocked_depth += 1
+        if self._suppressed_tags:
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_tags.append(tag)
             return
-        if self._blocked_depth:
+        if tag in _BLOCKED_HTML_TAGS or _is_hidden_html_element(attrs):
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_tags.append(tag)
             return
         if tag == "title":
             self._in_title = True
@@ -161,10 +179,12 @@ class _SafeHtmlTextParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in _BLOCKED_HTML_TAGS and self._blocked_depth:
-            self._blocked_depth -= 1
-            return
-        if self._blocked_depth:
+        if self._suppressed_tags:
+            if tag in self._suppressed_tags:
+                while self._suppressed_tags:
+                    suppressed_tag = self._suppressed_tags.pop()
+                    if suppressed_tag == tag:
+                        break
             return
         if tag == "title":
             self._in_title = False
@@ -205,7 +225,7 @@ class _SafeHtmlTextParser(HTMLParser):
             self._flush_current()
 
     def handle_data(self, data: str) -> None:
-        if self._blocked_depth:
+        if self._suppressed_tags:
             return
         if self._in_title:
             self._title_text.append(data)
@@ -241,6 +261,32 @@ class _SafeHtmlTextParser(HTMLParser):
             )
         self._current_text = []
         self._current_type = "body"
+
+
+def _is_hidden_html_element(attrs: list[tuple[str, str | None]]) -> bool:
+    for name, value in attrs:
+        attr_name = name.lower()
+        if attr_name == "hidden":
+            return True
+        if attr_name == "aria-hidden" and (value or "").strip().lower() == "true":
+            return True
+        if attr_name == "style" and value and _style_hides_element(value):
+            return True
+    return False
+
+
+def _style_hides_element(style: str) -> bool:
+    for declaration in style.split(";"):
+        property_name, separator, raw_value = declaration.partition(":")
+        if not separator:
+            continue
+        property_name = property_name.strip().lower()
+        value = raw_value.split("!", 1)[0].strip().lower()
+        if property_name == "display" and value == "none":
+            return True
+        if property_name == "visibility" and value in {"hidden", "collapse"}:
+            return True
+    return False
 
 
 def _html_blocks_to_pages(

@@ -268,6 +268,29 @@ def test_html_upload_validation_and_extraction_removes_active_content(tmp_path: 
     assert extracted.pages[0].metadata["parent_child_schema_version"] == "phase2.web_ingest.v1"
 
 
+def test_html_extraction_skips_hidden_subtrees(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><p>Visible alpha</p>"
+        b"<div hidden><p>Hidden token should not be indexed</p></div>"
+        b"<section style='display: none'><p>Display none secret</p></section>"
+        b"<aside style='visibility: hidden'><p>Invisible boilerplate</p></aside>"
+        b"<p>Visible beta <span aria-hidden='true'>screen reader duplicate</span></p>"
+        b"</body></html>"
+    )
+    path = tmp_path / "hidden.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("hidden.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Visible alpha" in joined
+    assert "Visible beta" in joined
+    assert "Hidden token" not in joined
+    assert "Display none secret" not in joined
+    assert "Invisible boilerplate" not in joined
+    assert "screen reader duplicate" not in joined
+
+
 def test_web_extraction_preserves_long_body_text(tmp_path: Path) -> None:
     long_text = "x" * 1200
     html_content = f"<html><body><p>{long_text}</p></body></html>".encode()
