@@ -285,6 +285,29 @@
 - Phase2 docs do not include raw prompts, full context, raw chunk text, private
   document text, PII, real API keys, tokens, cookies, or credentials.
 
+## PR-38 MCP Hybrid / Agentic RAG Tools Tests
+
+- `rag_search` preserves default dense compatibility and accepts `dense`,
+  `sparse`, `hybrid`, and `agentic_router`.
+- `rag_search_hybrid` and `rag_search_agentic` are thin wrappers over
+  strategy-aware `rag_search`.
+- `rag_ask` preserves default dense compatibility and allows explicit
+  `strategy=agentic_router`; `rag_ask_agentic` is a wrapper.
+- `rag_get_retrieval_trace` returns safe query-plan, strategy-decision, score,
+  latency, and count summaries without raw query, prompt, context, or chunk
+  text.
+- `rag_compare_strategies` reads existing latest evaluation results and does
+  not create new runs from MCP.
+- `rag_get_evaluation_summary` returns safe strategy, failure, promotion, and
+  agentic metric summaries.
+- MCP resources include `rag://retrieval-runs/{retrieval_run_id}`,
+  `rag://evaluations/{evaluation_run_id}/summary`, and `rag://strategies`.
+- MCP prompts include hybrid debug, agentic answer-with-citations, and strategy
+  comparison review templates, and they avoid destructive/admin write
+  instructions.
+- Upload, archive, approve, retry, remote MCP, OAuth, raw chunk text, full
+  context, tokens, secrets, and local paths remain absent from MCP output.
+
 ## Checks
 
 - `ruff format --check .`

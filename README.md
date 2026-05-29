@@ -317,6 +317,7 @@ metrics and reason codes. See
 - [UI demo](docs/demo/ui_demo.md)
 - [CLI demo](docs/demo/cli_demo.md)
 - [MCP demo](docs/demo/mcp_demo.md)
+- [MCP advanced RAG tools](docs/phase2/mcp_advanced_rag_tools.md)
 - [sample questions](docs/demo/sample_questions.md)
 - [demo data](docs/demo/demo_data.md)
 - [manual test cases](docs/test-cases/phase1_manual_test_cases.md)

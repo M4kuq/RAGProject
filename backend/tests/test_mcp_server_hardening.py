@@ -86,7 +86,13 @@ def test_jsonrpc_list_methods_are_exposed(mcp_adapter: McpServiceAdapter) -> Non
     tool_names = {tool["name"] for tool in tools["result"]["tools"]}
     assert tool_names == {
         "rag_search",
+        "rag_search_hybrid",
+        "rag_search_agentic",
         "rag_ask",
+        "rag_ask_agentic",
+        "rag_get_retrieval_trace",
+        "rag_compare_strategies",
+        "rag_get_evaluation_summary",
         "list_documents",
         "get_document_status",
         "get_job_status",
@@ -115,11 +121,12 @@ def test_jsonrpc_list_methods_are_exposed(mcp_adapter: McpServiceAdapter) -> Non
     assert resources is not None
     assert resources["result"]["resources"][0]["uri"] == "rag://documents"
     assert templates is not None
-    assert len(templates["result"]["resourceTemplates"]) == 3
+    assert len(templates["result"]["resourceTemplates"]) == 5
     assert prompts is not None
     prompt_names = [prompt["name"] for prompt in prompts["result"]["prompts"]]
     assert prompt_names == sorted(prompt_names)
     assert "rag_answer_with_citations" in prompt_names
+    assert "rag_agentic_answer_with_citations" in prompt_names
 
 
 def test_jsonrpc_rejects_prompt_args_and_page_size_bounds(

@@ -31,6 +31,11 @@ RESOURCES: tuple[McpResource, ...] = (
         name="documents",
         description="Safe list of active logical documents.",
     ),
+    McpResource(
+        uri="rag://strategies",
+        name="strategies",
+        description="Safe list of MCP-supported RAG strategies and tool wrappers.",
+    ),
 )
 
 RESOURCE_TEMPLATES: tuple[dict[str, str], ...] = (
@@ -50,6 +55,18 @@ RESOURCE_TEMPLATES: tuple[dict[str, str], ...] = (
         "uriTemplate": "rag://evaluations/{evaluation_run_id}",
         "name": "evaluation_result",
         "description": "Safe evaluation run result and metrics.",
+        "mimeType": "application/json",
+    },
+    {
+        "uriTemplate": "rag://retrieval-runs/{retrieval_run_id}",
+        "name": "retrieval_trace_summary",
+        "description": "Safe retrieval trace summary with query plan and decision metadata.",
+        "mimeType": "application/json",
+    },
+    {
+        "uriTemplate": "rag://evaluations/{evaluation_run_id}/summary",
+        "name": "evaluation_summary",
+        "description": "Safe evaluation summary and strategy comparison metrics.",
         "mimeType": "application/json",
     },
 )
@@ -79,6 +96,8 @@ def read_resource(adapter: McpServiceAdapter, uri: str) -> dict[str, Any]:
 def _read_data(adapter: McpServiceAdapter, uri: str) -> dict[str, Any]:
     if uri == "rag://documents":
         return adapter.list_documents({})
+    if uri == "rag://strategies":
+        return adapter.rag_strategies({})
     match = re.fullmatch(r"rag://documents/([1-9][0-9]*)", uri)
     if match:
         return adapter.get_document_status({"logical_document_id": int(match.group(1))})
@@ -88,6 +107,12 @@ def _read_data(adapter: McpServiceAdapter, uri: str) -> dict[str, Any]:
     match = re.fullmatch(r"rag://evaluations/([1-9][0-9]*)", uri)
     if match:
         return adapter.get_evaluation_result({"evaluation_run_id": int(match.group(1))})
+    match = re.fullmatch(r"rag://retrieval-runs/([1-9][0-9]*)", uri)
+    if match:
+        return adapter.rag_get_retrieval_trace({"retrieval_run_id": int(match.group(1))})
+    match = re.fullmatch(r"rag://evaluations/([1-9][0-9]*)/summary", uri)
+    if match:
+        return adapter.rag_get_evaluation_summary({"evaluation_run_id": int(match.group(1))})
     if uri.startswith("rag://"):
         raise McpNotFound("resource not found")
     raise McpInvalidRequest("invalid resource uri")

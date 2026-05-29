@@ -203,6 +203,13 @@ class Settings(BaseSettings):
     mcp_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
     mcp_tool_timeout_seconds: int = Field(default=30, ge=1, le=300)
     mcp_allow_write_tools: bool = False
+    mcp_enable_advanced_rag_tools: bool = True
+    mcp_allowed_strategies: list[str] = Field(
+        default_factory=lambda: ["dense", "sparse", "hybrid", "agentic_router"]
+    )
+    mcp_include_trace_summary_default: bool = False
+    mcp_max_answer_chars: int = Field(default=4000, ge=20, le=8000)
+    mcp_allow_evaluation_run_create: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -217,6 +224,7 @@ class Settings(BaseSettings):
         "trusted_proxy_ips",
         "document_url_fetch_allowed_schemes",
         "document_url_fetch_allowed_content_types",
+        "mcp_allowed_strategies",
         mode="before",
     )
     @classmethod
@@ -362,6 +370,16 @@ class Settings(BaseSettings):
             raise ValueError("MCP_ACTOR_MODE must be mcp_local in Phase1")
         if self.mcp_allow_write_tools:
             raise ValueError("MCP_ALLOW_WRITE_TOOLS must be false in Phase1")
+        self.mcp_allowed_strategies = [item.lower() for item in self.mcp_allowed_strategies]
+        allowed_mcp_strategies = {"dense", "sparse", "hybrid", "agentic_router"}
+        if not self.mcp_allowed_strategies or any(
+            item not in allowed_mcp_strategies for item in self.mcp_allowed_strategies
+        ):
+            raise ValueError(
+                "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, agentic_router"
+            )
+        if self.mcp_allow_evaluation_run_create:
+            raise ValueError("MCP_ALLOW_EVALUATION_RUN_CREATE must be false in PR-38")
         distance = self.qdrant_distance.strip().lower()
         if distance not in {"cosine", "dot", "euclid"}:
             raise ValueError("QDRANT_DISTANCE must be cosine, dot, or euclid")

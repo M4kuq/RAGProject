@@ -150,7 +150,8 @@ class JsonRpcMcpServer:
             "serverInfo": {"name": "ragproject-mcp", "version": "0.1.0"},
             "instructions": (
                 "Local-only read-mostly RAGProject MCP server. Write tools, remote MCP, "
-                "OAuth, sampling, and elicitation are not implemented in Phase1."
+                "OAuth, sampling, elicitation, upload, archive, approve, and retry are "
+                "not implemented. Phase2 RAG strategy tools expose safe summaries only."
             ),
         }
 
