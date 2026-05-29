@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard, and PR-36 adds safe document version compare plus citation source navigation.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-26 adds Retrieval Debug UI v2. PR-27 adds Query Analyzer / Query Planner. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard, PR-36 adds safe document version compare plus citation source navigation, and PR-37 finalizes demo, acceptance, smoke, and Phase3 handoff documentation.
 
 ## PR Plan
 
@@ -33,6 +33,67 @@ PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace r
 | PR-35 | Advanced Import: HTML / XML / URL + SSRF Guard |
 | PR-36 | Document Diff / Citation Navigation / Version Compare |
 | PR-37 | Phase2 Final Hardening / Demo / Docs |
+
+## Phase2 Final Docs
+
+Use these files for final handoff and demo validation:
+
+- [Phase2 demo scenario](phase2_demo_scenario.md)
+- [Phase2 manual test cases](phase2_manual_test_cases.md)
+- [Phase2 acceptance checklist](phase2_acceptance_checklist.md)
+- [Phase2 known limitations](phase2_known_limitations.md)
+- [Phase3 handoff](phase3_handoff.md)
+- [Manual acceptance notes template](phase2_manual_acceptance_notes.md)
+
+## Feature Docs Index
+
+- [Architecture delta](architecture_delta.md)
+- [Retrieval strategy schema](retrieval_strategy_schema.md)
+- [Retrieval trace foundation](retrieval_trace_foundation.md)
+- [Evaluation dataset management](evaluation_dataset_management.md)
+- [Sparse retrieval](sparse_retrieval.md)
+- [Hybrid retrieval](hybrid_retrieval.md)
+- [Strategy evaluation runner](strategy_evaluation_runner.md)
+- [Retrieval Debug UI v2](retrieval_debug_ui_v2.md)
+- [Query Analyzer / Planner](query_analyzer_planner.md)
+- [Strategy Router](strategy_router.md)
+- [Agentic retrieval loop](agentic_retrieval_loop.md)
+- [Agentic strategy evaluation](agentic_strategy_evaluation.md)
+- [CI retrieval evaluation](ci_retrieval_evaluation.md)
+- [LangSmith optional adapter](langsmith_optional_adapter.md)
+- [SentenceTransformers experiment harness](sentence_transformers_experiment_harness.md)
+- [Advanced import: Office](advanced_import_office.md)
+- [Parent-child chunking](parent_child_chunking.md)
+- [Advanced import: HTML / XML / URL](advanced_import_html_xml_url.md)
+- [SSRF guard](ssrf_guard.md)
+- [Document diff / version compare](document_diff_version_compare.md)
+- [Citation navigation](citation_navigation.md)
+- [Phase2 test strategy](test_strategy.md)
+- [PR-by-PR acceptance criteria](acceptance_criteria.md)
+
+## Local Setup And Smoke
+
+Local setup follows the repository root README and Docker Compose files. For
+Phase2-specific checks from the repository root:
+
+```powershell
+scripts/smoke_phase2.ps1
+scripts/smoke_phase2.ps1 -RunExperimentDryRun
+```
+
+```sh
+sh scripts/smoke_phase2.sh
+sh scripts/smoke_phase2.sh --run-experiment-dry-run
+```
+
+The basic smoke validates compose configuration, Phase2 final docs, key
+fixtures, and optional running health endpoints. `-Deep` / `--deep` additionally
+requires running local services and performs safe admin searches across
+`dense`, `sparse`, `hybrid`, and `agentic_router`; set
+`SMOKE_ADMIN_EMAIL` and `SMOKE_ADMIN_PASSWORD` in your shell for that local-only
+deep path. The smoke scripts do not run destructive cleanup, do not print
+secrets, and do not require external API keys, LangSmith, GPU, or heavy model
+downloads by default.
 
 ## PR-20 Baseline
 
@@ -245,6 +306,22 @@ PR-33 does not implement fine-tuning, production model cutover, required CI heav
 model downloads, GPU-required evaluation, external API-required evaluation,
 Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
 
+## PR-34 Advanced Import: Excel / PowerPoint / Parent-child Chunk
+
+PR-34 adds:
+
+- upload validation for `.xlsx` and `.pptx`
+- rejection of legacy, macro-enabled, embedded-object, encrypted, and unsafe
+  Office files
+- Excel extraction with visible-sheet, row, column, table, and parent metadata
+- PowerPoint extraction with slide, title, shape/table, and parent metadata
+- metadata-only parent-child chunking v1
+- source labels for sheet/row and slide/title citations
+
+PR-34 does not implement legacy `.xls` / `.ppt`, OCR, speaker-note extraction,
+visual slide rendering, embedded object extraction, HTML/XML/URL ingest,
+Graph-RAG, AWS, S3, or OIDC/OAuth.
+
 ## PR-35 HTML / XML / URL Ingest
 
 PR-35 adds:
@@ -278,6 +355,22 @@ PR-36 adds:
 PR-36 does not implement unbounded full-text diff, raw chunk exposure, PDF page
 image rendering, DOCX/PPTX visual rendering, OCR region navigation, Graph-RAG,
 AWS, S3, or OIDC/OAuth.
+
+## PR-37 Final Hardening / Demo / Docs
+
+PR-37 adds final Phase2 handoff material rather than a new retrieval feature:
+
+- demo scenario for Advanced Retrieval, Agentic-RAG, evaluation, debug,
+  observability, advanced import, document diff, and citation navigation
+- manual test cases grouped by Phase2 area
+- acceptance checklist with safe evidence guidance
+- known limitations and Phase3 handoff
+- safe Phase2 smoke wrappers for Windows and Unix-like shells
+
+The final docs and smoke scripts must not include `.env` values, real secrets,
+raw prompts, full context, raw chunk text, private document text, PII, or
+destructive cleanup commands. External trace export and model downloads remain
+explicit opt-in.
 
 ## Security
 
