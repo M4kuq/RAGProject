@@ -393,6 +393,50 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert "content_text" not in dumped
 
 
+def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="hybrid ask")
+    message = "Compare alpha secondary retrieval evidence"
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "hybrid-msg-1",
+            "message": message,
+            "strategy": "hybrid",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "hybrid"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "hybrid"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "hybrid"
+        assert run.strategy_decision_json["execution_strategy"] == "hybrid"
+        assert run.latency_breakdown_json is not None
+        assert "generation_ms" in run.latency_breakdown_json
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+
+
 def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -605,7 +649,7 @@ def test_rag_ask_agentic_router_respects_store_decision_trace_false(
         assert run.strategy_decision_json is None
 
 
-@pytest.mark.parametrize("strategy", ["sparse", "hybrid", "fallback_dense"])
+@pytest.mark.parametrize("strategy", ["sparse", "fallback_dense"])
 def test_rag_ask_request_rejects_non_public_strategies_without_persisting_messages(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
     strategy: str,

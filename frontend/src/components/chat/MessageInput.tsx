@@ -7,8 +7,11 @@ export function MessageInput({
   modelOptions,
   onChange,
   onModelChange,
+  onStrategyChange,
   onSubmit,
+  selectedStrategy,
   selectedModel,
+  strategyOptions,
   value
 }: {
   disabled: boolean;
@@ -17,8 +20,11 @@ export function MessageInput({
   modelOptions: { label: string; value: string }[];
   onChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onStrategyChange: (value: "dense" | "hybrid" | "agentic_router") => void;
   onSubmit: () => void;
+  selectedStrategy: "dense" | "hybrid" | "agentic_router";
   selectedModel: string;
+  strategyOptions: { label: string; value: "dense" | "hybrid" | "agentic_router" }[];
   value: string;
 }) {
   function submit(event: FormEvent) {
@@ -47,6 +53,19 @@ export function MessageInput({
       <div className="composer-footer">
         {disabledReason ? <p className="notice">{disabledReason}</p> : <p className="notice">Enter to send, Shift+Enter for a new line.</p>}
         <div className="composer-controls">
+          <select
+            aria-label="rag strategy"
+            className="model-select"
+            disabled={isSending}
+            onChange={(event) => onStrategyChange(event.target.value as "dense" | "hybrid" | "agentic_router")}
+            value={selectedStrategy}
+          >
+            {strategyOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <select
             aria-label="model"
             className="model-select"
