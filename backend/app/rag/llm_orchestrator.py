@@ -93,6 +93,7 @@ class LLMToolPlanningRequest:
     user_query: str
     top_k: int
     max_query_chars: int
+    remaining_timeout_seconds: float
     remaining_tool_calls: int
     remaining_search_calls: int
     tool_results: Sequence[LLMToolResult]
@@ -178,7 +179,7 @@ class OpenAICompatibleJSONToolPlanner:
                     "max_tokens": max(128, min(self.max_output_tokens, 1024)),
                     "stream": False,
                 },
-                timeout=self.timeout_seconds,
+                timeout=max(0.1, min(self.timeout_seconds, request.remaining_timeout_seconds)),
             )
         except httpx.HTTPError:
             return []
@@ -291,7 +292,9 @@ class LLMToolCallingRetrievalOrchestrator:
 
         with latency_tracker.span("llm_orchestrator_ms"):
             while tool_call_count < max_tool_calls:
-                if self.clock() - started_at > timeout_seconds:
+                elapsed_seconds = self.clock() - started_at
+                remaining_timeout = timeout_seconds - elapsed_seconds
+                if remaining_timeout <= 0:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
                     break
@@ -301,11 +304,16 @@ class LLMToolCallingRetrievalOrchestrator:
                             user_query=query[:max_query_chars],
                             top_k=top_k,
                             max_query_chars=max_query_chars,
+                            remaining_timeout_seconds=remaining_timeout,
                             remaining_tool_calls=max_tool_calls - tool_call_count,
                             remaining_search_calls=max_search_calls - search_call_count,
                             tool_results=tool_results,
                         )
                     )
+                if self.clock() - started_at > timeout_seconds:
+                    timeout_exceeded = True
+                    reason_codes.append("timeout_exceeded")
+                    break
                 if not planned_calls:
                     if search_call_count == 0:
                         planned_calls = [
@@ -416,24 +424,24 @@ class LLMToolCallingRetrievalOrchestrator:
                         break
                     seen_searches.add(normalized_key)
                     strategy = _tool_strategy(tool_name)
-                    try:
-                        with latency_tracker.span("llm_tool_execution_ms"):
-                            attempt = retrieve(
-                                strategy,
-                                f"llm_tool:{tool_name}:{tool_call_id}",
-                                tool_query[:max_query_chars],
-                            )
-                    except Exception:
+                    disabled_error = _strategy_disabled_error(self.settings, strategy)
+                    if disabled_error is not None:
                         tool_results.append(
                             LLMToolResult(
                                 tool_call_id=tool_call_id,
                                 tool_name=tool_name,
                                 status="failed",
-                                error_code="retrieval_tool_failed",
+                                error_code=disabled_error,
                             )
                         )
-                        reason_codes.append("retrieval_tool_failed")
+                        reason_codes.append(disabled_error)
                         continue
+                    with latency_tracker.span("llm_tool_execution_ms"):
+                        attempt = retrieve(
+                            strategy,
+                            f"llm_tool:{tool_name}:{tool_call_id}",
+                            tool_query[:max_query_chars],
+                        )
                     search_call_count += 1
                     attempts_by_tool_call_id[tool_call_id] = attempt
                     tool_results.append(
@@ -555,6 +563,7 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
             "user_query": request.user_query[: request.max_query_chars],
             "remaining_tool_calls": request.remaining_tool_calls,
             "remaining_search_calls": request.remaining_search_calls,
+            "remaining_timeout_seconds": round(max(0.0, request.remaining_timeout_seconds), 3),
             "available_tools": sorted(ALLOWED_TOOL_NAMES),
             "tool_results": [result.to_planner_payload() for result in request.tool_results],
             "instruction": (
@@ -651,6 +660,17 @@ def _tool_strategy(tool_name: str) -> RetrievalStrategy:
     if tool_name == "hybrid_search":
         return RetrievalStrategy.HYBRID
     return RetrievalStrategy.DENSE
+
+
+def _strategy_disabled_error(settings: Settings, strategy: RetrievalStrategy) -> str | None:
+    if strategy == RetrievalStrategy.SPARSE and not settings.sparse_enabled:
+        return "strategy_not_enabled"
+    if strategy == RetrievalStrategy.HYBRID:
+        if not settings.hybrid_enabled:
+            return "strategy_not_enabled"
+        if settings.hybrid_sparse_weight > 0 and not settings.sparse_enabled:
+            return "strategy_not_enabled"
+    return None
 
 
 def _safe_tool_items(

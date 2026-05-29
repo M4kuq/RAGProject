@@ -446,7 +446,10 @@ class RagService:
             if not self.settings.llm_orchestrator_enabled:
                 raise RagAskPipelineError("strategy_not_enabled", 409)
         elif requested_strategy != RetrievalStrategy.AGENTIC_ROUTER:
-            self._ensure_direct_strategy_enabled(requested_strategy)
+            try:
+                self._ensure_direct_strategy_enabled(requested_strategy)
+            except RagSearchPipelineError as exc:
+                raise RagAskPipelineError(exc.error_code, exc.status_code) from exc
         query_hash = _query_hash(payload.message)
         query_plan_build = self.query_plan_builder.build(
             payload.message,
@@ -2206,7 +2209,7 @@ def build_llm_tool_orchestrator_query_plan(
     base = build_default_dense_query_plan(
         query_hash=query_hash,
         filters=filters,
-        plan_metadata=None,
+        plan_metadata=_llm_orchestrator_plan_metadata(plan_metadata),
     )
     base.update(
         {
@@ -2244,6 +2247,30 @@ def build_llm_tool_orchestrator_strategy_decision() -> dict[str, object]:
             ],
         }
     )
+
+
+def _llm_orchestrator_plan_metadata(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        str(key): _clean_llm_orchestrator_plan_metadata(nested)
+        for key, nested in value.items()
+        if not str(key).endswith("_preview") and str(key) != "query_preview"
+    }
+
+
+def _clean_llm_orchestrator_plan_metadata(value: object) -> object:
+    if isinstance(value, dict):
+        cleaned: dict[str, object] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            if key_text.endswith("_preview") or key_text == "query_preview":
+                continue
+            cleaned[key_text] = _clean_llm_orchestrator_plan_metadata(nested)
+        return cleaned
+    if isinstance(value, list):
+        return [_clean_llm_orchestrator_plan_metadata(item) for item in value]
+    return value
 
 
 def _fusion_method(settings: Settings) -> FusionMethod:
