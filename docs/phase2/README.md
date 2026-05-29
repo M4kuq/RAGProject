@@ -33,6 +33,7 @@ PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace r
 | PR-35 | Advanced Import: HTML / XML / URL + SSRF Guard |
 | PR-36 | Document Diff / Citation Navigation / Version Compare |
 | PR-37 | Phase2 Final Hardening / Demo / Docs |
+| PR-38 | MCP Tools for Hybrid / Agentic RAG |
 
 ## Phase2 Final Docs
 
@@ -68,6 +69,7 @@ Use these files for final handoff and demo validation:
 - [SSRF guard](ssrf_guard.md)
 - [Document diff / version compare](document_diff_version_compare.md)
 - [Citation navigation](citation_navigation.md)
+- [MCP advanced RAG tools](mcp_advanced_rag_tools.md)
 - [Phase2 test strategy](test_strategy.md)
 - [PR-by-PR acceptance criteria](acceptance_criteria.md)
 

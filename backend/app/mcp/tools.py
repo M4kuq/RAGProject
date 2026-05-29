@@ -32,16 +32,58 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             input_schema=_object_schema(
                 {
                     "query": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["dense", "sparse", "hybrid", "agentic_router"],
+                        "default": "dense",
+                    },
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
                     "rerank_top_n": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 20,
                     },
+                    "include_trace_summary": {"type": "boolean"},
                 },
                 required=["query"],
             ),
             handler=adapter.rag_search,
+        ),
+        McpTool(
+            name="rag_search_hybrid",
+            description="Hybrid RAG search wrapper for rag_search(strategy=hybrid).",
+            input_schema=_object_schema(
+                {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["query"],
+            ),
+            handler=adapter.rag_search_hybrid,
+        ),
+        McpTool(
+            name="rag_search_agentic",
+            description="Agentic RAG search wrapper for rag_search(strategy=agentic_router).",
+            input_schema=_object_schema(
+                {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["query"],
+            ),
+            handler=adapter.rag_search_agentic,
         ),
         McpTool(
             name="rag_ask",
@@ -52,16 +94,85 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             input_schema=_object_schema(
                 {
                     "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["dense", "agentic_router"],
+                        "default": "dense",
+                    },
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
                     "rerank_top_n": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 20,
                     },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
                 },
                 required=["question"],
             ),
             handler=adapter.rag_ask,
+        ),
+        McpTool(
+            name="rag_ask_agentic",
+            description="Agentic RAG ask wrapper for rag_ask(strategy=agentic_router).",
+            input_schema=_object_schema(
+                {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["question"],
+            ),
+            handler=adapter.rag_ask_agentic,
+        ),
+        McpTool(
+            name="rag_get_retrieval_trace",
+            description="Get a safe retrieval trace summary by retrieval_run_id.",
+            input_schema=_object_schema(
+                {"retrieval_run_id": {"type": "integer", "minimum": 1}},
+                required=["retrieval_run_id"],
+            ),
+            handler=adapter.rag_get_retrieval_trace,
+        ),
+        McpTool(
+            name="rag_compare_strategies",
+            description=(
+                "Read the latest safe strategy comparison summary. "
+                "Does not create or rerun evaluations."
+            ),
+            input_schema=_object_schema(
+                {
+                    "evaluation_dataset_id": {"type": "integer", "minimum": 1},
+                    "strategies": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["dense", "sparse", "hybrid", "agentic_router"],
+                        },
+                        "minItems": 1,
+                        "maxItems": 4,
+                    },
+                    "mode": {"type": "string", "enum": ["latest_results"]},
+                },
+            ),
+            handler=adapter.rag_compare_strategies,
+        ),
+        McpTool(
+            name="rag_get_evaluation_summary",
+            description="Get a safe evaluation run summary without raw prompts or context.",
+            input_schema=_object_schema(
+                {"evaluation_run_id": {"type": "integer", "minimum": 1}},
+                required=["evaluation_run_id"],
+            ),
+            handler=adapter.rag_get_evaluation_summary,
         ),
         McpTool(
             name="list_documents",
@@ -174,7 +285,7 @@ def call_tool(
         return _tool_error(exc)
     except McpError:
         raise
-    is_error = name == "rag_ask" and structured.get("status") == "failed"
+    is_error = name in {"rag_ask", "rag_ask_agentic"} and structured.get("status") == "failed"
     return _tool_success(structured, is_error=is_error)
 
 

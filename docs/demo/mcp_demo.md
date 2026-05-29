@@ -32,6 +32,26 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"r
   | docker compose exec -T backend python -m app.mcp.server
 ```
 
+## Phase2 Hybrid / Agentic RAG Tools
+
+PR-38 keeps MCP local-only and read-mostly, but exposes Phase2 retrieval
+strategies safely.
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"rag_search","arguments":{"query":"How does hybrid retrieval combine lexical and vector signals?","strategy":"hybrid","top_k":5,"rerank_top_n":2,"include_trace_summary":true}}}' \
+  | docker compose exec -T backend python -m app.mcp.server
+
+printf '%s\n' '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"rag_search_agentic","arguments":{"query":"Compare dense and hybrid retrieval behavior.","top_k":5,"rerank_top_n":2,"include_trace_summary":true}}}' \
+  | docker compose exec -T backend python -m app.mcp.server
+
+printf '%s\n' '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"rag_ask_agentic","arguments":{"question":"When should agentic_router use fallback retrieval?","top_k":5,"rerank_top_n":2,"include_trace_summary":true}}}' \
+  | docker compose exec -T backend python -m app.mcp.server
+```
+
+Use `rag_get_retrieval_trace` only with a known `retrieval_run_id`; it returns a
+safe summary and does not expose raw query text, raw chunks, full context, or
+storage paths.
+
 ## rag_ask
 
 ```bash

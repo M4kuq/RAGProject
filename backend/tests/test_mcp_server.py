@@ -185,14 +185,20 @@ def test_mcp_adapter_injects_storage_without_global_settings(
     assert adapter.document_service.storage.base_dir == settings.storage_root
 
 
-def test_tool_registry_exposes_only_phase1_tools(
+def test_tool_registry_exposes_read_mostly_phase2_tools(
     mcp_adapter: McpServiceAdapter,
 ) -> None:
     registry = build_tool_registry(mcp_adapter)
 
     assert set(registry) == {
         "rag_search",
+        "rag_search_hybrid",
+        "rag_search_agentic",
         "rag_ask",
+        "rag_ask_agentic",
+        "rag_get_retrieval_trace",
+        "rag_compare_strategies",
+        "rag_get_evaluation_summary",
         "list_documents",
         "get_document_status",
         "get_job_status",
@@ -226,6 +232,65 @@ def test_rag_search_and_ask_return_safe_truncated_output(
     assert "raw_prompt" not in dumped.lower()
     assert "C:\\" not in dumped
     assert "storage_key" not in dumped.lower()
+    assert "token=abcd1234" not in dumped
+    assert "api_key" not in dumped.lower()
+    assert "https://example.com/redacted/alpha" in dumped
+
+
+def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    hybrid = mcp_adapter.rag_search_hybrid(
+        {
+            "query": "alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
+    agentic_search = mcp_adapter.rag_search_agentic(
+        {
+            "query": "compare alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
+    agentic_ask = mcp_adapter.rag_ask_agentic(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
+    trace = mcp_adapter.rag_get_retrieval_trace(
+        {"retrieval_run_id": agentic_search["retrieval_run_id"]},
+    )
+    comparison = mcp_adapter.rag_compare_strategies(
+        {"strategies": ["dense", "hybrid", "agentic_router"]},
+    )
+    summary = mcp_adapter.rag_get_evaluation_summary({"evaluation_run_id": 1})
+
+    assert hybrid["strategy"] == "hybrid"
+    assert hybrid["trace_summary"]["strategy_type"] == "hybrid"
+    assert agentic_search["strategy"] == "agentic_router"
+    assert agentic_search["trace_summary"]["strategy_type"] == "agentic_router"
+    assert agentic_ask["strategy"] == "agentic_router"
+    assert agentic_ask["status"] == "succeeded"
+    assert agentic_ask["citations"]
+    assert agentic_ask["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
+    assert trace["retrieval_run_id"] == agentic_search["retrieval_run_id"]
+    assert trace["strategy_decision"]["requested_strategy"] == "agentic_router"
+    assert comparison["evaluation_run_id"] == 1
+    assert {item["strategy"] for item in comparison["metrics"]} >= {"dense", "hybrid"}
+    assert summary["agentic_summary"]["strategy_type"] == "agentic_router"
+    dumped = json.dumps([hybrid, agentic_search, agentic_ask, trace, comparison, summary])
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
+    assert "secret_token" not in dumped.lower()
+    assert "raw_prompt" not in dumped.lower()
+    assert "full_context" not in dumped.lower()
+    assert "token=abcd1234" not in dumped
 
 
 def test_rag_ask_no_context_returns_safe_failure(
@@ -417,20 +482,36 @@ def test_mcp_redaction_preserves_sentinals_when_input_keys_collide() -> None:
 
 def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
     assert list_resources()["resources"][0]["uri"] == "rag://documents"
-    assert len(list_resource_templates()["resourceTemplates"]) == 3
+    assert len(list_resources()["resources"]) == 2
+    assert len(list_resource_templates()["resourceTemplates"]) == 5
+    search = mcp_adapter.rag_search(
+        {"query": "alpha retrieval", "include_trace_summary": True},
+    )
     documents = read_resource(mcp_adapter, "rag://documents")
+    strategies = read_resource(mcp_adapter, "rag://strategies")
     document = read_resource(mcp_adapter, "rag://documents/1")
     job = read_resource(mcp_adapter, "rag://jobs/1")
     evaluation = read_resource(mcp_adapter, "rag://evaluations/1")
+    evaluation_summary = read_resource(mcp_adapter, "rag://evaluations/1/summary")
+    retrieval_trace = read_resource(
+        mcp_adapter,
+        f"rag://retrieval-runs/{search['retrieval_run_id']}",
+    )
 
     assert "Alpha handbook" in documents["contents"][0]["text"]
+    assert '"agentic_router"' in strategies["contents"][0]["text"]
     assert '"logical_document_id": 1' in document["contents"][0]["text"]
     assert '"job_id": 1' in job["contents"][0]["text"]
     assert '"evaluation_run_id": 1' in evaluation["contents"][0]["text"]
+    assert '"agentic_summary"' in evaluation_summary["contents"][0]["text"]
+    assert '"strategy_decision"' in retrieval_trace["contents"][0]["text"]
     assert {prompt["name"] for prompt in list_prompts()["prompts"]} == {
         "rag_answer_with_citations",
+        "rag_agentic_answer_with_citations",
         "rag_search_debug",
+        "rag_hybrid_search_debug",
         "rag_evaluation_review",
+        "rag_strategy_comparison_review",
     }
     prompt = get_prompt("rag_answer_with_citations", {"question": "alpha"})
     prompt_text = prompt["messages"][0]["content"]["text"]
@@ -460,7 +541,13 @@ def test_jsonrpc_tools_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> 
 
     calls = [
         ("rag_search", {"query": "alpha"}),
+        ("rag_search_hybrid", {"query": "alpha"}),
+        ("rag_search_agentic", {"query": "alpha"}),
         ("rag_ask", {"question": "Summarize alpha citation"}),
+        ("rag_ask_agentic", {"question": "Summarize alpha citation"}),
+        ("rag_get_retrieval_trace", {"retrieval_run_id": 1}),
+        ("rag_compare_strategies", {}),
+        ("rag_get_evaluation_summary", {"evaluation_run_id": 1}),
         ("list_documents", {}),
         ("get_document_status", {"logical_document_id": 1}),
         ("get_job_status", {"job_id": 1}),
@@ -847,6 +934,10 @@ def _seed_data(db: Session) -> None:
             page_from=1,
             page_to=1,
             section_title="Alpha section",
+            metadata_json={
+                "source_type": "url",
+                "source_url": "https://example.com/api_key/alpha?token=abcd1234",
+            },
             modality="text",
         ),
     )
@@ -876,7 +967,57 @@ def _seed_data(db: Session) -> None:
         created_by=user.user_id,
         status="succeeded",
         target_type="fixture_dataset",
-        metrics_config={"dataset_name": "phase1_smoke", "case_limit": 1},
+        metrics_config={
+            "dataset_name": "phase2_strategy_smoke",
+            "case_limit": 1,
+            "strategies": ["dense", "hybrid", "agentic_router"],
+            "metrics": ["recall_at_k", "mrr", "p95_latency", "fallback_rate"],
+        },
+        strategy_type="agentic_router",
+        strategy_metrics_summary_json={
+            "schema_version": "phase2.evaluation.v1",
+            "strategies": ["dense", "hybrid", "agentic_router"],
+            "metric_summary": {"recall_at_k": 1.0, "mrr": 1.0, "fallback_rate": 0.0},
+            "strategy_metrics": {
+                "dense": {
+                    "metric_summary": {"recall_at_k": 1.0, "mrr": 1.0},
+                    "case_count": 1,
+                    "succeeded_count": 1,
+                    "failed_count": 0,
+                },
+                "hybrid": {
+                    "metric_summary": {"recall_at_k": 1.0, "mrr": 1.0},
+                    "case_count": 1,
+                    "succeeded_count": 1,
+                    "failed_count": 0,
+                },
+                "agentic_router": {
+                    "metric_summary": {
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "fallback_rate": 0.0,
+                        "budget_exhausted_rate": 0.0,
+                        "sufficiency_score_avg": 0.9,
+                        "retrieval_call_count_avg": 1.0,
+                    },
+                    "case_count": 1,
+                    "succeeded_count": 1,
+                    "failed_count": 0,
+                },
+            },
+            "agentic_summary": {
+                "strategy_type": "agentic_router",
+                "case_count": 1,
+                "fallback_rate": 0.0,
+                "budget_exhausted_rate": 0.0,
+                "strategy_selection_accuracy": 1.0,
+                "sufficiency_score_avg": 0.9,
+                "retrieval_call_count_avg": 1.0,
+                "no_context_rate": 0.0,
+                "p95_latency": 12,
+            },
+            "failure_summary": {"total_count": 0, "by_type": {}},
+        },
         started_at=now,
         finished_at=now,
     )

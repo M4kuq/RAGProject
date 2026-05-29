@@ -30,4 +30,5 @@ test runs, GitHub checks, screenshots, or manual notes, not to raw payload dumps
 | destructive commands are not automatic | Ready | `scripts/smoke_phase2.*` | No `docker compose down -v` by default. |
 | heavy model download is optional | Ready | PR-31/PR-33 docs | CI smoke blocks clearly if prerequisites missing. |
 | external export is optional | Ready | PR-32 docs | Disabled/no-op unless explicitly configured. |
+| MCP advanced RAG tools are safe | Ready | `docs/phase2/mcp_advanced_rag_tools.md` | Hybrid/agentic search, ask, trace, and evaluation summaries only; no upload/archive/approve/retry. |
 | Phase3 scope is clear | Ready | `docs/phase2/phase3_handoff.md` | Graph/OCR/multimodal/AWS/OIDC deferred. |

@@ -112,6 +112,27 @@ or raw retrieved context into the demo notes.
     - Open a chat answer citation, click View source, and show the bounded
       source locator.
 
+## MCP Advanced RAG Add-On
+
+After the browser demo, optionally show the local stdio MCP surface without
+performing document writes:
+
+- List MCP tools and confirm `rag_search`, `rag_search_hybrid`,
+  `rag_search_agentic`, `rag_ask_agentic`, `rag_get_retrieval_trace`,
+  `rag_compare_strategies`, and `rag_get_evaluation_summary` are available.
+- Run `rag_search` with `strategy=hybrid` or use `rag_search_hybrid` for a safe
+  synthetic query.
+- Run `rag_search_agentic` and show the bounded trace summary fields:
+  selected strategy, execution strategy, fallback state, retrieval call count,
+  sufficiency score, and latency.
+- Use `rag_get_retrieval_trace` on a known retrieval run id to show safe
+  query-plan, strategy-decision, score, latency, and item-count summaries.
+- Use `rag_compare_strategies` in `latest_results` mode to read existing
+  evaluation metrics. Do not create evaluation runs from MCP.
+
+Do not expose upload, archive, approve, retry, remote MCP, OAuth, raw prompts,
+full context, raw chunks, tokens, or secrets during this add-on.
+
 ## Safe Demo Queries
 
 Use short synthetic queries against the seeded demo corpus. Do not use

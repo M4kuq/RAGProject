@@ -33,6 +33,9 @@ limitations are intentional Phase2 boundaries or known areas for Phase3.
 - LangSmith trace export is optional and disabled/no-op by default.
 - SentenceTransformers experiments are local opt-in. Dry-run mode is the
   default and does not download models.
+- MCP advanced RAG tools are local-only stdio tools. They expose safe
+  retrieval/evaluation summaries and do not expose upload, archive, approve,
+  retry, remote MCP, OAuth, or autonomous admin operations.
 
 ## Import And Documents
 

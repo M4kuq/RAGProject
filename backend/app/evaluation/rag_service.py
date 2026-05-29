@@ -19,11 +19,17 @@ from app.ingest.embedding import (
 )
 from app.rag.citations import (
     CitationBuildError,
+    CitationSource,
     parse_generation_output,
     validate_generation_citations,
 )
 from app.rag.confidence import ConfidenceInputs, calculate_confidence
-from app.rag.generation import AnswerGenerationError, GenerationRequest, create_answer_generator
+from app.rag.generation import (
+    AnswerGenerationError,
+    GenerationContextItem,
+    GenerationRequest,
+    create_answer_generator,
+)
 from app.rag.rerank import RerankError, create_reranker
 from app.rag.retrieval import (
     RetrievalError,
@@ -96,7 +102,7 @@ class EvaluationRagQuestionService:
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
         if strategy_type != DEFAULT_RETRIEVAL_STRATEGY:
-            return self.evaluate_strategy(
+            return self.answer_question_with_strategy(
                 db,
                 question=question,
                 request_id=request_id,
@@ -242,6 +248,151 @@ class EvaluationRagQuestionService:
             )
             raise
 
+    def answer_question_with_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        try:
+            response = self.service.search(
+                db,
+                payload=RagSearchRequest(
+                    query=question,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    strategy=RagSearchRequestStrategy(strategy_type.value),
+                ),
+                request_id=request_id,
+            )
+            if not response.items:
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=response.retrieval_run_id,
+                    error_code="no_context_found",
+                )
+                return _failed_evaluation_result(
+                    response.retrieval_run_id,
+                    "no_context_found",
+                    retrieval_score_summary=response.retrieval_score_summary,
+                )
+            citation_sources = [
+                _citation_source_from_search_item(index, item)
+                for index, item in enumerate(response.items, start=1)
+            ]
+            context_items = _context_items_from_search_items(
+                db,
+                response.items,
+                max_context_chars=self.service.settings.generation_max_context_chars,
+            )
+            prompt_citation_sources = _prompt_citation_sources(
+                context_items=context_items,
+                citation_sources=citation_sources,
+            )
+            if not context_items or not prompt_citation_sources:
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=response.retrieval_run_id,
+                    error_code="no_context_found",
+                )
+                return _failed_evaluation_result(
+                    response.retrieval_run_id,
+                    "no_context_found",
+                    retrieval_score_summary=response.retrieval_score_summary,
+                )
+            generation = self.service.answer_generator.generate(
+                GenerationRequest(
+                    message=question,
+                    context_items=context_items,
+                    max_output_chars=self.service.settings.generation_max_output_chars,
+                )
+            )
+            parsed_generation = parse_generation_output(generation.content)
+            _validate_generation_output_safety(
+                parsed_generation.answer_text,
+                context_items=context_items,
+            )
+            cited_sources = validate_generation_citations(
+                parsed_generation,
+                source_map=prompt_citation_sources,
+            )
+            self.service.repository.save_citations(
+                db,
+                citations=[
+                    _citation_input(source, retrieval_run_id=response.retrieval_run_id)
+                    for source in cited_sources
+                ],
+            )
+            citation_records = self.service.repository.list_citations_for_run(
+                db,
+                retrieval_run_id=response.retrieval_run_id,
+            )
+            confidence = calculate_confidence(
+                ConfidenceInputs(
+                    retrieval_score_summary=response.retrieval_score_summary,
+                    marker_count=len(parsed_generation.markers),
+                    unique_citation_count=len(cited_sources),
+                    selected_count=len(prompt_citation_sources),
+                ),
+                self.service.settings,
+            )
+            run = self.service._require_run(db, response.retrieval_run_id)
+            self.service.repository.mark_succeeded(
+                db,
+                run=run,
+                retrieval_score_summary=response.retrieval_score_summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(
+                    response.retrieval_score_summary.top1_rerank_score
+                ),
+                answer_confidence=_decimal_score(confidence.answer_confidence),
+                groundedness_score=_decimal_score(confidence.groundedness_score),
+                confidence_label=confidence.confidence_label,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            db.refresh(run)
+            return RagEvaluationResult(
+                retrieval_run_id=response.retrieval_run_id,
+                status="succeeded",
+                answer_text=parsed_generation.answer_text,
+                citations=[_citation_response(record) for record in citation_records],
+                confidence=_confidence_response(run),
+                retrieval_score_summary=response.retrieval_score_summary,
+                retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
+                context_sources_for_safety=[item.text for item in context_items],
+            )
+        except CitationBuildError:
+            _mark_latest_failed_safely(
+                self.service,
+                db,
+                request_id=request_id,
+                error_code="citation_build_failed",
+            )
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                "citation_build_failed",
+            )
+        except AnswerGenerationError:
+            _mark_latest_failed_safely(
+                self.service,
+                db,
+                request_id=request_id,
+                error_code="generation_failed",
+            )
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                "generation_failed",
+            )
+        except RagSearchPipelineError as exc:
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                exc.error_code,
+            )
+
     def evaluate_strategy(
         self,
         db: Session,
@@ -308,6 +459,74 @@ def _retrieved_item_from_search_item(item: RagSearchItem) -> RetrievedEvaluation
     )
 
 
+def _context_items_from_search_items(
+    db: Session,
+    items: list[RagSearchItem],
+    *,
+    max_context_chars: int,
+) -> list[GenerationContextItem]:
+    chunk_ids = [item.document_chunk_id for item in items]
+    chunks = {
+        chunk.document_chunk_id: chunk
+        for chunk in db.scalars(
+            select(DocumentChunk).where(DocumentChunk.document_chunk_id.in_(chunk_ids))
+        ).all()
+    }
+    remaining = max_context_chars
+    context_items: list[GenerationContextItem] = []
+    for index, item in enumerate(items, start=1):
+        if remaining <= 0:
+            break
+        chunk = chunks.get(item.document_chunk_id)
+        if chunk is None:
+            continue
+        text = _clean_context_text(chunk.content_text)
+        if not text:
+            continue
+        clipped = text[:remaining]
+        remaining -= len(clipped)
+        context_items.append(
+            GenerationContextItem(
+                document_chunk_id=item.document_chunk_id,
+                source_label=item.source_label,
+                text=clipped,
+                local_citation_id=index,
+                page_from=item.page_from,
+                page_to=item.page_to,
+            )
+        )
+    return context_items
+
+
+def _citation_source_from_search_item(index: int, item: RagSearchItem) -> CitationSource:
+    payload = item.payload_snapshot
+    source_type = "external_url" if payload.get("source_type") == "url" else "upload"
+    source_url = payload.get("safe_source_url") or payload.get("source_url")
+    return CitationSource(
+        local_citation_id=index,
+        retrieval_run_item_id=item.retrieval_run_item_id,
+        document_chunk_id=item.document_chunk_id,
+        source_label=item.source_label,
+        snippet=item.snippet,
+        page_from=item.page_from,
+        page_to=item.page_to,
+        section_title=_safe_string(payload.get("section_title")),
+        source_type=source_type,
+        source_url=source_url if isinstance(source_url, str) else None,
+    )
+
+
+def _clean_context_text(text: str) -> str:
+    return " ".join(text.replace("\x00", " ").split())
+
+
+def _safe_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.replace("\x00", " ").split())
+    return cleaned or None
+
+
 def _safe_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
@@ -323,6 +542,23 @@ def _latest_retrieval_run_id(db: Session, *, request_id: str | None) -> int | No
         .order_by(RetrievalRun.created_at.desc(), RetrievalRun.retrieval_run_id.desc())
     )
     return run.retrieval_run_id if run is not None else None
+
+
+def _mark_latest_failed_safely(
+    service: RagService,
+    db: Session,
+    *,
+    request_id: str | None,
+    error_code: str,
+) -> None:
+    retrieval_run_id = _latest_retrieval_run_id(db, request_id=request_id)
+    if retrieval_run_id is None:
+        return
+    service._mark_failed_safely(
+        db,
+        retrieval_run_id=retrieval_run_id,
+        error_code=error_code,
+    )
 
 
 class DatabaseVectorSearchClient(VectorSearchClient):
