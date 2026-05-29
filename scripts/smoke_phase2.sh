@@ -48,6 +48,10 @@ for path in \
   docs/phase2/phase2_acceptance_checklist.md \
   docs/phase2/phase2_known_limitations.md \
   docs/phase2/phase3_handoff.md \
+  docs/phase2/demo_fixtures/phase2_source_feed.xml \
+  docs/phase2/demo_fixtures/phase2_source_page.html \
+  docs/phase2/demo_fixtures/phase2_strategy_overview.xlsx \
+  docs/phase2/demo_fixtures/phase2_strategy_walkthrough.pptx \
   docs/phase2/retrieval_debug_ui_v2.md \
   docs/phase2/agentic_retrieval_loop.md \
   docs/phase2/agentic_strategy_evaluation.md \
@@ -80,7 +84,7 @@ fi
 if [ "$RUN_EXPERIMENT_DRY_RUN" -eq 1 ]; then
   say "run SentenceTransformers experiment dry-run without model download"
   MODE=dry-run DOWNLOAD_POLICY=never SKIP_SEED_INDEXING=true \
-    scripts/run_retrieval_model_experiment.sh
+    sh scripts/run_retrieval_model_experiment.sh
 fi
 
 if [ "$RUN_RETRIEVAL_EVAL" -eq 1 ]; then

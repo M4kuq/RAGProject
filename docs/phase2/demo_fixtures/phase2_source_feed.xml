@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phase2Sources>
+  <source>
+    <title>SSRF guard behavior</title>
+    <summary>Single-document URL ingest validates scheme, host, redirects, content type, and response size before storage.</summary>
+  </source>
+  <source>
+    <title>Safe XML metadata</title>
+    <summary>XML import stores safe element path metadata and rejects DTD or entity declarations.</summary>
+  </source>
+</phase2Sources>

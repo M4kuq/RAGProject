@@ -13,6 +13,15 @@ or raw retrieved context into the demo notes.
   development.
 - Seeded documents and the `phase2_strategy_smoke` evaluation dataset are
   available.
+- For a fresh local database, upload and approve these deterministic demo
+  fixtures before showing advanced import metadata:
+  - `docs/phase2/demo_fixtures/phase2_strategy_overview.xlsx`
+  - `docs/phase2/demo_fixtures/phase2_strategy_walkthrough.pptx`
+  - `docs/phase2/demo_fixtures/phase2_source_page.html`
+  - `docs/phase2/demo_fixtures/phase2_source_feed.xml`
+- Single URL ingest is optional for the offline handoff demo. Demonstrate it
+  only with a presenter-provided public HTML/XML URL; do not use localhost,
+  private-network, metadata, credential-bearing, or customer URLs.
 - Optional integrations such as LangSmith and SentenceTransformers local
   experiments remain disabled unless the presenter explicitly opts in.
 
@@ -29,9 +38,11 @@ or raw retrieved context into the demo notes.
 
 3. **Document ingest status**
    - Open Admin Documents.
-   - Show ready versions, chunk counts, and source labels.
-   - Point out supported Phase2 imports: `.xlsx`, `.pptx`, `.html`, `.htm`,
-     `.xml`, and single URL ingest.
+   - Confirm the seeded documents and the uploaded demo fixtures are ready.
+   - Show ready versions, chunk counts, and source labels for the spreadsheet,
+     presentation, HTML page, and XML feed fixtures.
+   - Point out that single URL ingest follows the same safe metadata path but is
+     not required for this offline walkthrough.
 
 4. **Dense / sparse / hybrid comparison**
    - Open Retrieval Debug.
@@ -78,8 +89,17 @@ or raw retrieved context into the demo notes.
     - Explain that local mode is opt-in and no model is downloaded by default.
 
 12. **Advanced import**
-    - Show Office import metadata for a spreadsheet or presentation.
-    - Show HTML/XML/URL source metadata and SSRF guard constraints.
+    - If the database is fresh, upload and approve the four demo fixtures named
+      in the preconditions before this step.
+    - Show Office import metadata for
+      `phase2_strategy_overview.xlsx` and
+      `phase2_strategy_walkthrough.pptx`.
+    - Show HTML/XML source metadata for `phase2_source_page.html` and
+      `phase2_source_feed.xml`.
+    - Explain that URL source metadata is demonstrated only when a safe public
+      presenter-owned URL was imported separately, and that the SSRF guard
+      rejects localhost, private IPs, metadata hosts, and credential-bearing
+      URLs.
     - Emphasize no crawler, no JavaScript rendering, no OCR.
 
 13. **Document diff and citation navigation**
@@ -102,7 +122,8 @@ customer data, real credentials, or private document text.
 | Version-specific | `What changed in the newer policy version?` |
 | No context | `What is the weather on Mars today?` |
 | Office metadata | `Which sheet or slide mentions retrieval strategy?` |
-| URL source | `Which imported web page describes SSRF guard behavior?` |
+| HTML/XML source | `Which imported page or feed describes SSRF guard behavior?` |
+| Optional URL source | `Which imported public URL describes SSRF guard behavior?` |
 
 ## Presenter Notes
 

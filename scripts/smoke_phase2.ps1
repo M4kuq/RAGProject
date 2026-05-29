@@ -49,8 +49,8 @@ function Invoke-CurlJson([string[]]$ArgsList) {
 
 Write-Step "validate compose files"
 $env:COMPOSE_DISABLE_ENV_FILE = "1"
-Invoke-ComposeQuiet @("config")
-Invoke-ComposeQuiet @("-f", "docker-compose.ci.yml", "config", "--quiet")
+Invoke-ComposeQuiet -ArgsList @("config")
+Invoke-ComposeQuiet -ArgsList @("-f", "docker-compose.ci.yml", "config", "--quiet")
 
 Write-Step "verify Phase2 final docs and artifacts"
 @(
@@ -60,6 +60,10 @@ Write-Step "verify Phase2 final docs and artifacts"
   "docs/phase2/phase2_acceptance_checklist.md",
   "docs/phase2/phase2_known_limitations.md",
   "docs/phase2/phase3_handoff.md",
+  "docs/phase2/demo_fixtures/phase2_source_feed.xml",
+  "docs/phase2/demo_fixtures/phase2_source_page.html",
+  "docs/phase2/demo_fixtures/phase2_strategy_overview.xlsx",
+  "docs/phase2/demo_fixtures/phase2_strategy_walkthrough.pptx",
   "docs/phase2/retrieval_debug_ui_v2.md",
   "docs/phase2/agentic_retrieval_loop.md",
   "docs/phase2/agentic_strategy_evaluation.md",
@@ -123,7 +127,7 @@ $cookiePath = Join-Path ([System.IO.Path]::GetTempPath()) ("phase2-smoke-{0}.coo
 $loginBodyPath = Join-Path ([System.IO.Path]::GetTempPath()) ("phase2-smoke-{0}.login.json" -f $tempPrefix)
 try {
   Write-Step "sign in with local demo admin"
-  $csrf = Invoke-CurlJson @("-fsS", "-c", $cookiePath, "$BackendUrl/api/v1/auth/csrf")
+  $csrf = Invoke-CurlJson -ArgsList @("-fsS", "-c", $cookiePath, "$BackendUrl/api/v1/auth/csrf")
   $csrfToken = $csrf.data.csrf_token
   $loginBody = @{ email = $AdminEmail; password = $AdminPassword } | ConvertTo-Json -Compress
   [System.IO.File]::WriteAllText(
@@ -131,7 +135,7 @@ try {
     $loginBody,
     (New-Object System.Text.UTF8Encoding($false))
   )
-  $login = Invoke-CurlJson @(
+  $login = Invoke-CurlJson -ArgsList @(
     "-fsS", "-b", $cookiePath, "-c", $cookiePath,
     "-H", "Content-Type: application/json",
     "-H", "X-CSRF-Token: $csrfToken",
@@ -148,7 +152,7 @@ try {
       rerank_top_n = 2
       strategy = $strategy
     } | ConvertTo-Json -Compress
-    Invoke-CurlJson @(
+    Invoke-CurlJson -ArgsList @(
       "-fsS", "-b", $cookiePath,
       "-H", "Content-Type: application/json",
       "-H", "X-CSRF-Token: $csrfToken",
@@ -164,7 +168,7 @@ try {
     rerank_top_n = 1
     strategy = "agentic_router"
   } | ConvertTo-Json -Compress
-  $search = Invoke-CurlJson @(
+  $search = Invoke-CurlJson -ArgsList @(
     "-fsS", "-b", $cookiePath,
     "-H", "Content-Type: application/json",
     "-H", "X-CSRF-Token: $csrfToken",
@@ -173,7 +177,7 @@ try {
   )
   $runId = $search.data.retrieval_run_id
   if ($null -ne $runId) {
-    Invoke-CurlJson @("-fsS", "-b", $cookiePath, "$BackendUrl/api/v1/rag/retrieval-runs/$runId") | Out-Null
+    Invoke-CurlJson -ArgsList @("-fsS", "-b", $cookiePath, "$BackendUrl/api/v1/rag/retrieval-runs/$runId") | Out-Null
   }
 } finally {
   Remove-Item -LiteralPath $cookiePath -ErrorAction SilentlyContinue
