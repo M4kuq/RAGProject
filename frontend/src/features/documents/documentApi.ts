@@ -10,6 +10,7 @@ import type {
   DocumentUrlIngestRequest,
   DocumentUploadResponse,
   DocumentVersionCreateResponse,
+  DocumentVersionCompareResponse,
   DocumentVersionDetail,
   DocumentVersionSummary,
   PagedResult
@@ -49,6 +50,20 @@ export async function getDocumentVersionDetail(
 ): Promise<DocumentVersionDetail> {
   const response = await apiFetch<ApiResponse<DocumentVersionDetail>>(
     `/api/v1/documents/${logicalDocumentId}/versions/${documentVersionId}`
+  );
+  return response.data;
+}
+
+export async function compareDocumentVersions(values: {
+  logicalDocumentId: number;
+  baseVersionId: number;
+  targetVersionId: number;
+}): Promise<DocumentVersionCompareResponse> {
+  const response = await apiFetch<ApiResponse<DocumentVersionCompareResponse>>(
+    `/api/v1/documents/${values.logicalDocumentId}/versions/compare${toQuery({
+      base_version_id: values.baseVersionId,
+      target_version_id: values.targetVersionId
+    })}`
   );
   return response.data;
 }

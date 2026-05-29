@@ -150,6 +150,25 @@ def list_document_versions(
     return success_response([item.model_dump(mode="json") for item in items], request, page_meta)
 
 
+@router.get("/{logical_document_id}/versions/compare")
+def compare_document_versions(
+    logical_document_id: int,
+    base_version_id: int,
+    target_version_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: DocumentService = Depends(document_service),
+) -> dict[str, object]:
+    result = service.compare_versions(
+        db,
+        logical_document_id=logical_document_id,
+        base_version_id=base_version_id,
+        target_version_id=target_version_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
 @router.get("/{logical_document_id}/versions/{document_version_id}")
 def get_document_version_detail(
     logical_document_id: int,

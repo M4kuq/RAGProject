@@ -22,6 +22,8 @@ class CitationSource:
     page_from: int | None
     page_to: int | None
     section_title: str | None
+    source_type: str = "upload"
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)

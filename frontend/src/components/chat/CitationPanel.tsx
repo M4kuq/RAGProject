@@ -1,3 +1,7 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { useCurrentUser } from "../../features/auth/authHooks";
+import { fetchCitationSource } from "../../features/chat/chatApi";
 import { RagAskCitation } from "../../features/chat/chatTypes";
 import { OldSourceBadge } from "./OldSourceBadge";
 
@@ -6,7 +10,7 @@ function truncate(value: string | null | undefined, maxLength: number, fallback 
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}...` : normalized;
 }
 
-function pageLabel(citation: RagAskCitation): string | null {
+function pageLabel(citation: { page_from: number | null; page_to: number | null }): string | null {
   if (citation.page_from === null && citation.page_to === null) {
     return null;
   }
@@ -17,9 +21,37 @@ function pageLabel(citation: RagAskCitation): string | null {
 }
 
 export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
+  const currentUser = useCurrentUser();
+  const [openCitationId, setOpenCitationId] = useState<number | null>(null);
+  const [sourceByCitationId, setSourceByCitationId] = useState<Record<number, Awaited<ReturnType<typeof fetchCitationSource>>>>({});
+  const [loadingCitationId, setLoadingCitationId] = useState<number | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+
   if (!citations || citations.length === 0) {
     return null;
   }
+
+  async function openSource(citation: RagAskCitation) {
+    if (openCitationId === citation.citation_id) {
+      setOpenCitationId(null);
+      return;
+    }
+    setOpenCitationId(citation.citation_id);
+    setSourceError(null);
+    if (sourceByCitationId[citation.citation_id]) {
+      return;
+    }
+    setLoadingCitationId(citation.citation_id);
+    try {
+      const source = await fetchCitationSource(citation.citation_id);
+      setSourceByCitationId((current) => ({ ...current, [citation.citation_id]: source }));
+    } catch {
+      setSourceError("Unable to load source preview.");
+    } finally {
+      setLoadingCitationId(null);
+    }
+  }
+
   return (
     <aside className="citation-panel" aria-label="citations">
       <h3>Citations</h3>
@@ -37,9 +69,74 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
               {citation.section_title ? <span>{truncate(citation.section_title, 80)}</span> : null}
             </div>
             <p>{truncate(citation.snippet, 240)}</p>
+            <button className="inline-text-button" type="button" onClick={() => void openSource(citation)}>
+              {openCitationId === citation.citation_id ? "Hide source" : "View source"}
+            </button>
+            {openCitationId === citation.citation_id ? (
+              <SourcePreview
+                citationId={citation.citation_id}
+                isAdmin={currentUser.data?.role === "admin"}
+                isLoading={loadingCitationId === citation.citation_id}
+                error={sourceError}
+                source={sourceByCitationId[citation.citation_id]}
+              />
+            ) : null}
           </li>
         ))}
       </ol>
     </aside>
+  );
+}
+
+function SourcePreview({
+  citationId,
+  error,
+  isAdmin,
+  isLoading,
+  source
+}: {
+  citationId: number;
+  error: string | null;
+  isAdmin: boolean;
+  isLoading: boolean;
+  source?: Awaited<ReturnType<typeof fetchCitationSource>>;
+}) {
+  if (isLoading) {
+    return <div className="source-preview muted">Loading source...</div>;
+  }
+  if (error) {
+    return <div className="source-preview source-preview-error">{error}</div>;
+  }
+  if (!source) {
+    return null;
+  }
+  const locatorParts = [
+    source.sheet_name ? `Sheet: ${source.sheet_name}` : null,
+    source.row_from !== null && source.row_to !== null ? `Rows ${source.row_from}-${source.row_to}` : null,
+    source.slide_number !== null ? `Slide ${source.slide_number}` : null,
+    source.html_heading_path,
+    source.xml_path,
+    pageLabel(source)
+  ].filter(Boolean);
+  return (
+    <div className="source-preview" aria-label={`source preview ${citationId}`}>
+      <div className="source-preview-header">
+        <strong>{truncate(source.display_label || source.source_label, 100, "source")}</strong>
+        {source.old_version_flag ? <OldSourceBadge /> : null}
+      </div>
+      {locatorParts.length ? <p className="citation-meta">{locatorParts.join(" / ")}</p> : null}
+      {source.source_url ? (
+        <a href={source.source_url} rel="noopener noreferrer" target="_blank">
+          {truncate(source.source_url, 120)}
+        </a>
+      ) : null}
+      <p>{truncate(source.preview, 500)}</p>
+      {source.preview_truncated ? <p className="muted">Preview truncated.</p> : null}
+      {isAdmin ? (
+        <Link to={`/admin/documents/${source.logical_document_id}`}>
+          Open document #{source.logical_document_id}
+        </Link>
+      ) : null}
+    </div>
   );
 }

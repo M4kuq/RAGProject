@@ -3,6 +3,7 @@ import { queryKeys } from "../../lib/queryKeys";
 import {
   approveDocumentVersion,
   archiveDocument,
+  compareDocumentVersions,
   getDocumentDetail,
   getDocumentVersionDetail,
   ingestDocumentUrl,
@@ -42,6 +43,26 @@ export function useDocumentVersionDetail(logicalDocumentId: number, documentVers
     queryKey: queryKeys.documents.version(logicalDocumentId, documentVersionId),
     queryFn: () => getDocumentVersionDetail(logicalDocumentId, documentVersionId),
     enabled: Number.isFinite(logicalDocumentId) && Number.isFinite(documentVersionId)
+  });
+}
+
+export function useDocumentVersionCompare(
+  logicalDocumentId: number,
+  baseVersionId: number | null,
+  targetVersionId: number | null
+) {
+  return useQuery({
+    queryKey: queryKeys.documents.compare(logicalDocumentId, baseVersionId, targetVersionId),
+    queryFn: () =>
+      compareDocumentVersions({
+        logicalDocumentId,
+        baseVersionId: baseVersionId ?? 0,
+        targetVersionId: targetVersionId ?? 0
+      }),
+    enabled:
+      Number.isFinite(logicalDocumentId) &&
+      baseVersionId !== null &&
+      targetVersionId !== null
   });
 }
 

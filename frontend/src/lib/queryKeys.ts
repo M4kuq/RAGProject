@@ -17,6 +17,8 @@ export const queryKeys = {
     versions: (logicalDocumentId: number) => ["documents", "versions", logicalDocumentId] as const,
     version: (logicalDocumentId: number, documentVersionId: number) =>
       ["documents", "version", logicalDocumentId, documentVersionId] as const,
+    compare: (logicalDocumentId: number, baseVersionId: number | null, targetVersionId: number | null) =>
+      ["documents", "compare", logicalDocumentId, baseVersionId, targetVersionId] as const,
     chunks: (logicalDocumentId: number, documentVersionId: number, page: number, pageSize: number) =>
       ["documents", "chunks", logicalDocumentId, documentVersionId, page, pageSize] as const
   },

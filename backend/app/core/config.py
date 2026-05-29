@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     )
     document_url_fetch_block_private_ips: bool = True
     document_url_fetch_user_agent: str = "RAGProjectBot/Phase2"
+    document_diff_preview_max_chars: int = Field(default=500, ge=40, le=2000)
+    document_diff_max_items: int = Field(default=200, ge=1, le=500)
+    document_diff_text_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    citation_source_preview_max_chars: int = Field(default=500, ge=40, le=2000)
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"

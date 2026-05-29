@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ChunkPreviewTable } from "../../../components/admin/ChunkPreviewTable";
 import { validateDocumentFile } from "../../../components/admin/DocumentUploadForm";
@@ -10,8 +10,10 @@ import {
   useArchiveDocument,
   useDocumentChunks,
   useDocumentDetail,
+  useDocumentVersionCompare,
   useUploadDocumentVersion
 } from "../../../features/documents/documentHooks";
+import type { DocumentChunkDiffItem, DocumentMetadataDiffItem } from "../../../features/documents/documentTypes";
 import { formatDate, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
@@ -21,11 +23,23 @@ export function DocumentDetailPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [chunkPage, setChunkPage] = useState(1);
   const [versionFile, setVersionFile] = useState<File | null>(null);
+  const [baseVersionId, setBaseVersionId] = useState<number | null>(null);
+  const [targetVersionId, setTargetVersionId] = useState<number | null>(null);
   const document = useDocumentDetail(logicalDocumentId);
   const archive = useArchiveDocument();
   const uploadVersion = useUploadDocumentVersion();
   const previewVersion = document.data?.active_version ?? document.data?.latest_version ?? null;
   const chunks = useDocumentChunks(logicalDocumentId, previewVersion?.document_version_id ?? NaN, chunkPage, PAGE_SIZE);
+  const compare = useDocumentVersionCompare(logicalDocumentId, baseVersionId, targetVersionId);
+
+  useEffect(() => {
+    const versions = document.data?.versions ?? [];
+    if (versions.length < 1) {
+      return;
+    }
+    setTargetVersionId((current) => current ?? versions[0].document_version_id);
+    setBaseVersionId((current) => current ?? versions[1]?.document_version_id ?? versions[0].document_version_id);
+  }, [document.data?.versions]);
 
   async function archiveDocument() {
     if (!window.confirm("Archive this document?")) {
@@ -151,6 +165,52 @@ export function DocumentDetailPage() {
       </section>
 
       <section className="admin-section">
+        <h2>Version Compare</h2>
+        <div className="inline-form">
+          <label>
+            Base
+            <select
+              aria-label="base version"
+              value={baseVersionId ?? ""}
+              onChange={(event) => setBaseVersionId(Number(event.target.value))}
+            >
+              {document.data.versions.map((version) => (
+                <option key={version.document_version_id} value={version.document_version_id}>
+                  v{version.version_no} {version.is_active ? "(active)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Target
+            <select
+              aria-label="target version"
+              value={targetVersionId ?? ""}
+              onChange={(event) => setTargetVersionId(Number(event.target.value))}
+            >
+              {document.data.versions.map((version) => (
+                <option key={version.document_version_id} value={version.document_version_id}>
+                  v{version.version_no} {version.is_active ? "(active)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {compare.isLoading ? <LoadingState label="Loading version diff..." /> : null}
+        {compare.error ? <ErrorState error={compare.error} /> : null}
+        {compare.data ? (
+          <>
+            <DiffSummary summary={compare.data.summary} />
+            <MetadataDiffTable items={compare.data.metadata_diff.filter((item) => item.changed)} />
+            <ChunkDiffTable items={compare.data.chunk_diff_items} />
+            {compare.data.summary.diff_items_truncated ? (
+              <InlineAlert>Diff items are truncated. Narrow the versions or inspect chunks directly.</InlineAlert>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
+      <section className="admin-section">
         <h2>Chunk Preview</h2>
         {previewVersion ? <p className="muted">Previewing version v{previewVersion.version_no}.</p> : null}
         {chunks.isLoading ? <LoadingState /> : null}
@@ -164,4 +224,112 @@ export function DocumentDetailPage() {
       </section>
     </main>
   );
+}
+
+function DiffSummary({ summary }: { summary: { added_chunks: number; removed_chunks: number; changed_chunks: number; unchanged_chunks: number } }) {
+  return (
+    <dl className="detail-grid compact-grid">
+      <div>
+        <dt>Added</dt>
+        <dd>{summary.added_chunks}</dd>
+      </div>
+      <div>
+        <dt>Removed</dt>
+        <dd>{summary.removed_chunks}</dd>
+      </div>
+      <div>
+        <dt>Changed</dt>
+        <dd>{summary.changed_chunks}</dd>
+      </div>
+      <div>
+        <dt>Unchanged</dt>
+        <dd>{summary.unchanged_chunks}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function MetadataDiffTable({ items }: { items: DocumentMetadataDiffItem[] }) {
+  if (items.length === 0) {
+    return <p className="muted">No metadata changes.</p>;
+  }
+  return (
+    <table className="admin-table compact-table">
+      <thead>
+        <tr>
+          <th>Metadata</th>
+          <th>Base</th>
+          <th>Target</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item) => (
+          <tr key={item.field}>
+            <td>{item.field}</td>
+            <td>{formatDiffValue(item.base_value)}</td>
+            <td>{formatDiffValue(item.target_value)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ChunkDiffTable({ items }: { items: DocumentChunkDiffItem[] }) {
+  if (items.length === 0) {
+    return <p className="muted">No chunk diff items.</p>;
+  }
+  return (
+    <table className="admin-table compact-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Source</th>
+          <th>Base Preview</th>
+          <th>Target Preview</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item, index) => {
+          const source = item.target_chunk ?? item.base_chunk;
+          return (
+            <tr key={`${item.diff_type}-${source?.document_chunk_id ?? index}`}>
+              <td>{item.diff_type}</td>
+              <td>
+                {source ? (
+                  <>
+                    <strong>{truncateText(source.source_label, 80)}</strong>
+                    <div className="muted">{sourceLocator(source)}</div>
+                  </>
+                ) : (
+                  "-"
+                )}
+              </td>
+              <td>{item.base_chunk ? truncateText(item.base_chunk.preview, 240) : "-"}</td>
+              <td>{item.target_chunk ? truncateText(item.target_chunk.preview, 240) : "-"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function formatDiffValue(value: string | number | boolean | null): string {
+  if (value === null) {
+    return "-";
+  }
+  return String(value);
+}
+
+function sourceLocator(source: NonNullable<DocumentChunkDiffItem["base_chunk"]>): string {
+  const parts = [
+    source.page_from ? `p.${source.page_from}${source.page_to && source.page_to !== source.page_from ? `-${source.page_to}` : ""}` : null,
+    source.sheet_name ? `Sheet: ${source.sheet_name}` : null,
+    source.row_from !== null && source.row_to !== null ? `Rows ${source.row_from}-${source.row_to}` : null,
+    source.slide_number !== null ? `Slide ${source.slide_number}` : null,
+    source.html_heading_path,
+    source.xml_path
+  ].filter(Boolean);
+  return parts.join(" / ") || `chunk ${source.chunk_index}`;
 }

@@ -162,6 +162,40 @@ function askSuccess(replayed = false) {
   };
 }
 
+function citationSourceResponse() {
+  return {
+    data: {
+      citation_id: 201,
+      local_citation_id: 1,
+      logical_document_id: 77,
+      document_version_id: 88,
+      document_chunk_id: 301,
+      chunk_index: 2,
+      version_no: 3,
+      document_title: "Guide",
+      file_name: "guide.html",
+      source_type: "external_url",
+      source_url: "https://example.com/redacted/guide",
+      display_label: "example.com / Guide",
+      source_label: "example.com / Guide / Setup",
+      section_title: "Setup",
+      page_from: null,
+      page_to: null,
+      sheet_name: null,
+      row_from: null,
+      row_to: null,
+      slide_number: null,
+      slide_title: null,
+      html_heading_path: "Guide > Setup",
+      xml_path: null,
+      structure_type: "html_section",
+      preview: "Safe bounded source preview",
+      preview_truncated: true,
+      old_version_flag: true
+    }
+  };
+}
+
 function askSuccessWithMessages({
   assistantContent,
   assistantId,
@@ -309,6 +343,36 @@ test("renders citation filenames for persisted assistant messages", async () => 
   expect(screen.getByText(/\[1\] phase1-seed\.md/)).toBeInTheDocument();
   expect(screen.getByText("Architecture")).toBeInTheDocument();
   expect(screen.getByText("Phase1 validates a local Docker Compose RAG stack.")).toBeInTheDocument();
+});
+
+test("opens a bounded citation source preview with admin deep link", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse("admin"));
+    if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
+    if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+    if (path.includes("/api/v1/chat/sessions/10/messages")) return jsonResponse(persistedMessagesWithCitation());
+    if (path.endsWith("/api/v1/rag/citations/201/source")) return jsonResponse(citationSourceResponse());
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/10");
+
+  expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "View source" }));
+
+  expect(await screen.findByText("Safe bounded source preview")).toBeInTheDocument();
+  expect(screen.getByText("Preview truncated.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "https://example.com/redacted/guide" })).toHaveAttribute(
+    "rel",
+    "noopener noreferrer"
+  );
+  expect(screen.getByRole("link", { name: "Open document #77" })).toHaveAttribute(
+    "href",
+    "/admin/documents/77"
+  );
+  expect(screen.queryByText(/token=secret/i)).not.toBeInTheDocument();
 });
 
 test("can delete a saved chat from the sidebar", async () => {

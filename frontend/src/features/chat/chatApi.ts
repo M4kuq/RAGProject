@@ -6,7 +6,8 @@ import {
   ChatSession,
   CreateChatSessionRequest,
   RagAskRequest,
-  RagAskResult
+  RagAskResult,
+  RagCitationSource
 } from "./chatTypes";
 
 type ApiResponse<T> = {
@@ -63,4 +64,11 @@ export async function askRag(payload: RagAskRequest): Promise<RagAskResult> {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export async function fetchCitationSource(citationId: number): Promise<RagCitationSource> {
+  const response = await apiFetch<ApiResponse<RagCitationSource>>(
+    `/api/v1/rag/citations/${citationId}/source`
+  );
+  return response.data;
 }

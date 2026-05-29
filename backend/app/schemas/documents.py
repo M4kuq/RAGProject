@@ -21,6 +21,9 @@ MAX_DOCUMENT_TITLE_LENGTH = 255
 MAX_CHUNK_PREVIEW_LENGTH = 200
 
 
+DiffType = Literal["added", "removed", "changed", "unchanged"]
+
+
 def normalize_document_title(value: str | None, *, fallback: str | None = None) -> str:
     title = value.strip() if value is not None else (fallback or "").strip()
     if not title:
@@ -99,6 +102,85 @@ class DocumentChunkItem(BaseModel):
     modality: Literal["text"] = "text"
     chunk_hash: str | None = None
     created_at: datetime
+
+
+class DocumentSourceLocator(BaseModel):
+    logical_document_id: int
+    document_version_id: int
+    document_chunk_id: int
+    chunk_index: int
+    version_no: int
+    document_title: str
+    file_name: str | None = None
+    source_type: Literal["upload", "external_url"] = "upload"
+    source_url: str | None = None
+    display_label: str
+    source_label: str
+    section_title: str | None = None
+    page_from: int | None = None
+    page_to: int | None = None
+    sheet_name: str | None = None
+    row_from: int | None = None
+    row_to: int | None = None
+    slide_number: int | None = None
+    slide_title: str | None = None
+    html_heading_path: str | None = None
+    xml_path: str | None = None
+    structure_type: str | None = None
+    preview: str
+    preview_truncated: bool
+    old_version_flag: bool
+
+
+class DocumentMetadataDiffItem(BaseModel):
+    field: str
+    base_value: str | int | bool | None = None
+    target_value: str | int | bool | None = None
+    changed: bool
+
+
+class DocumentChunkDiffSide(BaseModel):
+    document_chunk_id: int
+    chunk_index: int
+    source_label: str
+    section_title: str | None = None
+    page_from: int | None = None
+    page_to: int | None = None
+    sheet_name: str | None = None
+    row_from: int | None = None
+    row_to: int | None = None
+    slide_number: int | None = None
+    html_heading_path: str | None = None
+    xml_path: str | None = None
+    preview: str
+    preview_truncated: bool
+
+
+class DocumentChunkDiffItem(BaseModel):
+    diff_type: DiffType
+    base_chunk: DocumentChunkDiffSide | None = None
+    target_chunk: DocumentChunkDiffSide | None = None
+    similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    match_reason: str
+
+
+class DocumentVersionCompareSummary(BaseModel):
+    added_chunks: int
+    removed_chunks: int
+    changed_chunks: int
+    unchanged_chunks: int
+    metadata_changed: bool
+    diff_items_returned: int
+    diff_items_truncated: bool
+
+
+class DocumentVersionCompareResponse(BaseModel):
+    logical_document_id: int
+    base_version: DocumentVersionDetail
+    target_version: DocumentVersionDetail
+    summary: DocumentVersionCompareSummary
+    metadata_diff: list[DocumentMetadataDiffItem]
+    chunk_diff_items: list[DocumentChunkDiffItem]
 
 
 class DocumentUploadResponse(BaseModel):

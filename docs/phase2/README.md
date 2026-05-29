@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, and PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard, and PR-36 adds safe document version compare plus citation source navigation.
 
 ## PR Plan
 
@@ -261,6 +261,23 @@ PR-35 does not implement crawling, recursive web ingest, authenticated URL fetch
 cookies, JavaScript rendering, headless browsing, OCR, image upload, multimodal
 retrieval, Graph-RAG, AWS, S3, or OIDC/OAuth. CI tests use fixtures and mock HTTP
 transports, not real external network access.
+
+## PR-36 Document Diff / Citation Navigation
+
+PR-36 adds:
+
+- admin-only document version compare API and UI
+- metadata diff over safe version fields only
+- chunk diff summary with added / removed / changed / unchanged counts
+- bounded chunk diff previews
+- citation source locator API for authenticated users
+- Chat citation "View source" preview
+- admin-only deep link from source preview to document detail
+- source URL redaction and old-version warning preservation
+
+PR-36 does not implement unbounded full-text diff, raw chunk exposure, PDF page
+image rendering, DOCX/PPTX visual rendering, OCR region navigation, Graph-RAG,
+AWS, S3, or OIDC/OAuth.
 
 ## Security
 
