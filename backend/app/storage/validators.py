@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import re
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PureWindowsPath
+from typing import cast
 from xml.etree import ElementTree
 
+from app.core.config import get_settings
 from app.core.errors import (
     PayloadTooLarge,
     UnsafeFileRejected,
@@ -336,15 +339,33 @@ def _validate_html_upload_text(text: str) -> None:
 
 
 def _validate_xml_upload_text(text: str) -> None:
+    validate_xml_text_safety(text)
+
+
+def validate_xml_text_safety(text: str, *, max_elements: int | None = None) -> None:
     lowered = text.lower()
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise UnsafeFileRejected()
+    element_limit = max_elements or get_settings().ingest_xml_max_elements
+    parser = ElementTree.XMLPullParser(events=("start", "end"))
+    visited_count = 0
     try:
-        root = ElementTree.fromstring(text.lstrip("\ufeff"))
+        for chunk in _iter_text_chunks(text.lstrip("\ufeff")):
+            parser.feed(chunk)
+            for event, element in cast(
+                Iterator[tuple[str, ElementTree.Element]], parser.read_events()
+            ):
+                if event == "start":
+                    visited_count += 1
+                    if visited_count > element_limit:
+                        raise UnsafeFileRejected()
+                    if _is_svg_xml_tag(element.tag):
+                        raise UnsafeFileRejected()
+                elif event == "end":
+                    element.clear()
+        parser.close()
     except ElementTree.ParseError as exc:
         raise UnsafeFileRejected() from exc
-    if _xml_tree_contains_svg(root):
-        raise UnsafeFileRejected()
 
 
 def _decode_text_for_validation(content: bytes) -> str:
@@ -358,8 +379,9 @@ def _decode_text_for_validation(content: bytes) -> str:
     raise UnsafeFileRejected()
 
 
-def _xml_tree_contains_svg(root: ElementTree.Element) -> bool:
-    return any(_is_svg_xml_tag(element.tag) for element in root.iter())
+def _iter_text_chunks(text: str, chunk_size: int = 8192) -> Iterator[str]:
+    for index in range(0, len(text), chunk_size):
+        yield text[index : index + chunk_size]
 
 
 def _is_svg_xml_tag(tag: object) -> bool:

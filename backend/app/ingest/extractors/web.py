@@ -8,6 +8,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from app.core.config import get_settings
+from app.core.errors import UnsafeFileRejected
 from app.ingest.extractors.base import (
     ExtractedDocument,
     ExtractedPage,
@@ -18,6 +19,7 @@ from app.ingest.extractors.base import (
     safe_extraction_failure,
 )
 from app.ingest.extractors.text import decode_text_file
+from app.storage.validators import validate_xml_text_safety
 
 WEB_INGEST_SCHEMA_VERSION = "phase2.web_ingest.v1"
 HTML_EXTRACTOR_VERSION = "1"
@@ -31,7 +33,7 @@ SECRET_ASSIGNMENT_RE = re.compile(
 URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://")
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
-_BLOCKED_HTML_TAGS = {"script", "style", "noscript", "iframe", "object", "embed"}
+_BLOCKED_HTML_TAGS = {"script", "style", "noscript", "iframe", "object", "embed", "template"}
 _BLOCK_TAGS = {"p", "div", "section", "article", "li", "tr", "br", "table", "ul", "ol"}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _TABLE_CELL_TAGS = {"td", "th"}
@@ -341,9 +343,11 @@ def _html_blocks_to_pages(
 
 
 def _safe_xml_root(text: str) -> ElementTree.Element:
-    lowered = text.lower()
-    if "<!doctype" in lowered or "<!entity" in lowered:
-        raise ExtractionError("text_extraction_failed", "Text extraction failed.")
+    settings = get_settings()
+    try:
+        validate_xml_text_safety(text, max_elements=settings.ingest_xml_max_elements)
+    except UnsafeFileRejected as exc:
+        raise ExtractionError("text_extraction_failed", "Text extraction failed.") from exc
     try:
         root = ElementTree.fromstring(text.lstrip("\ufeff"))
     except ElementTree.ParseError as exc:
@@ -399,9 +403,10 @@ def _walk_xml(
 ) -> list[tuple[list[str], ElementTree.Element, str]]:
     rows: list[tuple[list[str], ElementTree.Element, str]] = []
     visited_count = 0
+    stack: list[tuple[ElementTree.Element, list[str]]] = [(root, [])]
 
-    def visit(element: ElementTree.Element, path: list[str]) -> None:
-        nonlocal visited_count
+    while stack:
+        element, path = stack.pop()
         visited_count += 1
         if visited_count > max_elements:
             raise ExtractionError("text_extraction_failed", "Text extraction failed.")
@@ -411,13 +416,11 @@ def _walk_xml(
         own_text = _xml_direct_text(element)
         if not children:
             rows.append((current_path, element, own_text))
-            return
+            continue
         if own_text:
             rows.append((current_path, element, own_text))
-        for child in children:
-            visit(child, current_path)
-
-    visit(root, [])
+        for child in reversed(children):
+            stack.append((child, current_path))
     return rows
 
 

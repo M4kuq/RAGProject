@@ -291,6 +291,23 @@ def test_html_extraction_skips_hidden_subtrees(tmp_path: Path) -> None:
     assert "screen reader duplicate" not in joined
 
 
+def test_html_extraction_skips_template_subtrees(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><p>Visible page text</p>"
+        b"<template><p>internal token should stay inert</p></template>"
+        b"<p>Visible trailing text</p></body></html>"
+    )
+    path = tmp_path / "template.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("template.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Visible page text" in joined
+    assert "Visible trailing text" in joined
+    assert "internal token" not in joined
+
+
 def test_html_repeated_heading_sections_keep_separate_parent_keys(tmp_path: Path) -> None:
     content = (
         b"<html><body><h2>Overview</h2><p>First section</p>"
@@ -407,6 +424,45 @@ def test_xml_extraction_enforces_element_limit(
         XmlExtractor().extract(path, _metadata("too-many.xml", "application/xml", len(content)))
 
     get_settings.cache_clear()
+
+
+def test_xml_upload_validation_enforces_element_limit_before_tree_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", "2")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(UnsafeFileRejected):
+            validate_upload(
+                filename="too-many.xml",
+                content_type="application/xml",
+                content=b"<root><child>A</child><child>B</child></root>",
+                max_bytes=1000,
+                allowed_extensions=[".xml"],
+            )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_xml_extraction_handles_deep_nested_xml_without_recursion_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    depth = 1100
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", str(depth + 2))
+    get_settings.cache_clear()
+    try:
+        content = ("<n>" * depth + "deep value" + "</n>" * depth).encode()
+        path = tmp_path / "deep.xml"
+        path.write_bytes(content)
+
+        extracted = XmlExtractor().extract(
+            path, _metadata("deep.xml", "application/xml", len(content))
+        )
+
+        assert any(page.text == "deep value" for page in extracted.pages)
+    finally:
+        get_settings.cache_clear()
 
 
 def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
