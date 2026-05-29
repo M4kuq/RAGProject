@@ -429,9 +429,12 @@ class RagService:
         requested_strategy = RetrievalStrategy(payload.strategy.value)
         if requested_strategy not in {
             RetrievalStrategy.DENSE,
+            RetrievalStrategy.HYBRID,
             RetrievalStrategy.AGENTIC_ROUTER,
         }:
             raise RagAskPipelineError("strategy_not_enabled", 409)
+        if requested_strategy != RetrievalStrategy.AGENTIC_ROUTER:
+            self._ensure_direct_strategy_enabled(requested_strategy)
         query_hash = _query_hash(payload.message)
         query_plan_build = self.query_plan_builder.build(
             payload.message,
@@ -473,6 +476,20 @@ class RagService:
                 plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_router_strategy_decision(decision=router_decision)
+        elif requested_strategy == RetrievalStrategy.HYBRID:
+            fusion_method = _fusion_method(self.settings)
+            normalized_sparse_query = normalize_sparse_query(
+                retrieval_query,
+                max_terms=self.settings.sparse_max_query_terms,
+            )
+            query_plan = build_hybrid_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                normalized_term_count=len(normalized_sparse_query.terms),
+                fusion_method=fusion_method,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_hybrid_strategy_decision(fusion_method=fusion_method)
         else:
             query_plan = build_default_dense_query_plan(
                 query_hash=query_hash,

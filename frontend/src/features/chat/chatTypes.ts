@@ -60,6 +60,7 @@ export type RagAskRequest = {
   model_key?: string;
   top_k?: number;
   rerank_top_n?: number;
+  strategy?: "dense" | "hybrid" | "agentic_router";
 };
 
 export type RagAskResponse = {

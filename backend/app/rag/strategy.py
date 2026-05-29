@@ -26,6 +26,7 @@ class RagSearchRequestStrategy(StrEnum):
 
 class RagAskRequestStrategy(StrEnum):
     DENSE = "dense"
+    HYBRID = "hybrid"
     AGENTIC_ROUTER = "agentic_router"
 
 
