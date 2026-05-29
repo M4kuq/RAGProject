@@ -99,6 +99,20 @@ def test_python_enum_values_match_migration_check_values() -> None:
     assert migration_values["RETRIEVAL_SOURCE_VALUES"] == RETRIEVAL_SOURCE_VALUES
 
 
+def test_llm_orchestrator_strategy_migration_downgrade_rewrites_rows() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0008_llm_tool_orchestrator_strategy.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert "_rewrite_orchestrator_strategy_rows()" in source
+    assert "WHERE strategy_type = 'llm_tool_orchestrator'" in source
+    assert "SET strategy_type = 'agentic_router'" in source
+
+
 def test_phase2_trace_dtos_are_json_serializable_and_redacted() -> None:
     payloads = [
         QueryPlanTrace(

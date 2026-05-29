@@ -42,6 +42,18 @@ _RETRIEVAL_LATENCY_KEYS = (
     "rerank_ms",
     "retrieval_items_persist_ms",
 )
+_LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS = frozenset(
+    {
+        "llm_tool_planning_ms",
+        "llm_tool_execution_ms",
+        "query_embedding_ms",
+        "qdrant_search_ms",
+        "sparse_search_ms",
+        "fusion_ms",
+        "rdb_final_check_ms",
+        "rerank_ms",
+    }
+)
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(?:^|\s)(?:export\s+)?"
     r"([A-Z0-9_.-]*(?:api[_-]?key|secret|password|token|credential)[A-Z0-9_.-]*)"
@@ -112,7 +124,8 @@ class LatencyTracker:
 
     def snapshot(self) -> dict[str, object]:
         spans: dict[str, int] = dict(self._spans_ms)
-        retrieval_ms = sum(spans[key] for key in _RETRIEVAL_LATENCY_KEYS if key in spans)
+        retrieval_latency_keys = _retrieval_latency_keys_for(spans)
+        retrieval_ms = sum(spans[key] for key in retrieval_latency_keys if key in spans)
         if retrieval_ms > 0:
             spans["retrieval_ms"] = retrieval_ms
         spans["total_ms"] = _elapsed_ms(self._started_at, self._clock())
@@ -467,6 +480,14 @@ def build_hybrid_score_breakdown(
 
 def _elapsed_ms(started_at: float, finished_at: float) -> int:
     return max(0, int(round((finished_at - started_at) * 1000)))
+
+
+def _retrieval_latency_keys_for(spans: Mapping[str, int]) -> tuple[str, ...]:
+    if "llm_orchestrator_ms" not in spans:
+        return _RETRIEVAL_LATENCY_KEYS
+    return tuple(
+        key for key in _RETRIEVAL_LATENCY_KEYS if key not in _LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS
+    )
 
 
 def _safe_query_plan(

@@ -64,6 +64,27 @@ def test_latency_tracker_excludes_nested_agentic_parent_spans_from_retrieval_tot
     assert 52 <= snapshot["total_ms"]
 
 
+def test_latency_tracker_excludes_nested_llm_orchestrator_spans_from_retrieval_total() -> None:
+    clock = _Clock([0.0, 0.2])
+    tracker = LatencyTracker(clock=clock)
+    tracker.record_ms("llm_orchestrator_ms", 100)
+    tracker.record_ms("llm_tool_planning_ms", 25)
+    tracker.record_ms("llm_tool_execution_ms", 70)
+    tracker.record_ms("query_embedding_ms", 10)
+    tracker.record_ms("qdrant_search_ms", 20)
+    tracker.record_ms("rdb_final_check_ms", 5)
+    tracker.record_ms("retrieval_items_persist_ms", 7)
+
+    snapshot = tracker.snapshot()
+
+    assert snapshot["llm_orchestrator_ms"] == 100
+    assert snapshot["llm_tool_planning_ms"] == 25
+    assert snapshot["llm_tool_execution_ms"] == 70
+    assert snapshot["retrieval_ms"] == 107
+    assert isinstance(snapshot["total_ms"], int)
+    assert 107 <= snapshot["total_ms"]
+
+
 def test_trace_redactor_removes_forbidden_fields_and_sensitive_values() -> None:
     redacted = TraceRedactor.safe_dict(
         {

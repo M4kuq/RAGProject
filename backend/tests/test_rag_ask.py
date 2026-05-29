@@ -658,13 +658,15 @@ def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
         qdrant_collection_name="document_chunks",
         search_snippet_max_chars=32,
         generation_provider="fake",
+        sparse_enabled=False,
         hybrid_enabled=False,
         llm_orchestrator_max_tool_calls=2,
         llm_orchestrator_max_search_calls=2,
     )
+    planner = _HybridOnlyPlanner()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
-        planner=_HybridOnlyPlanner(),
+        planner=planner,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
@@ -689,6 +691,11 @@ def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "no_context_found"
+    assert planner.requests
+    assert "dense_search" in planner.requests[0].available_tools
+    assert "finalize_answer" in planner.requests[0].available_tools
+    assert "sparse_search" not in planner.requests[0].available_tools
+    assert "hybrid_search" not in planner.requests[0].available_tools
     assert vector_client.query_vectors == []
     with session_factory() as db:
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
@@ -696,6 +703,54 @@ def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
         assert run.strategy_decision_json["search_call_count"] == 0
         assert run.strategy_decision_json["budget_exhausted"] is True
         assert run.strategy_decision_json["tool_results"][0]["error_code"] == "strategy_not_enabled"
+
+
+def test_rag_ask_llm_tool_orchestrator_empty_finalize_selection_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_EmptyFinalizeAfterSearchPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="empty finalize")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-empty-finalize-msg-1",
+            "message": "alpha empty finalize",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    assert len(vector_client.query_vectors) == 1
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is True
+        assert "finalize_answer_empty_selection" in run.strategy_decision_json["reason_codes"]
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
 
 
 def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
@@ -1495,8 +1550,24 @@ class _RepeatingDensePlanner:
 
 
 class _HybridOnlyPlanner:
+    def __init__(self) -> None:
+        self.requests: list[LLMToolPlanningRequest] = []
+
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        self.requests.append(request)
         return [LLMToolCall(tool_name="hybrid_search", arguments={"query": "hybrid only"})]
+
+
+class _EmptyFinalizeAfterSearchPlanner:
+    def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        if not request.tool_results:
+            return [LLMToolCall(tool_name="dense_search", arguments={"query": "dense once"})]
+        return [
+            LLMToolCall(
+                tool_name="finalize_answer",
+                arguments={"selected_tool_call_ids": []},
+            )
+        ]
 
 
 class _SingleDensePlanner:

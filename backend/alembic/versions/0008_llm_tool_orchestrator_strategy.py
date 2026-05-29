@@ -57,6 +57,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _rewrite_orchestrator_strategy_rows()
     _replace_strategy_constraint(
         "retrieval_runs",
         "ck_retrieval_runs_strategy_type",
@@ -77,6 +78,20 @@ def downgrade() -> None:
         "ck_evaluation_results_strategy_type",
         OLD_RETRIEVAL_STRATEGY_VALUES,
     )
+
+
+def _rewrite_orchestrator_strategy_rows() -> None:
+    for table_name in (
+        "retrieval_runs",
+        "evaluation_runs",
+        "evaluation_run_items",
+        "evaluation_results",
+    ):
+        op.execute(
+            f"UPDATE {table_name} "
+            "SET strategy_type = 'agentic_router' "
+            "WHERE strategy_type = 'llm_tool_orchestrator'"
+        )
 
 
 def _replace_strategy_constraint(
