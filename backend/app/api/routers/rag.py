@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.api.deps import current_user, require_admin, require_csrf
+from app.api.deps import current_user, require_admin, require_authenticated_session, require_csrf
 from app.api.responses import get_request_id, success_response
 from app.core.config import get_settings
 from app.core.errors import ValidationFailed
+from app.core.sessions import SessionContext
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.rag import RagAskRequest, RagSearchRequest
@@ -19,12 +20,17 @@ from app.services.rag_service import (
     RagService,
     create_rag_service,
 )
+from app.services.source_locator_service import SourceLocatorService
 
 router = APIRouter()
 
 
 def rag_search_service() -> RagService:
     return create_rag_service(get_settings())
+
+
+def source_locator_service() -> SourceLocatorService:
+    return SourceLocatorService()
 
 
 @router.post("/ask", dependencies=[Depends(require_csrf)])
@@ -93,6 +99,23 @@ def retrieval_run_detail(
     service: RagService = Depends(rag_search_service),
 ) -> dict[str, object]:
     result = service.get_retrieval_run_detail(db, retrieval_run_id=retrieval_run_id)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/citations/{citation_id}/source")
+def citation_source(
+    citation_id: int,
+    request: Request,
+    context: SessionContext = Depends(require_authenticated_session),
+    db: Session = Depends(get_db),
+    service: SourceLocatorService = Depends(source_locator_service),
+) -> dict[str, object]:
+    result = service.get_citation_source(
+        db,
+        citation_id=citation_id,
+        user=context.user,
+        role_name=context.role_name,
+    )
     return success_response(result.model_dump(mode="json"), request)
 
 

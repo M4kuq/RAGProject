@@ -1924,6 +1924,8 @@ def _citation_source(
         page_from=candidate.chunk.page_from,
         page_to=candidate.chunk.page_to,
         section_title=_safe_display_text(candidate.chunk.section_title),
+        source_type=_citation_source_type(candidate),
+        source_url=_citation_source_url(candidate),
     )
 
 
@@ -1936,6 +1938,8 @@ def _citation_input(source: CitationSource, *, retrieval_run_id: int) -> Citatio
         page_to=source.page_to,
         display_label=source.source_label,
         rank_order=source.local_citation_id,
+        source_type=source.source_type,
+        source_url=source.source_url,
     )
 
 
@@ -2256,6 +2260,26 @@ def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     if metadata_label:
         return f"{safe_label} / {metadata_label}"[:255]
     return safe_label[:255]
+
+
+def _citation_source_type(candidate: CheckedRetrievalCandidate) -> str:
+    metadata = _safe_chunk_metadata(candidate.chunk.metadata_json)
+    if metadata.get("source_type") == "url" and _url_source_label(metadata):
+        return "external_url"
+    return "upload"
+
+
+def _citation_source_url(candidate: CheckedRetrievalCandidate) -> str | None:
+    metadata = _safe_chunk_metadata(candidate.chunk.metadata_json)
+    if metadata.get("source_type") != "url":
+        return None
+    source_url = metadata.get("source_url")
+    if not isinstance(source_url, str):
+        return None
+    safe_url = _safe_url_metadata_string(source_url)
+    if not safe_url or safe_url == "redacted":
+        return None
+    return safe_url
 
 
 def _metadata_source_suffix(value: object) -> str | None:

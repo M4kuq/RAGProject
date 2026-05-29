@@ -67,6 +67,83 @@ export type DocumentChunkItem = {
   created_at: string;
 };
 
+export type DocumentSourceLocator = {
+  logical_document_id: number;
+  document_version_id: number;
+  document_chunk_id: number;
+  chunk_index: number;
+  version_no: number;
+  document_title: string;
+  file_name: string | null;
+  source_type: "upload" | "external_url";
+  source_url: string | null;
+  display_label: string;
+  source_label: string;
+  section_title: string | null;
+  page_from: number | null;
+  page_to: number | null;
+  sheet_name: string | null;
+  row_from: number | null;
+  row_to: number | null;
+  slide_number: number | null;
+  slide_title: string | null;
+  html_heading_path: string | null;
+  xml_path: string | null;
+  structure_type: string | null;
+  preview: string;
+  preview_truncated: boolean;
+  old_version_flag: boolean;
+};
+
+export type DocumentMetadataDiffItem = {
+  field: string;
+  base_value: string | number | boolean | null;
+  target_value: string | number | boolean | null;
+  changed: boolean;
+};
+
+export type DocumentChunkDiffSide = {
+  document_chunk_id: number;
+  chunk_index: number;
+  source_label: string;
+  section_title: string | null;
+  page_from: number | null;
+  page_to: number | null;
+  sheet_name: string | null;
+  row_from: number | null;
+  row_to: number | null;
+  slide_number: number | null;
+  html_heading_path: string | null;
+  xml_path: string | null;
+  preview: string;
+  preview_truncated: boolean;
+};
+
+export type DocumentChunkDiffItem = {
+  diff_type: "added" | "removed" | "changed" | "unchanged";
+  base_chunk: DocumentChunkDiffSide | null;
+  target_chunk: DocumentChunkDiffSide | null;
+  similarity_score: number | null;
+  match_reason: string;
+};
+
+export type DocumentVersionCompareResponse = {
+  logical_document_id: number;
+  base_version: DocumentVersionDetail;
+  target_version: DocumentVersionDetail;
+  summary: {
+    added_chunks: number;
+    removed_chunks: number;
+    changed_chunks: number;
+    unchanged_chunks: number;
+    metadata_changed: boolean;
+    diff_items_returned: number;
+    diff_items_truncated: boolean;
+  };
+  metadata_diff: DocumentMetadataDiffItem[];
+  chunk_diff_items: DocumentChunkDiffItem[];
+};
+
 export type DocumentUploadResponse = {
   logical_document_id: number;
   document_version_id: number;

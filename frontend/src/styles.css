@@ -242,6 +242,35 @@ textarea {
   margin: 6px 0 0;
 }
 
+.inline-text-button {
+  background: transparent;
+  border: 0;
+  color: #0969da;
+  cursor: pointer;
+  font: inherit;
+  margin-top: 6px;
+  padding: 0;
+}
+
+.source-preview {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.source-preview-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.source-preview-error {
+  color: #9b1c31;
+}
+
 .muted {
   color: #57606a;
 }
@@ -308,6 +337,14 @@ textarea {
 .admin-section h2 {
   font-size: 18px;
   margin: 0 0 12px;
+}
+
+.compact-grid {
+  margin-bottom: 12px;
+}
+
+.compact-table {
+  margin-top: 12px;
 }
 
 .filter-bar,

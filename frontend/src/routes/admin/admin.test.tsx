@@ -761,6 +761,128 @@ test("document list renders filters, statuses and safe escaped text", async () =
   expect(document.querySelector("script")).toBeNull();
 });
 
+test("document detail renders version compare summary and bounded previews", async () => {
+  const compareRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/documents/1000/versions/compare")) {
+        compareRequests.push(url);
+        return jsonResponse({
+          data: {
+            logical_document_id: 1000,
+            base_version: { document_version_id: 2001, version_no: 1, status: "ready", is_active: false },
+            target_version: { document_version_id: 2002, version_no: 2, status: "ready", is_active: true },
+            summary: {
+              added_chunks: 1,
+              removed_chunks: 0,
+              changed_chunks: 1,
+              unchanged_chunks: 2,
+              metadata_changed: true,
+              diff_items_returned: 2,
+              diff_items_truncated: false
+            },
+            metadata_diff: [
+              { field: "file_name", base_value: "guide-v1.html", target_value: "guide-v2.html", changed: true }
+            ],
+            chunk_diff_items: [
+              {
+                diff_type: "changed",
+                base_chunk: {
+                  document_chunk_id: 3001,
+                  chunk_index: 0,
+                  source_label: "guide-v1.html / Setup",
+                  section_title: "Setup",
+                  page_from: null,
+                  page_to: null,
+                  sheet_name: null,
+                  row_from: null,
+                  row_to: null,
+                  slide_number: null,
+                  html_heading_path: "Guide > Setup",
+                  xml_path: null,
+                  preview: "Old bounded preview",
+                  preview_truncated: false
+                },
+                target_chunk: {
+                  document_chunk_id: 3002,
+                  chunk_index: 0,
+                  source_label: "guide-v2.html / Setup",
+                  section_title: "Setup",
+                  page_from: null,
+                  page_to: null,
+                  sheet_name: null,
+                  row_from: null,
+                  row_to: null,
+                  slide_number: null,
+                  html_heading_path: "Guide > Setup",
+                  xml_path: null,
+                  preview: "New bounded preview",
+                  preview_truncated: false
+                },
+                similarity_score: 0.81,
+                match_reason: "structural_key"
+              }
+            ]
+          }
+        });
+      }
+      if (url.includes("/api/v1/documents/1000/versions/2002/chunks")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } }
+        });
+      }
+      if (url.endsWith("/api/v1/documents/1000")) {
+        return jsonResponse({
+          data: {
+            logical_document_id: 1000,
+            document_name: "Guide",
+            title: "Guide",
+            status: "active",
+            display_status: "active",
+            latest_version: { document_version_id: 2002, version_no: 2, status: "ready", is_active: true },
+            active_version: { document_version_id: 2002, version_no: 2, status: "ready", is_active: true },
+            versions: [
+              { document_version_id: 2002, version_no: 2, status: "ready", is_active: true, display_status: "active", created_at: "2026-04-30T00:00:00Z", updated_at: "2026-04-30T00:00:00Z" },
+              { document_version_id: 2001, version_no: 1, status: "ready", is_active: false, display_status: "pending_review", created_at: "2026-04-29T00:00:00Z", updated_at: "2026-04-29T00:00:00Z" }
+            ],
+            created_at: "2026-04-28T00:00:00Z",
+            updated_at: "2026-04-30T00:00:00Z"
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/documents/1000");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Version Compare" })).toBeInTheDocument();
+  expect(await screen.findByText("Select versions and run compare to load the diff.")).toBeInTheDocument();
+  expect(compareRequests).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
+  expect(await screen.findByText("New bounded preview")).toBeInTheDocument();
+  expect(compareRequests).toHaveLength(1);
+  expect(screen.getByText("file_name")).toBeInTheDocument();
+  expect(screen.getByText("Guide > Setup")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("raw chunk text");
+  expect(document.body).not.toHaveTextContent("token=secret");
+});
+
 test("document list pagination requests the selected page", async () => {
   const documentRequests: string[] = [];
   vi.stubGlobal(

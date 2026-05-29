@@ -52,6 +52,8 @@ class CitationInput:
     page_to: int | None
     display_label: str
     rank_order: int
+    source_type: str = "upload"
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +348,8 @@ class RetrievalRepository:
                 snippet=item.snippet,
                 page_from=item.page_from,
                 page_to=item.page_to,
+                source_type=item.source_type,
+                source_url=item.source_url,
                 display_label=item.display_label,
                 rank_order=item.rank_order,
             )

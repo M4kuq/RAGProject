@@ -229,6 +229,14 @@ class DocumentRepository:
         ).all()
         return list(rows)
 
+    def list_all_chunks(self, db: Session, *, document_version_id: int) -> list[DocumentChunk]:
+        rows = db.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_version_id == document_version_id)
+            .order_by(DocumentChunk.chunk_index.asc(), DocumentChunk.document_chunk_id.asc())
+        ).all()
+        return list(rows)
+
     def delete_chunks(self, db: Session, *, document_version_id: int) -> int:
         result = db.execute(
             delete(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)

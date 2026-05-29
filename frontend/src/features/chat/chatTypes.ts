@@ -1,3 +1,5 @@
+import type { DocumentSourceLocator } from "../documents/documentTypes";
+
 export type ChatMode = "active" | "archived" | "temporary" | "temporary_expired";
 export type ChatMessageRole = "user" | "assistant" | "system";
 
@@ -38,6 +40,11 @@ export type RagAskCitation = {
   page_to: number | null;
   section_title: string | null;
   old_version_flag: boolean;
+};
+
+export type RagCitationSource = DocumentSourceLocator & {
+  citation_id: number;
+  local_citation_id: number;
 };
 
 export type RagAskConfidence = {

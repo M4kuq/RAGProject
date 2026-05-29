@@ -238,6 +238,26 @@
 - Existing PDF/DOCX/TXT/Markdown/CSV/Excel/PowerPoint ingest regressions remain
   green.
 
+## PR-36 Document Diff / Citation Navigation Tests
+
+- Admin document version compare succeeds for two versions under one logical document.
+- Viewer access to version compare is rejected.
+- Mismatched logical document/version ids return not found.
+- Metadata diff includes only safe version fields and redacted URL metadata.
+- Chunk diff reports added, removed, changed, and unchanged counts.
+- Diff items return bounded previews only; raw full chunk text, storage keys,
+  secret-like assignments, URL query strings, and email addresses are not exposed.
+- Citation source lookup succeeds for a citation that belongs to the requesting
+  viewer's chat.
+- Citation source lookup returns not found for another viewer.
+- Admin can inspect citation source locators.
+- Citation source locators include Office/Web metadata when present and retain
+  old-version warning state.
+- Chat CitationPanel opens a bounded source preview and shows admin deep links
+  only for admin users.
+- Admin DocumentDetail shows version compare summary, metadata diff, and bounded
+  chunk previews.
+
 ## Checks
 
 - `ruff format --check .`

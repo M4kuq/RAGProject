@@ -12,6 +12,7 @@ from app.rag.strategy import (
     RagSearchRequestStrategy,
     RetrievalStrategy,
 )
+from app.schemas.documents import DocumentSourceLocator
 
 
 class RagSearchFilters(BaseModel):
@@ -198,6 +199,11 @@ class RagAskCitation(BaseModel):
     page_to: int | None = None
     section_title: str | None = None
     old_version_flag: bool
+
+
+class RagCitationSourceResponse(DocumentSourceLocator):
+    citation_id: int = Field(ge=1)
+    local_citation_id: int = Field(ge=1)
 
 
 class RagAskConfidence(BaseModel):
