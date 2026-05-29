@@ -218,6 +218,7 @@ CREATE TABLE document_versions (
     mime_type VARCHAR(100) NOT NULL,
     file_size_bytes BIGINT NOT NULL,
     storage_key TEXT,
+    metadata_json JSONB,
     page_count INTEGER,
     extractor_name VARCHAR(100),
     extractor_version VARCHAR(100),
@@ -257,6 +258,7 @@ COMMENT ON COLUMN document_versions.status IS 'Phase1 values: processing, ready,
 COMMENT ON COLUMN document_versions.is_active IS 'RDB 上の検索対象 version の正。true にできるのは status=ready のみ。';
 COMMENT ON COLUMN document_versions.content_hash IS 'upload file byte sequence に対する SHA-256。logical_document_id 単位で重複 version を作らない。';
 COMMENT ON COLUMN document_versions.error_code IS 'status=failed の場合のみ設定する。failed ingest retry で processing に戻す際は必ず NULL に戻す。';
+COMMENT ON COLUMN document_versions.metadata_json IS 'Phase2 advanced import 用の safe metadata。URL ingest の source_type/source_url/final_url/content_type/fetched_at など allowlist 済み値のみ保存し、raw fetched body や secret を保存しない。';
 
 CREATE UNIQUE INDEX ux_document_versions_one_active
     ON document_versions(logical_document_id)
@@ -298,7 +300,7 @@ CREATE TABLE document_chunks (
 
 COMMENT ON TABLE document_chunks IS 'document_version 配下の chunk。Phase1 では chunk 単位 is_active は持たず、version active と logical document status を正とする。';
 COMMENT ON COLUMN document_chunks.content_text IS 'RAG retrieval/generation/sparse retrieval 用の chunk text。application log / audit log / trace JSON / score_breakdown JSON には出さない。';
-COMMENT ON COLUMN document_chunks.metadata_json IS 'Office parent-child chunk v1 の safe metadata。sheet/slide/row/column/source label 用の構造情報のみを保存し、raw chunk text や raw file content は保存しない。';
+COMMENT ON COLUMN document_chunks.metadata_json IS 'Office/Web parent-child chunk v1 の safe metadata。sheet/slide/row/column/html heading/xml path/source label 用の構造情報のみを保存し、raw chunk text や raw file content は保存しない。';
 
 -- ============================================================
 -- 4. Jobs

@@ -35,6 +35,7 @@ class DocumentRepository:
         file_size_bytes: int,
         storage_key: str,
         created_by: int,
+        metadata_json: dict[str, object] | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             logical_document_id=logical_document_id,
@@ -47,6 +48,7 @@ class DocumentRepository:
             file_size_bytes=file_size_bytes,
             storage_key=storage_key,
             created_by=created_by,
+            metadata_json=metadata_json,
         )
         db.add(version)
         db.flush()

@@ -5,6 +5,7 @@ import {
   archiveDocument,
   getDocumentDetail,
   getDocumentVersionDetail,
+  ingestDocumentUrl,
   listDocumentChunks,
   listDocuments,
   listDocumentVersions,
@@ -56,6 +57,17 @@ export function useUploadDocument() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: uploadDocument,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.all });
+    }
+  });
+}
+
+export function useIngestDocumentUrl() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ingestDocumentUrl,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.jobs.all });

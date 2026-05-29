@@ -19,6 +19,7 @@ from app.ingest.extractors.markdown import MarkdownExtractor
 from app.ingest.extractors.office import ExcelExtractor, PowerPointExtractor
 from app.ingest.extractors.pdf import PdfTextExtractor
 from app.ingest.extractors.text import PlainTextExtractor
+from app.ingest.extractors.web import HtmlExtractor, XmlExtractor
 from app.ingest.hashing import chunk_hash, normalize_chunk_text
 from app.ingest.metadata import metadata_from_extracted_document
 from app.storage import extractors as legacy_storage_extractors
@@ -139,7 +140,7 @@ def test_pdf_text_layer_extraction(tmp_path: Path) -> None:
 def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx",".html",".htm",".xml"]',
     )
     get_settings.cache_clear()
     dispatcher = ExtractorDispatcher()
@@ -162,6 +163,8 @@ def test_extractor_dispatcher_validates_extension_and_mime(monkeypatch: pytest.M
         ).name
         == "pptx"
     )
+    assert dispatcher.select(file_name="a.html", mime_type="text/html").name == "html"
+    assert dispatcher.select(file_name="a.xml", mime_type="application/xml").name == "xml"
 
     with pytest.raises(ExtractionError) as unsupported:
         dispatcher.select(file_name="a.exe", mime_type="application/octet-stream")
@@ -235,6 +238,290 @@ def test_xlsx_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
     assert page.metadata["row_to"] == 2
     assert extracted.pages[1].metadata["sheet_name"] == "Hidden"
     assert "Hidden Value" in extracted.pages[1].text
+
+
+def test_html_upload_validation_and_extraction_removes_active_content(tmp_path: Path) -> None:
+    content = (
+        b"<!doctype html><html><head><title>Roadmap</title><style>.x{}</style>"
+        b"<script>secret()</script></head><body><h1>Phase 2</h1>"
+        b"<p>HTML ingest text</p><table><tr><th>Name</th><td>Value</td></tr></table>"
+        b"</body></html>"
+    )
+    validate_upload(
+        filename="page.html",
+        content_type="text/html",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".html"],
+    )
+    path = tmp_path / "page.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("page.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Phase 2" in joined
+    assert "HTML ingest text" in joined
+    assert "Name | Value" in joined
+    assert "secret()" not in joined
+    assert extracted.pages[0].metadata["structure_type"] == "html_section"
+    assert extracted.pages[0].metadata["parent_child_schema_version"] == "phase2.web_ingest.v1"
+
+
+def test_html_extraction_skips_hidden_subtrees(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><p>Visible alpha</p>"
+        b"<div hidden><p>Hidden token should not be indexed</p></div>"
+        b"<section style='display: none'><p>Display none secret</p></section>"
+        b"<aside style='visibility: hidden'><p>Invisible boilerplate</p></aside>"
+        b"<p>Visible beta <span aria-hidden='true'>screen reader duplicate</span></p>"
+        b"</body></html>"
+    )
+    path = tmp_path / "hidden.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("hidden.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Visible alpha" in joined
+    assert "Visible beta" in joined
+    assert "Hidden token" not in joined
+    assert "Display none secret" not in joined
+    assert "Invisible boilerplate" not in joined
+    assert "screen reader duplicate" not in joined
+
+
+def test_html_extraction_skips_template_subtrees(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><p>Visible page text</p>"
+        b"<template><p>internal token should stay inert</p></template>"
+        b"<p>Visible trailing text</p></body></html>"
+    )
+    path = tmp_path / "template.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(path, _metadata("template.html", "text/html", len(content)))
+
+    joined = "\n".join(page.text for page in extracted.pages)
+    assert "Visible page text" in joined
+    assert "Visible trailing text" in joined
+    assert "internal token" not in joined
+
+
+def test_html_repeated_heading_sections_keep_separate_parent_keys(tmp_path: Path) -> None:
+    content = (
+        b"<html><body><h2>Overview</h2><p>First section</p>"
+        b"<h2>Overview</h2><p>Second section</p></body></html>"
+    )
+    path = tmp_path / "repeated-headings.html"
+    path.write_bytes(content)
+
+    extracted = HtmlExtractor().extract(
+        path, _metadata("repeated-headings.html", "text/html", len(content))
+    )
+
+    parent_keys = [page.metadata["parent_chunk_key"] for page in extracted.pages]
+    assert parent_keys[0] == parent_keys[1]
+    assert parent_keys[2] == parent_keys[3]
+    assert parent_keys[0] != parent_keys[2]
+
+    chunks = FixedTokenChunker(ChunkingConfig(chunk_size_tokens=100, chunk_overlap_tokens=0)).chunk(
+        extracted, document_version_id=12
+    )
+    assert [chunk.content_text for chunk in chunks] == [
+        "Overview First section",
+        "Overview Second section",
+    ]
+
+
+def test_web_extraction_preserves_long_body_text(tmp_path: Path) -> None:
+    long_text = "x" * 1200
+    html_content = f"<html><body><p>{long_text}</p></body></html>".encode()
+    html_path = tmp_path / "long.html"
+    html_path.write_bytes(html_content)
+
+    html_extracted = HtmlExtractor().extract(
+        html_path,
+        _metadata("long.html", "text/html", len(html_content)),
+    )
+
+    assert html_extracted.pages[0].text == long_text
+
+    xml_content = f"<root><entry>{long_text}</entry></root>".encode()
+    xml_path = tmp_path / "long.xml"
+    xml_path.write_bytes(xml_content)
+
+    xml_extracted = XmlExtractor().extract(
+        xml_path,
+        _metadata("long.xml", "application/xml", len(xml_content)),
+    )
+
+    assert xml_extracted.pages[0].text == long_text
+
+
+def test_xml_upload_validation_and_extraction_metadata(tmp_path: Path) -> None:
+    content = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed><entry><title>Release</title><summary>XML ingest text</summary></entry></feed>"""
+    validate_upload(
+        filename="feed.xml",
+        content_type="application/xml",
+        content=content,
+        max_bytes=len(content) + 1,
+        allowed_extensions=[".xml"],
+    )
+    path = tmp_path / "feed.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(path, _metadata("feed.xml", "application/xml", len(content)))
+
+    assert extracted.metadata.extractor_name == "xml"
+    assert any("XML ingest text" in page.text for page in extracted.pages)
+    first = extracted.pages[0]
+    assert first.metadata["structure_type"] == "xml_element"
+    assert "feed" in str(first.metadata["xml_path"])
+
+
+def test_xml_extraction_uses_parent_direct_text_without_child_duplicates(tmp_path: Path) -> None:
+    content = b"<root>intro<child>A</child>middle<child>B</child>end</root>"
+    path = tmp_path / "nested.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(
+        path, _metadata("nested.xml", "application/xml", len(content))
+    )
+
+    texts = [page.text for page in extracted.pages]
+    assert texts == ["intro middle end", "A", "B"]
+    assert "intro A middle B end" not in texts
+
+
+def test_xml_extraction_parent_keys_include_element_occurrence(tmp_path: Path) -> None:
+    content = b"<feed><entry><title>A</title></entry><entry><title>B</title></entry></feed>"
+    path = tmp_path / "feed.xml"
+    path.write_bytes(content)
+
+    extracted = XmlExtractor().extract(path, _metadata("feed.xml", "application/xml", len(content)))
+
+    title_keys = [
+        page.metadata["parent_chunk_key"]
+        for page in extracted.pages
+        if page.metadata["xml_path"] == "feed / entry / title"
+    ]
+    assert len(title_keys) == 2
+    assert len(set(title_keys)) == 2
+
+
+def test_xml_extraction_enforces_element_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", "2")
+    get_settings.cache_clear()
+    content = b"<root><child>A</child><child>B</child></root>"
+    path = tmp_path / "too-many.xml"
+    path.write_bytes(content)
+
+    with pytest.raises(ExtractionError):
+        XmlExtractor().extract(path, _metadata("too-many.xml", "application/xml", len(content)))
+
+    get_settings.cache_clear()
+
+
+def test_xml_upload_validation_enforces_element_limit_before_tree_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", "2")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(UnsafeFileRejected):
+            validate_upload(
+                filename="too-many.xml",
+                content_type="application/xml",
+                content=b"<root><child>A</child><child>B</child></root>",
+                max_bytes=1000,
+                allowed_extensions=[".xml"],
+            )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_xml_extraction_handles_deep_nested_xml_without_recursion_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    depth = 1100
+    monkeypatch.setenv("INGEST_XML_MAX_ELEMENTS", str(depth + 2))
+    get_settings.cache_clear()
+    try:
+        content = ("<n>" * depth + "deep value" + "</n>" * depth).encode()
+        path = tmp_path / "deep.xml"
+        path.write_bytes(content)
+
+        extracted = XmlExtractor().extract(
+            path, _metadata("deep.xml", "application/xml", len(content))
+        )
+
+        assert any(page.text == "deep value" for page in extracted.pages)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_xml_entities_and_svg_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="page.html",
+            content_type="application/xhtml+xml",
+            content=b"""<?xml version="1.0"?><!DOCTYPE html [<!ENTITY unsafe "x">]><html />""",
+            max_bytes=1000,
+            allowed_extensions=[".html"],
+        )
+
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="vector.xml",
+            content_type="application/xml",
+            content=b"<svg><script>alert(1)</script></svg>",
+            max_bytes=1000,
+            allowed_extensions=[".xml"],
+        )
+
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="prefixed-vector.xml",
+            content_type="application/xml",
+            content=b'<x:svg xmlns:x="http://www.w3.org/2000/svg"><x:text>unsafe</x:text></x:svg>',
+            max_bytes=1000,
+            allowed_extensions=[".xml"],
+        )
+
+    svg_path = tmp_path / "prefixed-vector.xml"
+    svg_path.write_text(
+        '<x:svg xmlns:x="http://www.w3.org/2000/svg"><x:text>unsafe</x:text></x:svg>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ExtractionError):
+        XmlExtractor().extract(
+            svg_path, _metadata("prefixed-vector.xml", "application/xml", svg_path.stat().st_size)
+        )
+
+    path = tmp_path / "entity.xml"
+    path.write_text(
+        """<?xml version="1.0"?><!DOCTYPE x [<!ENTITY unsafe "expanded">]><x>&unsafe;</x>""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ExtractionError) as exc:
+        XmlExtractor().extract(
+            path, _metadata("entity.xml", "application/xml", path.stat().st_size)
+        )
+    assert exc.value.error_code == "text_extraction_failed"
+
+    with pytest.raises(UnsafeFileRejected):
+        validate_upload(
+            filename="late-entity.xml",
+            content_type="application/xml",
+            content=(b"<root>" + (b"x" * 5000) + b"<!ENTITY unsafe 'expanded'></root>"),
+            max_bytes=6000,
+            allowed_extensions=[".xml"],
+        )
 
 
 def test_xlsx_extraction_skips_hidden_sheets(tmp_path: Path) -> None:

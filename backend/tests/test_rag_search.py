@@ -539,6 +539,51 @@ def test_rag_search_source_label_uses_safe_office_metadata(
     assert "content_text" not in str(first["payload_snapshot"])
 
 
+def test_rag_search_source_label_uses_safe_url_metadata(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    csrf_token = _login(client)
+    with session_factory() as db:
+        version = db.get(DocumentVersion, 10)
+        first_chunk = db.get(DocumentChunk, 100)
+        second_chunk = db.get(DocumentChunk, 101)
+        assert version is not None
+        assert first_chunk is not None
+        assert second_chunk is not None
+        version.file_name = "example.com-url-document.html"
+        first_chunk.metadata_json = {
+            "parent_child_schema_version": "phase2.parent_child.v1",
+            "structure_type": "html_section",
+            "heading_path": "Guide",
+            "source_type": "url",
+            "source_url": "https://example.com/docs/a",
+        }
+        second_chunk.metadata_json = {
+            "parent_child_schema_version": "phase2.parent_child.v1",
+            "structure_type": "html_section",
+            "heading_path": "Guide",
+            "source_type": "url",
+            "source_url": "https://example.com/docs/b",
+        }
+        db.commit()
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "top_k": 5, "rerank_top_n": 1},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert [item["source_label"] for item in items[:2]] == [
+        "https://example.com/docs/a / Guide",
+        "https://example.com/docs/b / Guide",
+    ]
+    assert items[0]["payload_snapshot"]["source_url"] == "https://example.com/docs/a"
+    assert items[1]["payload_snapshot"]["source_url"] == "https://example.com/docs/b"
+
+
 def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

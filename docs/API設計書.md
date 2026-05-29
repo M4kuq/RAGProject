@@ -3431,6 +3431,52 @@ dataset / case / metric / response には raw prompt、full context、raw chunk 
 
 特に以下を重視している。
 
+## Phase2 PR-35 Addendum: URL Document Ingest
+
+### POST /api/v1/documents/url
+
+Purpose:
+
+- Create a new logical document and initial document version from one safe HTTP(S) URL.
+- Store fetched bytes in normal document storage.
+- Create a normal `document_ingest` job.
+
+Auth:
+
+- admin only
+- CSRF required
+
+Request:
+
+```json
+{
+  "url": "https://example.com/page.html",
+  "title": "Optional Title"
+}
+```
+
+Response:
+
+- Same shape as `POST /api/v1/documents`.
+- Does not include the fetched body.
+- `version.metadata_json` may include safe allowlisted values:
+  - `source_type`
+  - `source_url`
+  - `final_url`
+  - `fetched_at`
+  - `content_type`
+  - `redirect_count`
+
+Rules:
+
+- URL scheme must be `http` or `https`.
+- URL userinfo credentials are rejected.
+- DNS-resolved localhost, private, link-local, metadata, non-global, and `.local` targets are rejected.
+- Redirect targets are revalidated.
+- Timeout, max redirects, max bytes, and content-type allowlists are enforced.
+- URL query strings and fragments are stripped from stored/displayed `source_url` and `final_url`.
+- Raw HTML/XML, full fetched body, raw chunk text, PII, tokens, and secrets are not logged, traced, or returned.
+
 - 認証 / 認可の明確化
 - CSRF / CORS / Cookie 運用の明確化
 - セッション再生成と明示的失効

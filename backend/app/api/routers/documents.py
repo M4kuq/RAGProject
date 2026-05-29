@@ -11,6 +11,7 @@ from app.core.errors import PayloadTooLarge
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
+from app.schemas.documents import DocumentUrlIngestRequest
 from app.services.document_service import DocumentService
 
 router = APIRouter()
@@ -72,6 +73,24 @@ async def upload_document(
         filename=file.filename,
         content_type=file.content_type,
         content=content,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/url", status_code=http_status.HTTP_201_CREATED)
+def ingest_document_url(
+    request: Request,
+    payload: DocumentUrlIngestRequest,
+    user: User = Depends(require_admin),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: DocumentService = Depends(document_service),
+) -> dict[str, object]:
+    result = service.ingest_url(
+        db,
+        user=user,
+        payload=payload,
         request_id=get_request_id(request),
     )
     return success_response(result.model_dump(mode="json"), request)

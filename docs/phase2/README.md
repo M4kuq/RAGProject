@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, and PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, and PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard.
 
 ## PR Plan
 
@@ -244,6 +244,23 @@ Evaluation Runner through the PR-31 retrieval smoke path.
 PR-33 does not implement fine-tuning, production model cutover, required CI heavy
 model downloads, GPU-required evaluation, external API-required evaluation,
 Graph-RAG, OCR, AWS, S3, or OIDC/OAuth.
+
+## PR-35 HTML / XML / URL Ingest
+
+PR-35 adds:
+
+- upload validation and extraction for `.html`, `.htm`, and `.xml`
+- safe HTML extraction that ignores script, style, iframe, object, embed, comments, and SVG
+- safe XML extraction that rejects DTD / entity declarations and SVG
+- `POST /api/v1/documents/url` for admin-only single URL ingestion
+- SSRF guard checks for scheme, userinfo, DNS-resolved IPs, localhost, private/link-local/metadata IPs, redirects, timeout, max bytes, and content type
+- safe `source_url` / `final_url` metadata on `document_versions.metadata_json`
+- heading / XML path metadata on `document_chunks.metadata_json`
+
+PR-35 does not implement crawling, recursive web ingest, authenticated URL fetch,
+cookies, JavaScript rendering, headless browsing, OCR, image upload, multimodal
+retrieval, Graph-RAG, AWS, S3, or OIDC/OAuth. CI tests use fixtures and mock HTTP
+transports, not real external network access.
 
 ## Security
 

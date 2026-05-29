@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -202,7 +202,7 @@ class RetrievalRepository:
         run.confidence_label = confidence_label
         if latency_breakdown_json is not None:
             run.latency_breakdown_json = latency_breakdown_json
-        run.finished_at = finished_at
+        run.finished_at = _terminal_time(run, finished_at)
         db.flush()
 
     def mark_failed(
@@ -216,7 +216,7 @@ class RetrievalRepository:
     ) -> None:
         run.status = "failed"
         run.error_code = error_code
-        run.finished_at = finished_at
+        run.finished_at = _terminal_time(run, finished_at)
         if latency_breakdown_json is not None:
             run.latency_breakdown_json = latency_breakdown_json
         run.answer_confidence = None
@@ -414,3 +414,17 @@ class RetrievalRepository:
                 )
             )
         return records_by_run_id
+
+
+def _terminal_time(run: RetrievalRun, finished_at: datetime) -> datetime:
+    if run.started_at is not None and _datetime_for_ordering(finished_at) < _datetime_for_ordering(
+        run.started_at
+    ):
+        return run.started_at
+    return finished_at
+
+
+def _datetime_for_ordering(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)

@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { InlineAlert } from "../common/States";
-import { useUploadDocument } from "../../features/documents/documentHooks";
+import { useIngestDocumentUrl, useUploadDocument } from "../../features/documents/documentHooks";
 import type { DocumentUploadResponse } from "../../features/documents/documentTypes";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -13,6 +13,9 @@ const ALLOWED_EXTENSIONS = [
   ".csv",
   ".xlsx",
   ".pptx",
+  ".html",
+  ".htm",
+  ".xml",
 ];
 
 export function validateDocumentFile(file: File | null): string | null {
@@ -85,6 +88,67 @@ export function DocumentUploadForm({ onUploaded }: { onUploaded?: (result: Docum
       {success ? (
         <InlineAlert tone="success">
           Uploaded document #{success.logical_document_id}, version #{success.document_version_id}, job #
+          {success.job_id}.
+        </InlineAlert>
+      ) : null}
+    </section>
+  );
+}
+
+export function DocumentUrlIngestForm({ onIngested }: { onIngested?: (result: DocumentUploadResponse) => void }) {
+  const ingest = useIngestDocumentUrl();
+  const [url, setUrl] = useState("");
+  const [title, setTitle] = useState("");
+  const [clientError, setClientError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<DocumentUploadResponse | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const urlValue = url.trim();
+    const titleValue = title.trim();
+    if (!urlValue) {
+      setClientError("Enter a URL.");
+      return;
+    }
+    if (!/^https?:\/\//i.test(urlValue)) {
+      setClientError("Only http and https URLs are supported.");
+      return;
+    }
+    setClientError(null);
+    try {
+      const result = await ingest.mutateAsync({
+        url: urlValue,
+        title: titleValue || undefined
+      });
+      setSuccess(result);
+      onIngested?.(result);
+    } catch {
+      setSuccess(null);
+    }
+  }
+
+  return (
+    <section className="admin-section">
+      <h2>URL ingest</h2>
+      <form className="stack upload-form" onSubmit={submit}>
+        <label>
+          URL
+          <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2048} />
+        </label>
+        <label>
+          Title
+          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={255} />
+        </label>
+        <p className="muted">Allowed: http / https HTML or XML. Private and localhost targets are rejected.</p>
+        <button type="submit" disabled={ingest.isPending}>
+          {ingest.isPending ? "Fetching..." : "Fetch URL"}
+        </button>
+      </form>
+      {clientError ? <InlineAlert tone="error">{clientError}</InlineAlert> : null}
+      {ingest.error ? <InlineAlert tone="error">{ingest.error.message}</InlineAlert> : null}
+      {success ? (
+        <InlineAlert tone="success">
+          URL accepted as document #{success.logical_document_id}, version #{success.document_version_id}, job #
           {success.job_id}.
         </InlineAlert>
       ) : null}

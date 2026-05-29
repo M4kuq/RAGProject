@@ -24,6 +24,7 @@ export type DocumentVersionSummary = {
   page_count: number | null;
   content_hash: string | null;
   error_code: string | null;
+  metadata_json: Record<string, unknown> | null;
   chunk_count: number | null;
   created_at: string;
   updated_at: string;
@@ -76,6 +77,11 @@ export type DocumentUploadResponse = {
   result_code: "created";
   document: DocumentItem;
   version: DocumentVersionDetail;
+};
+
+export type DocumentUrlIngestRequest = {
+  url: string;
+  title?: string;
 };
 
 export type DocumentVersionCreateResponse = {

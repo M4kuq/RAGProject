@@ -44,6 +44,9 @@ class Settings(BaseSettings):
             ".csv",
             ".xlsx",
             ".pptx",
+            ".html",
+            ".htm",
+            ".xml",
         ]
     )
     temp_chat_ttl_minutes: int = 120
@@ -64,6 +67,24 @@ class Settings(BaseSettings):
     ingest_office_max_cells: int = Field(default=100000, ge=1, le=1000000)
     ingest_office_rows_per_chunk: int = Field(default=25, ge=1, le=200)
     ingest_office_max_slides: int = Field(default=300, ge=1, le=1000)
+    ingest_html_max_elements: int = Field(default=5000, ge=1, le=100000)
+    ingest_xml_max_elements: int = Field(default=5000, ge=1, le=100000)
+    document_url_fetch_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+    document_url_fetch_max_redirects: int = Field(default=3, ge=0, le=10)
+    document_url_fetch_max_bytes: int = Field(default=5_000_000, ge=1024, le=20_000_000)
+    document_url_fetch_allowed_schemes: list[str] = Field(default_factory=lambda: ["http", "https"])
+    document_url_fetch_allowed_content_types: list[str] = Field(
+        default_factory=lambda: [
+            "text/html",
+            "application/xhtml+xml",
+            "text/xml",
+            "application/xml",
+            "application/rss+xml",
+            "application/atom+xml",
+        ]
+    )
+    document_url_fetch_block_private_ips: bool = True
+    document_url_fetch_user_agent: str = "RAGProjectBot/Phase2"
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
     qdrant_url: str = "http://qdrant:6333"
@@ -190,6 +211,8 @@ class Settings(BaseSettings):
         "cors_allowed_origins",
         "upload_allowed_extensions",
         "trusted_proxy_ips",
+        "document_url_fetch_allowed_schemes",
+        "document_url_fetch_allowed_content_types",
         mode="before",
     )
     @classmethod
@@ -247,6 +270,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ROUTER_SUFFICIENCY_MIN_SELECTED must be <= ROUTER_SUFFICIENCY_MIN_CANDIDATES"
             )
+        self.document_url_fetch_allowed_schemes = [
+            item.lower() for item in self.document_url_fetch_allowed_schemes
+        ]
+        if not self.document_url_fetch_allowed_schemes or any(
+            item not in {"http", "https"} for item in self.document_url_fetch_allowed_schemes
+        ):
+            raise ValueError("DOCUMENT_URL_FETCH_ALLOWED_SCHEMES must only include http/https")
+        self.document_url_fetch_allowed_content_types = [
+            item.lower() for item in self.document_url_fetch_allowed_content_types
+        ]
+        if not self.document_url_fetch_allowed_content_types:
+            raise ValueError("DOCUMENT_URL_FETCH_ALLOWED_CONTENT_TYPES must not be empty")
+        self.document_url_fetch_user_agent = (
+            self.document_url_fetch_user_agent.strip() or "RAGProjectBot/Phase2"
+        )
         self.trace_export_provider = self.trace_export_provider.lower()
         if self.trace_export_provider not in {"none", "langsmith"}:
             raise ValueError("TRACE_EXPORT_PROVIDER must be none or langsmith")

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routers.documents import document_service
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.base import Base
@@ -29,6 +31,8 @@ from app.ingest.qdrant import (
     QdrantVectorStore,
 )
 from app.main import create_app
+from app.services.document_service import DocumentService
+from app.services.url_fetch_service import UrlFetchResult
 from app.storage.file_storage import LocalFileStorage
 from app.workers.handlers.document_ingest_handler import DocumentIngestHandler
 from app.workers.job_dispatcher import JobDispatcher
@@ -47,7 +51,7 @@ def document_client(
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "64")
     monkeypatch.setenv(
         "UPLOAD_ALLOWED_EXTENSIONS",
-        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx",".html",".htm",".xml"]',
     )
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("EMBEDDING_FAKE_DIMENSION", "4")
@@ -405,6 +409,118 @@ def test_document_api_upload_markdown_extension_cp932_and_worker_ingest(
             .count()
             > 0
         )
+
+
+def test_document_api_url_ingest_creates_document_without_raw_body(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, storage_root = document_client
+    app = cast(FastAPI, client.app)
+    service = DocumentService(
+        storage=LocalFileStorage(storage_root),
+        url_fetcher=_FakeUrlFetcher(),
+    )
+    app.dependency_overrides[document_service] = lambda: service
+    csrf_token = login(client, email="admin@example.com")
+
+    response = client.post(
+        "/api/v1/documents/url",
+        json={"url": "https://example.com/page?token=secret", "title": "URL Page"},
+        headers=unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["data"]["version_status"] == "processing"
+    assert body["data"]["version"]["metadata_json"]["source_url"] == "https://example.com/page"
+    assert "token=secret" not in str(body)
+    assert "URL ingest alpha beta" not in str(body)
+    logical_document_id = int(body["data"]["logical_document_id"])
+    document_version_id = int(body["data"]["document_version_id"])
+
+    runner = WorkerRunner(
+        config=WorkerConfig(
+            poll_interval_seconds=0,
+            batch_size=1,
+            lease_duration=timedelta(minutes=5),
+            lease_renew_interval_seconds=60,
+            shutdown_grace_seconds=30,
+            enabled_job_types=frozenset({"document_ingest"}),
+            worker_instance_id="worker-1",
+        ),
+        session_factory=session_factory,
+        dispatcher=JobDispatcher(
+            {
+                "document_ingest": DocumentIngestHandler(
+                    session_factory=session_factory,
+                    storage=LocalFileStorage(storage_root),
+                    indexing_service=indexing_service(),
+                )
+            }
+        ),
+    )
+    assert runner.run_once() == 1
+    with session_factory() as db:
+        document = db.get(LogicalDocument, logical_document_id)
+        version = db.get(DocumentVersion, document_version_id)
+        chunk = db.scalar(
+            select(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)
+        )
+        assert document is not None
+        assert document.title == "URL Page"
+        assert version is not None
+        assert version.status == "ready"
+        assert version.metadata_json is not None
+        assert version.metadata_json["source_type"] == "url"
+        assert chunk is not None
+        assert chunk.metadata_json is not None
+        assert chunk.metadata_json["source_url"] == "https://example.com/page"
+
+
+class _FakeUrlFetcher:
+    def fetch(self, url: str) -> UrlFetchResult:
+        assert url == "https://example.com/page?token=secret"
+        return UrlFetchResult(
+            requested_url=url,
+            final_url="https://example.com/page",
+            safe_source_url="https://example.com/page",
+            safe_final_url="https://example.com/page",
+            content=b"<html><body><h1>Guide</h1><p>URL ingest alpha beta</p></body></html>",
+            content_type="text/html",
+            file_name="example.com-page.html",
+            fetched_at=datetime.now(UTC),
+            redirect_count=0,
+        )
+
+
+def test_document_api_url_ingest_rejects_disabled_generated_extension(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_factory, storage_root = document_client
+    monkeypatch.setenv(
+        "UPLOAD_ALLOWED_EXTENSIONS",
+        '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]',
+    )
+    get_settings.cache_clear()
+    app = cast(FastAPI, client.app)
+    service = DocumentService(
+        storage=LocalFileStorage(storage_root),
+        url_fetcher=_FakeUrlFetcher(),
+    )
+    app.dependency_overrides[document_service] = lambda: service
+    csrf_token = login(client, email="admin@example.com")
+
+    response = client.post(
+        "/api/v1/documents/url",
+        json={"url": "https://example.com/page?token=secret", "title": "URL Page"},
+        headers=unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "unsupported_media_type"
+    with session_factory() as db:
+        assert db.query(LogicalDocument).count() == 0
 
 
 def test_document_api_upload_validation_errors(

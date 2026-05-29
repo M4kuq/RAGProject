@@ -111,6 +111,7 @@ from app.schemas.rag import (
     RetrievalScoreSummary,
 )
 from app.services.chat_service import ChatService
+from app.services.url_fetch_service import redact_url_for_display
 
 SCORE_QUANT = Decimal("0.000001")
 SENSITIVE_OUTPUT_RE = re.compile(
@@ -2244,15 +2245,24 @@ def _source_label(candidate: CheckedRetrievalCandidate) -> str:
     normalized = _sanitize_label(raw_label.replace("\\", "/"))
     label = _sanitize_label(PurePosixPath(normalized).name)
     fallback = _sanitize_label(candidate.logical_document.title)
-    safe_label = label or fallback or f"document:{candidate.logical_document.logical_document_id}"
-    metadata_label = _metadata_source_suffix(candidate.chunk.metadata_json)
+    metadata = _safe_chunk_metadata(candidate.chunk.metadata_json)
+    safe_label = (
+        _url_source_label(metadata)
+        or label
+        or fallback
+        or f"document:{candidate.logical_document.logical_document_id}"
+    )
+    metadata_label = _metadata_source_suffix_from_safe(metadata)
     if metadata_label:
         return f"{safe_label} / {metadata_label}"[:255]
     return safe_label[:255]
 
 
 def _metadata_source_suffix(value: object) -> str | None:
-    metadata = _safe_chunk_metadata(value)
+    return _metadata_source_suffix_from_safe(_safe_chunk_metadata(value))
+
+
+def _metadata_source_suffix_from_safe(metadata: dict[str, object]) -> str | None:
     structure_type = metadata.get("structure_type")
     if structure_type == "excel_sheet":
         sheet_name = _metadata_str(metadata, "sheet_name")
@@ -2273,7 +2283,34 @@ def _metadata_source_suffix(value: object) -> str | None:
         if slide_title:
             parts.append(f"Title: {slide_title}")
         return " / ".join(parts) or None
+    if structure_type == "html_section":
+        heading_path = _metadata_str(metadata, "heading_path")
+        element_type = _metadata_str(metadata, "element_type")
+        return heading_path or element_type
+    if structure_type == "xml_element":
+        xml_path = _metadata_str(metadata, "xml_path")
+        element_name = _metadata_str(metadata, "element_name")
+        return xml_path or element_name
     return None
+
+
+def _url_source_label(metadata: dict[str, object]) -> str | None:
+    if metadata.get("source_type") != "url":
+        return None
+    source_url = metadata.get("source_url")
+    if not isinstance(source_url, str):
+        return None
+    safe_url = _safe_url_metadata_string(source_url)
+    if not safe_url or safe_url == "redacted":
+        return None
+    return safe_url
+
+
+def _safe_url_metadata_string(value: str) -> str:
+    safe_url = redact_url_for_display(value)
+    if safe_url == "redacted" or SENSITIVE_OUTPUT_RE.search(safe_url):
+        return "redacted"
+    return safe_url[:200]
 
 
 def _metadata_str(metadata: dict[str, object], key: str) -> str | None:
@@ -2303,13 +2340,26 @@ def _safe_chunk_metadata(value: object) -> dict[str, object]:
         "slide_title",
         "shape_count",
         "table_count",
+        "html_title",
+        "heading_path",
+        "element_type",
+        "element_index",
+        "xml_root",
+        "xml_path",
+        "element_name",
+        "source_type",
+        "source_url",
     }
     safe: dict[str, object] = {}
     for key, item in value.items():
         if key not in allowed_keys:
             continue
         if isinstance(item, str):
-            redacted = TraceRedactor.safe_string(item, max_length=120)
+            redacted = (
+                _safe_url_metadata_string(item)
+                if key == "source_url"
+                else TraceRedactor.safe_string(item, max_length=120)
+            )
             if redacted:
                 safe[key] = redacted
         elif isinstance(item, bool):
