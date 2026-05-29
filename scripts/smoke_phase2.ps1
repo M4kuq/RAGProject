@@ -48,6 +48,7 @@ function Invoke-CurlJson([string[]]$ArgsList) {
 }
 
 Write-Step "validate compose files"
+$env:COMPOSE_DISABLE_ENV_FILE = "1"
 Invoke-ComposeQuiet @("config")
 Invoke-ComposeQuiet @("-f", "docker-compose.ci.yml", "config", "--quiet")
 
@@ -99,7 +100,7 @@ if ($RunRetrievalEval) {
   Write-Step "run retrieval evaluation smoke wrapper"
   & (Join-Path $RepoRoot "scripts/run_retrieval_eval_smoke.ps1") `
     -Dataset phase2_strategy_smoke `
-    -Strategies dense,hybrid,agentic_router `
+    -Strategies "dense,hybrid,agentic_router" `
     -ThresholdMode warn `
     -CaseLimit 5
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

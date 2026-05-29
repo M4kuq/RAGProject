@@ -37,8 +37,8 @@ print(payload["data"][sys.argv[1]])
 }
 
 say "validate compose files"
-docker compose config >/dev/null
-docker compose -f docker-compose.ci.yml config --quiet
+COMPOSE_DISABLE_ENV_FILE=1 docker compose config >/dev/null
+COMPOSE_DISABLE_ENV_FILE=1 docker compose -f docker-compose.ci.yml config --quiet
 
 say "verify Phase2 final docs and artifacts"
 for path in \
