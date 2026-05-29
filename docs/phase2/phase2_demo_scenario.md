@@ -19,6 +19,8 @@ or raw retrieved context into the demo notes.
   - `docs/phase2/demo_fixtures/phase2_strategy_walkthrough.pptx`
   - `docs/phase2/demo_fixtures/phase2_source_page.html`
   - `docs/phase2/demo_fixtures/phase2_source_feed.xml`
+  Use Admin Documents > Upload for each file, approve the uploaded version, and
+  wait until the ingest job and document version are ready.
 - Single URL ingest is optional for the offline handoff demo. Demonstrate it
   only with a presenter-provided public HTML/XML URL; do not use localhost,
   private-network, metadata, credential-bearing, or customer URLs.
@@ -89,8 +91,9 @@ or raw retrieved context into the demo notes.
     - Explain that local mode is opt-in and no model is downloaded by default.
 
 12. **Advanced import**
-    - If the database is fresh, upload and approve the four demo fixtures named
-      in the preconditions before this step.
+    - If the database is fresh, use Admin Documents > Upload to add each demo
+      fixture named in the preconditions, approve the uploaded versions, and
+      wait until the ingest jobs finish before this step.
     - Show Office import metadata for
       `phase2_strategy_overview.xlsx` and
       `phase2_strategy_walkthrough.pptx`.
