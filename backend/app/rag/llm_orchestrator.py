@@ -14,6 +14,7 @@ from app.rag.agentic import (
     RetrievalAttemptResult,
     merge_dedupe_candidates,
 )
+from app.rag.generation import _lmstudio_model_name
 from app.rag.strategy import RetrievalStrategy
 from app.rag.trace import LatencyTracker, TraceRedactor
 from app.repositories.retrieval_repository import CheckedRetrievalCandidate
@@ -533,7 +534,7 @@ def create_llm_tool_call_planner(settings: Settings) -> LLMToolCallPlanner:
         return OpenAICompatibleJSONToolPlanner(
             api_key=settings.lmstudio_api_key,
             base_url=settings.lmstudio_base_url,
-            model_name=settings.generation_model_name,
+            model_name=_lmstudio_model_name(settings.generation_model_name),
             timeout_seconds=min(
                 settings.lmstudio_timeout_seconds, settings.llm_orchestrator_timeout_seconds
             ),
@@ -563,9 +564,8 @@ def _planner_system_instruction() -> str:
 
 
 def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]:
-    return TraceRedactor.safe_dict(
+    payload = TraceRedactor.safe_dict(
         {
-            "user_query": request.user_query[: request.max_query_chars],
             "remaining_tool_calls": request.remaining_tool_calls,
             "remaining_search_calls": request.remaining_search_calls,
             "remaining_timeout_seconds": round(max(0.0, request.remaining_timeout_seconds), 3),
@@ -577,6 +577,11 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
             ),
         }
     )
+    payload["user_query"] = _bounded_executable_query(
+        request.user_query,
+        max_chars=request.max_query_chars,
+    )
+    return payload
 
 
 def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall]:
@@ -597,7 +602,7 @@ def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall
         safe_arguments: dict[str, object] = {}
         for key, value in arguments.items():
             if key == "query" and isinstance(value, str):
-                safe_arguments[key] = TraceRedactor.safe_string(value, max_length=max_query_chars)
+                safe_arguments[key] = _bounded_executable_query(value, max_chars=max_query_chars)
             elif key in {"top_k", "retrieval_run_id"} and isinstance(value, int):
                 safe_arguments[key] = value
             elif key in {"selected_tool_call_ids"} and isinstance(value, list):
@@ -659,6 +664,11 @@ def _tool_query(arguments: dict[str, object], *, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback
+
+
+def _bounded_executable_query(value: str, *, max_chars: int) -> str:
+    normalized = " ".join(value.replace("\x00", " ").split())
+    return normalized[:max_chars]
 
 
 def _tool_strategy(tool_name: str) -> RetrievalStrategy:

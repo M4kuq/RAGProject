@@ -40,6 +40,8 @@ from app.rag.llm_orchestrator import (
     LLMToolCall,
     LLMToolCallingRetrievalOrchestrator,
     LLMToolPlanningRequest,
+    OpenAICompatibleJSONToolPlanner,
+    create_llm_tool_call_planner,
 )
 from app.rag.rerank import FakeRerankerClient, RerankCandidate, RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
@@ -751,6 +753,76 @@ def test_rag_ask_llm_tool_orchestrator_empty_finalize_selection_returns_no_conte
         assert (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
         )
+
+
+def test_lmstudio_tool_planner_preserves_executable_query_and_normalizes_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"tool_calls":[{"tool":"dense_search","arguments":'
+                                '{"query":"https://example.com/callback support@example.com"}}]}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.llm_orchestrator.httpx.post", fake_post)
+    planner = create_llm_tool_call_planner(
+        Settings(
+            app_env="test",
+            generation_provider="lmstudio",
+            generation_model_name="lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M",
+            lmstudio_api_key="lm-studio",
+            lmstudio_base_url="http://host.docker.internal:1234/v1",
+        )
+    )
+
+    assert isinstance(planner, OpenAICompatibleJSONToolPlanner)
+    calls = planner.plan(
+        LLMToolPlanningRequest(
+            user_query="Find https://example.com/callback and support@example.com",
+            top_k=2,
+            max_query_chars=500,
+            remaining_timeout_seconds=5,
+            remaining_tool_calls=2,
+            remaining_search_calls=1,
+            available_tools=("dense_search", "finalize_answer"),
+            tool_results=[],
+        )
+    )
+
+    user_payload = captured["json"]["messages"][1]["content"]
+    assert captured["json"]["model"] == "qwen3.5-9b"
+    assert "https://example.com/callback" in user_payload
+    assert "support@example.com" in user_payload
+    assert "redacted" not in user_payload
+    assert calls == [
+        LLMToolCall(
+            tool_name="dense_search",
+            arguments={"query": "https://example.com/callback support@example.com"},
+        )
+    ]
 
 
 def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
