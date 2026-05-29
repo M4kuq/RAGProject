@@ -12,7 +12,7 @@ x-backend-env: &backend-env
   SESSION_COOKIE_MAX_AGE_SECONDS: "28800"
   STORAGE_ROOT: /app/storage/uploads
   UPLOAD_MAX_BYTES: "20971520"
-  UPLOAD_ALLOWED_EXTENSIONS: '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx"]'
+  UPLOAD_ALLOWED_EXTENSIONS: '[".pdf",".docx",".txt",".md",".markdown",".csv",".xlsx",".pptx",".html",".htm",".xml"]'
   INGEST_OFFICE_MAX_PAGES: "200"
   INGEST_OFFICE_MAX_ROWS_PER_SHEET: "5000"
   INGEST_OFFICE_MAX_CELLS: "100000"

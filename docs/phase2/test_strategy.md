@@ -258,6 +258,33 @@
 - Admin DocumentDetail shows version compare summary, metadata diff, and bounded
   chunk previews.
 
+## PR-37 Phase2 Final Hardening / Demo / Docs Tests
+
+- Phase2 README links to final demo, manual test, acceptance, limitations, and
+  Phase3 handoff documents.
+- Phase2 README links to each PR-20 through PR-36 feature document that exists
+  in `docs/phase2`.
+- `phase2_demo_scenario.md` covers Advanced Retrieval, Agentic-RAG, Retrieval
+  Debug UI, Strategy Evaluation, CI Retrieval Evaluation, LangSmith optional
+  export, SentenceTransformers dry-run, advanced import, document diff, and
+  citation navigation.
+- `phase2_manual_test_cases.md` includes categories P2-TC-001 through
+  P2-TC-1400 for startup, retrieval, router, agentic loop, debug UI,
+  evaluation, CI smoke, observability, experiments, import, document diff,
+  security, and final acceptance.
+- `phase2_acceptance_checklist.md` covers the required Phase2 completion checks
+  and uses safe evidence pointers instead of raw payload dumps.
+- `phase2_known_limitations.md` and `phase3_handoff.md` clearly separate
+  Phase2 limitations from Graph-RAG, OCR, multimodal, AWS/S3, OIDC, and online
+  evaluation Phase3 scope.
+- `scripts/smoke_phase2.ps1` and `scripts/smoke_phase2.sh` validate key Phase2
+  artifacts without destructive cleanup by default.
+- Phase2 smoke scripts do not read `.env`, print secrets, run
+  `docker compose down -v`, require external APIs, or force heavy model
+  downloads.
+- Phase2 docs do not include raw prompts, full context, raw chunk text, private
+  document text, PII, real API keys, tokens, cookies, or credentials.
+
 ## Checks
 
 - `ruff format --check .`

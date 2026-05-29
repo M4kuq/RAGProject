@@ -1,5 +1,32 @@
 # RAGProject
 
+## Phase2 Handoff
+
+Phase2 final demo, acceptance, smoke, and Phase3 handoff material lives under
+[`docs/phase2/README.md`](docs/phase2/README.md).
+
+Start with:
+
+- [`docs/phase2/phase2_demo_scenario.md`](docs/phase2/phase2_demo_scenario.md)
+- [`docs/phase2/phase2_manual_test_cases.md`](docs/phase2/phase2_manual_test_cases.md)
+- [`docs/phase2/phase2_acceptance_checklist.md`](docs/phase2/phase2_acceptance_checklist.md)
+- [`docs/phase2/phase2_known_limitations.md`](docs/phase2/phase2_known_limitations.md)
+- [`docs/phase2/phase3_handoff.md`](docs/phase2/phase3_handoff.md)
+
+Safe local smoke:
+
+```powershell
+scripts\smoke_phase2.ps1
+```
+
+```sh
+sh scripts/smoke_phase2.sh
+```
+
+The Phase2 smoke does not run destructive cleanup, does not print `.env`
+values, and does not require external API keys, LangSmith, GPU, or mandatory
+heavy model downloads.
+
 RAGProject は、文書アップロード、抽出、chunking、embedding、Qdrant index、retrieval、rerank、回答生成、citation、confidence、evaluation、MCP stdio server までを Docker Compose のローカル環境で確認する Phase1 RAG ポートフォリオである。
 
 Phase1 の目的は、クラウド公開ではなく、第三者が README 通りに起動し、5分デモを実行し、手動テストケースと smoke で受け入れ確認できる状態にすることにある。
