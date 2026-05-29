@@ -48,6 +48,10 @@ from app.rag.generation import (
     create_answer_generator,
 )
 from app.rag.hybrid import HybridRetrievalStrategy
+from app.rag.llm_orchestrator import (
+    LLMToolCallingRetrievalOrchestrator,
+    LLMToolOrchestratorExecutionResult,
+)
 from app.rag.query_planner import QueryPlanBuilder
 from app.rag.rerank import (
     RerankCandidate,
@@ -162,6 +166,7 @@ class RagService:
         query_plan_builder: QueryPlanBuilder | None = None,
         strategy_router: StrategyRouter | None = None,
         agentic_executor: AgenticRetrievalExecutor | None = None,
+        llm_tool_orchestrator: LLMToolCallingRetrievalOrchestrator | None = None,
         trace_export_service: TraceExportService | None = None,
     ) -> None:
         self.settings = settings
@@ -178,6 +183,9 @@ class RagService:
         self.agentic_executor = agentic_executor or AgenticRetrievalExecutor(
             settings,
             ContextSufficiencyChecker(settings),
+        )
+        self.llm_tool_orchestrator = llm_tool_orchestrator or LLMToolCallingRetrievalOrchestrator(
+            settings
         )
         self.trace_export_service = trace_export_service or TraceExportService(settings)
         self.chat_service = ChatService(self.chat_repository)
@@ -431,9 +439,13 @@ class RagService:
             RetrievalStrategy.DENSE,
             RetrievalStrategy.HYBRID,
             RetrievalStrategy.AGENTIC_ROUTER,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
         }:
             raise RagAskPipelineError("strategy_not_enabled", 409)
-        if requested_strategy != RetrievalStrategy.AGENTIC_ROUTER:
+        if requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+            if not self.settings.llm_orchestrator_enabled:
+                raise RagAskPipelineError("strategy_not_enabled", 409)
+        elif requested_strategy != RetrievalStrategy.AGENTIC_ROUTER:
             self._ensure_direct_strategy_enabled(requested_strategy)
         query_hash = _query_hash(payload.message)
         query_plan_build = self.query_plan_builder.build(
@@ -490,6 +502,13 @@ class RagService:
                 plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_hybrid_strategy_decision(fusion_method=fusion_method)
+        elif requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+            query_plan = build_llm_tool_orchestrator_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_llm_tool_orchestrator_strategy_decision()
         else:
             query_plan = build_default_dense_query_plan(
                 query_hash=query_hash,
@@ -542,7 +561,17 @@ class RagService:
 
         try:
             retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if _should_use_agentic_loop(requested_strategy, router_decision):
+            if requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+                result = self._retrieve_llm_tool_orchestrator(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
+            elif _should_use_agentic_loop(requested_strategy, router_decision):
                 result = self._retrieve_agentic(
                     db,
                     query=retrieval_query,
@@ -1137,6 +1166,62 @@ class RagService:
         )
         return pipeline_result
 
+    def _retrieve_llm_tool_orchestrator(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalPipelineResult:
+        orchestrator_result = self.llm_tool_orchestrator.execute(
+            query=query,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            retrieval_run_id=retrieval_run_id,
+            retrieve=lambda strategy, role, tool_query: self._execute_agentic_attempt(
+                db,
+                query=tool_query,
+                top_k=top_k,
+                filters=filters,
+                strategy=strategy,
+                role=role,
+                latency_tracker=latency_tracker,
+            ),
+            inspect_trace=lambda: self._llm_orchestrator_trace_summary(
+                retrieval_run_id=retrieval_run_id,
+                latency_tracker=latency_tracker,
+            ),
+            latency_tracker=latency_tracker,
+        )
+        pipeline_result = self._persist_agentic_result(
+            db,
+            query=query,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            retrieval_run_id=retrieval_run_id,
+            agentic_result=orchestrator_result.retrieval_result,
+            latency_tracker=latency_tracker,
+            trace_strategy=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+        )
+        self._update_llm_orchestrator_trace(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            orchestrator_result=orchestrator_result,
+        )
+        summary_payload = pipeline_result.summary.model_dump(mode="json")
+        summary_payload.update(orchestrator_result.summary_fields())
+        return RetrievalPipelineResult(
+            summary=RetrievalScoreSummary(**summary_payload),
+            items=pipeline_result.items,
+            selected_candidates=pipeline_result.selected_candidates,
+            citation_sources=pipeline_result.citation_sources,
+            no_context=pipeline_result.no_context,
+        )
+
     def _execute_agentic_attempt(
         self,
         db: Session,
@@ -1318,6 +1403,7 @@ class RagService:
         retrieval_run_id: int,
         agentic_result: AgenticRetrievalResult,
         latency_tracker: LatencyTracker,
+        trace_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER,
     ) -> RetrievalPipelineResult:
         final_candidates = agentic_result.final_candidates
         if not final_candidates:
@@ -1345,6 +1431,7 @@ class RagService:
                     final_rank=index,
                     selected_flag=False,
                     agentic_result=agentic_result,
+                    trace_strategy=trace_strategy,
                 )
                 for index, candidate in enumerate(final_candidates, start=1)
             ]
@@ -1417,6 +1504,7 @@ class RagService:
                 final_rank=index,
                 selected_flag=index <= selected_count,
                 agentic_result=agentic_result,
+                trace_strategy=trace_strategy,
             )
             for index, candidate in enumerate(ordered_candidates, start=1)
         ]
@@ -1490,6 +1578,52 @@ class RagService:
             db,
             run=run,
             strategy_decision_json=strategy_decision,
+        )
+
+    def _update_llm_orchestrator_trace(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        orchestrator_result: LLMToolOrchestratorExecutionResult,
+    ) -> None:
+        run = self._require_run(db, retrieval_run_id)
+        decision = dict(run.strategy_decision_json or {})
+        orchestrator_fields = orchestrator_result.decision_trace_fields()
+        existing_reason_codes = decision.get("reason_codes")
+        if isinstance(existing_reason_codes, list):
+            reason_codes = [str(code) for code in existing_reason_codes]
+        else:
+            reason_codes = []
+        for code in orchestrator_result.reason_codes:
+            if code not in reason_codes:
+                reason_codes.append(code)
+        decision.update(orchestrator_fields)
+        decision["reason_codes"] = reason_codes
+        self.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            strategy_decision_json=TraceRedactor.safe_dict(decision),
+        )
+
+    def _llm_orchestrator_trace_summary(
+        self,
+        *,
+        retrieval_run_id: int,
+        latency_tracker: LatencyTracker,
+    ) -> dict[str, object]:
+        latency = latency_tracker.snapshot()
+        return TraceRedactor.safe_dict(
+            {
+                "retrieval_run_id": retrieval_run_id,
+                "strategy_type": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+                "status": "running",
+                "latency_summary": {
+                    "total_ms": latency.get("total_ms"),
+                    "retrieval_ms": latency.get("retrieval_ms"),
+                    "llm_orchestrator_ms": latency.get("llm_orchestrator_ms"),
+                },
+            }
         )
 
     def _classify_duplicate(
@@ -1877,6 +2011,7 @@ def _agentic_run_item_input(
     final_rank: int,
     selected_flag: bool,
     agentic_result: AgenticRetrievalResult,
+    trace_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER,
 ) -> RetrievalRunItemInput:
     retrieval_source = _agentic_item_source(candidate)
     return RetrievalRunItemInput(
@@ -1896,6 +2031,7 @@ def _agentic_run_item_input(
             selected_flag=selected_flag,
             agentic_result=agentic_result,
             item_source=retrieval_source,
+            trace_strategy=trace_strategy,
         ),
     )
 
@@ -2035,12 +2171,78 @@ def _retrieval_settings_snapshot(
     filters: RetrievalFilters,
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
 ) -> dict[str, object]:
-    return build_retrieval_settings_snapshot(
+    snapshot = build_retrieval_settings_snapshot(
         settings=settings,
         top_k=top_k,
         rerank_top_n=rerank_top_n,
         filters=filters,
         strategy_type=strategy_type,
+    )
+    if strategy_type == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+        snapshot.update(
+            TraceRedactor.safe_dict(
+                {
+                    "llm_orchestrator_enabled": settings.llm_orchestrator_enabled,
+                    "max_tool_calls": settings.llm_orchestrator_max_tool_calls,
+                    "max_search_calls": settings.llm_orchestrator_max_search_calls,
+                    "timeout_seconds": settings.llm_orchestrator_timeout_seconds,
+                    "max_query_chars": settings.llm_orchestrator_max_query_chars,
+                    "max_tool_result_items": settings.llm_orchestrator_max_tool_result_items,
+                    "max_snippet_chars": settings.llm_orchestrator_max_snippet_chars,
+                    "allow_trace_inspection": settings.llm_orchestrator_allow_trace_inspection,
+                    "allow_admin_tools": False,
+                }
+            )
+        )
+    return snapshot
+
+
+def build_llm_tool_orchestrator_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+    plan_metadata: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    base = build_default_dense_query_plan(
+        query_hash=query_hash,
+        filters=filters,
+        plan_metadata=None,
+    )
+    base.update(
+        {
+            "strategy_type": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            "query_mode": "llm_tool_calling_retrieval",
+            "reason_codes": [
+                "phase2_5_llm_tool_orchestrator",
+                "retrieval_only_tools",
+                "bounded_loop",
+            ],
+            "candidate_strategies": [
+                RetrievalStrategy.DENSE.value,
+                RetrievalStrategy.SPARSE.value,
+                RetrievalStrategy.HYBRID.value,
+            ],
+            "recommended_strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+        }
+    )
+    return TraceRedactor.safe_dict(base)
+
+
+def build_llm_tool_orchestrator_strategy_decision() -> dict[str, object]:
+    return TraceRedactor.safe_dict(
+        {
+            "schema_version": "phase2.trace.v1",
+            "selected_strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            "execution_strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            "fallback_used": False,
+            "router_enabled": False,
+            "decision_source": "llm_tool_calling",
+            "decision_policy": "bounded_retrieval_only_tools",
+            "reason_codes": [
+                "explicit_strategy_llm_tool_orchestrator",
+                "retrieval_only_tools",
+            ],
+        }
     )
 
 
@@ -2123,6 +2325,7 @@ def _agentic_score_breakdown(
     selected_flag: bool,
     agentic_result: AgenticRetrievalResult,
     item_source: RetrievalSource,
+    trace_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER,
 ) -> dict[str, object]:
     dense_score = _payload_float(candidate, "dense_score")
     sparse_score = _payload_float(candidate, "sparse_score")
@@ -2138,7 +2341,7 @@ def _agentic_score_breakdown(
         fused_score = candidate.retrieval_score
     payload = {
         "schema_version": "phase2.trace.v1",
-        "retrieval_source": RetrievalStrategy.AGENTIC_ROUTER.value,
+        "retrieval_source": trace_strategy.value,
         "item_retrieval_source": item_source.value,
         "sources": _payload_string_list(candidate, "agentic_sources"),
         "initial_strategy": agentic_result.initial_strategy.value,

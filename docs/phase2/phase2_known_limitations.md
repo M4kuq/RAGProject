@@ -17,6 +17,10 @@ limitations are intentional Phase2 boundaries or known areas for Phase3.
   only and falls back to dense when needed.
 - Agentic Retrieval Loop is intentionally small. Additional retrieval calls are
   bounded by settings, normally one initial call plus at most one fallback.
+- LLM Agentic RAG is a bounded retrieval-only tool orchestrator. It can choose
+  dense/sparse/hybrid search and finalize evidence, but it cannot perform
+  writes, inspect raw chunks, browse the web, run DB queries, or operate
+  external systems.
 - Multi-query execution, metadata-filtered execution, and version-aware
   execution are planned or fallback-only in Phase2 unless explicitly wired by a
   later PR.

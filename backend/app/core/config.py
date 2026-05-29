@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     router_no_context_after_budget_exhausted: bool = True
     router_fallback_strategy: str = "fallback_dense"
     router_store_decision_trace: bool = True
+    llm_orchestrator_enabled: bool = True
+    llm_orchestrator_max_tool_calls: int = Field(default=5, ge=1, le=10)
+    llm_orchestrator_max_search_calls: int = Field(default=3, ge=1, le=10)
+    llm_orchestrator_timeout_seconds: float = Field(default=30.0, gt=0.0, le=180.0)
+    llm_orchestrator_max_query_chars: int = Field(default=500, ge=1, le=1000)
+    llm_orchestrator_max_tool_result_items: int = Field(default=10, ge=1, le=20)
+    llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
+    llm_orchestrator_allow_trace_inspection: bool = True
+    llm_orchestrator_allow_admin_tools: bool = False
     evaluation_failure_low_recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_mrr_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_citation_coverage_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -282,6 +291,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ROUTER_SUFFICIENCY_MIN_SELECTED must be <= ROUTER_SUFFICIENCY_MIN_CANDIDATES"
             )
+        if self.llm_orchestrator_max_search_calls > self.llm_orchestrator_max_tool_calls:
+            raise ValueError(
+                "LLM_ORCHESTRATOR_MAX_SEARCH_CALLS must be <= LLM_ORCHESTRATOR_MAX_TOOL_CALLS"
+            )
+        if self.llm_orchestrator_allow_admin_tools:
+            raise ValueError("LLM_ORCHESTRATOR_ALLOW_ADMIN_TOOLS must be false")
         self.document_url_fetch_allowed_schemes = [
             item.lower() for item in self.document_url_fetch_allowed_schemes
         ]

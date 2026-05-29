@@ -2,6 +2,7 @@ import type { DocumentSourceLocator } from "../documents/documentTypes";
 
 export type ChatMode = "active" | "archived" | "temporary" | "temporary_expired";
 export type ChatMessageRole = "user" | "assistant" | "system";
+export type RagStrategy = "dense" | "hybrid" | "agentic_router" | "llm_tool_orchestrator";
 
 export type ChatSession = {
   chat_session_id: number;
@@ -60,7 +61,7 @@ export type RagAskRequest = {
   model_key?: string;
   top_k?: number;
   rerank_top_n?: number;
-  strategy?: "dense" | "hybrid" | "agentic_router";
+  strategy?: RagStrategy;
 };
 
 export type RagAskResponse = {

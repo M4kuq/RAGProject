@@ -1,4 +1,5 @@
 import { FormEvent, KeyboardEvent } from "react";
+import type { RagStrategy } from "../../features/chat/chatTypes";
 
 export function MessageInput({
   disabled,
@@ -20,11 +21,11 @@ export function MessageInput({
   modelOptions: { label: string; value: string }[];
   onChange: (value: string) => void;
   onModelChange: (value: string) => void;
-  onStrategyChange: (value: "dense" | "hybrid" | "agentic_router") => void;
+  onStrategyChange: (value: RagStrategy) => void;
   onSubmit: () => void;
-  selectedStrategy: "dense" | "hybrid" | "agentic_router";
+  selectedStrategy: RagStrategy;
   selectedModel: string;
-  strategyOptions: { label: string; value: "dense" | "hybrid" | "agentic_router" }[];
+  strategyOptions: { label: string; value: RagStrategy }[];
   value: string;
 }) {
   function submit(event: FormEvent) {
@@ -57,7 +58,7 @@ export function MessageInput({
             aria-label="rag strategy"
             className="model-select"
             disabled={isSending}
-            onChange={(event) => onStrategyChange(event.target.value as "dense" | "hybrid" | "agentic_router")}
+            onChange={(event) => onStrategyChange(event.target.value as RagStrategy)}
             value={selectedStrategy}
           >
             {strategyOptions.map((option) => (

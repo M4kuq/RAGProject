@@ -30,6 +30,9 @@ _RETRIEVAL_LATENCY_KEYS = (
     "sufficiency_check_ms",
     "merge_dedupe_ms",
     "rerank_after_merge_ms",
+    "llm_orchestrator_ms",
+    "llm_tool_planning_ms",
+    "llm_tool_execution_ms",
     "strategy_router_ms",
     "query_embedding_ms",
     "qdrant_search_ms",
@@ -147,7 +150,9 @@ def build_default_dense_strategy_decision() -> dict[str, object]:
         decision_policy="static_dense",
         reason_codes=["phase1_compat_default_dense"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = DEFAULT_RETRIEVAL_STRATEGY.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_sparse_query_plan(
@@ -185,7 +190,9 @@ def build_sparse_strategy_decision() -> dict[str, object]:
         decision_policy="explicit_sparse",
         reason_codes=["explicit_strategy_sparse"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = RetrievalStrategy.SPARSE.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_hybrid_query_plan(
@@ -225,7 +232,9 @@ def build_hybrid_strategy_decision(*, fusion_method: FusionMethod) -> dict[str, 
         decision_policy=f"explicit_hybrid_{fusion_method.value}",
         reason_codes=["explicit_strategy_hybrid", f"fusion_method:{fusion_method.value}"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = RetrievalStrategy.HYBRID.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_router_query_plan(

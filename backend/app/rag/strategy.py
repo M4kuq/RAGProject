@@ -14,6 +14,7 @@ class RetrievalStrategy(StrEnum):
     METADATA_FILTERED = "metadata_filtered"
     VERSION_AWARE = "version_aware"
     AGENTIC_ROUTER = "agentic_router"
+    LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     FALLBACK_DENSE = "fallback_dense"
 
 
@@ -28,6 +29,7 @@ class RagAskRequestStrategy(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
     AGENTIC_ROUTER = "agentic_router"
+    LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
 
 
 class RetrievalSource(StrEnum):
@@ -172,6 +174,26 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     "rag.router.store_decision_trace": (
         True,
         "Store redacted StrategyRouter decision trace.",
+    ),
+    "rag.llm_orchestrator.enabled": (
+        True,
+        "Enable explicit /rag/ask strategy=llm_tool_orchestrator requests.",
+    ),
+    "rag.llm_orchestrator.max_tool_calls": (
+        5,
+        "Maximum bounded retrieval-only tool calls for the LLM orchestrator.",
+    ),
+    "rag.llm_orchestrator.max_search_calls": (
+        3,
+        "Maximum dense/sparse/hybrid search tool calls for the LLM orchestrator.",
+    ),
+    "rag.llm_orchestrator.timeout_seconds": (
+        30,
+        "Wall-clock timeout for the LLM tool-calling retrieval loop.",
+    ),
+    "rag.llm_orchestrator.allow_admin_tools": (
+        False,
+        "Keep admin/write tools unavailable to the LLM retrieval orchestrator.",
     ),
     "rag.trace.enabled": (
         True,

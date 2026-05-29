@@ -6,7 +6,7 @@ import { MessageInput } from "../components/chat/MessageInput";
 import { MessageList } from "../components/chat/MessageList";
 import { useCurrentUser } from "../features/auth/authHooks";
 import { generateClientMessageId, mergeMessages, UiMessage } from "../features/chat/chatState";
-import { ChatMessage, ChatMode, ChatSession, RagAskResult } from "../features/chat/chatTypes";
+import { ChatMessage, ChatMode, ChatSession, RagAskResult, RagStrategy } from "../features/chat/chatTypes";
 import {
   useArchiveSession,
   useAskRagMutation,
@@ -34,7 +34,8 @@ const MODEL_OPTIONS = [
 const RAG_STRATEGY_OPTIONS = [
   { value: "dense" as const, label: "Normal RAG" },
   { value: "hybrid" as const, label: "Hybrid RAG" },
-  { value: "agentic_router" as const, label: "Agentic RAG" }
+  { value: "agentic_router" as const, label: "Agentic Router" },
+  { value: "llm_tool_orchestrator" as const, label: "LLM Agentic RAG" }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
 
@@ -77,6 +78,9 @@ function safeErrorMessage(error: unknown): string {
     }
     if (error.code === "unsupported_model") {
       return "This model is not available in the current local configuration.";
+    }
+    if (error.code === "strategy_not_enabled") {
+      return "This RAG mode is not enabled in the current local configuration.";
     }
     if (error.code === "client_message_conflict") {
       return "The message state conflicted with another request. Reload and try again.";
@@ -444,7 +448,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const [localMessages, setLocalMessages] = useState<UiMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(readInitialModel);
-  const [selectedStrategy, setSelectedStrategy] = useState<"dense" | "hybrid" | "agentic_router">("dense");
+  const [selectedStrategy, setSelectedStrategy] = useState<RagStrategy>("dense");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [editDialog, setEditDialog] = useState<EditChatDialogState | null>(null);

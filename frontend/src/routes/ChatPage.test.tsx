@@ -656,7 +656,13 @@ test("sends the selected RAG strategy with chat asks", async () => {
 
   renderChat();
   await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
-  fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "hybrid" } });
+  expect(screen.getByRole("option", { name: "Normal RAG" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Hybrid RAG" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Agentic Router" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "LLM Agentic RAG" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("rag strategy"), {
+    target: { value: "llm_tool_orchestrator" }
+  });
   fireEvent.change(screen.getByLabelText("message"), { target: { value: "What changed?" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -667,7 +673,7 @@ test("sends the selected RAG strategy with chat asks", async () => {
   });
   expect(JSON.parse(String(askCall[1].body))).toMatchObject({
     message: "What changed?",
-    strategy: "hybrid"
+    strategy: "llm_tool_orchestrator"
   });
 });
 

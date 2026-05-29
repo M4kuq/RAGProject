@@ -34,13 +34,16 @@ PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace r
 | PR-36 | Document Diff / Citation Navigation / Version Compare |
 | PR-37 | Phase2 Final Hardening / Demo / Docs |
 | PR-38 | MCP Tools for Hybrid / Agentic RAG |
+| PR-39 | LLM Tool-Calling Retrieval Orchestrator |
 
 ## Phase2 Final Docs
 
 Use these files for final handoff and demo validation:
 
 - [Phase2 demo scenario](phase2_demo_scenario.md)
+- [Phase2 demo scenario Japanese](phase2_demo_scenario.ja.md)
 - [Phase2 manual test cases](phase2_manual_test_cases.md)
+- [Phase2 manual test cases Japanese](phase2_manual_test_cases.ja.md)
 - [Phase2 acceptance checklist](phase2_acceptance_checklist.md)
 - [Phase2 known limitations](phase2_known_limitations.md)
 - [Phase3 handoff](phase3_handoff.md)
@@ -70,6 +73,8 @@ Use these files for final handoff and demo validation:
 - [Document diff / version compare](document_diff_version_compare.md)
 - [Citation navigation](citation_navigation.md)
 - [MCP advanced RAG tools](mcp_advanced_rag_tools.md)
+- [LLM tool-calling retrieval orchestrator](llm_tool_calling_retrieval_orchestrator.md)
+- [LLM tool-calling retrieval orchestrator Japanese](llm_tool_calling_retrieval_orchestrator.ja.md)
 - [Phase2 test strategy](test_strategy.md)
 - [PR-by-PR acceptance criteria](acceptance_criteria.md)
 

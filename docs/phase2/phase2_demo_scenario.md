@@ -56,6 +56,17 @@ or raw retrieved context into the demo notes.
    - Show query plan, router decision, execution strategy, fallback state,
      sufficiency summary, retrieval call count, and latency.
 
+5a. **LLM Agentic RAG ask**
+   - Open the normal Chat screen.
+   - Select **LLM Agentic RAG** in the RAG mode selector.
+   - Ask a safe synthetic comparison question.
+   - Confirm the answer returns citations and confidence, or returns
+     `no_context_found` without an assistant placeholder when evidence is
+     insufficient.
+   - In Retrieval Debug, show the matching `llm_tool_orchestrator` run with
+     tool call count, search call count, finalize flag, budget flags, and safe
+     latency fields.
+
 6. **Retrieval Debug UI v2**
    - Open a retrieval run detail.
    - Confirm `query_plan_json`, `strategy_decision_json`,
