@@ -762,6 +762,7 @@ test("document list renders filters, statuses and safe escaped text", async () =
 });
 
 test("document detail renders version compare summary and bounded previews", async () => {
+  const compareRequests: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
@@ -774,6 +775,7 @@ test("document detail renders version compare summary and bounded previews", asy
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
       if (url.includes("/api/v1/documents/1000/versions/compare")) {
+        compareRequests.push(url);
         return jsonResponse({
           data: {
             logical_document_id: 1000,
@@ -870,7 +872,11 @@ test("document detail renders version compare summary and bounded previews", asy
   );
 
   expect(await screen.findByRole("heading", { name: "Version Compare" })).toBeInTheDocument();
+  expect(await screen.findByText("Select versions and run compare to load the diff.")).toBeInTheDocument();
+  expect(compareRequests).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
   expect(await screen.findByText("New bounded preview")).toBeInTheDocument();
+  expect(compareRequests).toHaveLength(1);
   expect(screen.getByText("file_name")).toBeInTheDocument();
   expect(screen.getByText("Guide > Setup")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent("raw chunk text");

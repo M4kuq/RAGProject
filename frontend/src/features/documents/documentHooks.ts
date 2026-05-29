@@ -49,7 +49,8 @@ export function useDocumentVersionDetail(logicalDocumentId: number, documentVers
 export function useDocumentVersionCompare(
   logicalDocumentId: number,
   baseVersionId: number | null,
-  targetVersionId: number | null
+  targetVersionId: number | null,
+  enabled = true
 ) {
   return useQuery({
     queryKey: queryKeys.documents.compare(logicalDocumentId, baseVersionId, targetVersionId),
@@ -60,6 +61,7 @@ export function useDocumentVersionCompare(
         targetVersionId: targetVersionId ?? 0
       }),
     enabled:
+      enabled &&
       Number.isFinite(logicalDocumentId) &&
       baseVersionId !== null &&
       targetVersionId !== null

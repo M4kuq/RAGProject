@@ -25,7 +25,7 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
   const [openCitationId, setOpenCitationId] = useState<number | null>(null);
   const [sourceByCitationId, setSourceByCitationId] = useState<Record<number, Awaited<ReturnType<typeof fetchCitationSource>>>>({});
   const [loadingCitationId, setLoadingCitationId] = useState<number | null>(null);
-  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceErrorByCitationId, setSourceErrorByCitationId] = useState<Record<number, string>>({});
 
   if (!citations || citations.length === 0) {
     return null;
@@ -36,19 +36,27 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
       setOpenCitationId(null);
       return;
     }
-    setOpenCitationId(citation.citation_id);
-    setSourceError(null);
-    if (sourceByCitationId[citation.citation_id]) {
+    const citationId = citation.citation_id;
+    setOpenCitationId(citationId);
+    setSourceErrorByCitationId((current) => {
+      const next = { ...current };
+      delete next[citationId];
+      return next;
+    });
+    if (sourceByCitationId[citationId]) {
       return;
     }
-    setLoadingCitationId(citation.citation_id);
+    if (loadingCitationId === citationId) {
+      return;
+    }
+    setLoadingCitationId(citationId);
     try {
-      const source = await fetchCitationSource(citation.citation_id);
-      setSourceByCitationId((current) => ({ ...current, [citation.citation_id]: source }));
+      const source = await fetchCitationSource(citationId);
+      setSourceByCitationId((current) => ({ ...current, [citationId]: source }));
     } catch {
-      setSourceError("Unable to load source preview.");
+      setSourceErrorByCitationId((current) => ({ ...current, [citationId]: "Unable to load source preview." }));
     } finally {
-      setLoadingCitationId(null);
+      setLoadingCitationId((current) => (current === citationId ? null : current));
     }
   }
 
@@ -77,7 +85,7 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
                 citationId={citation.citation_id}
                 isAdmin={currentUser.data?.role === "admin"}
                 isLoading={loadingCitationId === citation.citation_id}
-                error={sourceError}
+                error={sourceErrorByCitationId[citation.citation_id] ?? null}
                 source={sourceByCitationId[citation.citation_id]}
               />
             ) : null}

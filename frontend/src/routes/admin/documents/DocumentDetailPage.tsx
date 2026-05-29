@@ -25,21 +25,33 @@ export function DocumentDetailPage() {
   const [versionFile, setVersionFile] = useState<File | null>(null);
   const [baseVersionId, setBaseVersionId] = useState<number | null>(null);
   const [targetVersionId, setTargetVersionId] = useState<number | null>(null);
+  const [compareRequested, setCompareRequested] = useState(false);
   const document = useDocumentDetail(logicalDocumentId);
   const archive = useArchiveDocument();
   const uploadVersion = useUploadDocumentVersion();
   const previewVersion = document.data?.active_version ?? document.data?.latest_version ?? null;
   const chunks = useDocumentChunks(logicalDocumentId, previewVersion?.document_version_id ?? NaN, chunkPage, PAGE_SIZE);
-  const compare = useDocumentVersionCompare(logicalDocumentId, baseVersionId, targetVersionId);
+  const documentVersions = document.data?.versions ?? [];
+  const defaultTargetVersionId = documentVersions[0]?.document_version_id ?? null;
+  const defaultBaseVersionId = documentVersions[1]?.document_version_id ?? defaultTargetVersionId;
+  const versionSelectionKey = `${logicalDocumentId}:${documentVersions.map((version) => version.document_version_id).join(",")}`;
+  const compare = useDocumentVersionCompare(logicalDocumentId, baseVersionId, targetVersionId, compareRequested);
 
   useEffect(() => {
-    const versions = document.data?.versions ?? [];
-    if (versions.length < 1) {
-      return;
-    }
-    setTargetVersionId((current) => current ?? versions[0].document_version_id);
-    setBaseVersionId((current) => current ?? versions[1]?.document_version_id ?? versions[0].document_version_id);
-  }, [document.data?.versions]);
+    setTargetVersionId(defaultTargetVersionId);
+    setBaseVersionId(defaultBaseVersionId);
+    setCompareRequested(false);
+  }, [defaultBaseVersionId, defaultTargetVersionId, versionSelectionKey]);
+
+  function changeBaseVersion(value: string) {
+    setBaseVersionId(Number(value));
+    setCompareRequested(false);
+  }
+
+  function changeTargetVersion(value: string) {
+    setTargetVersionId(Number(value));
+    setCompareRequested(false);
+  }
 
   async function archiveDocument() {
     if (!window.confirm("Archive this document?")) {
@@ -172,9 +184,9 @@ export function DocumentDetailPage() {
             <select
               aria-label="base version"
               value={baseVersionId ?? ""}
-              onChange={(event) => setBaseVersionId(Number(event.target.value))}
+              onChange={(event) => changeBaseVersion(event.target.value)}
             >
-              {document.data.versions.map((version) => (
+              {documentVersions.map((version) => (
                 <option key={version.document_version_id} value={version.document_version_id}>
                   v{version.version_no} {version.is_active ? "(active)" : ""}
                 </option>
@@ -186,19 +198,27 @@ export function DocumentDetailPage() {
             <select
               aria-label="target version"
               value={targetVersionId ?? ""}
-              onChange={(event) => setTargetVersionId(Number(event.target.value))}
+              onChange={(event) => changeTargetVersion(event.target.value)}
             >
-              {document.data.versions.map((version) => (
+              {documentVersions.map((version) => (
                 <option key={version.document_version_id} value={version.document_version_id}>
                   v{version.version_no} {version.is_active ? "(active)" : ""}
                 </option>
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            disabled={baseVersionId === null || targetVersionId === null || compare.isLoading}
+            onClick={() => setCompareRequested(true)}
+          >
+            Compare versions
+          </button>
         </div>
-        {compare.isLoading ? <LoadingState label="Loading version diff..." /> : null}
-        {compare.error ? <ErrorState error={compare.error} /> : null}
-        {compare.data ? (
+        {!compareRequested ? <p className="muted">Select versions and run compare to load the diff.</p> : null}
+        {compareRequested && compare.isLoading ? <LoadingState label="Loading version diff..." /> : null}
+        {compareRequested && compare.error ? <ErrorState error={compare.error} /> : null}
+        {compareRequested && compare.data ? (
           <>
             <DiffSummary summary={compare.data.summary} />
             <MetadataDiffTable items={compare.data.metadata_diff.filter((item) => item.changed)} />

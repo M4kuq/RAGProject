@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
@@ -78,7 +78,33 @@ function emptyMessages() {
   return { data: [], meta: { pagination: { page: 1, page_size: 100, total: 0, has_next: false } } };
 }
 
-function persistedMessagesWithCitation() {
+function persistedMessagesWithCitation(includeSecondCitation = false) {
+  const citations = [
+    {
+      citation_id: 201,
+      local_citation_id: 1,
+      document_chunk_id: 301,
+      source_label: "phase1-seed.md",
+      snippet: "Phase1 validates a local Docker Compose RAG stack.",
+      page_from: null,
+      page_to: null,
+      section_title: "Architecture",
+      old_version_flag: false
+    }
+  ];
+  if (includeSecondCitation) {
+    citations.push({
+      citation_id: 202,
+      local_citation_id: 2,
+      document_chunk_id: 302,
+      source_label: "phase2-seed.md",
+      snippet: "Phase2 validates citation navigation.",
+      page_from: null,
+      page_to: null,
+      section_title: "Navigation",
+      old_version_flag: false
+    });
+  }
   return {
     data: [
       {
@@ -100,19 +126,7 @@ function persistedMessagesWithCitation() {
         content: "Phase1 uses local RAG components [1].",
         client_message_id: null,
         edited_flag: false,
-        citations: [
-          {
-            citation_id: 201,
-            local_citation_id: 1,
-            document_chunk_id: 301,
-            source_label: "phase1-seed.md",
-            snippet: "Phase1 validates a local Docker Compose RAG stack.",
-            page_from: null,
-            page_to: null,
-            section_title: "Architecture",
-            old_version_flag: false
-          }
-        ],
+        citations,
         confidence: { answer_confidence: 0.82, groundedness_score: 0.9, confidence_label: "High" },
         created_at: "2026-05-18T00:00:02Z",
         updated_at: "2026-05-18T00:00:02Z"
@@ -162,11 +176,19 @@ function askSuccess(replayed = false) {
   };
 }
 
-function citationSourceResponse() {
+function citationSourceResponse({
+  citationId = 201,
+  localCitationId = 1,
+  preview = "Safe bounded source preview"
+}: {
+  citationId?: number;
+  localCitationId?: number;
+  preview?: string;
+} = {}) {
   return {
     data: {
-      citation_id: 201,
-      local_citation_id: 1,
+      citation_id: citationId,
+      local_citation_id: localCitationId,
       logical_document_id: 77,
       document_version_id: 88,
       document_chunk_id: 301,
@@ -189,7 +211,7 @@ function citationSourceResponse() {
       html_heading_path: "Guide > Setup",
       xml_path: null,
       structure_type: "html_section",
-      preview: "Safe bounded source preview",
+      preview,
       preview_truncated: true,
       old_version_flag: true
     }
@@ -373,6 +395,66 @@ test("opens a bounded citation source preview with admin deep link", async () =>
     "/admin/documents/77"
   );
   expect(screen.queryByText(/token=secret/i)).not.toBeInTheDocument();
+});
+
+test("keeps the active citation source loading when a stale request fails", async () => {
+  let rejectFirstSource: ((reason?: unknown) => void) | undefined;
+  let resolveSecondSource: ((response: Response) => void) | undefined;
+  const firstSource = new Promise<Response>((_resolve, reject) => {
+    rejectFirstSource = reject;
+  });
+  const secondSource = new Promise<Response>((resolve) => {
+    resolveSecondSource = resolve;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+      if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
+      if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+      if (path.includes("/api/v1/chat/sessions/10/messages")) {
+        return jsonResponse(persistedMessagesWithCitation(true));
+      }
+      if (path.endsWith("/api/v1/rag/citations/201/source")) return firstSource;
+      if (path.endsWith("/api/v1/rag/citations/202/source")) return secondSource;
+      return jsonResponse({ data: [] });
+    })
+  );
+
+  renderChat("/chat/10");
+
+  expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: "View source" })[0]);
+  expect(await screen.findByText("Loading source...")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "View source" }));
+
+  await act(async () => {
+    rejectFirstSource?.(new Error("stale source failed"));
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("Loading source...")).toBeInTheDocument();
+  expect(screen.queryByText("Unable to load source preview.")).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveSecondSource?.(
+      new Response(
+        JSON.stringify(
+          citationSourceResponse({
+            citationId: 202,
+            localCitationId: 2,
+            preview: "Second source preview"
+          })
+        ),
+        { status: 200 }
+      )
+    );
+    await Promise.resolve();
+  });
+
+  expect(await screen.findByText("Second source preview")).toBeInTheDocument();
+  expect(screen.queryByText("Unable to load source preview.")).not.toBeInTheDocument();
 });
 
 test("can delete a saved chat from the sidebar", async () => {

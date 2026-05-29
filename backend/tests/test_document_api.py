@@ -578,6 +578,11 @@ def test_admin_compares_document_versions_with_bounded_safe_diff(
     assert changed["base_chunk"]["preview_truncated"] is True
     assert "redacted-email" in changed["target_chunk"]["preview"]
     assert changed["target_chunk"]["sheet_name"] == "Roadmap"
+    final_url = next(item for item in body["data"]["metadata_diff"] if item["field"] == "final_url")
+    assert final_url["base_value"] == "redacted"
+    assert final_url["target_value"] == "redacted"
+    assert "alice@example.com" not in serialized
+    assert "bob@example.com" not in serialized
     assert "https://example.com/base" in serialized
     assert "https://example.com/target" in serialized
 
@@ -637,6 +642,7 @@ def _create_versioned_document(
             metadata_json={
                 "source_type": "url",
                 "source_url": "https://example.com/base?api_key=super-secret-value",
+                "final_url": "https://example.com/users/alice@example.com/base",
             },
             created_by=admin.user_id,
         )
@@ -652,6 +658,7 @@ def _create_versioned_document(
             metadata_json={
                 "source_type": "url",
                 "source_url": "https://example.com/target?token=super-secret-value",
+                "final_url": "https://example.com/users/bob@example.com/target",
             },
             created_by=admin.user_id,
         )

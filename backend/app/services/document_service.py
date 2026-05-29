@@ -1286,6 +1286,8 @@ def _safe_url_metadata_string(value: str) -> str:
     normalized = " ".join(value.replace("\x00", " ").split())
     safe_url = redact_url_for_display(normalized)
     if safe_url != "redacted":
+        if _SECRET_ASSIGNMENT_RE.search(safe_url) or _EMAIL_RE.search(safe_url):
+            return "redacted"
         return safe_url[:200]
     if _SECRET_ASSIGNMENT_RE.search(normalized) or _EMAIL_RE.search(normalized):
         return "redacted"
