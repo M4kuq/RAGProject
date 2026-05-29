@@ -1,4 +1,5 @@
 import { FormEvent, KeyboardEvent } from "react";
+import type { RagStrategy } from "../../features/chat/chatTypes";
 
 export function MessageInput({
   disabled,
@@ -7,8 +8,11 @@ export function MessageInput({
   modelOptions,
   onChange,
   onModelChange,
+  onStrategyChange,
   onSubmit,
+  selectedStrategy,
   selectedModel,
+  strategyOptions,
   value
 }: {
   disabled: boolean;
@@ -17,8 +21,11 @@ export function MessageInput({
   modelOptions: { label: string; value: string }[];
   onChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onStrategyChange: (value: RagStrategy) => void;
   onSubmit: () => void;
+  selectedStrategy: RagStrategy;
   selectedModel: string;
+  strategyOptions: { label: string; value: RagStrategy }[];
   value: string;
 }) {
   function submit(event: FormEvent) {
@@ -47,6 +54,19 @@ export function MessageInput({
       <div className="composer-footer">
         {disabledReason ? <p className="notice">{disabledReason}</p> : <p className="notice">Enter to send, Shift+Enter for a new line.</p>}
         <div className="composer-controls">
+          <select
+            aria-label="rag strategy"
+            className="model-select"
+            disabled={isSending}
+            onChange={(event) => onStrategyChange(event.target.value as RagStrategy)}
+            value={selectedStrategy}
+          >
+            {strategyOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <select
             aria-label="model"
             className="model-select"

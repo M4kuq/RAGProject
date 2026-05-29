@@ -6,7 +6,7 @@ import { MessageInput } from "../components/chat/MessageInput";
 import { MessageList } from "../components/chat/MessageList";
 import { useCurrentUser } from "../features/auth/authHooks";
 import { generateClientMessageId, mergeMessages, UiMessage } from "../features/chat/chatState";
-import { ChatMessage, ChatMode, ChatSession, RagAskResult } from "../features/chat/chatTypes";
+import { ChatMessage, ChatMode, ChatSession, RagAskResult, RagStrategy } from "../features/chat/chatTypes";
 import {
   useArchiveSession,
   useAskRagMutation,
@@ -30,6 +30,12 @@ const MODEL_OPTIONS = [
   { value: "openai:gpt-5.4", label: "GPT 5.4" },
   { value: "anthropic:claude-sonnet-4-20250514", label: "Claude" },
   { value: "gemini:gemini-2.5-flash", label: "Gemini" }
+];
+const RAG_STRATEGY_OPTIONS = [
+  { value: "dense" as const, label: "Normal RAG" },
+  { value: "hybrid" as const, label: "Hybrid RAG" },
+  { value: "agentic_router" as const, label: "Agentic Router" },
+  { value: "llm_tool_orchestrator" as const, label: "LLM Agentic RAG" }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
 
@@ -72,6 +78,9 @@ function safeErrorMessage(error: unknown): string {
     }
     if (error.code === "unsupported_model") {
       return "This model is not available in the current local configuration.";
+    }
+    if (error.code === "strategy_not_enabled") {
+      return "This RAG mode is not enabled in the current local configuration.";
     }
     if (error.code === "client_message_conflict") {
       return "The message state conflicted with another request. Reload and try again.";
@@ -439,6 +448,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const [localMessages, setLocalMessages] = useState<UiMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(readInitialModel);
+  const [selectedStrategy, setSelectedStrategy] = useState<RagStrategy>("dense");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [editDialog, setEditDialog] = useState<EditChatDialogState | null>(null);
@@ -545,7 +555,8 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         message,
         model_key: selectedModel,
         top_k: DEFAULT_TOP_K,
-        rerank_top_n: DEFAULT_RERANK_TOP_N
+        rerank_top_n: DEFAULT_RERANK_TOP_N,
+        strategy: selectedStrategy
       });
       queryClient.setQueryData(queryKeys.chatMessages(targetSession.chat_session_id), (current: ChatMessage[] | undefined) =>
         mergePersistedAskMessages(current, result)
@@ -752,8 +763,11 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
             modelOptions={MODEL_OPTIONS}
             onChange={setQuestion}
             onModelChange={changeModel}
+            onStrategyChange={setSelectedStrategy}
             onSubmit={submitQuestion}
             selectedModel={selectedModel}
+            selectedStrategy={selectedStrategy}
+            strategyOptions={RAG_STRATEGY_OPTIONS}
             value={question}
           />
         </div>

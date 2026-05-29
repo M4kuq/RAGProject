@@ -623,7 +623,8 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
     message: "What is RAG?",
     model_key: "openai:gpt-5.5",
     top_k: 20,
-    rerank_top_n: 5
+    rerank_top_n: 5,
+    strategy: "dense"
   });
   expect(new Headers(askCall[1].headers).get("x-csrf-token")).toBe("csrf-token");
 
@@ -635,6 +636,45 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
   expect(screen.getByText(/handbook\.pdf/)).toBeInTheDocument();
   expect(screen.getByText("Grounded citation preview")).toBeInTheDocument();
   expect(screen.queryByText("999")).not.toBeInTheDocument();
+});
+
+test("sends the selected RAG strategy with chat asks", async () => {
+  document.cookie = "rag_csrf=csrf-token";
+  vi.stubGlobal("crypto", { randomUUID: () => "strategy-fixed" });
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse([]));
+    if (path.endsWith("/api/v1/chat/sessions") && method === "POST") return jsonResponse(sessionResponse(), 201);
+    if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+    if (path.includes("/api/v1/chat/sessions/10/messages")) return jsonResponse(emptyMessages());
+    if (path.includes("/api/v1/rag/ask")) return jsonResponse(askSuccess());
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat();
+  await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
+  expect(screen.getByRole("option", { name: "Normal RAG" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Hybrid RAG" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Agentic Router" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "LLM Agentic RAG" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("rag strategy"), {
+    target: { value: "llm_tool_orchestrator" }
+  });
+  fireEvent.change(screen.getByLabelText("message"), { target: { value: "What changed?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  const askCall = await waitFor(() => {
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v1/rag/ask"));
+    expect(call).toBeTruthy();
+    return call as [string, RequestInit];
+  });
+  expect(JSON.parse(String(askCall[1].body))).toMatchObject({
+    message: "What changed?",
+    strategy: "llm_tool_orchestrator"
+  });
 });
 
 test("keeps multiple completed ask pairs interleaved by timeline", async () => {

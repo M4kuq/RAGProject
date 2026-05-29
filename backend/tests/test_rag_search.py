@@ -431,6 +431,7 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             "schema_version": "phase2.trace.v1",
             "selected_strategy": "dense",
             "fallback_strategy": "dense",
+            "execution_strategy": "dense",
             "fallback_used": False,
             "router_enabled": False,
             "decision_source": "default",

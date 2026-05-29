@@ -10,6 +10,7 @@ test runs, GitHub checks, screenshots, or manual notes, not to raw payload dumps
 | sparse retrieval works | Ready | `docs/phase2/sparse_retrieval.md`, sparse tests | PostgreSQL FTS plus test fallback. |
 | hybrid retrieval works | Ready | `docs/phase2/hybrid_retrieval.md`, hybrid tests | Dense+sparse fusion with score breakdown. |
 | agentic_router works | Ready | `docs/phase2/strategy_router.md`, agentic tests | Explicit opt-in for search/ask. |
+| LLM Agentic RAG works | Ready | `docs/phase2/llm_tool_calling_retrieval_orchestrator.md`, PR-39 tests | Bounded retrieval-only tool loop for `/rag/ask strategy=llm_tool_orchestrator`. |
 | context sufficiency works | Ready | `docs/phase2/agentic_retrieval_loop.md` | Rule-based, bounded checker. |
 | fallback works | Ready | Router/agentic tests | Dense fallback is safe and deterministic. |
 | query_plan_json saved | Ready | Retrieval trace/debug docs | Safe query analysis/planning only. |

@@ -39,6 +39,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "metadata_filtered",
         "version_aware",
         "agentic_router",
+        "llm_tool_orchestrator",
         "fallback_dense",
     )
     assert RETRIEVAL_SOURCE_VALUES == (
@@ -60,7 +61,9 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
     )
     assert RAG_ASK_REQUEST_STRATEGY_VALUES == (
         "dense",
+        "hybrid",
         "agentic_router",
+        "llm_tool_orchestrator",
     )
     assert "fallback_dense" not in RAG_SEARCH_REQUEST_STRATEGY_VALUES
     assert "fallback_dense" not in RAG_ASK_REQUEST_STRATEGY_VALUES
@@ -75,7 +78,9 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
     )
     assert _field_enum_values(RagAskRequest.model_json_schema(), "strategy") == (
         "dense",
+        "hybrid",
         "agentic_router",
+        "llm_tool_orchestrator",
     )
     assert _field_enum_values(EvaluationRunCreateRequest.model_json_schema(), "strategy_type") == (
         "dense",
@@ -92,6 +97,20 @@ def test_python_enum_values_match_migration_check_values() -> None:
     migration_values = _migration_constants()
     assert migration_values["RETRIEVAL_STRATEGY_VALUES"] == RETRIEVAL_STRATEGY_VALUES
     assert migration_values["RETRIEVAL_SOURCE_VALUES"] == RETRIEVAL_SOURCE_VALUES
+
+
+def test_llm_orchestrator_strategy_migration_downgrade_rewrites_rows() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0008_llm_tool_orchestrator_strategy.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert "_rewrite_orchestrator_strategy_rows()" in source
+    assert "WHERE strategy_type = 'llm_tool_orchestrator'" in source
+    assert "SET strategy_type = 'agentic_router'" in source
 
 
 def test_phase2_trace_dtos_are_json_serializable_and_redacted() -> None:
@@ -167,19 +186,41 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "0003_phase2_strategy_trace.py"
+        / "0008_llm_tool_orchestrator_strategy.py"
     )
     tree = ast.parse(migration.read_text(encoding="utf-8"))
     constants: dict[str, tuple[str, ...]] = {}
+    old_strategy_values: tuple[str, ...] | None = None
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
-        if node.targets[0].id not in {"RETRIEVAL_STRATEGY_VALUES", "RETRIEVAL_SOURCE_VALUES"}:
+        if node.targets[0].id == "OLD_RETRIEVAL_STRATEGY_VALUES":
+            old_strategy_values = tuple(ast.literal_eval(node.value))
             continue
-        value = ast.literal_eval(node.value)
-        constants[node.targets[0].id] = tuple(value)
+        if node.targets[0].id == "NEW_RETRIEVAL_STRATEGY_VALUES":
+            assert old_strategy_values is not None
+            constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(
+                (*old_strategy_values[:-1], "llm_tool_orchestrator", old_strategy_values[-1])
+            )
+            continue
+
+    source_migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0003_phase2_strategy_trace.py"
+    )
+    tree = ast.parse(source_migration.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        if node.targets[0].id != "RETRIEVAL_SOURCE_VALUES":
+            continue
+        constants["RETRIEVAL_SOURCE_VALUES"] = tuple(ast.literal_eval(node.value))
     return constants
 
 

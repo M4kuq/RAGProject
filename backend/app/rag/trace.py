@@ -30,6 +30,9 @@ _RETRIEVAL_LATENCY_KEYS = (
     "sufficiency_check_ms",
     "merge_dedupe_ms",
     "rerank_after_merge_ms",
+    "llm_orchestrator_ms",
+    "llm_tool_planning_ms",
+    "llm_tool_execution_ms",
     "strategy_router_ms",
     "query_embedding_ms",
     "qdrant_search_ms",
@@ -38,6 +41,18 @@ _RETRIEVAL_LATENCY_KEYS = (
     "rdb_final_check_ms",
     "rerank_ms",
     "retrieval_items_persist_ms",
+)
+_LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS = frozenset(
+    {
+        "llm_tool_planning_ms",
+        "llm_tool_execution_ms",
+        "query_embedding_ms",
+        "qdrant_search_ms",
+        "sparse_search_ms",
+        "fusion_ms",
+        "rdb_final_check_ms",
+        "rerank_ms",
+    }
 )
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(?:^|\s)(?:export\s+)?"
@@ -109,7 +124,8 @@ class LatencyTracker:
 
     def snapshot(self) -> dict[str, object]:
         spans: dict[str, int] = dict(self._spans_ms)
-        retrieval_ms = sum(spans[key] for key in _RETRIEVAL_LATENCY_KEYS if key in spans)
+        retrieval_latency_keys = _retrieval_latency_keys_for(spans)
+        retrieval_ms = sum(spans[key] for key in retrieval_latency_keys if key in spans)
         if retrieval_ms > 0:
             spans["retrieval_ms"] = retrieval_ms
         spans["total_ms"] = _elapsed_ms(self._started_at, self._clock())
@@ -147,7 +163,9 @@ def build_default_dense_strategy_decision() -> dict[str, object]:
         decision_policy="static_dense",
         reason_codes=["phase1_compat_default_dense"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = DEFAULT_RETRIEVAL_STRATEGY.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_sparse_query_plan(
@@ -185,7 +203,9 @@ def build_sparse_strategy_decision() -> dict[str, object]:
         decision_policy="explicit_sparse",
         reason_codes=["explicit_strategy_sparse"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = RetrievalStrategy.SPARSE.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_hybrid_query_plan(
@@ -225,7 +245,9 @@ def build_hybrid_strategy_decision(*, fusion_method: FusionMethod) -> dict[str, 
         decision_policy=f"explicit_hybrid_{fusion_method.value}",
         reason_codes=["explicit_strategy_hybrid", f"fusion_method:{fusion_method.value}"],
     )
-    return TraceRedactor.safe_dict(trace.model_dump(mode="json", exclude_none=True))
+    payload = trace.model_dump(mode="json", exclude_none=True)
+    payload["execution_strategy"] = RetrievalStrategy.HYBRID.value
+    return TraceRedactor.safe_dict(payload)
 
 
 def build_router_query_plan(
@@ -458,6 +480,14 @@ def build_hybrid_score_breakdown(
 
 def _elapsed_ms(started_at: float, finished_at: float) -> int:
     return max(0, int(round((finished_at - started_at) * 1000)))
+
+
+def _retrieval_latency_keys_for(spans: Mapping[str, int]) -> tuple[str, ...]:
+    if "llm_orchestrator_ms" not in spans:
+        return _RETRIEVAL_LATENCY_KEYS
+    return tuple(
+        key for key in _RETRIEVAL_LATENCY_KEYS if key not in _LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS
+    )
 
 
 def _safe_query_plan(
