@@ -128,6 +128,15 @@ function persistedMessagesWithCitation(includeSecondCitation = false) {
         edited_flag: false,
         citations,
         confidence: { answer_confidence: 0.82, groundedness_score: 0.9, confidence_label: "High" },
+        retrieval_summary: {
+          retrieval_run_id: 999,
+          strategy_type: "hybrid",
+          selected_strategy: "hybrid",
+          execution_strategy: "hybrid",
+          tools_used: [],
+          fallback_used: false,
+          no_context: false
+        },
         created_at: "2026-05-18T00:00:02Z",
         updated_at: "2026-05-18T00:00:02Z"
       }
@@ -170,6 +179,15 @@ function askSuccess(replayed = false) {
         }
       ],
       confidence: { answer_confidence: 0.82, groundedness_score: 0.9, confidence_label: "High" },
+      retrieval_summary: {
+        retrieval_run_id: 999,
+        strategy_type: "llm_tool_orchestrator",
+        selected_strategy: "llm_tool_orchestrator",
+        execution_strategy: "llm_tool_orchestrator",
+        tools_used: ["dense_search", "hybrid_search"],
+        fallback_used: false,
+        no_context: false
+      },
       retrieval_run_id: 999
     },
     meta: { request_id: "req_1", replayed }
@@ -385,6 +403,9 @@ test("opens a bounded citation source preview with admin deep link", async () =>
   fireEvent.click(screen.getByRole("button", { name: "View source" }));
 
   expect(await screen.findByText("Safe bounded source preview")).toBeInTheDocument();
+  expect(screen.getByText("v3")).toBeInTheDocument();
+  expect(screen.getByText("#301")).toBeInTheDocument();
+  expect(screen.getByText("External URL")).toBeInTheDocument();
   expect(screen.getByText("Preview truncated.")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "https://example.com/redacted/guide" })).toHaveAttribute(
     "rel",
@@ -393,6 +414,10 @@ test("opens a bounded citation source preview with admin deep link", async () =>
   expect(screen.getByRole("link", { name: "Open document #77" })).toHaveAttribute(
     "href",
     "/admin/documents/77"
+  );
+  expect(screen.getByRole("link", { name: "Open version compare" })).toHaveAttribute(
+    "href",
+    "/admin/documents/77#version-compare"
   );
   expect(screen.queryByText(/token=secret/i)).not.toBeInTheDocument();
 });
@@ -624,13 +649,14 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
     model_key: "openai:gpt-5.5",
     top_k: 20,
     rerank_top_n: 5,
-    strategy: "dense"
+    strategy: "llm_tool_orchestrator"
   });
   expect(new Headers(askCall[1].headers).get("x-csrf-token")).toBe("csrf-token");
 
   resolveAsk(new Response(JSON.stringify(askSuccess()), { status: 200 }));
 
   expect(await screen.findByText("RAG answers with grounded citations [1].")).toBeInTheDocument();
+  expect(screen.getByText("Auto: dense + hybrid")).toBeInTheDocument();
   expect(screen.getByText("Confidence High")).toBeInTheDocument();
   expect(screen.getByText("old version")).toBeInTheDocument();
   expect(screen.getByText(/handbook\.pdf/)).toBeInTheDocument();
@@ -656,13 +682,15 @@ test("sends the selected RAG strategy with chat asks", async () => {
 
   renderChat();
   await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
+  expect(screen.getByRole("option", { name: "Auto" })).toBeInTheDocument();
+  expect(screen.getByLabelText("rag strategy")).toHaveValue("llm_tool_orchestrator");
+  expect(screen.getByText(/LLM Agentic RAG: the model chooses dense, sparse, or hybrid retrieval tools/)).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Normal RAG" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Hybrid RAG" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Agentic Router" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "LLM Agentic RAG" })).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("rag strategy"), {
-    target: { value: "llm_tool_orchestrator" }
-  });
+  fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "hybrid" } });
+  expect(screen.getByText(/Dense vector retrieval plus sparse keyword retrieval with score fusion/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "llm_tool_orchestrator" } });
   fireEvent.change(screen.getByLabelText("message"), { target: { value: "What changed?" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 

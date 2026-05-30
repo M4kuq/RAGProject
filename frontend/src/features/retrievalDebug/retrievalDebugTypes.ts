@@ -91,3 +91,7 @@ export type RetrievalRunDebugDetail = {
   retrieval_run: RetrievalRunDebugSummary;
   items: RetrievalRunDebugItem[];
 };
+
+export type RetrievalRunDebugHistory = {
+  items: RetrievalRunDebugSummary[];
+};

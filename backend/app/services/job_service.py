@@ -101,7 +101,7 @@ class JobService:
             created_at=job.created_at,
             updated_at=job.updated_at,
             error_code=job.error_code,
-            error_message=redact_error_message(job.error_message),
+            error_message=_safe_error_message(job),
             payload_view=JobPayloadView(payload=_redacted_payload_dict(job.payload_json)),
         )
 
@@ -150,3 +150,11 @@ class JobService:
 
 def _redacted_payload_dict(value: object) -> dict[str, object]:
     return sanitize_job_payload(cast(dict[str, object], value or {}))
+
+
+def _safe_error_message(job: Job) -> str | None:
+    if job.error_message:
+        return redact_error_message(job.error_message)
+    if job.status == "failed" or job.error_code:
+        return redact_error_message(job.error_message)
+    return None

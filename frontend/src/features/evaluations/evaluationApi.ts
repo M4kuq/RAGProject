@@ -3,6 +3,7 @@ import type { ApiResponse } from "../../types/api";
 import type {
   EvaluationCase,
   EvaluationDataset,
+  EvaluationDatasetCreateRequest,
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
@@ -30,6 +31,16 @@ export async function createEvaluationRun(
   payload: EvaluationRunCreateRequest
 ): Promise<EvaluationRunCreateResponse> {
   const response = await apiFetch<ApiResponse<EvaluationRunCreateResponse>>("/api/v1/evaluations/runs", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return response.data;
+}
+
+export async function createEvaluationDataset(
+  payload: EvaluationDatasetCreateRequest
+): Promise<EvaluationDataset> {
+  const response = await apiFetch<ApiResponse<EvaluationDataset>>("/api/v1/evaluations/datasets", {
     method: "POST",
     body: JSON.stringify(payload)
   });

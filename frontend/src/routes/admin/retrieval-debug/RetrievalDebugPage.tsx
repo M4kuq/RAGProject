@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { useEvaluationRuns } from "../../../features/evaluations/evaluationHooks";
@@ -6,12 +6,14 @@ import type { StrategyComparisonMetric } from "../../../features/evaluations/eva
 import { formatUnknownValue, redactString, safeRecord } from "../../../features/retrievalDebug/redaction";
 import {
   useRagDebugSearch,
+  useRetrievalRunDebugHistory,
   useRetrievalRunDebugDetail
 } from "../../../features/retrievalDebug/retrievalDebugHooks";
 import type {
   RagSearchDebugItem,
   RetrievalRunDebugDetail,
   RetrievalRunDebugItem,
+  RetrievalRunDebugSummary,
   SupportedRetrievalDebugStrategy
 } from "../../../features/retrievalDebug/retrievalDebugTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
@@ -74,15 +76,25 @@ export function RetrievalDebugPage() {
   const [topK, setTopK] = useState(10);
   const [rerankTopN, setRerankTopN] = useState(5);
   const [formError, setFormError] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const search = useRagDebugSearch();
-  const latestRunId = search.data?.retrieval_run_id ?? null;
+  const history = useRetrievalRunDebugHistory();
+  const latestRunId = selectedRunId ?? history.data?.items[0]?.retrieval_run_id ?? null;
   const detail = useRetrievalRunDebugDetail(latestRunId);
   const evaluations = useEvaluationRuns({ page: 1, page_size: 5 });
+  const searchItems =
+    latestRunId !== null && latestRunId === search.data?.retrieval_run_id ? search.data.items : [];
 
   const displayItems = useMemo(
-    () => buildDisplayItems(search.data?.items ?? [], detail.data?.items ?? []),
-    [search.data?.items, detail.data?.items]
+    () => buildDisplayItems(searchItems, detail.data?.items ?? []),
+    [searchItems, detail.data?.items]
   );
+
+  useEffect(() => {
+    if (selectedRunId === null && history.data?.items.length) {
+      setSelectedRunId(history.data.items[0].retrieval_run_id);
+    }
+  }, [history.data?.items, selectedRunId]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -94,12 +106,18 @@ export function RetrievalDebugPage() {
     setFormError(null);
     const safeTopK = clampNumber(topK, 1, 20, 10);
     const safeRerankTopN = clampNumber(rerankTopN, 1, 20, 5);
-    await search.mutateAsync({
+    const result = await search.mutateAsync({
       query: trimmedQuery,
       top_k: safeTopK,
       rerank_top_n: safeRerankTopN,
       strategy
     });
+    setSelectedRunId(result.retrieval_run_id);
+    void history.refetch();
+  }
+
+  async function refreshTrace() {
+    await Promise.all([history.refetch(), latestRunId ? detail.refetch() : Promise.resolve()]);
   }
 
   return (
@@ -109,7 +127,11 @@ export function RetrievalDebugPage() {
           <h1>Retrieval Debug</h1>
           <p className="muted">Run dense, sparse, and hybrid retrieval and inspect safe trace metadata.</p>
         </div>
-        <button type="button" disabled={!latestRunId || detail.isFetching} onClick={() => void detail.refetch()}>
+        <button
+          type="button"
+          disabled={history.isFetching || detail.isFetching}
+          onClick={() => void refreshTrace()}
+        >
           Refresh trace
         </button>
       </header>
@@ -175,11 +197,19 @@ export function RetrievalDebugPage() {
 
       {formError ? <InlineAlert tone="error">{formError}</InlineAlert> : null}
       {search.error ? <InlineAlert tone="error">{search.error.message}</InlineAlert> : null}
+      {history.error ? <ErrorState title="Unable to load retrieval run history" error={history.error} /> : null}
       {search.isPending ? <LoadingState label="Running retrieval..." /> : null}
 
-      {search.data ? (
+      <RetrievalRunHistoryPanel
+        isLoading={history.isLoading}
+        onSelect={setSelectedRunId}
+        runs={history.data?.items ?? []}
+        selectedRunId={latestRunId}
+      />
+
+      {latestRunId ? (
         <>
-          <SearchResultSummary detail={detail.data} searchData={search.data} />
+          <SearchResultSummary detail={detail.data} retrievalRunId={latestRunId} searchData={search.data} />
           {detail.isLoading ? <LoadingState label="Loading trace..." /> : null}
           {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
@@ -187,7 +217,9 @@ export function RetrievalDebugPage() {
           <RetrievalRunItemsTable items={displayItems} />
         </>
       ) : (
-        <EmptyState title="No debug run">Run a retrieval search to inspect trace and score breakdowns.</EmptyState>
+        <EmptyState title="No retrieval runs">
+          Run a retrieval search, use Chat RAG, or refresh after another retrieval to inspect trace and score breakdowns.
+        </EmptyState>
       )}
 
       <EvaluationStrategySummaryPanel metrics={latestStrategyMetrics(evaluations.data?.items ?? [])} />
@@ -197,18 +229,29 @@ export function RetrievalDebugPage() {
 
 function SearchResultSummary({
   detail,
+  retrievalRunId,
   searchData
 }: {
   detail: RetrievalRunDebugDetail | undefined;
-  searchData: { retrieval_run_id: number; retrieval_score_summary: Record<string, unknown>; items: unknown[] };
+  retrievalRunId: number;
+  searchData: { retrieval_run_id: number; retrieval_score_summary: Record<string, unknown>; items: unknown[] } | undefined;
 }) {
   const run = detail?.retrieval_run;
-  const summary = safeRecord(run?.retrieval_score_summary ?? searchData.retrieval_score_summary);
+  const summary = safeRecord(run?.retrieval_score_summary ?? searchData?.retrieval_score_summary);
+  const decision = safeRecord(run?.strategy_decision_json);
+  const preferSummaryTrace = run?.strategy_type === "llm_tool_orchestrator";
+  const isLlmToolOrchestrator = run?.strategy_type === "llm_tool_orchestrator";
   return (
     <section className="admin-section">
       <h2>Run Summary</h2>
+      {isLlmToolOrchestrator ? (
+        <p className="section-help">
+          LLM tool orchestration uses retrieval tool calls instead of the rule-based sufficiency check.
+          Review tools_used, search_call_count, and fallback_reason for the retrieval path.
+        </p>
+      ) : null}
       <dl className="detail-grid">
-        <Detail label="retrieval_run_id" value={`#${searchData.retrieval_run_id}`} />
+        <Detail label="retrieval_run_id" value={`#${retrievalRunId}`} />
         <Detail label="status" value={run ? <StatusBadge status={run.status} /> : "succeeded"} />
         <Detail label="strategy" value={run?.strategy_type ?? "N/A"} />
         <Detail label="selected_count" value={formatUnknownValue(summary.selected_count)} />
@@ -216,19 +259,106 @@ function SearchResultSummary({
           label="rdb_final_check_excluded"
           value={formatUnknownValue(summary.excluded_by_rdb_check_count)}
         />
-        <Detail label="fallback_used" value={formatUnknownValue(run?.strategy_decision_json?.fallback_used ?? false)} />
+        <Detail
+          label="fallback_used"
+          value={formatUnknownValue(traceField(decision, summary, "fallback_used", false, preferSummaryTrace))}
+        />
         <Detail
           label="retrieval_call_count"
-          value={formatUnknownValue(run?.strategy_decision_json?.retrieval_call_count ?? "N/A")}
+          value={formatUnknownValue(traceRetrievalCallCount(decision, summary, preferSummaryTrace))}
         />
         <Detail
           label="sufficiency_score"
-          value={formatScore(run?.strategy_decision_json?.sufficiency_score)}
+          value={formatScoreWithNote(
+            traceField(decision, summary, "sufficiency_score", undefined, preferSummaryTrace),
+            isLlmToolOrchestrator ? "not computed for LLM tool orchestration" : undefined
+          )}
         />
+        {isLlmToolOrchestrator ? (
+          <>
+            <Detail label="tools_used" value={formatUnknownValue(summary.tools_used ?? decision.tools_used ?? [])} />
+            <Detail
+              label="search_call_count"
+              value={formatUnknownValue(traceField(decision, summary, "search_call_count", undefined, true))}
+            />
+            <Detail
+              label="fallback_reason"
+              value={formatUnknownValue(traceField(decision, summary, "fallback_reason", undefined, true))}
+            />
+          </>
+        ) : null}
         <Detail label="started" value={formatDate(run?.started_at)} />
         <Detail label="finished" value={formatDate(run?.finished_at)} />
         <Detail label="error" value={formatSafeText(run?.error_code ?? null, 80)} />
       </dl>
+    </section>
+  );
+}
+
+function RetrievalRunHistoryPanel({
+  isLoading,
+  onSelect,
+  runs,
+  selectedRunId
+}: {
+  isLoading: boolean;
+  onSelect: (retrievalRunId: number) => void;
+  runs: RetrievalRunDebugSummary[];
+  selectedRunId: number | null;
+}) {
+  return (
+    <section className="admin-section">
+      <h2>Recent Retrieval Runs</h2>
+      {isLoading ? <LoadingState label="Loading retrieval run history..." /> : null}
+      {!isLoading && runs.length === 0 ? (
+        <EmptyState title="No retrieval run history">No retrieval runs have been recorded yet.</EmptyState>
+      ) : null}
+      {runs.length ? (
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Origin</th>
+              <th>Strategy</th>
+              <th>Execution</th>
+              <th>Selected</th>
+              <th>Started</th>
+              <th>Finished</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => {
+              const decision = safeRecord(run.strategy_decision_json);
+              const summary = safeRecord(run.retrieval_score_summary);
+              return (
+                <tr key={run.retrieval_run_id}>
+                  <td>#{run.retrieval_run_id}</td>
+                  <td>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td>{run.origin_type}</td>
+                  <td>{run.strategy_type}</td>
+                  <td>{formatUnknownValue(decision.execution_strategy ?? decision.selected_strategy ?? "N/A")}</td>
+                  <td>{formatUnknownValue(summary.selected_count ?? "N/A")}</td>
+                  <td>{formatDate(run.started_at)}</td>
+                  <td>{formatDate(run.finished_at)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      disabled={run.retrieval_run_id === selectedRunId}
+                      onClick={() => onSelect(run.retrieval_run_id)}
+                    >
+                      {run.retrieval_run_id === selectedRunId ? "Selected" : "View"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : null}
     </section>
   );
 }
@@ -246,6 +376,8 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
   const settings = safeRecord(run.retrieval_settings_json);
   const latency = safeRecord(run.latency_breakdown_json);
   const summary = safeRecord(run.retrieval_score_summary);
+  const preferSummaryTrace = run.strategy_type === "llm_tool_orchestrator";
+  const isLlmToolOrchestrator = run.strategy_type === "llm_tool_orchestrator";
 
   return (
     <section className="admin-section retrieval-debug-grid">
@@ -288,17 +420,69 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
       </TraceCard>
 
       <TraceCard title="Strategy Decision">
+        {isLlmToolOrchestrator ? (
+          <p className="section-help">
+            This run was controlled by bounded retrieval tools. Router-only fields may be unavailable;
+            use the tool call fields below for LLM Agentic RAG behavior.
+          </p>
+        ) : null}
         <dl className="detail-grid">
           <Detail label="selected_strategy" value={formatUnknownValue(decision.selected_strategy)} />
           <Detail label="execution_strategy" value={formatUnknownValue(decision.execution_strategy)} />
           <Detail label="decision_source" value={formatUnknownValue(decision.decision_source ?? "default")} />
           <Detail label="router_enabled" value={formatUnknownValue(decision.router_enabled ?? false)} />
-          <Detail label="fallback_used" value={formatUnknownValue(decision.fallback_used ?? false)} />
-          <Detail label="fallback_strategy" value={formatUnknownValue(decision.fallback_strategy ?? "N/A")} />
-          <Detail label="fallback_reason" value={formatUnknownValue(decision.fallback_reason)} />
-          <Detail label="retrieval_call_count" value={formatUnknownValue(decision.retrieval_call_count)} />
-          <Detail label="budget_exhausted" value={formatUnknownValue(decision.budget_exhausted ?? false)} />
-          <Detail label="sufficiency_score" value={formatScore(decision.sufficiency_score)} />
+          {isLlmToolOrchestrator ? (
+            <>
+              <Detail label="tools_used" value={formatUnknownValue(summary.tools_used ?? decision.tools_used ?? [])} />
+              <Detail
+                label="tool_call_count"
+                value={formatUnknownValue(traceField(decision, summary, "tool_call_count", undefined, true))}
+              />
+              <Detail
+                label="search_call_count"
+                value={formatUnknownValue(traceField(decision, summary, "search_call_count", undefined, true))}
+              />
+              <Detail
+                label="finalize_called"
+                value={formatUnknownValue(traceField(decision, summary, "finalize_called", undefined, true))}
+              />
+              <Detail
+                label="timeout_exceeded"
+                value={formatUnknownValue(traceField(decision, summary, "timeout_exceeded", false, true))}
+              />
+              <Detail
+                label="repeated_query_detected"
+                value={formatUnknownValue(traceField(decision, summary, "repeated_query_detected", false, true))}
+              />
+            </>
+          ) : null}
+          <Detail
+            label="fallback_used"
+            value={formatUnknownValue(traceField(decision, summary, "fallback_used", false, preferSummaryTrace))}
+          />
+          <Detail
+            label="fallback_strategy"
+            value={formatUnknownValue(traceField(decision, summary, "fallback_strategy", "N/A", preferSummaryTrace))}
+          />
+          <Detail
+            label="fallback_reason"
+            value={formatUnknownValue(traceField(decision, summary, "fallback_reason", undefined, preferSummaryTrace))}
+          />
+          <Detail
+            label="retrieval_call_count"
+            value={formatUnknownValue(traceRetrievalCallCount(decision, summary, preferSummaryTrace))}
+          />
+          <Detail
+            label="budget_exhausted"
+            value={formatUnknownValue(traceField(decision, summary, "budget_exhausted", false, preferSummaryTrace))}
+          />
+          <Detail
+            label="sufficiency_score"
+            value={formatScoreWithNote(
+              traceField(decision, summary, "sufficiency_score", undefined, preferSummaryTrace),
+              isLlmToolOrchestrator ? "not computed for LLM tool orchestration" : undefined
+            )}
+          />
           <Detail
             label="sufficiency_reason_codes"
             value={formatUnknownValue(decision.sufficiency_reason_codes ?? [])}
@@ -572,6 +756,39 @@ function latestStrategyMetrics(runs: Array<{ strategy_comparison: StrategyCompar
   return runs.find((run) => run.strategy_comparison.length > 0)?.strategy_comparison ?? [];
 }
 
+function traceField(
+  decision: Record<string, unknown>,
+  summary: Record<string, unknown>,
+  key: string,
+  fallback?: unknown,
+  preferSummary = false
+) {
+  const summaryValue = summary[key];
+  const decisionValue = decision[key];
+  if (preferSummary && summaryValue !== null && summaryValue !== undefined) {
+    return summaryValue;
+  }
+  if (decisionValue !== null && decisionValue !== undefined) {
+    return decisionValue;
+  }
+  if (summaryValue !== null && summaryValue !== undefined) {
+    return summaryValue;
+  }
+  return fallback;
+}
+
+function traceRetrievalCallCount(
+  decision: Record<string, unknown>,
+  summary: Record<string, unknown>,
+  preferSummary = false
+) {
+  const retrievalCallCount = traceField(decision, summary, "retrieval_call_count", undefined, preferSummary);
+  if (retrievalCallCount !== null && retrievalCallCount !== undefined) {
+    return retrievalCallCount;
+  }
+  return traceField(decision, summary, "search_call_count", "N/A", preferSummary);
+}
+
 function clampNumber(value: number, min: number, max: number, fallback: number) {
   if (!Number.isFinite(value)) {
     return fallback;
@@ -584,6 +801,11 @@ function formatScore(value: unknown) {
     return "N/A";
   }
   return value.toFixed(3);
+}
+
+function formatScoreWithNote(value: unknown, note?: string) {
+  const formatted = formatScore(value);
+  return formatted === "N/A" && note ? `N/A (${note})` : formatted;
 }
 
 function formatLatency(value: unknown) {

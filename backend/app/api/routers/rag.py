@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -87,6 +87,18 @@ def search(
         result = service.search(db, payload=payload, request_id=get_request_id(request))
     except RagSearchPipelineError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/retrieval-runs")
+def retrieval_run_history(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: RagService = Depends(rag_search_service),
+) -> dict[str, object]:
+    result = service.list_retrieval_run_debug_history(db, limit=limit)
     return success_response(result.model_dump(mode="json"), request)
 
 

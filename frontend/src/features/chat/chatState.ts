@@ -1,4 +1,4 @@
-import { ChatMessage, RagAskConfidence, RagAskCitation } from "./chatTypes";
+import { ChatMessage, RagAskConfidence, RagAskCitation, RagAskRetrievalSummary } from "./chatTypes";
 
 export type UiMessage = {
   chat_message_id: number | string;
@@ -12,6 +12,7 @@ export type UiMessage = {
   status?: "persisted" | "optimistic" | "loading";
   citations?: RagAskCitation[];
   confidence?: RagAskConfidence | null;
+  retrieval_summary?: RagAskRetrievalSummary | null;
   replayed?: boolean;
 };
 

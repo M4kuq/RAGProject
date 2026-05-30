@@ -15,6 +15,7 @@ dist/
 coverage/
 *.tsbuildinfo
 reports/
+artifacts/
 .codex/*.rules
 /.playwright-mcp/
 /.tmp-*/

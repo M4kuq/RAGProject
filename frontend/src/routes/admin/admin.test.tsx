@@ -42,6 +42,29 @@ test("AdminSidebar renders document review and job links", () => {
   expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute("href", "/admin/jobs");
 });
 
+test("AdminSidebar highlights review without also highlighting documents", () => {
+  render(
+    <MemoryRouter initialEntries={["/admin/documents/review"]}>
+      <AdminSidebar />
+    </MemoryRouter>
+  );
+
+  expect(screen.getByRole("link", { name: "Review" })).toHaveClass("active");
+  expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("link", { name: "Documents" })).not.toHaveClass("active");
+});
+
+test("AdminSidebar keeps documents active for document detail routes", () => {
+  render(
+    <MemoryRouter initialEntries={["/admin/documents/123/versions/456"]}>
+      <AdminSidebar />
+    </MemoryRouter>
+  );
+
+  expect(screen.getByRole("link", { name: "Documents" })).toHaveClass("active");
+  expect(screen.getByRole("link", { name: "Review" })).not.toHaveClass("active");
+});
+
 test("viewer cannot enter admin route and does not see admin navigation", async () => {
   vi.stubGlobal(
     "fetch",
@@ -440,17 +463,159 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   );
 
   expect(await screen.findByRole("heading", { name: "Evaluation #77" })).toBeInTheDocument();
+  expect(screen.getByText(/Promote failed evaluation items/)).toBeInTheDocument();
+  expect(screen.getByText(/strategy expectations only/)).toBeInTheDocument();
   expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "archived_failures" })).not.toBeInTheDocument();
   fireEvent.change(await screen.findByLabelText("failure promotion target dataset"), {
     target: { value: "42" }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Promote primary failures" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select primary failures" }));
+  fireEvent.click(screen.getByRole("button", { name: "Promote selected failures" }));
 
   await waitFor(() => expect(promoteRequests.length).toBe(1));
   const body = JSON.parse(String(promoteRequests[0].body));
   expect(body.target_dataset_id).toBe(42);
-  expect(body.failure_types).toEqual(["retrieval_exception", "no_context"]);
+  expect(body.promotion_keys).toEqual(["promotion-key-retrieval", "promotion-key-known"]);
+  expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
+});
+
+test("evaluation detail can create a target dataset and promote selected failures", async () => {
+  const createDatasetRequests: RequestInit[] = [];
+  const promoteRequests: RequestInit[] = [];
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/datasets") && init?.method === "POST") {
+        createDatasetRequests.push(init);
+        return jsonResponse({
+          data: {
+            evaluation_dataset_id: 99,
+            dataset_name: "failure_promoted_run_78",
+            description: "Failure promotion target for evaluation run #78.",
+            version: "v1",
+            source_type: "feedback_promoted",
+            status: "active",
+            metadata_json: { source: "failure_promotion_target", source_evaluation_run_id: 78 },
+            case_count: 0,
+            created_by: 1,
+            created_at: "2026-05-01T00:00:00Z",
+            updated_at: "2026-05-01T00:00:00Z"
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 100, total: 0, has_next: false } }
+        });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs/78/promote-failures")) {
+        promoteRequests.push(init ?? {});
+        return jsonResponse({
+          data: {
+            evaluation_run_id: 78,
+            target_dataset_id: 99,
+            created_count: 1,
+            skipped_count: 0,
+            items: [
+              {
+                promotion_key: "promotion-key-no-context",
+                failure_type: "no_context",
+                strategy_type: "hybrid",
+                evaluation_run_item_id: 780,
+                evaluation_case_id: null,
+                promoted_case_id: 901,
+                case_key: "failure_case",
+                result_code: "created"
+              }
+            ]
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs/78")) {
+        return jsonResponse({
+          data: {
+            evaluation_run_id: 78,
+            job_id: 89,
+            evaluation_dataset_id: null,
+            dataset_name: "fixture_only_run",
+            strategy_type: "hybrid",
+            strategies: ["hybrid"],
+            metric_names: ["no_context_rate"],
+            trigger_type: "manual",
+            status: "succeeded",
+            case_count: 1,
+            succeeded_count: 0,
+            failed_count: 1,
+            metric_summary: {},
+            strategy_comparison: [],
+            strategy_metrics_summary_json: null,
+            error_code: null,
+            error_message: null,
+            started_at: "2026-05-01T00:00:00Z",
+            finished_at: "2026-05-01T00:00:01Z",
+            created_at: "2026-05-01T00:00:00Z",
+            updated_at: "2026-05-01T00:00:01Z",
+            items: [],
+            failure_candidates: [
+              {
+                schema_version: "phase2.evaluation.v1",
+                evaluation_run_id: 78,
+                evaluation_run_item_id: 780,
+                evaluation_case_id: null,
+                case_key: "fixture_case",
+                question_hash: "c".repeat(64),
+                strategy_type: "hybrid",
+                failure_type: "no_context",
+                severity: "high",
+                failure_reason_codes: ["no_context"],
+                metric_snapshot: {},
+                recommended_tags: ["failure_promoted"],
+                promotion_key: "promotion-key-no-context"
+              }
+            ]
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations/78");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Evaluation #78" })).toBeInTheDocument();
+  expect(await screen.findByText(/No active target dataset exists/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Promote selected failures" })).toBeDisabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Create target dataset" }));
+
+  await waitFor(() => expect(createDatasetRequests.length).toBe(1));
+  const createBody = JSON.parse(String(createDatasetRequests[0].body));
+  expect(createBody.dataset_name).toBe("failure_promoted_run_78");
+  expect(await screen.findByRole("option", { name: "failure_promoted_run_78" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: /select failure no_context/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Promote selected failures" }));
+
+  await waitFor(() => expect(promoteRequests.length).toBe(1));
+  const promoteBody = JSON.parse(String(promoteRequests[0].body));
+  expect(promoteBody.target_dataset_id).toBe(99);
+  expect(promoteBody.promotion_keys).toEqual(["promotion-key-no-context"]);
   expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
 });
 
@@ -502,6 +667,9 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
             ]
           }
         });
+      }
+      if (url.includes("/api/v1/rag/retrieval-runs?")) {
+        return jsonResponse({ data: { items: [] } });
       }
       if (url.endsWith("/api/v1/rag/retrieval-runs/600")) {
         return jsonResponse({
@@ -713,6 +881,138 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(document.body).not.toHaveTextContent("sk-secret");
 });
 
+test("retrieval debug loads run history and refreshes selected trace", async () => {
+  let historyRequests = 0;
+  let detailRequests = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/rag/retrieval-runs?")) {
+        historyRequests += 1;
+        return jsonResponse({
+          data: {
+            items: [
+              {
+                retrieval_run_id: 601,
+                origin_type: "chat",
+                chat_session_id: 11,
+                request_message_id: 21,
+                status: "succeeded",
+                strategy_type: "llm_tool_orchestrator",
+                error_code: null,
+                query_hash: "d".repeat(64),
+                top_k: 8,
+                retrieval_score_summary: {
+                  selected_count: 2,
+                  fallback_used: true,
+                  fallback_reason: "llm_tool_additional_search",
+                  fallback_strategy: "hybrid",
+                  retrieval_call_count: 2
+                },
+                query_plan_json: null,
+                strategy_decision_json: {
+                  selected_strategy: "hybrid",
+                  execution_strategy: "hybrid",
+                  fallback_used: false,
+                  tools_used: ["dense_search", "hybrid_search"],
+                  raw_prompt: "raw prompt must not appear"
+                },
+                latency_breakdown_json: { total_ms: 120 },
+                retrieval_settings_json: { top_k: 8 },
+                rerank_score_top1: null,
+                answer_confidence: 0.8,
+                groundedness_score: 1,
+                confidence_label: "High",
+                started_at: "2026-05-01T00:00:00Z",
+                finished_at: "2026-05-01T00:00:01Z",
+                created_at: "2026-05-01T00:00:00Z"
+              }
+            ]
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/rag/retrieval-runs/601")) {
+        detailRequests += 1;
+        return jsonResponse({
+          data: {
+            retrieval_run: {
+              retrieval_run_id: 601,
+              origin_type: "chat",
+              chat_session_id: 11,
+              request_message_id: 21,
+              status: "succeeded",
+              strategy_type: "llm_tool_orchestrator",
+              error_code: null,
+              query_hash: "d".repeat(64),
+              top_k: 8,
+              retrieval_score_summary: {
+                selected_count: 2,
+                fallback_used: true,
+                fallback_reason: "llm_tool_additional_search",
+                fallback_strategy: "hybrid",
+                retrieval_call_count: 2
+              },
+              query_plan_json: { query_mode: "llm_tool_orchestrator", raw_prompt: "raw prompt must not appear" },
+              strategy_decision_json: {
+                selected_strategy: "hybrid",
+                execution_strategy: "hybrid",
+                fallback_used: false,
+                tools_used: ["dense_search", "hybrid_search"]
+              },
+              latency_breakdown_json: { total_ms: 120 },
+              retrieval_settings_json: { top_k: 8 },
+              rerank_score_top1: null,
+              answer_confidence: 0.8,
+              groundedness_score: 1,
+              confidence_label: "High",
+              started_at: "2026-05-01T00:00:00Z",
+              finished_at: "2026-05-01T00:00:01Z",
+              created_at: "2026-05-01T00:00:00Z"
+            },
+            items: []
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 5, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/retrieval-debug");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Recent Retrieval Runs" })).toBeInTheDocument();
+  expect((await screen.findAllByText("#601")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("llm_tool_orchestrator")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("llm_tool_additional_search")).length).toBeGreaterThan(0);
+  expect(await screen.findByText(/retrieval tool calls instead of the rule-based sufficiency check/)).toBeInTheDocument();
+  expect((await screen.findAllByText("tools_used")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/dense_search/)).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/hybrid_search/)).length).toBeGreaterThan(0);
+  expect(await screen.findByText("120 ms")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("raw prompt must not appear");
+  await waitFor(() => expect(detailRequests).toBeGreaterThanOrEqual(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "Refresh trace" }));
+
+  await waitFor(() => expect(historyRequests).toBeGreaterThanOrEqual(2));
+  await waitFor(() => expect(detailRequests).toBeGreaterThanOrEqual(2));
+});
+
 test("document list renders filters, statuses and safe escaped text", async () => {
   vi.stubGlobal(
     "fetch",
@@ -872,6 +1172,8 @@ test("document detail renders version compare summary and bounded previews", asy
   );
 
   expect(await screen.findByRole("heading", { name: "Version Compare" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Version Compare" })).toHaveAttribute("href", "#version-compare");
+  expect(screen.getByText("Compare version metadata and bounded source previews. Full source bodies are not shown.")).toBeInTheDocument();
   expect(await screen.findByText("Select versions and run compare to load the diff.")).toBeInTheDocument();
   expect(compareRequests).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
@@ -1059,6 +1361,62 @@ test("job payload view redacts secret and absolute path fields", () => {
   expect(screen.getByText("safe_label")).toBeInTheDocument();
   expect(screen.queryByText("secret-token")).not.toBeInTheDocument();
   expect(screen.queryByText("C:\\storage\\uploads\\raw.txt")).not.toBeInTheDocument();
+});
+
+test("succeeded job detail does not show failure message", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/jobs/27")) {
+        return jsonResponse({
+          data: {
+            job_id: 27,
+            job_type: "evaluation_run",
+            status: "succeeded",
+            priority: 100,
+            target_type: "evaluation_run",
+            target_id: 3,
+            retry_of_job_id: null,
+            retry_count: 0,
+            created_by: 1,
+            started_at: "2026-05-30T23:28:00Z",
+            finished_at: "2026-05-30T23:28:00Z",
+            created_at: "2026-05-30T23:28:00Z",
+            updated_at: "2026-05-30T23:28:00Z",
+            locked_at: null,
+            lease_expires_at: null,
+            result_json: null,
+            source_job_id: null,
+            active_retry_job_id: null,
+            error_code: null,
+            error_message: null,
+            payload_view: { payload: { evaluation_run_id: 3 }, payload_redacted: true }
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/jobs/27");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "Job #27" })).toBeInTheDocument();
+  expect(screen.getByText("succeeded")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Error" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Job failed.")).not.toBeInTheDocument();
 });
 
 test("failed job retry refreshes csrf before mutation", async () => {
