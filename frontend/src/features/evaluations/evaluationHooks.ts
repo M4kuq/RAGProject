@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queryKeys";
 import {
+  createEvaluationDataset,
   createEvaluationRun,
   exportEvaluationDataset,
   getEvaluationDataset,
@@ -13,6 +14,7 @@ import {
 } from "./evaluationApi";
 import type {
   EvaluationDataset,
+  EvaluationDatasetCreateRequest,
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
   EvaluationRunCreateRequest
@@ -45,6 +47,17 @@ export function useCreateEvaluationRun() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.evaluations.detail(result.evaluation_run_id)
       });
+    }
+  });
+}
+
+export function useCreateEvaluationDataset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: EvaluationDatasetCreateRequest) => createEvaluationDataset(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.evaluations.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.evaluations.activeDatasets });
     }
   });
 }

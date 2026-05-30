@@ -25,6 +25,7 @@ export type ChatMessage = {
   client_message_id: string | null;
   citations?: RagAskCitation[];
   confidence?: RagAskConfidence | null;
+  retrieval_summary?: RagAskRetrievalSummary | null;
   edited_flag?: boolean;
   replayed?: boolean;
   created_at: string;
@@ -54,6 +55,16 @@ export type RagAskConfidence = {
   confidence_label: "High" | "Medium" | "Low";
 };
 
+export type RagAskRetrievalSummary = {
+  retrieval_run_id: number;
+  strategy_type: RagStrategy | "sparse";
+  selected_strategy: string | null;
+  execution_strategy: string | null;
+  tools_used: string[];
+  fallback_used: boolean | null;
+  no_context: boolean | null;
+};
+
 export type RagAskRequest = {
   chat_session_id: number;
   client_message_id: string;
@@ -70,6 +81,7 @@ export type RagAskResponse = {
   assistant_message: ChatMessage;
   citations: RagAskCitation[];
   confidence: RagAskConfidence | null;
+  retrieval_summary: RagAskRetrievalSummary;
   retrieval_run_id: number;
 };
 

@@ -105,11 +105,13 @@ from app.schemas.rag import (
     RagAskConfidence,
     RagAskRequest,
     RagAskResponse,
+    RagAskRetrievalSummary,
     RagAskUserMessage,
     RagSearchItem,
     RagSearchRequest,
     RagSearchResponse,
     RetrievalRunDebugItem,
+    RetrievalRunDebugListResponse,
     RetrievalRunDebugResponse,
     RetrievalRunDebugSummary,
     RetrievalScoreSummary,
@@ -408,6 +410,18 @@ class RagService:
             items=[_retrieval_run_debug_item(item) for item in items],
         )
 
+    def list_retrieval_run_debug_history(
+        self,
+        db: Session,
+        *,
+        limit: int,
+    ) -> RetrievalRunDebugListResponse:
+        safe_limit = min(100, max(1, limit))
+        runs = self.repository.list_recent_runs(db, limit=safe_limit)
+        return RetrievalRunDebugListResponse(
+            items=[_retrieval_run_debug_summary(run) for run in runs]
+        )
+
     def ask(
         self,
         db: Session,
@@ -657,6 +671,18 @@ class RagService:
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
                 )
+                if (
+                    requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR
+                    and _is_insufficient_evidence_answer(parsed_generation.answer_text)
+                ):
+                    self._mark_failed_safely(
+                        db,
+                        retrieval_run_id=run_id,
+                        error_code="no_context_found",
+                        latency_tracker=latency_tracker,
+                        rollback=False,
+                    )
+                    raise RagAskPipelineError("no_context_found", 422)
                 assistant_message = self.chat_repository.create_message(
                     db,
                     chat_session_id=payload.chat_session_id,
@@ -1041,7 +1067,8 @@ class RagService:
                 candidates=fused_candidates,
                 filters=filters,
             )
-        visible_candidates = checked_candidates[:top_k]
+        ranked_candidates = _order_by_source_affinity(query, checked_candidates)
+        visible_candidates = ranked_candidates[:top_k]
         selected_count = min(rerank_top_n, len(visible_candidates))
         excluded_by_rdb_check_count = max(0, len(fused_candidates) - len(checked_candidates))
         if not visible_candidates:
@@ -1385,7 +1412,7 @@ class RagService:
                 candidates=fused_candidates,
                 filters=filters,
             )
-        visible_candidates = checked_candidates[:top_k]
+        visible_candidates = _order_by_source_affinity(query, checked_candidates)[:top_k]
         return RetrievalAttemptResult(
             strategy=strategy,
             candidates=visible_candidates,
@@ -1408,7 +1435,7 @@ class RagService:
         latency_tracker: LatencyTracker,
         trace_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER,
     ) -> RetrievalPipelineResult:
-        final_candidates = agentic_result.final_candidates
+        final_candidates = _order_by_source_affinity(query, agentic_result.final_candidates)
         if not final_candidates:
             summary = _agentic_score_summary(
                 requested_top_k=top_k,
@@ -1496,6 +1523,7 @@ class RagService:
                 rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
             ),
         )
+        ordered_candidates = _order_by_source_affinity(query, ordered_candidates)
         selected_count = (
             0 if agentic_result.no_context else min(rerank_top_n, len(ordered_candidates))
         )
@@ -2277,6 +2305,79 @@ def _fusion_method(settings: Settings) -> FusionMethod:
     return FusionMethod(settings.hybrid_fusion_method)
 
 
+_SOURCE_AFFINITY_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{2,}")
+_SOURCE_AFFINITY_STOP_WORDS = {
+    "and",
+    "compare",
+    "comparison",
+    "please",
+    "search",
+    "retrieval",
+    "method",
+    "methods",
+    "strategy",
+    "strategies",
+}
+
+
+def _order_by_source_affinity(
+    query: str,
+    candidates: list[CheckedRetrievalCandidate],
+) -> list[CheckedRetrievalCandidate]:
+    tokens = _source_affinity_tokens(query)
+    if not tokens or len(candidates) < 2:
+        return candidates
+    scored = [
+        (_source_affinity_score(candidate, tokens), index, candidate)
+        for index, candidate in enumerate(candidates)
+    ]
+    if max(score for score, _, _ in scored) <= 0:
+        return candidates
+    return [
+        candidate
+        for _, _, candidate in sorted(
+            scored,
+            key=lambda item: (-item[0], item[1]),
+        )
+    ]
+
+
+def _source_affinity_tokens(query: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in _SOURCE_AFFINITY_TOKEN_RE.finditer(query):
+        token = match.group(0).strip("._-").lower()
+        if len(token) < 4 or token in _SOURCE_AFFINITY_STOP_WORDS or token in seen:
+            continue
+        tokens.append(token)
+        seen.add(token)
+        if len(tokens) >= 8:
+            break
+    return tokens
+
+
+def _source_affinity_score(
+    candidate: CheckedRetrievalCandidate,
+    tokens: list[str],
+) -> int:
+    file_name = (candidate.document_version.file_name or "").lower()
+    title = (candidate.logical_document.title or "").lower()
+    section_title = (candidate.chunk.section_title or "").lower()
+    combined = f"{file_name} {title} {section_title}"
+    score = 0
+    for token in tokens:
+        if token not in combined:
+            continue
+        score += 1
+        if token in title:
+            score += 2
+        if token in file_name:
+            score += 1
+        if token in section_title:
+            score += 1
+    return score
+
+
 def _hybrid_uses_dense(settings: Settings) -> bool:
     return settings.hybrid_dense_weight > 0
 
@@ -2797,6 +2898,7 @@ def _ask_response(
         citations=[_citation_response(record) for record in citation_records],
         confidence=_confidence_response(run),
         retrieval_run_id=retrieval_run_id,
+        retrieval_summary=_retrieval_summary_response(run),
         replayed=replayed,
     )
 
@@ -2829,6 +2931,54 @@ def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
         answer_confidence=_round_score(float(run.answer_confidence)),
         groundedness_score=_round_score(float(run.groundedness_score)),
         confidence_label=label,
+    )
+
+
+def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
+    decision = _safe_json_object(run.strategy_decision_json) or {}
+    tools_used_value = decision.get("tools_used")
+    tools_used = (
+        [str(item) for item in tools_used_value if isinstance(item, str)]
+        if isinstance(tools_used_value, list)
+        else []
+    )
+    return RagAskRetrievalSummary(
+        retrieval_run_id=run.retrieval_run_id,
+        strategy_type=RetrievalStrategy(run.strategy_type),
+        selected_strategy=_optional_safe_string(decision.get("selected_strategy")),
+        execution_strategy=_optional_safe_string(decision.get("execution_strategy")),
+        tools_used=tools_used,
+        fallback_used=decision.get("fallback_used")
+        if isinstance(decision.get("fallback_used"), bool)
+        else None,
+        no_context=decision.get("no_context")
+        if isinstance(decision.get("no_context"), bool)
+        else None,
+    )
+
+
+def _optional_safe_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    safe = _safe_display_text(value)
+    return safe or None
+
+
+def _is_insufficient_evidence_answer(answer_text: str) -> bool:
+    normalized = " ".join(answer_text.lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "十分な根拠がありません",
+            "十分な根拠がない",
+            "十分な情報がありません",
+            "根拠が不足",
+            "insufficient evidence",
+            "insufficient context",
+            "not enough evidence",
+            "not enough context",
+            "no sufficient evidence",
+        )
     )
 
 

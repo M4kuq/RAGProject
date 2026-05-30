@@ -126,7 +126,15 @@ export function DocumentDetailPage() {
       {archive.error ? <InlineAlert tone="error">{archive.error.message}</InlineAlert> : null}
       {uploadVersion.error ? <InlineAlert tone="error">{uploadVersion.error.message}</InlineAlert> : null}
 
-      <section className="admin-section">
+      <nav className="document-detail-tabs" aria-label="Document detail sections">
+        <a href="#document-metadata">Metadata</a>
+        <a href="#document-upload-version">Upload Version</a>
+        <a href="#document-versions">Versions</a>
+        <a href="#version-compare">Version Compare</a>
+        <a href="#chunk-preview">Chunk Preview</a>
+      </nav>
+
+      <section className="admin-section" id="document-metadata">
         <h2>Metadata</h2>
         <dl className="detail-grid">
           <div>
@@ -161,7 +169,7 @@ export function DocumentDetailPage() {
         {isArchived ? <InlineAlert>Archived documents are excluded from retrieval.</InlineAlert> : null}
       </section>
 
-      <section className="admin-section">
+      <section className="admin-section" id="document-upload-version">
         <h2>Upload New Version</h2>
         <div className="inline-form">
           <input aria-label="new version file" type="file" onChange={(event) => setVersionFile(event.target.files?.[0] ?? null)} />
@@ -171,13 +179,16 @@ export function DocumentDetailPage() {
         </div>
       </section>
 
-      <section className="admin-section">
+      <section className="admin-section" id="document-versions">
         <h2>Versions</h2>
         <VersionList logicalDocumentId={logicalDocumentId} versions={document.data.versions} />
       </section>
 
-      <section className="admin-section">
+      <section className="admin-section" id="version-compare">
         <h2>Version Compare</h2>
+        <p className="muted">
+          Compare version metadata and bounded source previews. Full source bodies are not shown.
+        </p>
         <div className="inline-form">
           <label>
             Base
@@ -230,7 +241,7 @@ export function DocumentDetailPage() {
         ) : null}
       </section>
 
-      <section className="admin-section">
+      <section className="admin-section" id="chunk-preview">
         <h2>Chunk Preview</h2>
         {previewVersion ? <p className="muted">Previewing version v{previewVersion.version_no}.</p> : null}
         {chunks.isLoading ? <LoadingState /> : null}

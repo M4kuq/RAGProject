@@ -53,9 +53,14 @@ from app.schemas.evaluations import (
     EvaluationDatasetManifest,
     EvaluationFailurePromotionRequest,
     EvaluationRunCreateRequest,
+    StrategyComparisonMetric,
 )
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
-from app.services.evaluation_service import STRATEGY_METRIC_SPECS, EvaluationService
+from app.services.evaluation_service import (
+    STRATEGY_METRIC_SPECS,
+    EvaluationService,
+    _strategy_metrics_summary_json,
+)
 from app.workers.handlers.base import JobExecutionContext
 from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
 
@@ -220,6 +225,43 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
     assert "full context" not in dumped.lower()
     assert "raw chunk" not in dumped.lower()
     assert "secret" not in dumped.lower()
+
+
+def test_strategy_metrics_summary_uses_p95_value_for_p95_latency() -> None:
+    payload = _strategy_metrics_summary_json(
+        strategies=["hybrid"],
+        strategy_comparison=[
+            StrategyComparisonMetric(
+                strategy_type=RetrievalStrategy.HYBRID,
+                metric_name="p95_latency",
+                average=90.8,
+                p50=88.0,
+                p95=104.0,
+                count=5,
+            ),
+            StrategyComparisonMetric(
+                strategy_type=RetrievalStrategy.HYBRID,
+                metric_name="recall_at_k",
+                average=0.6,
+                p50=1.0,
+                p95=1.0,
+                count=5,
+            ),
+        ],
+        metric_summary={"p95_latency": 104.0, "recall_at_k": 0.6},
+        case_count=5,
+        succeeded_count=5,
+        failed_count=0,
+    )
+
+    strategy_metrics = payload["strategy_metrics"]
+    assert isinstance(strategy_metrics, dict)
+    hybrid_summary = strategy_metrics["hybrid"]
+    assert isinstance(hybrid_summary, dict)
+    strategy_summary = hybrid_summary["metric_summary"]
+    assert isinstance(strategy_summary, dict)
+    assert strategy_summary["p95_latency"] == 104.0
+    assert strategy_summary["recall_at_k"] == 0.6
 
 
 def test_fixture_metadata_drives_agentic_strategy_accuracy() -> None:
@@ -1548,6 +1590,32 @@ def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> No
                 ),
             )
             assert bulk_promoted.created_count == len(unique_candidate_item_ids)
+            selected_candidate = next(
+                candidate
+                for candidate in eligible_candidates
+                if candidate.failure_type == "strategy_selection_incorrect"
+            )
+            keyed_target = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_keyed_failure_target",
+                    source_type="manual",
+                ),
+                user=admin_user,
+            )
+            keyed_promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=keyed_target.evaluation_dataset_id,
+                    promotion_keys=[selected_candidate.promotion_key],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert keyed_promoted.created_count == 1
+            assert keyed_promoted.items[0].promotion_key == selected_candidate.promotion_key
+            assert keyed_promoted.items[0].failure_type == "strategy_selection_incorrect"
             promoted = service.promote_failures(
                 db,
                 evaluation_run_id=created.evaluation_run_id,

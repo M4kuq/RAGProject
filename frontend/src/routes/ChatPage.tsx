@@ -32,10 +32,26 @@ const MODEL_OPTIONS = [
   { value: "gemini:gemini-2.5-flash", label: "Gemini" }
 ];
 const RAG_STRATEGY_OPTIONS = [
-  { value: "dense" as const, label: "Normal RAG" },
-  { value: "hybrid" as const, label: "Hybrid RAG" },
-  { value: "agentic_router" as const, label: "Agentic Router" },
-  { value: "llm_tool_orchestrator" as const, label: "LLM Agentic RAG" }
+  {
+    value: "llm_tool_orchestrator" as const,
+    label: "Auto",
+    description: "LLM Agentic RAG: the model chooses dense, sparse, or hybrid retrieval tools within a budget."
+  },
+  {
+    value: "dense" as const,
+    label: "Normal RAG",
+    description: "Dense vector retrieval followed by answer generation."
+  },
+  {
+    value: "hybrid" as const,
+    label: "Hybrid RAG",
+    description: "Dense vector retrieval plus sparse keyword retrieval with score fusion."
+  },
+  {
+    value: "agentic_router" as const,
+    label: "Agentic Router",
+    description: "Rule-based query planning and strategy routing before answer generation."
+  }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
 
@@ -64,6 +80,9 @@ function readonlyReason(mode: ChatMode): string | null {
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    if (error.code === "csrf_invalid" || error.code === "csrf_missing") {
+      return "Your session protection token expired. Reload and try again.";
+    }
     if (error.status === 401 || error.code === "auth_required") {
       return "Please sign in again.";
     }
@@ -130,6 +149,7 @@ function mergePersistedAskMessages(current: ChatMessage[] | undefined, result: R
     client_message_id: null,
     citations: result.data.citations,
     confidence: result.data.confidence,
+    retrieval_summary: result.data.retrieval_summary,
     edited_flag: false,
     replayed: Boolean(result.meta.replayed),
     updated_at: result.data.assistant_message.updated_at ?? result.data.assistant_message.created_at
@@ -448,7 +468,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const [localMessages, setLocalMessages] = useState<UiMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(readInitialModel);
-  const [selectedStrategy, setSelectedStrategy] = useState<RagStrategy>("dense");
+  const [selectedStrategy, setSelectedStrategy] = useState<RagStrategy>("llm_tool_orchestrator");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [editDialog, setEditDialog] = useState<EditChatDialogState | null>(null);

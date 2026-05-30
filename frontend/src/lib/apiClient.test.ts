@@ -72,6 +72,49 @@ test("refreshes csrf token before unsafe requests when page state was reloaded",
   expect(new Headers(init.headers).get("x-csrf-token")).toBe("refreshed-token");
 });
 
+test("refreshes csrf token and retries once when an unsafe request has a stale token", async () => {
+  document.cookie = "rag_csrf=stale-token";
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: "csrf_invalid", message: "CSRF token is invalid." } }),
+        { status: 403 }
+      )
+    )
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: { csrf_token: "fresh-token" } }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await apiFetch("/api/v1/rag/ask", {
+    method: "POST",
+    body: JSON.stringify({ question: "What is RAG?" })
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  const [, firstInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(new Headers(firstInit.headers).get("x-csrf-token")).toBe("stale-token");
+  expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/auth/csrf");
+  const [, retryInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+  expect(new Headers(retryInit.headers).get("x-csrf-token")).toBe("fresh-token");
+});
+
+test("does not retry generic permission errors as csrf failures", async () => {
+  document.cookie = "rag_csrf=session-token";
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ error: { code: "permission_denied", message: "Permission denied." } }), {
+      status: 403
+    })
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(apiFetch("/api/v1/rag/ask", { method: "POST" })).rejects.toMatchObject({
+    code: "permission_denied",
+    status: 403
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
 test("keeps form data content type unset", async () => {
   const fetchMock = vi
     .fn()

@@ -488,6 +488,7 @@ class EvaluationFailureCandidatesResponse(BaseModel):
 class EvaluationFailurePromotionRequest(BaseModel):
     target_dataset_id: int = Field(ge=1)
     failure_types: list[str] | None = Field(default=None, min_length=1, max_length=20)
+    promotion_keys: list[str] | None = Field(default=None, min_length=1, max_length=100)
     min_severity: EvaluationFailureSeverity = EvaluationFailureSeverity.MEDIUM
     limit: int = Field(default=50, ge=1, le=100)
 
@@ -499,6 +500,18 @@ class EvaluationFailurePromotionRequest(BaseModel):
         deduped: list[str] = []
         for item in value:
             safe = _safe_key(item, field_name="failure_type")
+            if safe not in deduped:
+                deduped.append(safe)
+        return deduped
+
+    @field_validator("promotion_keys")
+    @classmethod
+    def validate_promotion_keys(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        deduped: list[str] = []
+        for item in value:
+            safe = _safe_key(item, field_name="promotion_key")
             if safe not in deduped:
                 deduped.append(safe)
         return deduped

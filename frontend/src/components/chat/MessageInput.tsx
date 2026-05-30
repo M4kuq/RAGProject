@@ -25,7 +25,7 @@ export function MessageInput({
   onSubmit: () => void;
   selectedStrategy: RagStrategy;
   selectedModel: string;
-  strategyOptions: { label: string; value: RagStrategy }[];
+  strategyOptions: { description: string; label: string; value: RagStrategy }[];
   value: string;
 }) {
   function submit(event: FormEvent) {
@@ -40,6 +40,9 @@ export function MessageInput({
     }
   }
 
+  const selectedStrategyDescription =
+    strategyOptions.find((option) => option.value === selectedStrategy)?.description ?? null;
+
   return (
     <form onSubmit={submit} className="composer">
       <textarea
@@ -52,7 +55,16 @@ export function MessageInput({
         value={value}
       />
       <div className="composer-footer">
-        {disabledReason ? <p className="notice">{disabledReason}</p> : <p className="notice">Enter to send, Shift+Enter for a new line.</p>}
+        <div className="composer-guidance">
+          {disabledReason ? (
+            <p className="notice">{disabledReason}</p>
+          ) : (
+            <p className="notice">Enter to send, Shift+Enter for a new line.</p>
+          )}
+          {selectedStrategyDescription ? (
+            <p className="strategy-description">{selectedStrategyDescription}</p>
+          ) : null}
+        </div>
         <div className="composer-controls">
           <select
             aria-label="rag strategy"

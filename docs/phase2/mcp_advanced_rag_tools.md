@@ -13,7 +13,8 @@ The MCP surface supports:
 - `rag_search` with `strategy=dense|sparse|hybrid|agentic_router`
 - `rag_search_hybrid` as a wrapper for `rag_search(strategy=hybrid)`
 - `rag_search_agentic` as a wrapper for `rag_search(strategy=agentic_router)`
-- `rag_ask` with default dense behavior and explicit `strategy=agentic_router`
+- `rag_ask` with default dense behavior and explicit `strategy=hybrid|agentic_router`
+- `rag_ask_hybrid` as a wrapper for `rag_ask(strategy=hybrid)`
 - `rag_ask_agentic` as a wrapper for `rag_ask(strategy=agentic_router)`
 - `rag_get_retrieval_trace` for safe retrieval trace summaries
 - `rag_compare_strategies` for latest stored strategy comparison summaries
@@ -85,12 +86,31 @@ Hybrid search:
 }
 ```
 
-Agentic answer:
+Hybrid answer:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "rag_ask_hybrid",
+    "arguments": {
+      "question": "How does Hybrid RAG combine dense and sparse retrieval?",
+      "top_k": 5,
+      "rerank_top_n": 3,
+      "include_trace_summary": true
+    }
+  }
+}
+```
+
+Agentic answer:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
   "method": "tools/call",
   "params": {
     "name": "rag_ask_agentic",
@@ -109,7 +129,7 @@ Retrieval trace summary:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 3,
+  "id": 4,
   "method": "tools/call",
   "params": {
     "name": "rag_get_retrieval_trace",

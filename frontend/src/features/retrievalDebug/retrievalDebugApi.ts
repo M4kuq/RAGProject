@@ -3,7 +3,8 @@ import type { ApiResponse } from "../../types/api";
 import type {
   RagSearchDebugRequest,
   RagSearchDebugResponse,
-  RetrievalRunDebugDetail
+  RetrievalRunDebugDetail,
+  RetrievalRunDebugHistory
 } from "./retrievalDebugTypes";
 
 export async function runRagDebugSearch(
@@ -21,6 +22,13 @@ export async function getRetrievalRunDebugDetail(
 ): Promise<RetrievalRunDebugDetail> {
   const response = await apiFetch<ApiResponse<RetrievalRunDebugDetail>>(
     `/api/v1/rag/retrieval-runs/${retrievalRunId}`
+  );
+  return response.data;
+}
+
+export async function listRetrievalRunDebugHistory(): Promise<RetrievalRunDebugHistory> {
+  const response = await apiFetch<ApiResponse<RetrievalRunDebugHistory>>(
+    "/api/v1/rag/retrieval-runs?limit=20"
   );
   return response.data;
 }

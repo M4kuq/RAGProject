@@ -149,6 +149,10 @@ class RetrievalRunDebugResponse(BaseModel):
     items: list[RetrievalRunDebugItem]
 
 
+class RetrievalRunDebugListResponse(BaseModel):
+    items: list[RetrievalRunDebugSummary]
+
+
 class RagSearchItem(BaseModel):
     retrieval_run_item_id: int
     document_chunk_id: int
@@ -212,6 +216,16 @@ class RagAskConfidence(BaseModel):
     confidence_label: Literal["High", "Medium", "Low"]
 
 
+class RagAskRetrievalSummary(BaseModel):
+    retrieval_run_id: int
+    strategy_type: RetrievalStrategy
+    selected_strategy: str | None = None
+    execution_strategy: str | None = None
+    tools_used: list[str] = Field(default_factory=list)
+    fallback_used: bool | None = None
+    no_context: bool | None = None
+
+
 class RagAskResponse(BaseModel):
     chat_session_id: int
     user_message: RagAskUserMessage
@@ -219,4 +233,5 @@ class RagAskResponse(BaseModel):
     citations: list[RagAskCitation]
     confidence: RagAskConfidence
     retrieval_run_id: int
+    retrieval_summary: RagAskRetrievalSummary
     replayed: bool = False
