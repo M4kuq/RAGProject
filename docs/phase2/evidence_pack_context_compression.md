@@ -58,6 +58,11 @@ The effective total evidence text cap is also bounded by
 `generation_max_context_chars` so PR-41 does not expand the prompt beyond the
 existing generation limit.
 
+When `rag.evidence_pack.enabled` is `false`, the builder records a skipped safe
+trace and bypasses Evidence Pack-specific item, source, and per-item caps. The
+only remaining context bound is the pre-existing generation context character
+limit.
+
 ## Persistence
 
 PR-41 adds nullable `retrieval_runs.context_compression_json` via migration

@@ -133,6 +133,32 @@ def test_bounded_evidence_text_ratio_and_citation_mapping() -> None:
     assert context_items[0].text == "a" * 40
 
 
+def test_disabled_policy_passthrough_ignores_evidence_item_caps() -> None:
+    pack = EvidencePackBuilder().build(
+        [
+            _candidate(1, 101, "alpha one", source="source-a", rank=1),
+            _candidate(2, 102, "alpha two", source="source-a", rank=2),
+            _candidate(3, 103, "beta one", source="source-b", rank=3),
+        ],
+        policy=EvidencePackPolicy(
+            enabled=False,
+            max_items=1,
+            max_items_per_source=1,
+            max_chars_per_item=20,
+            max_total_chars=1000,
+        ),
+    )
+
+    assert pack.trace.enabled is False
+    assert pack.selected_item_ids == [1, 2, 3]
+    assert pack.trace.drops == {}
+    assert [item.evidence_text_for_generation for item in pack.items] == [
+        "alpha one",
+        "alpha two",
+        "beta one",
+    ]
+
+
 def test_context_compression_json_has_no_raw_text_fields() -> None:
     pack = EvidencePackBuilder().build(
         [

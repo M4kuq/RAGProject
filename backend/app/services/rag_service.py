@@ -3022,15 +3022,26 @@ def _context_budget_policy(settings: Settings) -> ContextBudgetPolicy:
 
 
 def _evidence_pack_policy(settings: Settings) -> EvidencePackPolicy:
-    return EvidencePackPolicy(
-        enabled=settings.evidence_pack_enabled,
-        max_items=settings.evidence_pack_max_items,
-        max_items_per_source=settings.evidence_pack_max_items_per_source,
-        max_chars_per_item=settings.evidence_pack_max_chars_per_item,
-        max_total_chars=min(
+    enabled = settings.evidence_pack_enabled
+    if enabled:
+        max_items = settings.evidence_pack_max_items
+        max_items_per_source = settings.evidence_pack_max_items_per_source
+        max_chars_per_item = settings.evidence_pack_max_chars_per_item
+        max_total_chars = min(
             settings.evidence_pack_max_total_chars,
             settings.generation_max_context_chars,
-        ),
+        )
+    else:
+        max_items = settings.context_budget_max_context_items
+        max_items_per_source = settings.context_budget_max_context_items
+        max_chars_per_item = settings.generation_max_context_chars
+        max_total_chars = settings.generation_max_context_chars
+    return EvidencePackPolicy(
+        enabled=enabled,
+        max_items=max_items,
+        max_items_per_source=max_items_per_source,
+        max_chars_per_item=max_chars_per_item,
+        max_total_chars=max_total_chars,
         near_duplicate_threshold=settings.evidence_pack_near_duplicate_threshold,
         preserve_citation_candidates=settings.evidence_pack_preserve_citation_candidates,
         group_by_source=settings.evidence_pack_group_by_source,

@@ -520,14 +520,6 @@ def _passthrough_items(
                 CompressionDropReason.MISSING_TEXT,
             )
             continue
-        if len(items) >= policy.max_items:
-            _drop(
-                drops,
-                drop_counts,
-                prepared_candidate,
-                CompressionDropReason.MAX_ITEMS_EXCEEDED,
-            )
-            continue
         remaining_total = policy.max_total_chars - output_chars
         if remaining_total <= 0:
             _drop(

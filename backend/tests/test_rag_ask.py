@@ -442,6 +442,54 @@ def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
         assert [item.selected_flag for item in items] == [True, False]
 
 
+def test_rag_ask_evidence_pack_disabled_bypasses_evidence_caps(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        evidence_pack_enabled=False,
+        evidence_pack_max_items=1,
+        evidence_pack_max_items_per_source=1,
+        evidence_pack_max_chars_per_item=20,
+        evidence_pack_max_total_chars=20,
+        generation_max_context_chars=1000,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=NoopRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="evidence disabled")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "evidence-disabled-msg",
+            "message": "alpha policy summary",
+            "top_k": 2,
+            "rerank_top_n": 2,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["items"]["selected_count"] == 2
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["enabled"] is False
+        assert run.context_compression_json["policy"]["max_total_chars"] == 1000
+        assert run.context_compression_json["output"]["evidence_item_count"] == 2
+        assert run.context_compression_json["output"]["output_char_count"] > 20
+        assert run.context_compression_json["drops"] == {}
+
+
 def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
     caplog: pytest.LogCaptureFixture,
