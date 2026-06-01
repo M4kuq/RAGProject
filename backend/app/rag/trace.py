@@ -316,6 +316,15 @@ def build_retrieval_settings_snapshot(
             strategy_type == RetrievalStrategy.AGENTIC_ROUTER and settings.router_enabled
         ),
         trace_enabled=True,
+        evidence_pack_enabled=bool(settings.evidence_pack_enabled),
+        evidence_pack_max_items=settings.evidence_pack_max_items,
+        evidence_pack_max_items_per_source=settings.evidence_pack_max_items_per_source,
+        evidence_pack_max_chars_per_item=settings.evidence_pack_max_chars_per_item,
+        evidence_pack_max_total_chars=settings.evidence_pack_max_total_chars,
+        evidence_pack_near_duplicate_threshold=round(
+            float(settings.evidence_pack_near_duplicate_threshold),
+            6,
+        ),
         fusion_method=FusionMethod(settings.hybrid_fusion_method),
         hybrid_rrf_k=settings.hybrid_rrf_k,
         hybrid_dense_weight=round(float(settings.hybrid_dense_weight), 6),

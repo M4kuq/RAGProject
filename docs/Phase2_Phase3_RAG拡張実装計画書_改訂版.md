@@ -1,6 +1,6 @@
 # Phase2 / Phase3 RAG拡張実装計画書 改訂版
 
-This revised note reflects the post-PR-39 repository state used by PR-40.
+This revised note reflects the post-PR-40 repository state used by PR-41.
 `docs/Phase2_Phase3_RAG拡張実装計画書.md` remains as the older roadmap; this file
 records the Phase2.5 / pre-Phase3 extension order currently implemented on
 `main`.
@@ -20,7 +20,25 @@ records the Phase2.5 / pre-Phase3 extension order currently implemented on
 
 ## Current PR
 
-PR-40 implements Context Budget / Context Trace / Context Debug Foundation:
+PR-41 implements Retrieved Context Compression / Evidence Pack:
+
+- `EvidencePackBuilder`
+- `ContextCompressor`
+- `EvidenceItem`, `EvidenceGroup`, and `EvidencePackTrace`
+- deterministic exact / normalized / near-duplicate reduction
+- bounded evidence text for generation
+- safe `retrieval_runs.context_compression_json`
+- citation source mapping from evidence item to retrieval run item and chunk
+- `/rag/ask` integration after PR-40 context budget and before generation
+- dense / hybrid / `agentic_router` / `llm_tool_orchestrator` ask coverage
+- admin Retrieval Debug Evidence Pack panel
+- safe structured Evidence Pack logs
+
+PR-41 compresses retrieved context. It does not compress LLM tool results.
+
+## Completed PR-40
+
+PR-40 added Context Budget / Context Trace / Context Debug Foundation:
 
 - `ContextBudgetPolicy`
 - `ContextBudgetManager`
@@ -32,11 +50,8 @@ PR-40 implements Context Budget / Context Trace / Context Debug Foundation:
 - admin Retrieval Debug Context Budget panel
 - safe structured context budget logs
 
-PR-40 is not a compression PR. Items that do not fit are dropped with a reason.
-
 ## Explicitly Deferred
 
-- PR-41: Retrieved Context Compression / Evidence Pack.
 - PR-42: Tool Result Compression.
 - Later Phase3: Graph-RAG, OCR, multimodal retrieval, AWS/S3/OIDC, remote MCP,
   and external operation agents.

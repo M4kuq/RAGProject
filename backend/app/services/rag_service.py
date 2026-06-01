@@ -51,6 +51,13 @@ from app.rag.context_budget import (
     finalize_context_budget_selection,
     sanitize_context_budget_json,
 )
+from app.rag.evidence_pack import (
+    EvidenceCandidate,
+    EvidencePack,
+    EvidencePackBuilder,
+    EvidencePackPolicy,
+    sanitize_context_compression_json,
+)
 from app.rag.generation import (
     AnswerGenerationError,
     AnswerGenerator,
@@ -193,6 +200,7 @@ class RagService:
         agentic_executor: AgenticRetrievalExecutor | None = None,
         llm_tool_orchestrator: LLMToolCallingRetrievalOrchestrator | None = None,
         context_budget_manager: ContextBudgetManager | None = None,
+        evidence_pack_builder: EvidencePackBuilder | None = None,
         trace_export_service: TraceExportService | None = None,
     ) -> None:
         self.settings = settings
@@ -214,6 +222,7 @@ class RagService:
             settings
         )
         self.context_budget_manager = context_budget_manager or ContextBudgetManager()
+        self.evidence_pack_builder = evidence_pack_builder or EvidencePackBuilder()
         self.trace_export_service = trace_export_service or TraceExportService(settings)
         self.chat_service = ChatService(self.chat_repository)
 
@@ -672,12 +681,19 @@ class RagService:
                 result.context_candidates,
                 context_budget_decision,
             )
-            selected_context_candidates = [ref.candidate for ref in selected_context_refs]
             selected_citation_sources = _context_citation_sources(
                 selected_context_refs,
                 snippet_max_chars=self.settings.citation_preview_max_chars,
             )
-            if result.no_context or not selected_context_candidates:
+            with latency_tracker.span("evidence_pack_ms"):
+                evidence_pack = self._build_evidence_pack(
+                    db,
+                    retrieval_run_id=run_id,
+                    selected_context_refs=selected_context_refs,
+                    selected_citation_sources=selected_citation_sources,
+                    candidate_context_items=context_budget_decision.trace.items.candidate_count,
+                )
+            if result.no_context or not evidence_pack.items:
                 self._mark_failed_safely(
                     db,
                     retrieval_run_id=run_id,
@@ -688,11 +704,7 @@ class RagService:
                 raise RagAskPipelineError("no_context_found", 422)
 
             with latency_tracker.span("context_assembly_ms"):
-                context_items = _assemble_context(
-                    selected_context_candidates,
-                    citation_sources=selected_citation_sources,
-                    max_context_chars=self.settings.generation_max_context_chars,
-                )
+                context_items = evidence_pack.to_generation_context_items()
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
@@ -1938,6 +1950,47 @@ class RagService:
         )
         return final_decision
 
+    def _build_evidence_pack(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        selected_context_refs: list[ContextCandidateRef],
+        selected_citation_sources: list[CitationSource],
+        candidate_context_items: int,
+    ) -> EvidencePack:
+        run = self._require_run(db, retrieval_run_id)
+        policy = _evidence_pack_policy(self.settings)
+        candidates = _evidence_candidates(selected_context_refs, selected_citation_sources)
+        try:
+            pack = self.evidence_pack_builder.build(
+                candidates,
+                policy=policy,
+                candidate_context_items=candidate_context_items,
+            )
+        except Exception:
+            _log_evidence_pack_failed(
+                run=run,
+                input_item_count=len(candidates),
+                event="rag.evidence_pack.failed",
+            )
+            raise
+        if policy.store_debug_trace:
+            self.repository.update_retrieval_run_trace(
+                db,
+                run=run,
+                context_compression_json=pack.trace.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                ),
+            )
+        _log_evidence_pack(
+            run=run,
+            pack=pack,
+            event="rag.evidence_pack.built" if policy.enabled else "rag.evidence_pack.skipped",
+        )
+        return pack
+
     def _ensure_direct_strategy_enabled(self, strategy_type: RetrievalStrategy) -> None:
         if strategy_type == RetrievalStrategy.HYBRID:
             if not self.settings.hybrid_enabled:
@@ -2373,6 +2426,7 @@ def _retrieval_run_debug_summary(run: RetrievalRun) -> RetrievalRunDebugSummary:
         latency_breakdown_json=_safe_json_object(run.latency_breakdown_json),
         retrieval_settings_json=_safe_json_object(run.retrieval_settings_json),
         context_budget_json=sanitize_context_budget_json(run.context_budget_json),
+        context_compression_json=sanitize_context_compression_json(run.context_compression_json),
         rerank_score_top1=_optional_rounded_float(run.rerank_score_top1),
         answer_confidence=_optional_rounded_float(run.answer_confidence),
         groundedness_score=_optional_rounded_float(run.groundedness_score),
@@ -2678,7 +2732,7 @@ def _agentic_score_breakdown(
         sparse_score = candidate.retrieval_score
     if fused_score is None and item_source == RetrievalSource.HYBRID:
         fused_score = candidate.retrieval_score
-    payload = {
+    payload: dict[str, object] = {
         "schema_version": "phase2.trace.v1",
         "retrieval_source": trace_strategy.value,
         "item_retrieval_source": item_source.value,
@@ -2967,6 +3021,34 @@ def _context_budget_policy(settings: Settings) -> ContextBudgetPolicy:
     )
 
 
+def _evidence_pack_policy(settings: Settings) -> EvidencePackPolicy:
+    enabled = settings.evidence_pack_enabled
+    if enabled:
+        max_items = settings.evidence_pack_max_items
+        max_items_per_source = settings.evidence_pack_max_items_per_source
+        max_chars_per_item = settings.evidence_pack_max_chars_per_item
+        max_total_chars = min(
+            settings.evidence_pack_max_total_chars,
+            settings.generation_max_context_chars,
+        )
+    else:
+        max_items = settings.context_budget_max_context_items
+        max_items_per_source = settings.context_budget_max_context_items
+        max_chars_per_item = settings.generation_max_context_chars
+        max_total_chars = settings.generation_max_context_chars
+    return EvidencePackPolicy(
+        enabled=enabled,
+        max_items=max_items,
+        max_items_per_source=max_items_per_source,
+        max_chars_per_item=max_chars_per_item,
+        max_total_chars=max_total_chars,
+        near_duplicate_threshold=settings.evidence_pack_near_duplicate_threshold,
+        preserve_citation_candidates=settings.evidence_pack_preserve_citation_candidates,
+        group_by_source=settings.evidence_pack_group_by_source,
+        store_debug_trace=settings.evidence_pack_store_debug_trace,
+    )
+
+
 def _context_budget_candidates(
     refs: list[ContextCandidateRef],
 ) -> list[ContextBudgetCandidate]:
@@ -2989,6 +3071,44 @@ def _context_budget_candidates(
         )
         for ref in refs
     ]
+
+
+def _evidence_candidates(
+    refs: list[ContextCandidateRef],
+    citation_sources: list[CitationSource],
+) -> list[EvidenceCandidate]:
+    source_by_run_item_id = {source.retrieval_run_item_id: source for source in citation_sources}
+    candidates: list[EvidenceCandidate] = []
+    for ref in refs:
+        source = source_by_run_item_id.get(ref.saved_item.retrieval_run_item_id)
+        if source is None:
+            continue
+        candidates.append(
+            EvidenceCandidate(
+                retrieval_run_item_id=ref.saved_item.retrieval_run_item_id,
+                document_chunk_id=ref.candidate.chunk.document_chunk_id,
+                local_citation_id=source.local_citation_id,
+                text=_clean_context_text(ref.candidate.chunk.content_text),
+                source_label=_source_label(ref.candidate),
+                section_title=_safe_display_text(ref.candidate.chunk.section_title),
+                page_from=ref.candidate.chunk.page_from,
+                page_to=ref.candidate.chunk.page_to,
+                score=_round_score(ref.candidate.retrieval_score),
+                rerank_score=_round_score(ref.rerank_score)
+                if ref.rerank_score is not None
+                else None,
+                rank=ref.rank,
+                rerank_order=ref.rerank_order,
+                source_group_key=(
+                    f"logical_document:{ref.candidate.logical_document.logical_document_id}"
+                ),
+                citation_candidate=ref.citation_candidate,
+                retrieval_source=ref.saved_item.retrieval_source,
+                logical_document_id=ref.candidate.logical_document.logical_document_id,
+                document_version_id=ref.candidate.document_version.document_version_id,
+            )
+        )
+    return candidates
 
 
 def _context_budget_strategy(run: RetrievalRun) -> ContextBudgetStrategySummary:
@@ -3071,7 +3191,7 @@ def _log_context_budget(
 ) -> None:
     trace = decision.trace
     strategy = trace.strategy
-    payload = {
+    payload: dict[str, object] = {
         "request_id": run.request_id,
         "retrieval_run_id": run.retrieval_run_id,
         "strategy_type": run.strategy_type,
@@ -3086,6 +3206,58 @@ def _log_context_budget(
         "drop_reason_counts": trace.drop_reasons,
     }
     logger.info(event, extra={"rag_context_budget": payload})
+
+
+def _log_evidence_pack(
+    *,
+    run: RetrievalRun,
+    pack: EvidencePack,
+    event: str,
+) -> None:
+    trace = pack.trace
+    payload: dict[str, object] = {
+        "request_id": run.request_id,
+        "retrieval_run_id": run.retrieval_run_id,
+        "strategy_type": run.strategy_type,
+        "selected_strategy": _safe_strategy_field(run, "selected_strategy"),
+        "execution_strategy": _safe_strategy_field(run, "execution_strategy"),
+        "input_item_count": trace.input.selected_context_items,
+        "output_item_count": trace.output.evidence_item_count,
+        "evidence_group_count": trace.output.evidence_group_count,
+        "compression_ratio": trace.output.compression_ratio,
+        "drop_reason_counts": trace.drops,
+        "estimated_input_tokens": trace.input.input_estimated_tokens,
+        "estimated_output_tokens": trace.output.output_estimated_tokens,
+    }
+    logger.info(event, extra={"rag_evidence_pack": payload})
+
+
+def _log_evidence_pack_failed(
+    *,
+    run: RetrievalRun,
+    input_item_count: int,
+    event: str,
+) -> None:
+    payload: dict[str, object] = {
+        "request_id": run.request_id,
+        "retrieval_run_id": run.retrieval_run_id,
+        "strategy_type": run.strategy_type,
+        "selected_strategy": _safe_strategy_field(run, "selected_strategy"),
+        "execution_strategy": _safe_strategy_field(run, "execution_strategy"),
+        "input_item_count": max(0, input_item_count),
+        "output_item_count": 0,
+        "evidence_group_count": 0,
+        "compression_ratio": 0.0,
+        "drop_reason_counts": {},
+        "estimated_input_tokens": 0,
+        "estimated_output_tokens": 0,
+    }
+    logger.info(event, extra={"rag_evidence_pack": payload})
+
+
+def _safe_strategy_field(run: RetrievalRun, key: str) -> str | None:
+    decision = run.strategy_decision_json if isinstance(run.strategy_decision_json, dict) else {}
+    return _safe_string_value(decision.get(key))
 
 
 def _safe_string_value(value: object) -> str | None:

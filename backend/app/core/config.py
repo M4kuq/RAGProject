@@ -163,6 +163,15 @@ class Settings(BaseSettings):
     context_budget_preserve_source_diversity: bool = True
     context_budget_token_estimator: str = "heuristic"
     context_budget_store_debug_trace: bool = True
+    evidence_pack_enabled: bool = True
+    evidence_pack_max_items: int = Field(default=12, ge=1, le=100)
+    evidence_pack_max_items_per_source: int = Field(default=4, ge=1, le=100)
+    evidence_pack_max_chars_per_item: int = Field(default=1200, ge=20, le=50_000)
+    evidence_pack_max_total_chars: int = Field(default=12_000, ge=20, le=200_000)
+    evidence_pack_near_duplicate_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    evidence_pack_preserve_citation_candidates: bool = True
+    evidence_pack_group_by_source: bool = True
+    evidence_pack_store_debug_trace: bool = True
     evaluation_failure_low_recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_mrr_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_citation_coverage_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -321,6 +330,10 @@ class Settings(BaseSettings):
         if self.context_budget_min_citation_candidates > self.context_budget_max_context_items:
             raise ValueError(
                 "CONTEXT_BUDGET_MIN_CITATION_CANDIDATES must be <= CONTEXT_BUDGET_MAX_CONTEXT_ITEMS"
+            )
+        if self.evidence_pack_max_items_per_source > self.evidence_pack_max_items:
+            raise ValueError(
+                "EVIDENCE_PACK_MAX_ITEMS_PER_SOURCE must be <= EVIDENCE_PACK_MAX_ITEMS"
             )
         self.document_url_fetch_allowed_schemes = [
             item.lower() for item in self.document_url_fetch_allowed_schemes

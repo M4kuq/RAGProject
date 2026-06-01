@@ -7,6 +7,7 @@ const SENSITIVE_KEY_PARTS = [
   "credential",
   "cookie",
   "csrf",
+  "evidence_text_for_generation",
   "full_context",
   "password",
   "pii",

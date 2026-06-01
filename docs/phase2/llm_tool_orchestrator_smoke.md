@@ -1,19 +1,21 @@
-# PR-39 / PR-40 LLM Tool Orchestrator Smoke
+# PR-39 / PR-41 LLM Tool Orchestrator Smoke
 
 This smoke note covers the PR-39 `llm_tool_orchestrator` ask path after PR-40
-context budget tracing.
+context budget tracing and PR-41 Evidence Pack construction.
 
 ## Scope
 
 - `/api/v1/rag/ask strategy=llm_tool_orchestrator`
 - bounded retrieval-only tool calls
 - final selected evidence passed through `ContextBudgetManager`
+- final selected retrieved context passed through `EvidencePackBuilder`
 - safe `retrieval_runs.context_budget_json`
+- safe `retrieval_runs.context_compression_json`
 - admin Retrieval Debug context budget display
+- admin Retrieval Debug Evidence Pack display
 
 Not in scope:
 
-- Retrieved Context Compression / Evidence Pack
 - Tool Result Compression
 - Graph-RAG
 - OCR or multimodal retrieval
@@ -28,12 +30,15 @@ Not in scope:
 4. Confirm `context_budget_json.schema_version = phase2.context_budget.v1`.
 5. Confirm selected / dropped item counts and drop reasons are present.
 6. Confirm `context_budget_json.strategy.selected_strategy = llm_tool_orchestrator`.
-7. Confirm citations still use selected context candidates.
-8. Confirm admin Retrieval Debug renders the Context Budget panel.
-9. Confirm viewer chat does not render context budget internals.
+7. Confirm `context_compression_json.schema_version = phase2.context_compression.v1`.
+8. Confirm compression ratio, evidence item count, group count, and duplicate drops are present.
+9. Confirm citations still use selected Evidence Pack candidates.
+10. Confirm admin Retrieval Debug renders the Context Budget and Evidence Pack panels.
+11. Confirm viewer chat does not render context budget or Evidence Pack internals.
 
 ## Redaction
 
 The smoke must not print or persist raw prompt, full context, raw chunk text,
-snippets, raw tool outputs, PII, token values, secrets, local paths, cookies, or
-session values. Numeric token estimates and bounded safe IDs are allowed.
+`evidence_text_for_generation`, snippets, raw tool outputs, PII, token values,
+secrets, local paths, cookies, or session values. Numeric token estimates,
+bounded safe IDs, and text hashes are allowed.

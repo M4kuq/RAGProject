@@ -823,6 +823,78 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
                 raw_prompt: "raw prompt must not appear",
                 full_context: "full context must not appear"
               },
+              context_compression_json: {
+                schema_version: "phase2.context_compression.v1",
+                enabled: true,
+                method: "deterministic_evidence_pack",
+                policy: {
+                  max_items: 12,
+                  max_items_per_source: 4,
+                  max_chars_per_item: 1200,
+                  max_total_chars: 6000,
+                  near_duplicate_threshold: 0.85,
+                  preserve_citation_candidates: true,
+                  group_by_source: true
+                },
+                input: {
+                  candidate_context_items: 2,
+                  selected_context_items: 1,
+                  input_estimated_tokens: 80,
+                  input_char_count: 320
+                },
+                output: {
+                  evidence_group_count: 1,
+                  evidence_item_count: 1,
+                  output_estimated_tokens: 60,
+                  output_char_count: 240,
+                  compression_ratio: 0.75,
+                  citation_candidate_count: 1
+                },
+                drops: { near_duplicate_removed: 1 },
+                evidence_groups: [
+                  {
+                    source_group_key: "logical_document:10",
+                    source_label: "phase2.md",
+                    item_count: 1,
+                    selected_item_count: 1,
+                    estimated_tokens: 60,
+                    top_score: 0.73,
+                    evidence_item_refs: ["e1"]
+                  }
+                ],
+                evidence_item_refs: [
+                  {
+                    evidence_item_id: "e1",
+                    retrieval_run_item_id: 900,
+                    document_chunk_id: 300,
+                    local_citation_id: 1,
+                    source_label: "phase2.md",
+                    rank: 1,
+                    source_group_key: "logical_document:10",
+                    evidence_text_hash: "a".repeat(64),
+                    original_char_count: 320,
+                    output_char_count: 240,
+                    estimated_tokens: 60,
+                    citation_candidate: true,
+                    compression_method: "bounded_excerpt",
+                    compression_reason: "bounded_excerpt",
+                    evidence_text_for_generation: "raw evidence text must not appear"
+                  }
+                ],
+                dropped_item_refs: [
+                  {
+                    retrieval_run_item_id: 901,
+                    document_chunk_id: 301,
+                    source_label: "phase2-budget.md",
+                    rank: 2,
+                    estimated_tokens: 90,
+                    original_char_count: 360,
+                    drop_reason: "near_duplicate_removed"
+                  }
+                ],
+                raw_prompt: "raw prompt must not appear",
+                full_context: "full context must not appear"
+              },
               rerank_score_top1: null,
               answer_confidence: null,
               groundedness_score: null,
@@ -943,13 +1015,18 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect((await screen.findAllByText("6000")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("80")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("max_items_exceeded")).length).toBeGreaterThan(0);
-  expect(await screen.findByText("phase2-budget.md")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Evidence Pack" })).toBeInTheDocument();
+  expect((await screen.findAllByText("deterministic_evidence_pack")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("near_duplicate_removed")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("bounded_excerpt")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("phase2-budget.md")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("0.730")).length).toBeGreaterThan(0);
   expect(await screen.findByText("hybrid retrieval safe snippet")).toBeInTheDocument();
   expect(await screen.findByText("recall_at_k")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent("raw prompt must not appear");
   expect(document.body).not.toHaveTextContent("full context must not appear");
   expect(document.body).not.toHaveTextContent("raw chunk text must not appear");
+  expect(document.body).not.toHaveTextContent("raw evidence text must not appear");
   expect(document.body).not.toHaveTextContent("OPENAI_API_KEY");
   expect(document.body).not.toHaveTextContent("sk-secret");
 });

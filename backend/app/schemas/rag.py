@@ -118,6 +118,7 @@ class RetrievalRunDebugSummary(BaseModel):
     latency_breakdown_json: dict[str, object] | None = None
     retrieval_settings_json: dict[str, object] | None = None
     context_budget_json: dict[str, object] | None = None
+    context_compression_json: dict[str, object] | None = None
     rerank_score_top1: float | None = None
     answer_confidence: float | None = None
     groundedness_score: float | None = None

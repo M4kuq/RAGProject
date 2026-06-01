@@ -192,6 +192,8 @@ def test_retrieval_and_rerank_settings_validation() -> None:
         Settings(ask_rerank_top_n_default=6, rerank_top_n_max=5)
     with pytest.raises(ValueError):
         Settings(generation_provider="remote")
+    with pytest.raises(ValueError):
+        Settings(evidence_pack_max_items=2, evidence_pack_max_items_per_source=3)
 
 
 def test_sparse_query_normalization_and_score_order_are_deterministic() -> None:
@@ -454,6 +456,12 @@ def test_rag_search_admin_success_persists_standalone_run_and_items(
             "hybrid_enabled": True,
             "router_enabled": False,
             "trace_enabled": True,
+            "evidence_pack_enabled": True,
+            "evidence_pack_max_items": 12,
+            "evidence_pack_max_items_per_source": 4,
+            "evidence_pack_max_chars_per_item": 1200,
+            "evidence_pack_max_total_chars": 12000,
+            "evidence_pack_near_duplicate_threshold": 0.85,
             "fusion_method": "rrf",
             "hybrid_rrf_k": 60,
             "hybrid_dense_weight": 0.5,
@@ -654,6 +662,57 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
             "raw_prompt": "budget raw prompt must not leak",
             "full_context": "budget full context must not leak",
         }
+        run.context_compression_json = {
+            "schema_version": "phase2.context_compression.v1",
+            "enabled": True,
+            "method": "deterministic_evidence_pack",
+            "policy": {"max_items": 12, "max_items_per_source": 4},
+            "input": {
+                "candidate_context_items": 1,
+                "selected_context_items": 1,
+                "input_estimated_tokens": 4,
+                "input_char_count": 16,
+            },
+            "output": {
+                "evidence_group_count": 1,
+                "evidence_item_count": 1,
+                "output_estimated_tokens": 4,
+                "output_char_count": 16,
+                "compression_ratio": 1.0,
+                "citation_candidate_count": 1,
+            },
+            "drops": {"raw_prompt": 1, "near_duplicate_removed": 0},
+            "evidence_groups": [
+                {
+                    "source_group_key": "logical_document:10",
+                    "source_label": "hand book.pdf",
+                    "item_count": 1,
+                    "selected_item_count": 1,
+                    "estimated_tokens": 4,
+                    "evidence_item_refs": ["e1"],
+                }
+            ],
+            "evidence_item_refs": [
+                {
+                    "evidence_item_id": "e1",
+                    "retrieval_run_item_id": 1,
+                    "document_chunk_id": 100,
+                    "local_citation_id": 1,
+                    "source_group_key": "logical_document:10",
+                    "evidence_text_hash": "a" * 64,
+                    "original_char_count": 16,
+                    "output_char_count": 16,
+                    "estimated_tokens": 4,
+                    "citation_candidate": True,
+                    "compression_method": "none",
+                    "source_label": "hand book.pdf",
+                    "evidence_text_for_generation": "raw evidence text must not leak",
+                }
+            ],
+            "dropped_item_refs": [],
+            "raw_prompt": "compression raw prompt must not leak",
+            "full_context": "compression full context must not leak",
+        }
         item = (
             db.query(RetrievalRunItem)
             .filter_by(retrieval_run_id=retrieval_run_id)
@@ -688,7 +747,13 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert detail["retrieval_run"]["query_plan_json"]["safe_value"] == "redacted"
     assert detail["retrieval_run"]["context_budget_json"]["budget"]["max_context_tokens"] == 6000
     assert detail["retrieval_run"]["context_budget_json"]["usage"]["estimated_context_tokens"] == 4
+    assert detail["retrieval_run"]["context_compression_json"]["output"]["evidence_item_count"] == 1
+    assert detail["retrieval_run"]["context_compression_json"]["drops"] == {
+        "near_duplicate_removed": 0
+    }
     assert "raw_prompt" not in detail["retrieval_run"]["context_budget_json"]
+    assert "raw_prompt" not in detail["retrieval_run"]["context_compression_json"]
+    assert "evidence_text_for_generation" not in detail["retrieval_run"]["context_compression_json"]
     assert "raw_prompt" not in detail["retrieval_run"]["query_plan_json"]
     assert "apikey" not in detail["retrieval_run"]["query_plan_json"]
     assert "csrf" not in detail["retrieval_run"]["query_plan_json"]
@@ -706,6 +771,9 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert "raw budget chunk must not leak" not in serialized
     assert "budget raw prompt must not leak" not in serialized
     assert "budget full context must not leak" not in serialized
+    assert "compression raw prompt must not leak" not in serialized
+    assert "compression full context must not leak" not in serialized
+    assert "raw evidence text must not leak" not in serialized
     assert "secret-token" not in serialized
     assert "secret-value" not in serialized
     assert "sk-uncovered-secret" not in serialized

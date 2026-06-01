@@ -10,6 +10,7 @@ test("retrieval debug redaction removes forbidden trace keys and secret-like val
       cookie: "cookie-must-not-render",
       content_text: "raw chunk text must not render",
       csrf: "csrf-must-not-render",
+      evidence_text_for_generation: "bounded evidence text must not render",
       private_key: "private-key-must-not-render",
       safe_assignment: "DATABASE_PASSWORD=secret-value",
       session_id: "session-must-not-render",
@@ -23,6 +24,7 @@ test("retrieval debug redaction removes forbidden trace keys and secret-like val
   expect((redacted.nested as Record<string, unknown>).cookie).toBeUndefined();
   expect((redacted.nested as Record<string, unknown>).content_text).toBeUndefined();
   expect((redacted.nested as Record<string, unknown>).csrf).toBeUndefined();
+  expect((redacted.nested as Record<string, unknown>).evidence_text_for_generation).toBeUndefined();
   expect((redacted.nested as Record<string, unknown>).private_key).toBeUndefined();
   expect((redacted.nested as Record<string, unknown>).safe_assignment).toBe("[redacted]");
   expect((redacted.nested as Record<string, unknown>).session_id).toBeUndefined();
@@ -31,6 +33,7 @@ test("retrieval debug redaction removes forbidden trace keys and secret-like val
   expect(JSON.stringify(redacted)).not.toContain("raw chunk");
   expect(JSON.stringify(redacted)).not.toContain("secret-value");
   expect(JSON.stringify(redacted)).not.toContain("csrf-must-not-render");
+  expect(JSON.stringify(redacted)).not.toContain("bounded evidence text");
   expect(JSON.stringify(redacted)).not.toContain("session-must-not-render");
   expect(JSON.stringify(redacted)).not.toContain("cookie-must-not-render");
 });

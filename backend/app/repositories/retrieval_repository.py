@@ -244,6 +244,7 @@ class RetrievalRepository:
         latency_breakdown_json: dict[str, object] | None = None,
         retrieval_settings_json: dict[str, object] | None = None,
         context_budget_json: dict[str, object] | None = None,
+        context_compression_json: dict[str, object] | None = None,
     ) -> None:
         if query_plan_json is not None:
             run.query_plan_json = query_plan_json
@@ -255,6 +256,8 @@ class RetrievalRepository:
             run.retrieval_settings_json = retrieval_settings_json
         if context_budget_json is not None:
             run.context_budget_json = context_budget_json
+        if context_compression_json is not None:
+            run.context_compression_json = context_compression_json
         db.flush()
 
     def update_context_selection(

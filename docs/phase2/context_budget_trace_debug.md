@@ -8,8 +8,9 @@ persistence.
 
 PR-40 does not compress, summarize, truncate, or semantically deduplicate
 retrieved evidence. If an item does not fit, the initial policy drops the whole
-item and records a safe reason. Retrieved Context Compression / Evidence Pack is
-handed off to PR-41. Tool Result Compression is handed off to PR-42.
+item and records a safe reason. PR-41 consumes the selected refs and builds a
+deterministic Evidence Pack before generation. Tool Result Compression is handed
+off to PR-42.
 
 ## ContextBudgetManager
 
@@ -74,8 +75,8 @@ After context assembly applies the existing generation character cap, the
 persisted selected refs and `retrieval_run_items.selected_flag` are synchronized
 to the context refs actually passed to generation.
 
-PR-40 does not truncate over-limit items. Truncation, summarization, and Evidence
-Pack construction are PR-41 work.
+PR-40 does not truncate over-limit items. PR-41 owns bounded evidence text and
+duplicate reduction in `retrieval_runs.context_compression_json`.
 
 ## Drop Reasons
 

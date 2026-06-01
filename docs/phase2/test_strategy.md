@@ -345,6 +345,35 @@
   strategy labels, candidate/selected/dropped counts, estimated context tokens,
   remaining context tokens, exhausted flag, and drop reason counts.
 
+## PR-41 Evidence Pack / Retrieved Context Compression Tests
+
+- `EvidencePackPolicy` validates max item and max-per-source settings.
+- `ContextCompressor` removes exact duplicates, normalized duplicates, and
+  token-overlap near duplicates deterministically.
+- `ContextCompressor` enforces source grouping, max items per source, max
+  evidence items, bounded item text, and bounded total evidence text.
+- `EvidenceItem` maps back to `retrieval_run_item_id`, `document_chunk_id`, and
+  local citation id.
+- `EvidencePackTrace` records input counts, output counts, compression ratio,
+  drop reason counts, evidence groups, evidence item refs, and dropped refs.
+- `context_compression_json` stores only safe refs, hashes, counts, and bounded
+  metadata. It does not contain raw prompt, full context, raw chunk text,
+  `evidence_text_for_generation`, raw query, raw tool result, PII, token values,
+  secrets, cookies, sessions, or local paths.
+- `/rag/ask` dense, hybrid, `agentic_router`, and `llm_tool_orchestrator` runs
+  build an Evidence Pack before generation.
+- No-context and generation failure paths retain safe compression metadata when
+  retrieval completed.
+- Citation generation and confidence calculation use only evidence items passed
+  to generation.
+- Admin retrieval-run detail includes safe `context_compression_json`; viewer
+  access remains `403`, and missing run remains `404`.
+- Admin Retrieval Debug renders the Evidence Pack panel, compression ratio,
+  evidence groups, duplicate drops, evidence item refs, dropped evidence refs,
+  and empty state when trace is missing.
+- Context Budget panel, RAG ask/search/Auto/MCP, retrieval debug, and strategy
+  evaluation regressions remain green.
+
 ## Checks
 
 - `ruff format --check .`
