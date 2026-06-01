@@ -57,6 +57,7 @@ from app.services.rag_service import (
     _context_citation_sources,
     _context_refs_for_citation_sources,
     _decimal_score,
+    _is_insufficient_evidence_answer,
     _optional_decimal_score,
     _prompt_citation_sources,
     _query_hash,
@@ -419,6 +420,9 @@ class EvaluationRagQuestionService:
         top_k: int | None,
         rerank_top_n: int | None,
     ) -> RagEvaluationResult:
+        if not self.service.settings.llm_orchestrator_enabled:
+            return _failed_evaluation_result(None, "strategy_not_enabled")
+
         effective_top_k = self.service._effective_ask_top_k(top_k)
         effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
         filters = RetrievalFilters()
@@ -533,6 +537,19 @@ class EvaluationRagQuestionService:
                 parsed_generation.answer_text,
                 context_items=context_items,
             )
+            if _is_insufficient_evidence_answer(parsed_generation.answer_text):
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="no_context_found",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                return _failed_evaluation_result(
+                    run_id,
+                    "no_context_found",
+                    retrieval_score_summary=final_summary,
+                )
             cited_sources = validate_generation_citations(
                 parsed_generation,
                 source_map=prompt_citation_sources,

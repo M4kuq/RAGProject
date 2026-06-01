@@ -1353,6 +1353,60 @@ def test_rag_ask_llm_tool_orchestrator_repeated_tool_result_is_traced(
         assert "repeated_tool_result_detected" in strategy_decision["reason_codes"]
 
 
+def test_rag_ask_llm_tool_orchestrator_compression_disabled_preserves_final_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        tool_result_compression_enabled=False,
+        tool_result_compression_max_items_per_tool=1,
+        tool_result_compression_max_total_items_per_turn=1,
+        llm_orchestrator_max_tool_result_items=1,
+    )
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=NoopRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm compression disabled")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-compression-disabled-msg-1",
+            "message": "alpha policy compression disabled",
+            "strategy": "llm_tool_orchestrator",
+            "top_k": 2,
+            "rerank_top_n": 2,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["tool_result_compression_enabled"] is False
+        assert "tool_result_compression_skipped" in run.strategy_decision_json["reason_codes"]
+        assert "tool_result_compression_applied" not in run.strategy_decision_json["reason_codes"]
+        assert run.strategy_decision_json["tool_results"][0]["item_count"] == 2
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["items"]["selected_count"] == 2
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 2
+        assert run.tool_result_compression_json is not None
+        assert run.tool_result_compression_json["enabled"] is False
+        assert run.tool_result_compression_json["summary"]["output_item_count"] == 0
+
+
 def test_rag_ask_llm_tool_orchestrator_repeated_query_without_candidates_returns_no_context(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

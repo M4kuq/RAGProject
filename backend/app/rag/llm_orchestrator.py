@@ -25,6 +25,7 @@ from app.rag.tool_result_compression import (
     ToolResultCompressionTrace,
     ToolResultCompressor,
     ToolResultItem,
+    tool_result_item_from_candidate,
 )
 from app.rag.trace import LatencyTracker, TraceRedactor
 from app.repositories.retrieval_repository import CheckedRetrievalCandidate
@@ -300,6 +301,16 @@ class LLMToolCallingRetrievalOrchestrator:
         )
         timeout_seconds = max(1.0, float(self.settings.llm_orchestrator_timeout_seconds))
         max_query_chars = _bounded_int(self.settings.llm_orchestrator_max_query_chars, 1, 1000)
+        legacy_result_item_limit = _bounded_int(
+            self.settings.llm_orchestrator_max_tool_result_items,
+            1,
+            20,
+        )
+        legacy_snippet_chars = _bounded_int(
+            self.settings.llm_orchestrator_max_snippet_chars,
+            20,
+            1000,
+        )
         compression_policy = _tool_result_compression_policy(self.settings)
         compressor = ToolResultCompressor()
         budget_manager = ToolResultBudgetManager(compression_policy)
@@ -490,35 +501,50 @@ class LLMToolCallingRetrievalOrchestrator:
                             tool_query[:max_query_chars],
                         )
                     search_call_count += 1
-                    compressed = compressor.compress(
-                        _tool_result_candidates(
-                            attempt.candidates,
+                    if compression_policy.enabled:
+                        compressed = compressor.compress(
+                            _tool_result_candidates(
+                                attempt.candidates,
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                            ),
+                            policy=compression_policy,
+                            budget_manager=budget_manager,
                             tool_call_id=tool_call_id,
                             tool_name=tool_name,
-                        ),
-                        policy=compression_policy,
-                        budget_manager=budget_manager,
-                        tool_call_id=tool_call_id,
-                        tool_name=tool_name,
-                    )
-                    attempts_by_tool_call_id[tool_call_id] = _attempt_with_candidates(
-                        attempt,
-                        compressed.items,
-                    )
-                    tool_results.append(_llm_tool_result_from_compressed(compressed))
-                    if compressed.repeated_result:
-                        reason_codes.append("repeated_tool_result_detected")
-                    if compressed.oversized_rejected:
-                        reason_codes.append("oversized_tool_output_rejected")
-                    if compressed.budget_exhausted:
-                        reason_codes.append("tool_result_budget_exhausted")
-                    reason_codes.append(
-                        "tool_result_compression_applied"
-                        if compression_policy.enabled
-                        else "tool_result_compression_skipped"
-                    )
-                    if compressed.status == "failed":
-                        reason_codes.append(compressed.error_code or "tool_result_failed")
+                        )
+                        attempts_by_tool_call_id[tool_call_id] = _attempt_with_candidates(
+                            attempt,
+                            compressed.items,
+                        )
+                        tool_results.append(_llm_tool_result_from_compressed(compressed))
+                        if compressed.repeated_result:
+                            reason_codes.append("repeated_tool_result_detected")
+                        if compressed.oversized_rejected:
+                            reason_codes.append("oversized_tool_output_rejected")
+                        if compressed.budget_exhausted:
+                            reason_codes.append("tool_result_budget_exhausted")
+                        reason_codes.append("tool_result_compression_applied")
+                        if compressed.status == "failed":
+                            reason_codes.append(compressed.error_code or "tool_result_failed")
+                    else:
+                        attempts_by_tool_call_id[tool_call_id] = attempt
+                        tool_results.append(
+                            LLMToolResult(
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                                status="succeeded",
+                                item_count=len(attempt.candidates),
+                                items=_legacy_tool_result_items(
+                                    attempt.candidates,
+                                    tool_call_id=tool_call_id,
+                                    tool_name=tool_name,
+                                    max_item_count=legacy_result_item_limit,
+                                    max_snippet_chars=legacy_snippet_chars,
+                                ),
+                            )
+                        )
+                        reason_codes.append("tool_result_compression_skipped")
                     reason_codes.append(f"{tool_name}_called")
                 if finalize_called or repeated_query_detected:
                     break
@@ -818,6 +844,26 @@ def _tool_result_candidates(
         )
         for candidate in candidates
     ]
+
+
+def _legacy_tool_result_items(
+    candidates: Sequence[CheckedRetrievalCandidate],
+    *,
+    tool_call_id: str,
+    tool_name: str,
+    max_item_count: int,
+    max_snippet_chars: int,
+) -> list[ToolResultItem]:
+    items: list[ToolResultItem] = []
+    for candidate in _tool_result_candidates(
+        candidates[:max_item_count],
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+    ):
+        item = tool_result_item_from_candidate(candidate, max_snippet_chars=max_snippet_chars)
+        if item is not None:
+            items.append(item)
+    return items
 
 
 def _attempt_with_candidates(

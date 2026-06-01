@@ -713,6 +713,43 @@ def attach_retrieval_run_item_ids(
     return sanitize_tool_result_compression_json(safe)
 
 
+def tool_result_item_from_candidate(
+    candidate: ToolResultCandidate,
+    *,
+    max_snippet_chars: int,
+) -> ToolResultItem | None:
+    prepared = _prepare_candidate(candidate)
+    if not prepared.clean_text:
+        return None
+    snippet = _safe_snippet(prepared.clean_text, max_chars=max_snippet_chars)
+    method = ToolResultCompressionMethod.NONE
+    if snippet == "redacted":
+        method = ToolResultCompressionMethod.UNSAFE_REDACTED
+    elif len(snippet) < prepared.original_char_count:
+        method = ToolResultCompressionMethod.MAX_CHARS_PER_SNIPPET
+    return ToolResultItem(
+        tool_call_id=candidate.tool_call_id,
+        tool_name=candidate.tool_name,
+        document_chunk_id=candidate.document_chunk_id,
+        source_label=candidate.source_label,
+        section_title=candidate.section_title,
+        page_from=candidate.page_from,
+        page_to=candidate.page_to,
+        rank=candidate.rank,
+        retrieval_score=_rounded(candidate.retrieval_score),
+        rerank_score=_rounded(candidate.rerank_score),
+        fusion_score=_rounded(candidate.fusion_score),
+        citation_candidate=candidate.citation_candidate,
+        snippet=snippet,
+        snippet_hash=_sha256(snippet),
+        original_char_count=prepared.original_char_count,
+        snippet_char_count=len(snippet),
+        estimated_tokens=estimate_tokens(snippet),
+        source_group_key=_source_group_key(candidate),
+        compression_method=method,
+    )
+
+
 def _prepare_candidate(candidate: ToolResultCandidate) -> _PreparedToolResultCandidate:
     clean_text = _clean_text(candidate.text)
     return _PreparedToolResultCandidate(

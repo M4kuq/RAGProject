@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import create_engine
@@ -37,7 +37,7 @@ from app.mcp.resources import list_resource_templates, list_resources, read_reso
 from app.mcp.server import JsonRpcMcpServer, main, run_stdio
 from app.mcp.settings import get_mcp_settings
 from app.mcp.tools import build_tool_registry
-from app.rag.generation import FakeAnswerGenerator
+from app.rag.generation import FakeAnswerGenerator, GenerationRequest, GenerationResult
 from app.rag.rerank import FakeRerankerClient
 from app.services.rag_service import RagSearchPipelineError, RagService
 
@@ -46,45 +46,30 @@ def _test_settings(
     *,
     mcp_enabled: bool = True,
     storage_root: Path | None = None,
+    **overrides: Any,
 ) -> Settings:
-    if storage_root is None:
-        return Settings(
-            _env_file=None,
-            app_env="test",
-            database_url="sqlite://",
-            embedding_provider="fake",
-            embedding_fake_dimension=4,
-            rerank_provider="fake",
-            generation_provider="fake",
-            retrieval_top_k_default=5,
-            retrieval_top_k_max=5,
-            rerank_top_n_default=2,
-            rerank_top_n_max=5,
-            ask_top_k_default=5,
-            ask_rerank_top_n_default=2,
-            search_snippet_max_chars=48,
-            mcp_snippet_max_chars=48,
-            mcp_enabled=mcp_enabled,
-        )
-    return Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="sqlite://",
-        storage_root=storage_root,
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        rerank_provider="fake",
-        generation_provider="fake",
-        retrieval_top_k_default=5,
-        retrieval_top_k_max=5,
-        rerank_top_n_default=2,
-        rerank_top_n_max=5,
-        ask_top_k_default=5,
-        ask_rerank_top_n_default=2,
-        search_snippet_max_chars=48,
-        mcp_snippet_max_chars=48,
-        mcp_enabled=mcp_enabled,
-    )
+    values: dict[str, Any] = {
+        "_env_file": None,
+        "app_env": "test",
+        "database_url": "sqlite://",
+        "embedding_provider": "fake",
+        "embedding_fake_dimension": 4,
+        "rerank_provider": "fake",
+        "generation_provider": "fake",
+        "retrieval_top_k_default": 5,
+        "retrieval_top_k_max": 5,
+        "rerank_top_n_default": 2,
+        "rerank_top_n_max": 5,
+        "ask_top_k_default": 5,
+        "ask_rerank_top_n_default": 2,
+        "search_snippet_max_chars": 48,
+        "mcp_snippet_max_chars": 48,
+        "mcp_enabled": mcp_enabled,
+    }
+    if storage_root is not None:
+        values["storage_root"] = storage_root
+    values.update(overrides)
+    return Settings(**values)
 
 
 @pytest.fixture
@@ -138,6 +123,14 @@ def empty_mcp_adapter() -> Iterator[McpServiceAdapter]:
         )
     finally:
         engine.dispose()
+
+
+class _StaticAnswerGenerator:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        return GenerationResult(content=self.content)
 
 
 def test_mcp_settings_phase1_guardrails() -> None:
@@ -319,6 +312,59 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert "raw_prompt" not in dumped.lower()
     assert "full_context" not in dumped.lower()
     assert "token=abcd1234" not in dumped
+
+
+def test_rag_ask_auto_respects_llm_orchestrator_disabled(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    mcp_adapter.settings = _test_settings(llm_orchestrator_enabled=False)
+
+    ask = mcp_adapter.rag_ask_auto(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
+
+    assert ask["status"] == "failed"
+    assert ask["error_code"] == "strategy_not_enabled"
+    assert ask["retrieval_run_id"] is None
+    assert ask["answer"] == ""
+    assert ask["citations"] == []
+
+
+def test_rag_ask_auto_insufficient_evidence_returns_safe_failure(
+    mcp_adapter: McpServiceAdapter,
+) -> None:
+    mcp_adapter.rag_service_factory = lambda settings, db: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=DatabaseVectorSearchClient(db),
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("Insufficient evidence [1]"),
+    )
+
+    ask = mcp_adapter.rag_ask_auto(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
+
+    assert ask["status"] == "failed"
+    assert ask["error_code"] == "no_context_found"
+    assert ask["answer"] == ""
+    assert ask["citations"] == []
+    assert ask["retrieval_run_id"] is not None
+    dumped = json.dumps(ask)
+    assert "Insufficient evidence" not in dumped
+    assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
+    assert "raw_prompt" not in dumped.lower()
+    assert "full_context" not in dumped.lower()
 
 
 def test_rag_ask_no_context_returns_safe_failure(
