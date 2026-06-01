@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import {
   useActiveEvaluationDatasets,
+  useCreateEvaluationDataset,
   useEvaluationRunDetail,
   usePromoteEvaluationFailures
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationFailureCandidate,
   EvaluationFailureSeverity,
-  EvaluationMetricResult
+  EvaluationMetricResult,
+  EvaluationDataset
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
@@ -18,9 +20,27 @@ export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
   const datasets = useActiveEvaluationDatasets();
+  const createDataset = useCreateEvaluationDataset();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
   const [promotionMessage, setPromotionMessage] = useState<string | null>(null);
   const [promotionTargetDatasetId, setPromotionTargetDatasetId] = useState("");
+  const [selectedPromotionKeys, setSelectedPromotionKeys] = useState<string[]>([]);
+  const [createdTargetDataset, setCreatedTargetDataset] = useState<EvaluationDataset | null>(null);
+  const activeDatasets = useMemo(
+    () => mergeDatasets(datasets.data ?? [], createdTargetDataset),
+    [createdTargetDataset, datasets.data]
+  );
+  const selectedPromotionKeySet = useMemo(
+    () => new Set(selectedPromotionKeys),
+    [selectedPromotionKeys]
+  );
+
+  useEffect(() => {
+    setSelectedPromotionKeys([]);
+    setPromotionMessage(null);
+    setPromotionTargetDatasetId("");
+    setCreatedTargetDataset(null);
+  }, [evaluationRunId]);
 
   if (run.isLoading) {
     return (
@@ -38,9 +58,9 @@ export function EvaluationDetailPage() {
     );
   }
 
-  const activeDatasets = datasets.data ?? [];
   const selectedTargetDatasetId =
     promotionTargetDatasetId || (run.data.evaluation_dataset_id ? String(run.data.evaluation_dataset_id) : "");
+  const primaryPromotionKeys = primaryFailureKeys(run.data.failure_candidates);
 
   return (
     <main className="admin-main">
@@ -183,70 +203,136 @@ export function EvaluationDetailPage() {
 
       <section className="admin-section">
         <div className="section-header-row">
-          <h2>Failure Candidates</h2>
-          <label>
-            Target dataset
-            <select
-              aria-label="failure promotion target dataset"
-              value={selectedTargetDatasetId}
-              onChange={(event) => setPromotionTargetDatasetId(event.target.value)}
-            >
-              <option value="">Select dataset</option>
-              {activeDatasets.map((dataset) => (
-                <option
-                  key={dataset.evaluation_dataset_id}
-                  value={dataset.evaluation_dataset_id}
-                >
-                  {truncateText(dataset.dataset_name, 80)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            disabled={
-              promoteFailures.isPending ||
-              !selectedTargetDatasetId ||
-              run.data.failure_candidates.length === 0
-            }
-            onClick={() => {
-              const targetDatasetId = Number(selectedTargetDatasetId);
-              if (!Number.isSafeInteger(targetDatasetId) || targetDatasetId < 1) {
-                return;
-              }
-              const confirmed = window.confirm(
-                "Promote one primary failure per source item to this evaluation dataset?"
-              );
-              if (!confirmed) {
-                return;
-              }
-              void promoteFailures
-                .mutateAsync({
-                  target_dataset_id: targetDatasetId,
-                  failure_types: primaryFailureTypes(run.data.failure_candidates),
-                  min_severity: "medium",
-                  limit: 50
-                })
-                .then((result) => {
-                  setPromotionMessage(
-                    `Promoted ${result.created_count} case(s), skipped ${result.skipped_count}.`
+          <div>
+            <h2>Failure Candidates</h2>
+            <span className="muted">
+              {selectedPromotionKeys.length} selected / {run.data.failure_candidates.length} candidates
+            </span>
+            <p className="section-help">
+              Promote failed evaluation items into a reusable dataset. Use Select primary failures
+              to choose one representative candidate per source item, then promote it into the target
+              dataset. Repeating the same promotion should skip duplicates.
+            </p>
+            <p className="section-help">
+              Promotion copies safe failure metadata, metrics, reason codes, and strategy expectations only.
+            </p>
+          </div>
+          <div className="failure-promotion-controls">
+            <label className="failure-promotion-target">
+              Target dataset
+              <select
+                aria-label="failure promotion target dataset"
+                value={selectedTargetDatasetId}
+                onChange={(event) => setPromotionTargetDatasetId(event.target.value)}
+              >
+                <option value="">Select dataset</option>
+                {activeDatasets.map((dataset) => (
+                  <option
+                    key={dataset.evaluation_dataset_id}
+                    value={dataset.evaluation_dataset_id}
+                  >
+                    {truncateText(dataset.dataset_name, 80)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="failure-promotion-actions">
+              <button
+                type="button"
+                disabled={createDataset.isPending}
+                onClick={() => {
+                  const datasetName = `failure_promoted_run_${run.data.evaluation_run_id}`;
+                  void createDataset
+                    .mutateAsync({
+                      dataset_name: datasetName,
+                      description: `Failure promotion target for evaluation run #${run.data.evaluation_run_id}.`,
+                      version: "v1",
+                      source_type: "feedback_promoted",
+                      status: "active",
+                      metadata_json: {
+                        source: "failure_promotion_target",
+                        source_evaluation_run_id: run.data.evaluation_run_id
+                      }
+                    })
+                    .then((dataset) => {
+                      setCreatedTargetDataset(dataset);
+                      setPromotionTargetDatasetId(String(dataset.evaluation_dataset_id));
+                      setPromotionMessage(`Created target dataset ${dataset.dataset_name}.`);
+                    });
+                }}
+              >
+                Create target dataset
+              </button>
+              <button
+                type="button"
+                disabled={run.data.failure_candidates.length === 0}
+                onClick={() => setSelectedPromotionKeys(primaryPromotionKeys)}
+              >
+                Select primary failures
+              </button>
+              <button
+                type="button"
+                disabled={selectedPromotionKeys.length === 0}
+                onClick={() => setSelectedPromotionKeys([])}
+              >
+                Clear selection
+              </button>
+              <button
+                type="button"
+                disabled={
+                  promoteFailures.isPending ||
+                  !selectedTargetDatasetId ||
+                  selectedPromotionKeys.length === 0
+                }
+                onClick={() => {
+                  const targetDatasetId = Number(selectedTargetDatasetId);
+                  if (!Number.isSafeInteger(targetDatasetId) || targetDatasetId < 1) {
+                    return;
+                  }
+                  const confirmed = window.confirm(
+                    "Promote selected failure candidates to this evaluation dataset?"
                   );
-                });
-            }}
-          >
-            Promote primary failures
-          </button>
+                  if (!confirmed) {
+                    return;
+                  }
+                  void promoteFailures
+                    .mutateAsync({
+                      target_dataset_id: targetDatasetId,
+                      promotion_keys: selectedPromotionKeys,
+                      min_severity: "medium",
+                      limit: 50
+                    })
+                    .then((result) => {
+                      setPromotionMessage(
+                        `Promoted ${result.created_count} case(s), skipped ${result.skipped_count}.`
+                      );
+                    });
+                }}
+              >
+                Promote selected failures
+              </button>
+            </div>
+          </div>
         </div>
         {datasets.error ? (
           <InlineAlert tone="error">Unable to load promotion target datasets.</InlineAlert>
+        ) : null}
+        {activeDatasets.length === 0 ? (
+          <InlineAlert tone="info">
+            No active target dataset exists. Create one here, then select failure candidates to promote.
+          </InlineAlert>
         ) : null}
         {promotionMessage ? <InlineAlert tone="success">{promotionMessage}</InlineAlert> : null}
         {promoteFailures.error ? (
           <InlineAlert tone="error">{promoteFailures.error.message}</InlineAlert>
         ) : null}
+        {createDataset.error ? (
+          <InlineAlert tone="error">{createDataset.error.message}</InlineAlert>
+        ) : null}
         <table className="admin-table">
           <thead>
             <tr>
+              <th>Select</th>
               <th>Case</th>
               <th>Strategy</th>
               <th>Failure</th>
@@ -258,6 +344,20 @@ export function EvaluationDetailPage() {
           <tbody>
             {run.data.failure_candidates.map((candidate) => (
               <tr key={candidate.promotion_key}>
+                <td>
+                  <input
+                    aria-label={`select failure ${candidate.failure_type} ${truncateText(candidate.promotion_key, 8)}`}
+                    type="checkbox"
+                    checked={selectedPromotionKeySet.has(candidate.promotion_key)}
+                    onChange={(event) => {
+                      setSelectedPromotionKeys((current) =>
+                        event.target.checked
+                          ? Array.from(new Set([...current, candidate.promotion_key]))
+                          : current.filter((key) => key !== candidate.promotion_key)
+                      );
+                    }}
+                  />
+                </td>
                 <td>{candidate.case_key ?? `item-${candidate.evaluation_run_item_id}`}</td>
                 <td>{candidate.strategy_type}</td>
                 <td>{candidate.failure_type}</td>
@@ -268,7 +368,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.failure_candidates.length === 0 ? (
               <tr>
-                <td colSpan={6}>No failure candidates.</td>
+                <td colSpan={7}>No failure candidates.</td>
               </tr>
             ) : null}
           </tbody>
@@ -327,7 +427,20 @@ function formatScore(value: number | null) {
   return value === null ? "-" : value.toFixed(3);
 }
 
-function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[] {
+function mergeDatasets(
+  datasets: EvaluationDataset[],
+  createdDataset: EvaluationDataset | null
+): EvaluationDataset[] {
+  if (!createdDataset || createdDataset.status !== "active") {
+    return datasets;
+  }
+  if (datasets.some((dataset) => dataset.evaluation_dataset_id === createdDataset.evaluation_dataset_id)) {
+    return datasets;
+  }
+  return [...datasets, createdDataset];
+}
+
+function primaryFailureKeys(candidates: EvaluationFailureCandidate[]): string[] {
   const byItem = new Map<number, EvaluationFailureCandidate>();
   for (const candidate of candidates) {
     const existing = byItem.get(candidate.evaluation_run_item_id);
@@ -335,9 +448,7 @@ function primaryFailureTypes(candidates: EvaluationFailureCandidate[]): string[]
       byItem.set(candidate.evaluation_run_item_id, candidate);
     }
   }
-  return Array.from(
-    new Set(Array.from(byItem.values()).map((candidate) => candidate.failure_type))
-  );
+  return Array.from(byItem.values()).map((candidate) => candidate.promotion_key);
 }
 
 function compareFailureCandidates(

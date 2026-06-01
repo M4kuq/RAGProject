@@ -41,6 +41,7 @@ export function JobDetailPage() {
   }
 
   const canRetry = job.data.status === "failed" && !job.data.active_retry_job_id;
+  const hasErrorDetails = Boolean(job.data.error_code || job.data.error_message || job.data.status === "failed");
 
   return (
     <main className="admin-main">
@@ -100,10 +101,12 @@ export function JobDetailPage() {
         </dl>
       </section>
 
-      <section className="admin-section">
-        <h2>Error</h2>
-        <p>{job.data.error_code ? truncateText(job.data.error_code, 160) : formatSafeText(job.data.error_message, 160)}</p>
-      </section>
+      {hasErrorDetails ? (
+        <section className="admin-section">
+          <h2>Error</h2>
+          <p>{job.data.error_code ? truncateText(job.data.error_code, 160) : formatSafeText(job.data.error_message, 160)}</p>
+        </section>
+      ) : null}
 
       <section className="admin-section">
         <h2>Safe Payload</h2>

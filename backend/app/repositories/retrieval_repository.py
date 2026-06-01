@@ -146,6 +146,14 @@ class RetrievalRepository:
         statement = select(RetrievalRun).where(RetrievalRun.retrieval_run_id.in_(run_ids))
         return {run.retrieval_run_id: run for run in db.scalars(statement).all()}
 
+    def list_recent_runs(self, db: Session, *, limit: int) -> list[RetrievalRun]:
+        statement = (
+            select(RetrievalRun)
+            .order_by(RetrievalRun.created_at.desc(), RetrievalRun.retrieval_run_id.desc())
+            .limit(limit)
+        )
+        return list(db.scalars(statement).all())
+
     def list_items_for_run(
         self,
         db: Session,

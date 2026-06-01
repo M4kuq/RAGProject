@@ -92,6 +92,10 @@ function readError(json: unknown, status: number, fallback: string): ApiError {
   return new ApiError({ code: "error", message: fallback, requestId: null, status });
 }
 
+function isCsrfError(error: ApiError): boolean {
+  return error.status === 403 && (error.code === "csrf_invalid" || error.code === "csrf_missing");
+}
+
 async function refreshCsrfToken(): Promise<string | null> {
   const response = await fetch(`${API_BASE}/api/v1/auth/csrf`, {
     credentials: "include"
@@ -107,10 +111,11 @@ async function refreshCsrfToken(): Promise<string | null> {
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
+  const hasExplicitCsrfHeader = headers.has("x-csrf-token");
   if (!headers.has("content-type") && init.body && !isFormBody(init.body)) {
     headers.set("content-type", "application/json");
   }
-  if (UNSAFE_METHODS.has(method) && !headers.has("x-csrf-token")) {
+  if (UNSAFE_METHODS.has(method) && !hasExplicitCsrfHeader) {
     let token = csrfToken ?? readCookie(CSRF_COOKIE_NAME);
     if (!token) {
       token = await refreshCsrfToken();
@@ -120,15 +125,39 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     }
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    ...init,
-    headers
-  });
-  const json = await response.json().catch(() => ({}));
-  updateCsrfToken(json);
-  if (!response.ok) {
-    throw readError(json, response.status, response.statusText);
+  async function send(currentHeaders: Headers): Promise<{ error: ApiError | null; json: unknown }> {
+    const response = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      ...init,
+      headers: new Headers(currentHeaders)
+    });
+    const json = await response.json().catch(() => ({}));
+    updateCsrfToken(json);
+    if (!response.ok) {
+      return { error: readError(json, response.status, response.statusText), json };
+    }
+    return { error: null, json };
   }
+
+  let result = await send(headers);
+  if (
+    result.error &&
+    UNSAFE_METHODS.has(method) &&
+    !hasExplicitCsrfHeader &&
+    isCsrfError(result.error)
+  ) {
+    csrfToken = null;
+    const refreshedToken = await refreshCsrfToken();
+    if (refreshedToken) {
+      headers.set("x-csrf-token", refreshedToken);
+      result = await send(headers);
+    }
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+  const json = result.json;
+  updateCsrfToken(json);
   return json as T;
 }

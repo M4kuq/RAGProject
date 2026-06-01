@@ -195,6 +195,7 @@ def test_tool_registry_exposes_read_mostly_phase2_tools(
         "rag_search_hybrid",
         "rag_search_agentic",
         "rag_ask",
+        "rag_ask_hybrid",
         "rag_ask_agentic",
         "rag_get_retrieval_trace",
         "rag_compare_strategies",
@@ -264,6 +265,14 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
             "include_trace_summary": True,
         },
     )
+    hybrid_ask = mcp_adapter.rag_ask_hybrid(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
     trace = mcp_adapter.rag_get_retrieval_trace(
         {"retrieval_run_id": agentic_search["retrieval_run_id"]},
     )
@@ -276,6 +285,9 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert hybrid["trace_summary"]["strategy_type"] == "hybrid"
     assert agentic_search["strategy"] == "agentic_router"
     assert agentic_search["trace_summary"]["strategy_type"] == "agentic_router"
+    assert hybrid_ask["strategy"] == "hybrid"
+    assert hybrid_ask["status"] == "succeeded"
+    assert hybrid_ask["citations"]
     assert agentic_ask["strategy"] == "agentic_router"
     assert agentic_ask["status"] == "succeeded"
     assert agentic_ask["citations"]
@@ -285,7 +297,9 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert comparison["evaluation_run_id"] == 1
     assert {item["strategy"] for item in comparison["metrics"]} >= {"dense", "hybrid"}
     assert summary["agentic_summary"]["strategy_type"] == "agentic_router"
-    dumped = json.dumps([hybrid, agentic_search, agentic_ask, trace, comparison, summary])
+    dumped = json.dumps(
+        [hybrid, agentic_search, hybrid_ask, agentic_ask, trace, comparison, summary]
+    )
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
     assert "secret_token" not in dumped.lower()
     assert "raw_prompt" not in dumped.lower()
@@ -544,6 +558,7 @@ def test_jsonrpc_tools_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> 
         ("rag_search_hybrid", {"query": "alpha"}),
         ("rag_search_agentic", {"query": "alpha"}),
         ("rag_ask", {"question": "Summarize alpha citation"}),
+        ("rag_ask_hybrid", {"question": "Summarize alpha citation"}),
         ("rag_ask_agentic", {"question": "Summarize alpha citation"}),
         ("rag_get_retrieval_trace", {"retrieval_run_id": 1}),
         ("rag_compare_strategies", {}),

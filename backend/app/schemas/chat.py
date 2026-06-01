@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.rag import RagAskCitation, RagAskConfidence
+from app.schemas.rag import RagAskCitation, RagAskConfidence, RagAskRetrievalSummary
 
 ChatSessionStatus = Literal["active", "archived"]
 ChatDisplayStatus = Literal["active", "archived", "temporary", "temporary_expired"]
@@ -101,6 +101,7 @@ class ChatMessageItem(BaseModel):
     edited_flag: bool
     citations: list[RagAskCitation] = Field(default_factory=list)
     confidence: RagAskConfidence | None = None
+    retrieval_summary: RagAskRetrievalSummary | None = None
     created_at: datetime
     updated_at: datetime
 

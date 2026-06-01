@@ -132,6 +132,20 @@ function SourcePreview({
         <strong>{truncate(source.display_label || source.source_label, 100, "source")}</strong>
         {source.old_version_flag ? <OldSourceBadge /> : null}
       </div>
+      <dl className="source-preview-facts">
+        <div>
+          <dt>Version</dt>
+          <dd>v{source.version_no}</dd>
+        </div>
+        <div>
+          <dt>Chunk</dt>
+          <dd>#{source.document_chunk_id}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{source.source_type === "external_url" ? "External URL" : "Upload"}</dd>
+        </div>
+      </dl>
       {locatorParts.length ? <p className="citation-meta">{locatorParts.join(" / ")}</p> : null}
       {source.source_url ? (
         <a href={source.source_url} rel="noopener noreferrer" target="_blank">
@@ -141,9 +155,12 @@ function SourcePreview({
       <p>{truncate(source.preview, 500)}</p>
       {source.preview_truncated ? <p className="muted">Preview truncated.</p> : null}
       {isAdmin ? (
-        <Link to={`/admin/documents/${source.logical_document_id}`}>
-          Open document #{source.logical_document_id}
-        </Link>
+        <div className="source-preview-actions">
+          <Link to={`/admin/documents/${source.logical_document_id}`}>
+            Open document #{source.logical_document_id}
+          </Link>
+          <Link to={`/admin/documents/${source.logical_document_id}#version-compare`}>Open version compare</Link>
+        </div>
       ) : null}
     </div>
   );

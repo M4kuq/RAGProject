@@ -1,6 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queryKeys";
-import { getRetrievalRunDebugDetail, runRagDebugSearch } from "./retrievalDebugApi";
+import {
+  getRetrievalRunDebugDetail,
+  listRetrievalRunDebugHistory,
+  runRagDebugSearch
+} from "./retrievalDebugApi";
 import type { RagSearchDebugRequest } from "./retrievalDebugTypes";
 
 export function useRagDebugSearch() {
@@ -14,5 +18,12 @@ export function useRetrievalRunDebugDetail(retrievalRunId: number | null) {
     queryKey: queryKeys.retrievalDebug.run(retrievalRunId),
     queryFn: () => getRetrievalRunDebugDetail(retrievalRunId as number),
     enabled: retrievalRunId !== null && Number.isFinite(retrievalRunId)
+  });
+}
+
+export function useRetrievalRunDebugHistory() {
+  return useQuery({
+    queryKey: queryKeys.retrievalDebug.history,
+    queryFn: listRetrievalRunDebugHistory
   });
 }

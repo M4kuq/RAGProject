@@ -145,9 +145,9 @@ class Settings(BaseSettings):
     router_fallback_strategy: str = "fallback_dense"
     router_store_decision_trace: bool = True
     llm_orchestrator_enabled: bool = True
-    llm_orchestrator_max_tool_calls: int = Field(default=5, ge=1, le=10)
-    llm_orchestrator_max_search_calls: int = Field(default=3, ge=1, le=10)
-    llm_orchestrator_timeout_seconds: float = Field(default=30.0, gt=0.0, le=180.0)
+    llm_orchestrator_max_tool_calls: int = Field(default=8, ge=1, le=10)
+    llm_orchestrator_max_search_calls: int = Field(default=8, ge=1, le=10)
+    llm_orchestrator_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     llm_orchestrator_max_query_chars: int = Field(default=500, ge=1, le=1000)
     llm_orchestrator_max_tool_result_items: int = Field(default=10, ge=1, le=20)
     llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)

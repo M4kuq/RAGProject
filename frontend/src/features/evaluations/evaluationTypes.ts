@@ -11,6 +11,7 @@ export type RetrievalStrategy =
   | "metadata_filtered"
   | "version_aware"
   | "agentic_router"
+  | "llm_tool_orchestrator"
   | "fallback_dense";
 export type EvaluationRunnableStrategy = "dense" | "sparse" | "hybrid" | "agentic_router";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
@@ -114,6 +115,7 @@ export type EvaluationFailureCandidate = {
 export type EvaluationFailurePromotionRequest = {
   target_dataset_id: number;
   failure_types?: string[] | null;
+  promotion_keys?: string[] | null;
   min_severity?: EvaluationFailureSeverity;
   limit?: number;
 };
@@ -164,6 +166,15 @@ export type EvaluationDataset = {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type EvaluationDatasetCreateRequest = {
+  dataset_name: string;
+  description?: string | null;
+  version?: string;
+  source_type?: "manual" | "fixture" | "feedback_promoted" | "imported";
+  status?: "active" | "archived";
+  metadata_json?: Record<string, unknown> | null;
 };
 
 export type EvaluationCase = {

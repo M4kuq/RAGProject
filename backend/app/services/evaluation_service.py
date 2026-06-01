@@ -737,10 +737,12 @@ class EvaluationService:
             raise ValidationFailed({"target_dataset_id": "target dataset is archived"})
 
         selected_types = set(payload.failure_types or [])
+        selected_promotion_keys = set(payload.promotion_keys or [])
         candidates = [
             candidate
             for candidate in self._failure_candidates(db, run=run)
-            if (not selected_types or candidate.failure_type in selected_types)
+            if (not selected_promotion_keys or candidate.promotion_key in selected_promotion_keys)
+            and (not selected_types or candidate.failure_type in selected_types)
             and _severity_rank(candidate.severity) >= _severity_rank(payload.min_severity)
         ]
         candidates = _primary_failure_candidates(candidates)
@@ -2308,9 +2310,10 @@ def _strategy_metrics_summary_json(
             failed_value if isinstance(failed_value, int) else 0,
             comparison.failed_count,
         )
-        if comparison.average is not None:
+        summary_value = _strategy_comparison_summary_value(comparison)
+        if summary_value is not None:
             cast(dict[str, float], entry["metric_summary"])[str(comparison.metric_name)] = (
-                comparison.average
+                summary_value
             )
     failure_summary = _failure_summary(failure_candidates or [])
     agentic_metrics = cast(
@@ -2344,6 +2347,12 @@ def _strategy_metrics_summary_json(
         payload["agentic_summary"] = agentic_summary
     payload["failure_summary"] = failure_summary
     return payload
+
+
+def _strategy_comparison_summary_value(comparison: StrategyComparisonMetric) -> float | None:
+    if str(comparison.metric_name) == "p95_latency":
+        return comparison.p95
+    return comparison.average
 
 
 def _loaded_case_from_model(case: EvaluationCaseModel) -> LoadedEvaluationCase:

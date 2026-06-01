@@ -167,6 +167,7 @@ textarea {
 .confidence-badge,
 .old-source-badge,
 .pending-badge,
+.retrieval-mode-badge,
 .replay-badge {
   border-radius: 999px;
   display: inline-flex;
@@ -184,6 +185,11 @@ textarea {
 .replay-badge {
   background: #edf7f5;
   color: #24585e;
+}
+
+.retrieval-mode-badge {
+  background: #eef4ff;
+  color: #234c86;
 }
 
 .confidence-high {
@@ -267,6 +273,38 @@ textarea {
   justify-content: space-between;
 }
 
+.source-preview-facts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  margin: 8px 0;
+}
+
+.source-preview-facts div {
+  background: #f7f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.source-preview-facts dt {
+  color: #57606a;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.source-preview-facts dd {
+  font-size: 13px;
+  margin: 0;
+}
+
+.source-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
 .source-preview-error {
   color: #9b1c31;
 }
@@ -337,6 +375,71 @@ textarea {
 .admin-section h2 {
   font-size: 18px;
   margin: 0 0 12px;
+}
+
+.document-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.document-detail-tabs a {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  color: #24292f;
+  font-size: 14px;
+  padding: 8px 10px;
+  text-decoration: none;
+}
+
+.document-detail-tabs a:hover,
+.document-detail-tabs a:focus {
+  border-color: #0969da;
+  color: #0969da;
+}
+
+.section-header-row {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.section-header-row h2 {
+  margin-bottom: 4px;
+}
+
+.section-help {
+  color: #57606a;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  max-width: 860px;
+}
+
+.failure-promotion-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.failure-promotion-target {
+  display: grid;
+  gap: 6px;
+  min-width: min(100%, 320px);
+}
+
+.failure-promotion-target select {
+  width: 100%;
+}
+
+.failure-promotion-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .compact-grid {
@@ -1218,6 +1321,19 @@ textarea {
   display: flex;
   gap: 12px;
   justify-content: space-between;
+}
+
+.composer-guidance {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.strategy-description {
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .composer-controls {
