@@ -61,6 +61,7 @@ export type RetrievalRunDebugSummary = {
   latency_breakdown_json: Record<string, unknown> | null;
   retrieval_settings_json: Record<string, unknown> | null;
   context_budget_json: ContextBudgetTrace | null;
+  context_compression_json: EvidencePackTrace | null;
   rerank_score_top1: number | null;
   answer_confidence: number | null;
   groundedness_score: number | null;
@@ -130,6 +131,86 @@ export type ContextBudgetItemRef = {
   retrieval_source?: string | null;
   reason?: string | null;
   drop_reason?: string | null;
+};
+
+export type EvidencePackTrace = {
+  schema_version: "phase2.context_compression.v1";
+  enabled: boolean;
+  method: "deterministic_evidence_pack";
+  policy: {
+    max_items?: number;
+    max_items_per_source?: number;
+    max_chars_per_item?: number;
+    max_total_chars?: number;
+    near_duplicate_threshold?: number;
+    preserve_citation_candidates?: boolean;
+    group_by_source?: boolean;
+  };
+  input: {
+    candidate_context_items: number;
+    selected_context_items: number;
+    input_estimated_tokens: number;
+    input_char_count: number;
+  };
+  output: {
+    evidence_group_count: number;
+    evidence_item_count: number;
+    output_estimated_tokens: number;
+    output_char_count: number;
+    compression_ratio: number;
+    citation_candidate_count: number;
+  };
+  drops: Record<string, number>;
+  evidence_groups: EvidenceGroupRef[];
+  evidence_item_refs: EvidenceItemRef[];
+  dropped_item_refs: DroppedEvidenceRef[];
+};
+
+export type EvidenceGroupRef = {
+  source_group_key: string;
+  source_label?: string | null;
+  document_version_id?: number | null;
+  logical_document_id?: number | null;
+  item_count: number;
+  selected_item_count: number;
+  estimated_tokens: number;
+  top_score?: number | null;
+  evidence_item_refs: string[];
+};
+
+export type EvidenceItemRef = {
+  evidence_item_id: string;
+  retrieval_run_item_id: number;
+  document_chunk_id: number;
+  local_citation_id: number;
+  source_label?: string | null;
+  section_title?: string | null;
+  page_from?: number | null;
+  page_to?: number | null;
+  score?: number | null;
+  rerank_score?: number | null;
+  rank?: number | null;
+  rerank_order?: number | null;
+  source_group_key: string;
+  evidence_text_hash: string;
+  original_char_count: number;
+  output_char_count: number;
+  estimated_tokens: number;
+  citation_candidate: boolean;
+  compression_method: string;
+  compression_reason?: string | null;
+  retrieval_source?: string | null;
+};
+
+export type DroppedEvidenceRef = {
+  retrieval_run_item_id: number;
+  document_chunk_id: number;
+  source_label?: string | null;
+  rank?: number | null;
+  rerank_order?: number | null;
+  estimated_tokens: number;
+  original_char_count: number;
+  drop_reason: string;
 };
 
 export type RetrievalRunDebugItem = {

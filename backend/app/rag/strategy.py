@@ -236,6 +236,42 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         True,
         "Persist safe context budget summaries in retrieval_runs.context_budget_json.",
     ),
+    "rag.evidence_pack.enabled": (
+        True,
+        "Enable deterministic Evidence Pack construction before RAG answer generation.",
+    ),
+    "rag.evidence_pack.max_items": (
+        12,
+        "Maximum evidence items passed to answer generation.",
+    ),
+    "rag.evidence_pack.max_items_per_source": (
+        4,
+        "Maximum evidence items retained from one source group.",
+    ),
+    "rag.evidence_pack.max_chars_per_item": (
+        1200,
+        "Maximum bounded evidence text characters for one item.",
+    ),
+    "rag.evidence_pack.max_total_chars": (
+        12000,
+        "Maximum bounded evidence text characters passed to generation.",
+    ),
+    "rag.evidence_pack.near_duplicate_threshold": (
+        0.85,
+        "Jaccard token-overlap threshold for deterministic near-duplicate removal.",
+    ),
+    "rag.evidence_pack.preserve_citation_candidates": (
+        True,
+        "Prefer citation-capable items while building Evidence Packs.",
+    ),
+    "rag.evidence_pack.group_by_source": (
+        True,
+        "Group Evidence Pack trace metadata by safe source group.",
+    ),
+    "rag.evidence_pack.store_debug_trace": (
+        True,
+        "Persist safe Evidence Pack summaries in retrieval_runs.context_compression_json.",
+    ),
     "rag.trace.enabled": (
         True,
         "Store redacted retrieval trace metadata.",

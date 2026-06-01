@@ -132,3 +132,30 @@ Displayed fields:
 The panel does not display raw prompt, full context, raw chunk text, snippets,
 raw tool output, PII, token values, secrets, credentials, sessions, cookies, or
 local paths. Numeric token estimates are safe bounded counts.
+
+## PR-41 Evidence Pack Panel
+
+PR-41 adds an Evidence Pack panel to the same admin Retrieval Debug surface. The
+panel reads safe `retrieval_runs.context_compression_json` metadata when present.
+Search-only runs can show an empty state because Evidence Pack construction is
+applied to `/rag/ask` after context budget selection and before generation.
+
+Displayed fields:
+
+- enabled
+- compression method
+- input selected context item count
+- output evidence item count
+- evidence group count
+- compression ratio
+- duplicate and source-limit drop counts
+- max items per source
+- evidence groups
+- evidence item refs
+- dropped evidence refs
+- citation candidate count
+
+The panel does not display raw prompt, raw query, full context, raw chunk text,
+`evidence_text_for_generation`, raw tool output, snippets, PII, token values,
+secrets, credentials, sessions, cookies, or local paths. Viewer chat UI does not
+render Evidence Pack debug internals.

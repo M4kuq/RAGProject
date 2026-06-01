@@ -578,6 +578,7 @@ class RetrievalRun(Base):
     latency_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     retrieval_settings_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     context_budget_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    context_compression_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     rerank_score_top1: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     answer_confidence: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))

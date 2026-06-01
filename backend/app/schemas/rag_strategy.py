@@ -179,6 +179,7 @@ class LatencyBreakdown(SafeTraceModel):
     rerank_ms: int | None = Field(default=None, ge=0)
     retrieval_items_persist_ms: int | None = Field(default=None, ge=0)
     context_assembly_ms: int | None = Field(default=None, ge=0)
+    evidence_pack_ms: int | None = Field(default=None, ge=0)
     generation_ms: int | None = Field(default=None, ge=0)
     citation_build_ms: int | None = Field(default=None, ge=0)
     confidence_ms: int | None = Field(default=None, ge=0)

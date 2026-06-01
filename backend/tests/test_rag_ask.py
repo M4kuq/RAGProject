@@ -216,6 +216,21 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert "full active chunk text should not be returned whole" not in budget_dump
         assert "raw_prompt" not in budget_dump
         assert "full_context" not in budget_dump
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["schema_version"] == "phase2.context_compression.v1"
+        assert run.context_compression_json["input"]["selected_context_items"] == 1
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["output"]["evidence_group_count"] == 1
+        assert run.context_compression_json["output"]["compression_ratio"] <= 1
+        assert (
+            run.context_compression_json["evidence_item_refs"][0]["retrieval_run_item_id"]
+            == run.context_budget_json["selected_item_refs"][0]["retrieval_run_item_id"]
+        )
+        compression_dump = str(run.context_compression_json)
+        assert "full active chunk text should not be returned whole" not in compression_dump
+        assert "evidence_text_for_generation" not in compression_dump
+        assert "raw_prompt" not in compression_dump
+        assert "full_context" not in compression_dump
         assert run.answer_confidence is not None
         assert run.groundedness_score is not None
         assert run.confidence_label in {"High", "Medium", "Low"}
@@ -409,6 +424,10 @@ def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
         assert run.context_budget_json["selected_item_refs"][0]["document_chunk_id"] == 100
         assert run.context_budget_json["dropped_item_refs"][0]["document_chunk_id"] == 101
         assert run.context_budget_json["drop_reasons"] == {"over_budget": 1}
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["drops"] == {"max_total_chars": 1}
+        assert run.context_compression_json["evidence_item_refs"][0]["document_chunk_id"] == 100
         assert run.retrieval_score_summary is not None
         assert run.retrieval_score_summary["selected_count"] == 1
         assert run.retrieval_score_summary["top1_retrieval_score"] == 0.91
@@ -466,6 +485,15 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
     assert log_payload["budget_exhausted"] is True
     assert "raw" not in str(log_payload).lower()
     assert "secret" not in str(log_payload).lower()
+    evidence_logs = [
+        record for record in caplog.records if record.getMessage() == "rag.evidence_pack.built"
+    ]
+    assert evidence_logs
+    evidence_payload = evidence_logs[-1].__dict__["rag_evidence_pack"]
+    assert evidence_payload["input_item_count"] == 0
+    assert evidence_payload["output_item_count"] == 0
+    assert "raw" not in str(evidence_payload).lower()
+    assert "secret" not in str(evidence_payload).lower()
     with session_factory() as db:
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
         assert run.status == "failed"
@@ -477,6 +505,10 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
         dumped = str(run.context_budget_json)
         assert "full active chunk text should not be returned whole" not in dumped
         assert "raw_prompt" not in dumped
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["input"]["candidate_context_items"] == 2
+        assert run.context_compression_json["input"]["selected_context_items"] == 0
+        assert run.context_compression_json["output"]["evidence_item_count"] == 0
 
 
 def test_rag_ask_agentic_router_opt_in_persists_router_decision(
@@ -529,6 +561,9 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert run.context_budget_json["strategy"]["strategy_type"] == "agentic_router"
         assert run.context_budget_json["items"]["selected_count"] == 1
         assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -582,6 +617,9 @@ def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
         assert run.context_budget_json["strategy"]["strategy_type"] == "hybrid"
         assert run.context_budget_json["items"]["selected_count"] == 1
         assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -641,6 +679,9 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert run.context_budget_json["strategy"]["selected_strategy"] == "llm_tool_orchestrator"
         assert run.context_budget_json["items"]["selected_count"] == 1
         assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
         settings_snapshot = run.retrieval_settings_json
         assert settings_snapshot is not None
         assert settings_snapshot["max_tool_calls"] == 8
@@ -1715,6 +1756,8 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         assert run.status == "failed"
         assert run.error_code == "no_context_found"
         _assert_safe_run_trace(run, raw_query="missing context")
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 0
         assert db.query(Citation).count() == 0
 
     vector_client.candidates = [_candidate(100, 0.91, 1)]
@@ -1750,6 +1793,9 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         _assert_safe_run_trace(run, raw_query="alpha policy generation failure")
         assert run.latency_breakdown_json is not None
         assert "generation_ms" in run.latency_breakdown_json
+        assert "evidence_pack_ms" in run.latency_breakdown_json
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
         run_items = (
             db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         )
@@ -2302,6 +2348,7 @@ def _assert_safe_run_trace(run: RetrievalRun, *, raw_query: str) -> None:
             "strategy_decision": run.strategy_decision_json,
             "settings": run.retrieval_settings_json,
             "latency": run.latency_breakdown_json,
+            "context_compression": run.context_compression_json,
         }
     )
     assert raw_query not in dumped

@@ -12,6 +12,9 @@ import {
 import type {
   ContextBudgetItemRef,
   ContextBudgetTrace,
+  DroppedEvidenceRef,
+  EvidenceItemRef,
+  EvidencePackTrace,
   RagSearchDebugItem,
   RetrievalRunDebugDetail,
   RetrievalRunDebugItem,
@@ -52,6 +55,7 @@ const LATENCY_KEYS = [
   "rerank_ms",
   "retrieval_items_persist_ms",
   "generation_ms",
+  "evidence_pack_ms",
   "citation_build_ms",
   "confidence_ms"
 ];
@@ -216,6 +220,7 @@ export function RetrievalDebugPage() {
           {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
           {detail.data ? <ContextBudgetPanel trace={detail.data.retrieval_run.context_budget_json} /> : null}
+          {detail.data ? <EvidencePackPanel trace={detail.data.retrieval_run.context_compression_json} /> : null}
           <ScoreBreakdownTable items={displayItems} />
           <RetrievalRunItemsTable items={displayItems} />
         </>
@@ -651,6 +656,154 @@ function ContextBudgetItemTable({
   );
 }
 
+function EvidencePackPanel({ trace }: { trace: EvidencePackTrace | null }) {
+  if (!trace) {
+    return (
+      <section className="admin-section">
+        <h2>Evidence Pack</h2>
+        <EmptyState title="No evidence pack trace">
+          Evidence Pack data is recorded for RAG ask runs after PR-41.
+        </EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <section className="admin-section">
+      <h2>Evidence Pack</h2>
+      <dl className="detail-grid">
+        <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
+        <Detail label="method" value={formatUnknownValue(trace.method)} />
+        <Detail label="input_items" value={trace.input.selected_context_items} />
+        <Detail label="evidence_items" value={trace.output.evidence_item_count} />
+        <Detail label="evidence_groups" value={trace.output.evidence_group_count} />
+        <Detail label="compression_ratio" value={formatRatio(trace.output.compression_ratio)} />
+        <Detail label="input_chars" value={trace.input.input_char_count} />
+        <Detail label="output_chars" value={trace.output.output_char_count} />
+        <Detail label="citation_candidate_count" value={trace.output.citation_candidate_count} />
+        <Detail
+          label="max_items_per_source"
+          value={formatUnknownValue(trace.policy.max_items_per_source)}
+        />
+      </dl>
+      <div className="retrieval-debug-grid">
+        <TraceCard title="Compression Drops">
+          <KeyValueTable record={trace.drops} />
+        </TraceCard>
+        <TraceCard title="Evidence Groups">
+          <table className="admin-table compact-table">
+            <thead>
+              <tr>
+                <th>source</th>
+                <th>items</th>
+                <th>tokens</th>
+                <th>top_score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trace.evidence_groups.map((group) => (
+                <tr key={group.source_group_key}>
+                  <td>{formatDebugText(group.source_label ?? group.source_group_key, 80)}</td>
+                  <td>{group.item_count}</td>
+                  <td>{group.estimated_tokens}</td>
+                  <td>{formatScore(group.top_score)}</td>
+                </tr>
+              ))}
+              {trace.evidence_groups.length === 0 ? (
+                <tr>
+                  <td colSpan={4}>No evidence groups.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </TraceCard>
+      </div>
+      <EvidenceItemTable items={trace.evidence_item_refs} />
+      <DroppedEvidenceTable items={trace.dropped_item_refs} />
+    </section>
+  );
+}
+
+function EvidenceItemTable({ items }: { items: EvidenceItemRef[] }) {
+  return (
+    <section>
+      <h3>Evidence Items</h3>
+      <table className="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>Evidence</th>
+            <th>Item</th>
+            <th>Chunk</th>
+            <th>Citation</th>
+            <th>Source</th>
+            <th>Chars</th>
+            <th>Tokens</th>
+            <th>Method</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.evidence_item_id}>
+              <td>{formatDebugText(item.evidence_item_id, 40)}</td>
+              <td>{item.retrieval_run_item_id}</td>
+              <td>{item.document_chunk_id}</td>
+              <td>{item.local_citation_id}</td>
+              <td>{formatDebugText(item.source_label ?? null, 80)}</td>
+              <td>{`${item.output_char_count}/${item.original_char_count}`}</td>
+              <td>{item.estimated_tokens}</td>
+              <td>{formatUnknownValue(item.compression_reason ?? item.compression_method)}</td>
+            </tr>
+          ))}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={8}>No evidence items.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function DroppedEvidenceTable({ items }: { items: DroppedEvidenceRef[] }) {
+  return (
+    <section>
+      <h3>Dropped Evidence</h3>
+      <table className="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Chunk</th>
+            <th>Source</th>
+            <th>Rank</th>
+            <th>Chars</th>
+            <th>Tokens</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={`${item.retrieval_run_item_id}-${item.drop_reason}`}>
+              <td>{item.retrieval_run_item_id}</td>
+              <td>{item.document_chunk_id}</td>
+              <td>{formatDebugText(item.source_label ?? null, 80)}</td>
+              <td>{formatUnknownValue(item.rank ?? item.rerank_order)}</td>
+              <td>{item.original_char_count}</td>
+              <td>{item.estimated_tokens}</td>
+              <td>{formatUnknownValue(item.drop_reason)}</td>
+            </tr>
+          ))}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={7}>No dropped evidence.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 function ScoreBreakdownTable({ items }: { items: DisplayItem[] }) {
   return (
     <section className="admin-section">
@@ -911,6 +1064,13 @@ function clampNumber(value: number, min: number, max: number, fallback: number) 
 }
 
 function formatScore(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "N/A";
+  }
+  return value.toFixed(3);
+}
+
+function formatRatio(value: unknown) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "N/A";
   }

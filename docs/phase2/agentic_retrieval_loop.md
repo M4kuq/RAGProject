@@ -105,6 +105,15 @@ agentic candidates through `ContextBudgetManager` before answer generation.
 char/token estimates, source breakdown, selected item refs, dropped item refs,
 and drop reasons.
 
+## PR-41 Evidence Pack Handoff
+
+After PR-41, explicit `/rag/ask strategy=agentic_router` runs pass the
+PR-40-selected context refs through `EvidencePackBuilder` before answer
+generation. `retrieval_runs.context_compression_json` records safe compression
+counts, compression ratio, duplicate drop reasons, source groups, evidence item
+refs, and dropped refs.
+
 The agentic loop still does not store raw query, raw prompt, full context, raw
-chunk text, raw exception messages, PII, secrets, token values, or external tool
-actions. Context compression and Evidence Pack construction remain PR-41 scope.
+chunk text, `evidence_text_for_generation`, raw exception messages, PII,
+secrets, token values, or external tool actions. Tool Result Compression remains
+PR-42 scope.

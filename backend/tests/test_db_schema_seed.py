@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0009_context_budget"
+    assert version == "0010_context_compression"
 
     expected_tables = {
         "roles",
@@ -484,6 +484,7 @@ def test_phase2_orm_fields_match_strategy_schema() -> None:
         "latency_breakdown_json",
         "retrieval_settings_json",
         "context_budget_json",
+        "context_compression_json",
     } <= set(run_columns.keys())
     assert {"metadata_json"} <= set(version_columns.keys())
     assert {"metadata_json"} <= set(chunk_columns.keys())
@@ -614,6 +615,15 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.context_budget.preserve_source_diversity") is True
         assert _setting_value(db, "rag.context_budget.token_estimator") == "heuristic"
         assert _setting_value(db, "rag.context_budget.store_debug_trace") is True
+        assert _setting_value(db, "rag.evidence_pack.enabled") is True
+        assert _setting_value(db, "rag.evidence_pack.max_items") == 12
+        assert _setting_value(db, "rag.evidence_pack.max_items_per_source") == 4
+        assert _setting_value(db, "rag.evidence_pack.max_chars_per_item") == 1200
+        assert _setting_value(db, "rag.evidence_pack.max_total_chars") == 12000
+        assert _setting_value(db, "rag.evidence_pack.near_duplicate_threshold") == 0.85
+        assert _setting_value(db, "rag.evidence_pack.preserve_citation_candidates") is True
+        assert _setting_value(db, "rag.evidence_pack.group_by_source") is True
+        assert _setting_value(db, "rag.evidence_pack.store_debug_trace") is True
         assert _setting_value(db, "rag.trace.enabled") is True
         assert _setting_value(db, "rag.sparse.enabled") is True
         assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
