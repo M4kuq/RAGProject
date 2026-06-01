@@ -96,7 +96,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                     "question": {"type": "string", "minLength": 1, "maxLength": 8000},
                     "strategy": {
                         "type": "string",
-                        "enum": ["dense", "agentic_router"],
+                        "enum": ["dense", "hybrid", "agentic_router"],
                         "default": "dense",
                     },
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
@@ -112,6 +112,26 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                 required=["question"],
             ),
             handler=adapter.rag_ask,
+        ),
+        McpTool(
+            name="rag_ask_hybrid",
+            description="Hybrid RAG ask wrapper for rag_ask(strategy=hybrid).",
+            input_schema=_object_schema(
+                {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["question"],
+            ),
+            handler=adapter.rag_ask_hybrid,
         ),
         McpTool(
             name="rag_ask_agentic",
@@ -285,7 +305,10 @@ def call_tool(
         return _tool_error(exc)
     except McpError:
         raise
-    is_error = name in {"rag_ask", "rag_ask_agentic"} and structured.get("status") == "failed"
+    is_error = (
+        name in {"rag_ask", "rag_ask_agentic", "rag_ask_hybrid"}
+        and structured.get("status") == "failed"
+    )
     return _tool_success(structured, is_error=is_error)
 
 

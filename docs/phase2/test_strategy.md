@@ -318,6 +318,10 @@
 - `ContextBudgetManager` selects within budget, drops over-budget items, drops
   items beyond max item count, preserves source diversity when enabled, counts
   citation candidates, counts sources, and records drop reason counts.
+- After generation context assembly applies the existing char cap, persisted
+  selected refs match the context actually passed to generation.
+- `min_citation_candidates` promotes additional candidates only when budget and
+  max item limits allow.
 - `context_budget_json` stores only safe refs and bounded count metadata. It
   does not store raw prompt, full context, raw chunk text, snippets, raw tool
   results, PII, token values, secrets, credentials, cookies, sessions, or local
@@ -328,6 +332,8 @@
   `no_context_found` run still stores safe context budget metadata.
 - Generation and citation failure paths retain safe context budget metadata when
   retrieval and budget selection completed.
+- Persisted top retrieval/rerank scores are recomputed from final budget-selected
+  context refs rather than pre-budget candidates.
 - Admin retrieval-run detail includes safe `context_budget_json`; viewer access
   remains `403`, and missing run remains `404`.
 - Admin Retrieval Debug renders the Context Budget panel, selected/dropped

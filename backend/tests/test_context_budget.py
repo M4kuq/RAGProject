@@ -117,6 +117,26 @@ def test_context_budget_drops_over_budget_and_max_items() -> None:
     assert over_budget.trace.usage.budget_exhausted is True
 
 
+def test_context_budget_promotes_extra_candidates_to_minimum_when_budget_allows() -> None:
+    decision = ContextBudgetManager().apply(
+        [
+            _candidate(1, 101, "a" * 20, rank=1, citation_candidate=True),
+            _candidate(2, 102, "b" * 20, rank=2, citation_candidate=False),
+            _candidate(3, 103, "c" * 20, rank=3, citation_candidate=False),
+        ],
+        policy=ContextBudgetPolicy(
+            max_context_tokens=30,
+            max_context_items=3,
+            max_tokens_per_item=30,
+            min_citation_candidates=2,
+        ),
+    )
+
+    assert decision.selected_item_ids == [1, 2]
+    assert decision.trace.selected_item_refs[1].reason == "min_citation_candidates"
+    assert decision.trace.drop_reasons == {"not_selected_by_rerank": 1}
+
+
 def test_context_budget_preserves_source_diversity_when_enabled() -> None:
     decision = ContextBudgetManager().apply(
         [

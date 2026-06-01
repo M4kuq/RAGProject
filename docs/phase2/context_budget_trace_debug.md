@@ -65,7 +65,13 @@ The initial selection policy:
 4. Prefer one item per source before adding additional items from the same source.
 5. Drop items beyond `max_context_items`.
 6. Drop items that would exceed `max_context_tokens`.
-7. Drop items whose own estimate exceeds `max_tokens_per_item`.
+7. Promote additional non-rerank-selected candidates only when needed to satisfy
+   `min_citation_candidates` and the token/char budget allows.
+8. Drop items whose own estimate exceeds `max_tokens_per_item`.
+
+After context assembly applies the existing generation character cap, the
+persisted selected refs and `retrieval_run_items.selected_flag` are synchronized
+to the context refs actually passed to generation.
 
 PR-40 does not truncate over-limit items. Truncation, summarization, and Evidence
 Pack construction are PR-41 work.

@@ -726,6 +726,50 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert missing_response.json()["error"]["code"] == "resource_not_found"
 
 
+def test_retrieval_debug_history_lists_safe_recent_runs(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    csrf_token = _login(client)
+
+    first_response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy", "top_k": 5, "rerank_top_n": 1},
+        headers=_unsafe_headers(csrf_token),
+    )
+    second_response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "beta policy", "top_k": 5, "rerank_top_n": 1},
+        headers=_unsafe_headers(csrf_token),
+    )
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_run_id = first_response.json()["data"]["retrieval_run_id"]
+    second_run_id = second_response.json()["data"]["retrieval_run_id"]
+
+    with session_factory() as db:
+        first_run = db.get(RetrievalRun, first_run_id)
+        assert first_run is not None
+        first_run.query_plan_json = {"raw_prompt": "must not leak", "safe": "ok"}
+        db.commit()
+
+    history_response = client.get("/api/v1/rag/retrieval-runs?limit=10")
+
+    assert history_response.status_code == 200
+    data = history_response.json()["data"]
+    assert [item["retrieval_run_id"] for item in data["items"][:2]] == [second_run_id, first_run_id]
+    assert data["items"][0]["status"] == "succeeded"
+    assert data["items"][0]["strategy_type"] == "dense"
+    assert "raw_prompt" not in str(history_response.json())
+    assert "must not leak" not in str(history_response.json())
+
+    client.cookies.clear()
+    _login(client, email="viewer@example.com")
+    viewer_response = client.get("/api/v1/rag/retrieval-runs")
+    assert viewer_response.status_code == 403
+    assert viewer_response.json()["error"]["code"] == "permission_denied"
+
+
 def test_rag_search_sparse_success_persists_trace_and_score_breakdown(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -963,6 +1007,67 @@ def test_rag_search_hybrid_success_persists_fusion_trace_and_score_breakdown(
         assert first_score_breakdown["selected_flag"] is True
         assert "content_text" not in str(first_score_breakdown)
         assert "raw_chunk_text" not in str(first_score_breakdown)
+
+
+def test_rag_search_hybrid_prefers_matching_source_metadata_for_named_query(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    with session_factory() as db:
+        db.add(
+            LogicalDocument(
+                logical_document_id=50,
+                owner_user_id=1,
+                title="RAGProject Phase2 Hybrid Retrieval",
+            )
+        )
+        db.add(
+            _version(
+                50,
+                50,
+                "ready",
+                True,
+                "e",
+                file_name="hybrid_retrieval.md",
+            )
+        )
+        db.add(
+            _chunk(
+                500,
+                50,
+                "RAGProject Hybrid Retrieval compares dense and sparse fusion for Phase2. " * 3,
+            )
+        )
+        db.commit()
+    vector_client.candidates = [_candidate(100, 0.99, 1), _candidate(500, 0.50, 2)]
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "RAGProject dense hybrid comparison",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "strategy": "hybrid",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["items"][0]["document_chunk_id"] == 500
+    assert data["items"][0]["source_label"].startswith("hybrid_retrieval.md")
+    with session_factory() as db:
+        first_item = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=data["retrieval_run_id"])
+            .order_by(RetrievalRunItem.created_at.asc())
+            .first()
+        )
+        assert first_item is not None
+        assert first_item.document_chunk_id == 500
+        assert first_item.score_breakdown_json is not None
+        assert first_item.score_breakdown_json["final_rank"] == 1
 
 
 def test_rag_search_agentic_router_selects_hybrid_and_persists_decision(

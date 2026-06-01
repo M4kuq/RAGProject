@@ -48,6 +48,7 @@ from app.rag.context_budget import (
     ContextBudgetPolicy,
     ContextBudgetStrategySummary,
     estimate_tokens,
+    finalize_context_budget_selection,
     sanitize_context_budget_json,
 )
 from app.rag.generation import (
@@ -115,11 +116,13 @@ from app.schemas.rag import (
     RagAskConfidence,
     RagAskRequest,
     RagAskResponse,
+    RagAskRetrievalSummary,
     RagAskUserMessage,
     RagSearchItem,
     RagSearchRequest,
     RagSearchResponse,
     RetrievalRunDebugItem,
+    RetrievalRunDebugListResponse,
     RetrievalRunDebugResponse,
     RetrievalRunDebugSummary,
     RetrievalScoreSummary,
@@ -432,6 +435,18 @@ class RagService:
             items=[_retrieval_run_debug_item(item) for item in items],
         )
 
+    def list_retrieval_run_debug_history(
+        self,
+        db: Session,
+        *,
+        limit: int,
+    ) -> RetrievalRunDebugListResponse:
+        safe_limit = min(100, max(1, limit))
+        runs = self.repository.list_recent_runs(db, limit=safe_limit)
+        return RetrievalRunDebugListResponse(
+            items=[_retrieval_run_debug_summary(run) for run in runs]
+        )
+
     def ask(
         self,
         db: Session,
@@ -682,9 +697,19 @@ class RagService:
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
                 )
-                final_summary = _summary_with_selected_count(
+                prompt_context_refs = _context_refs_for_citation_sources(
+                    selected_context_refs,
+                    prompt_citation_sources,
+                )
+                context_budget_decision = self._finalize_context_budget_after_assembly(
+                    db,
+                    retrieval_run_id=run_id,
+                    decision=context_budget_decision,
+                    prompt_context_refs=prompt_context_refs,
+                )
+                final_summary = _summary_with_final_context_refs(
                     result.summary,
-                    selected_count=len(prompt_citation_sources),
+                    prompt_context_refs,
                 )
             with latency_tracker.span("generation_ms"):
                 generation = answer_generator.generate(
@@ -700,6 +725,18 @@ class RagService:
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
                 )
+                if (
+                    requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR
+                    and _is_insufficient_evidence_answer(parsed_generation.answer_text)
+                ):
+                    self._mark_failed_safely(
+                        db,
+                        retrieval_run_id=run_id,
+                        error_code="no_context_found",
+                        latency_tracker=latency_tracker,
+                        rollback=False,
+                    )
+                    raise RagAskPipelineError("no_context_found", 422)
                 assistant_message = self.chat_repository.create_message(
                     db,
                     chat_session_id=payload.chat_session_id,
@@ -1114,7 +1151,8 @@ class RagService:
                 candidates=fused_candidates,
                 filters=filters,
             )
-        visible_candidates = checked_candidates[:top_k]
+        ranked_candidates = _order_by_source_affinity(query, checked_candidates)
+        visible_candidates = ranked_candidates[:top_k]
         selected_count = min(rerank_top_n, len(visible_candidates))
         excluded_by_rdb_check_count = max(0, len(fused_candidates) - len(checked_candidates))
         if not visible_candidates:
@@ -1474,7 +1512,7 @@ class RagService:
                 candidates=fused_candidates,
                 filters=filters,
             )
-        visible_candidates = checked_candidates[:top_k]
+        visible_candidates = _order_by_source_affinity(query, checked_candidates)[:top_k]
         return RetrievalAttemptResult(
             strategy=strategy,
             candidates=visible_candidates,
@@ -1497,7 +1535,7 @@ class RagService:
         latency_tracker: LatencyTracker,
         trace_strategy: RetrievalStrategy = RetrievalStrategy.AGENTIC_ROUTER,
     ) -> RetrievalPipelineResult:
-        final_candidates = agentic_result.final_candidates
+        final_candidates = _order_by_source_affinity(query, agentic_result.final_candidates)
         if not final_candidates:
             summary = _agentic_score_summary(
                 requested_top_k=top_k,
@@ -1600,6 +1638,7 @@ class RagService:
                 rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
             ),
         )
+        ordered_candidates = _order_by_source_affinity(query, ordered_candidates)
         selected_count = (
             0 if agentic_result.no_context else min(rerank_top_n, len(ordered_candidates))
         )
@@ -1828,6 +1867,8 @@ class RagService:
     ) -> ContextBudgetDecision:
         run = self._require_run(db, retrieval_run_id)
         policy = _context_budget_policy(self.settings)
+        if result.no_context:
+            policy = policy.model_copy(update={"min_citation_candidates": 0})
         decision = self.context_budget_manager.apply(
             _context_budget_candidates(result.context_candidates),
             policy=policy,
@@ -1858,6 +1899,44 @@ class RagService:
             ),
         )
         return decision
+
+    def _finalize_context_budget_after_assembly(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        decision: ContextBudgetDecision,
+        prompt_context_refs: list[ContextCandidateRef],
+    ) -> ContextBudgetDecision:
+        final_decision = finalize_context_budget_selection(
+            decision,
+            selected_item_ids={ref.saved_item.retrieval_run_item_id for ref in prompt_context_refs},
+        )
+        if final_decision is decision:
+            return decision
+        run = self._require_run(db, retrieval_run_id)
+        selected_item_ids = set(final_decision.selected_item_ids)
+        self.repository.update_context_selection(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            selected_item_ids=selected_item_ids,
+        )
+        if self.settings.context_budget_store_debug_trace:
+            self.repository.update_retrieval_run_trace(
+                db,
+                run=run,
+                context_budget_json=final_decision.trace.model_dump(mode="json", exclude_none=True),
+            )
+        _log_context_budget(
+            run=run,
+            decision=final_decision,
+            event=(
+                "rag.context_budget.exhausted"
+                if final_decision.trace.usage.budget_exhausted
+                else "rag.context_budget.applied"
+            ),
+        )
+        return final_decision
 
     def _ensure_direct_strategy_enabled(self, strategy_type: RetrievalStrategy) -> None:
         if strategy_type == RetrievalStrategy.HYBRID:
@@ -2437,6 +2516,79 @@ def _fusion_method(settings: Settings) -> FusionMethod:
     return FusionMethod(settings.hybrid_fusion_method)
 
 
+_SOURCE_AFFINITY_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{2,}")
+_SOURCE_AFFINITY_STOP_WORDS = {
+    "and",
+    "compare",
+    "comparison",
+    "please",
+    "search",
+    "retrieval",
+    "method",
+    "methods",
+    "strategy",
+    "strategies",
+}
+
+
+def _order_by_source_affinity(
+    query: str,
+    candidates: list[CheckedRetrievalCandidate],
+) -> list[CheckedRetrievalCandidate]:
+    tokens = _source_affinity_tokens(query)
+    if not tokens or len(candidates) < 2:
+        return candidates
+    scored = [
+        (_source_affinity_score(candidate, tokens), index, candidate)
+        for index, candidate in enumerate(candidates)
+    ]
+    if max(score for score, _, _ in scored) <= 0:
+        return candidates
+    return [
+        candidate
+        for _, _, candidate in sorted(
+            scored,
+            key=lambda item: (-item[0], item[1]),
+        )
+    ]
+
+
+def _source_affinity_tokens(query: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in _SOURCE_AFFINITY_TOKEN_RE.finditer(query):
+        token = match.group(0).strip("._-").lower()
+        if len(token) < 4 or token in _SOURCE_AFFINITY_STOP_WORDS or token in seen:
+            continue
+        tokens.append(token)
+        seen.add(token)
+        if len(tokens) >= 8:
+            break
+    return tokens
+
+
+def _source_affinity_score(
+    candidate: CheckedRetrievalCandidate,
+    tokens: list[str],
+) -> int:
+    file_name = (candidate.document_version.file_name or "").lower()
+    title = (candidate.logical_document.title or "").lower()
+    section_title = (candidate.chunk.section_title or "").lower()
+    combined = f"{file_name} {title} {section_title}"
+    score = 0
+    for token in tokens:
+        if token not in combined:
+            continue
+        score += 1
+        if token in title:
+            score += 2
+        if token in file_name:
+            score += 1
+        if token in section_title:
+            score += 1
+    return score
+
+
 def _hybrid_uses_dense(settings: Settings) -> bool:
     return settings.hybrid_dense_weight > 0
 
@@ -2874,13 +3026,40 @@ def _context_citation_sources(
     ]
 
 
-def _summary_with_selected_count(
+def _context_refs_for_citation_sources(
+    refs: list[ContextCandidateRef],
+    citation_sources: list[CitationSource],
+) -> list[ContextCandidateRef]:
+    included_ids = {
+        source.retrieval_run_item_id
+        for source in citation_sources
+        if source.retrieval_run_item_id is not None
+    }
+    return [ref for ref in refs if ref.saved_item.retrieval_run_item_id in included_ids]
+
+
+def _summary_with_final_context_refs(
     summary: RetrievalScoreSummary,
-    *,
-    selected_count: int,
+    refs: list[ContextCandidateRef],
 ) -> RetrievalScoreSummary:
     payload = summary.model_dump(mode="json")
-    payload["selected_count"] = max(0, selected_count)
+    retrieval_scores = [ref.candidate.retrieval_score for ref in refs]
+    payload["selected_count"] = len(refs)
+    payload["top1_retrieval_score"] = (
+        _round_score(retrieval_scores[0]) if retrieval_scores else None
+    )
+    payload["top3_avg_retrieval_score"] = (
+        _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
+        if retrieval_scores
+        else None
+    )
+    top1_rerank_score = next(
+        (ref.rerank_score for ref in refs if ref.rerank_score is not None),
+        None,
+    )
+    payload["top1_rerank_score"] = (
+        _round_score(top1_rerank_score) if top1_rerank_score is not None else None
+    )
     return RetrievalScoreSummary(**payload)
 
 
@@ -3073,6 +3252,7 @@ def _ask_response(
         citations=[_citation_response(record) for record in citation_records],
         confidence=_confidence_response(run),
         retrieval_run_id=retrieval_run_id,
+        retrieval_summary=_retrieval_summary_response(run),
         replayed=replayed,
     )
 
@@ -3105,6 +3285,54 @@ def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
         answer_confidence=_round_score(float(run.answer_confidence)),
         groundedness_score=_round_score(float(run.groundedness_score)),
         confidence_label=label,
+    )
+
+
+def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
+    decision = _safe_json_object(run.strategy_decision_json) or {}
+    tools_used_value = decision.get("tools_used")
+    tools_used = (
+        [str(item) for item in tools_used_value if isinstance(item, str)]
+        if isinstance(tools_used_value, list)
+        else []
+    )
+    return RagAskRetrievalSummary(
+        retrieval_run_id=run.retrieval_run_id,
+        strategy_type=RetrievalStrategy(run.strategy_type),
+        selected_strategy=_optional_safe_string(decision.get("selected_strategy")),
+        execution_strategy=_optional_safe_string(decision.get("execution_strategy")),
+        tools_used=tools_used,
+        fallback_used=decision.get("fallback_used")
+        if isinstance(decision.get("fallback_used"), bool)
+        else None,
+        no_context=decision.get("no_context")
+        if isinstance(decision.get("no_context"), bool)
+        else None,
+    )
+
+
+def _optional_safe_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    safe = _safe_display_text(value)
+    return safe or None
+
+
+def _is_insufficient_evidence_answer(answer_text: str) -> bool:
+    normalized = " ".join(answer_text.lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "十分な根拠がありません",
+            "十分な根拠がない",
+            "十分な情報がありません",
+            "根拠が不足",
+            "insufficient evidence",
+            "insufficient context",
+            "not enough evidence",
+            "not enough context",
+            "no sufficient evidence",
+        )
     )
 
 

@@ -200,6 +200,9 @@ class McpServiceAdapter:
     def rag_ask_agentic(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.AGENTIC_ROUTER.value})
 
+    def rag_ask_hybrid(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.rag_ask({**arguments, "strategy": RetrievalStrategy.HYBRID.value})
+
     def rag_get_retrieval_trace(self, arguments: dict[str, Any]) -> dict[str, Any]:
         payload = _validate(McpGetRetrievalTraceInput, arguments)
         with self.db_session() as db:
@@ -280,7 +283,7 @@ class McpServiceAdapter:
                 "strategy": RetrievalStrategy.HYBRID.value,
                 "description": "Dense + sparse fusion retrieval.",
                 "available": RetrievalStrategy.HYBRID.value in self.mcp_settings.allowed_strategies,
-                "mcp_tools": ["rag_search", "rag_search_hybrid"],
+                "mcp_tools": ["rag_search", "rag_search_hybrid", "rag_ask_hybrid"],
             },
             {
                 "strategy": RetrievalStrategy.AGENTIC_ROUTER.value,
@@ -399,9 +402,10 @@ class McpServiceAdapter:
             raise McpInvalidRequest("advanced RAG MCP tools are disabled")
         if ask and strategy not in {
             RetrievalStrategy.DENSE.value,
+            RetrievalStrategy.HYBRID.value,
             RetrievalStrategy.AGENTIC_ROUTER.value,
         }:
-            raise McpInvalidRequest("rag_ask supports dense or agentic_router only")
+            raise McpInvalidRequest("rag_ask supports dense, hybrid, or agentic_router only")
 
     def _latest_evaluation_run(
         self,

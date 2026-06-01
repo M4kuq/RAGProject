@@ -130,6 +130,42 @@ def test_jobs_list_and_detail_return_redacted_payload(
     assert "locked_by" not in body["data"]
 
 
+def test_jobs_succeeded_without_error_does_not_report_failure(
+    jobs_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = jobs_client
+    now = datetime(2026, 5, 30, 23, 28, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(
+            Job(
+                job_id=27,
+                job_type="evaluation_run",
+                status="succeeded",
+                target_type="evaluation_run",
+                target_id=3,
+                payload_json={"evaluation_run_id": 3},
+                error_code=None,
+                error_message=None,
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    _login_as(client, "admin@example.com")
+    listing = client.get("/api/v1/jobs")
+    detail = client.get("/api/v1/jobs/27")
+
+    assert listing.status_code == 200
+    assert detail.status_code == 200
+    assert listing.json()["data"][0]["status"] == "succeeded"
+    assert listing.json()["data"][0]["error_message"] is None
+    assert detail.json()["data"]["error_message"] is None
+    assert "Job failed." not in detail.text
+
+
 def test_jobs_list_filters_paginates_and_rejects_invalid_status(
     jobs_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:

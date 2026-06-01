@@ -43,7 +43,7 @@ from app.rag.llm_orchestrator import (
     OpenAICompatibleJSONToolPlanner,
     create_llm_tool_call_planner,
 )
-from app.rag.rerank import FakeRerankerClient, RerankCandidate, RerankError
+from app.rag.rerank import FakeRerankerClient, NoopRerankerClient, RerankCandidate, RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
@@ -165,6 +165,15 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert 0.0 <= data["confidence"]["answer_confidence"] <= 1.0
     assert 0.0 <= data["confidence"]["groundedness_score"] <= 1.0
     assert data["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
+    assert data["retrieval_summary"] == {
+        "retrieval_run_id": data["retrieval_run_id"],
+        "strategy_type": "dense",
+        "selected_strategy": "dense",
+        "execution_strategy": "dense",
+        "tools_used": [],
+        "fallback_used": False,
+        "no_context": None,
+    }
     assert (
         "full active chunk text should not be returned whole"
         not in data["assistant_message"]["content"]
@@ -358,6 +367,61 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert admin.status_code == 200
 
 
+def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        generation_max_context_chars=130,
+        context_budget_max_context_tokens=1000,
+        context_budget_max_tokens_per_item=1000,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=NoopRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="budget char cap")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "budget-char-cap-msg",
+            "message": "alpha policy summary",
+            "top_k": 2,
+            "rerank_top_n": 2,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["citations"][0]["document_chunk_id"] == 100
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["selected_item_refs"][0]["document_chunk_id"] == 100
+        assert run.context_budget_json["dropped_item_refs"][0]["document_chunk_id"] == 101
+        assert run.context_budget_json["drop_reasons"] == {"over_budget": 1}
+        assert run.retrieval_score_summary is not None
+        assert run.retrieval_score_summary["selected_count"] == 1
+        assert run.retrieval_score_summary["top1_retrieval_score"] == 0.91
+        assert run.retrieval_score_summary["top1_rerank_score"] == 0.91
+        assert str(run.rerank_score_top1) == "0.910000"
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rank_order.asc())
+            .all()
+        )
+        assert [item.selected_flag for item in items] == [True, False]
+
+
 def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
     caplog: pytest.LogCaptureFixture,
@@ -407,7 +471,7 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
         assert run.context_budget_json is not None
         assert run.context_budget_json["items"]["candidate_count"] == 2
         assert run.context_budget_json["items"]["selected_count"] == 0
-        assert run.context_budget_json["drop_reasons"]["over_budget"] == 1
+        assert run.context_budget_json["drop_reasons"]["over_budget"] == 2
         dumped = str(run.context_budget_json)
         assert "full active chunk text should not be returned whole" not in dumped
         assert "raw_prompt" not in dumped
@@ -563,6 +627,8 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert run.strategy_decision_json["selected_strategy"] == "llm_tool_orchestrator"
         assert run.strategy_decision_json["tool_call_count"] == 2
         assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["fallback_used"] is False
         assert run.strategy_decision_json["finalize_called"] is True
         assert run.strategy_decision_json["no_context"] is False
         assert run.latency_breakdown_json is not None
@@ -575,7 +641,9 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
         settings_snapshot = run.retrieval_settings_json
         assert settings_snapshot is not None
-        assert settings_snapshot["max_tool_calls"] == 5
+        assert settings_snapshot["max_tool_calls"] == 8
+        assert settings_snapshot["max_search_calls"] == 8
+        assert settings_snapshot["timeout_seconds"] == 600.0
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -645,7 +713,7 @@ def test_rag_ask_hybrid_disabled_returns_strategy_not_enabled(
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
 
 
-def test_rag_ask_llm_tool_orchestrator_budget_exhausted_returns_no_context(
+def test_rag_ask_llm_tool_orchestrator_budget_exhausted_best_effort_finalizes_with_candidates(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
@@ -661,6 +729,8 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_returns_no_context(
         qdrant_collection_name="document_chunks",
         search_snippet_max_chars=32,
         generation_provider="fake",
+        sparse_enabled=False,
+        hybrid_enabled=False,
         llm_orchestrator_max_tool_calls=1,
         llm_orchestrator_max_search_calls=1,
     )
@@ -684,6 +754,72 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_returns_no_context(
         headers=_unsafe_headers(csrf_token),
     )
 
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.strategy_type == "llm_tool_orchestrator"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["finalize_called"] is False
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert (
+            "best_effort_finalize_after_budget_or_timeout"
+            in run.strategy_decision_json["reason_codes"]
+        )
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() > 0
+        )
+
+
+def test_rag_ask_llm_tool_orchestrator_budget_exhausted_without_candidates_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=2,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        generation_provider="fake",
+        sparse_enabled=False,
+        hybrid_enabled=False,
+        llm_orchestrator_max_tool_calls=1,
+        llm_orchestrator_max_search_calls=1,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm empty budget")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-empty-budget-msg-1",
+            "message": "alpha policy budget empty",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "no_context_found"
     with session_factory() as db:
@@ -695,7 +831,7 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_returns_no_context(
         assert run.strategy_type == "llm_tool_orchestrator"
         assert run.strategy_decision_json is not None
         assert run.strategy_decision_json["budget_exhausted"] is True
-        assert run.strategy_decision_json["finalize_called"] is False
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
         assert run.strategy_decision_json["no_context"] is True
 
 
@@ -895,7 +1031,10 @@ def test_lmstudio_tool_planner_preserves_executable_query_and_normalizes_model(
     )
 
     user_payload = captured["json"]["messages"][1]["content"]
+    system_payload = captured["json"]["messages"][0]["content"]
     assert captured["json"]["model"] == "qwen3.5-9b"
+    assert captured["json"]["max_tokens"] == 256
+    assert "Do not write analysis" in system_payload
     assert "https://example.com/callback" in user_payload
     assert "support@example.com" in user_payload
     assert "redacted" not in user_payload
@@ -961,7 +1100,7 @@ def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
         assert run.strategy_decision_json["search_call_count"] == 0
 
 
-def test_rag_ask_llm_tool_orchestrator_repeated_query_is_blocked_safely(
+def test_rag_ask_llm_tool_orchestrator_repeated_query_best_effort_finalizes_with_candidates(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
@@ -991,17 +1130,241 @@ def test_rag_ask_llm_tool_orchestrator_repeated_query_is_blocked_safely(
         headers=_unsafe_headers(csrf_token),
     )
 
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["assistant_message"]["role"] == "assistant"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["repeated_query_detected"] is True
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["finalize_called"] is False
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert (
+            "best_effort_finalize_after_repeated_query"
+            in run.strategy_decision_json["reason_codes"]
+        )
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
+        assert db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count()
+        dumped = str(run.strategy_decision_json)
+        assert "alpha repeat" not in dumped
+        assert "full active chunk text" not in dumped
+
+
+def test_rag_ask_llm_tool_orchestrator_repeated_query_without_candidates_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    settings = _settings(sparse_enabled=False, hybrid_enabled=False)
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_RepeatingDensePlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm repeat empty")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-repeat-empty-msg-1",
+            "message": "alpha repeat empty",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "no_context_found"
     with session_factory() as db:
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
         assert run.strategy_decision_json is not None
         assert run.strategy_decision_json["repeated_query_detected"] is True
-        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
         assert run.strategy_decision_json["no_context"] is True
-        dumped = str(run.strategy_decision_json)
-        assert "alpha repeat" not in dumped
-        assert "full active chunk text" not in dumped
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 1
+
+
+def test_rag_ask_llm_tool_orchestrator_falls_back_to_hybrid_for_dense_hybrid_comparison(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm hybrid compare")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-hybrid-compare-msg-1",
+            "message": "denseとhybridで比較してください",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["search_call_count"] == 2
+        assert run.strategy_decision_json["retrieval_call_count"] == 2
+        assert run.strategy_decision_json["fallback_used"] is True
+        assert run.strategy_decision_json["fallback_strategy"] == "hybrid"
+        assert run.strategy_decision_json["fallback_reason"] == "llm_tool_additional_search"
+        assert run.strategy_decision_json["tools_used"] == ["dense_search", "hybrid_search"]
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert (
+            "planner_no_tool_call_fallback_hybrid_comparison"
+            in run.strategy_decision_json["reason_codes"]
+        )
+
+
+def test_rag_ask_llm_tool_orchestrator_prefers_named_project_source_for_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    with session_factory() as db:
+        db.add(
+            LogicalDocument(
+                logical_document_id=50,
+                owner_user_id=1,
+                title="RAGProject Phase2 Hybrid Retrieval",
+            )
+        )
+        db.add(
+            LogicalDocument(
+                logical_document_id=60,
+                owner_user_id=1,
+                title="LLM Research - ReAct",
+            )
+        )
+        db.add(
+            _version(
+                50,
+                50,
+                "ready",
+                True,
+                "e",
+                file_name="hybrid_retrieval.md",
+            )
+        )
+        db.add(_version(60, 60, "ready", True, "f", file_name="2022-react-reasoning-acting.md"))
+        db.add(
+            _chunk(
+                500,
+                50,
+                "RAGProject Hybrid Retrieval compares dense and sparse fusion for Phase2. " * 3,
+            )
+        )
+        db.add(_chunk(600, 60, "ReAct reasoning and acting generic agent paper. " * 4))
+        db.commit()
+    vector_client.candidates = [_candidate(600, 0.99, 1), _candidate(500, 0.50, 2)]
+    settings = _settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm source affinity")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-source-affinity-msg-1",
+            "message": "RAGProject dense hybrid comparison",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["retrieval_summary"]["tools_used"] == ["dense_search", "hybrid_search"]
+    assert data["citations"][0]["document_chunk_id"] == 500
+    assert data["citations"][0]["source_label"].startswith("hybrid_retrieval.md")
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        first_selected = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id, selected_flag=True)
+            .order_by(RetrievalRunItem.rerank_order.asc())
+            .first()
+        )
+        assert first_selected is not None
+        assert first_selected.document_chunk_id == 500
+
+
+def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator(
+            "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]"
+        ),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm insufficient")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-insufficient-msg-1",
+            "message": "denseとhybridで比較してください",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
 
 
 def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
@@ -1727,6 +2090,13 @@ class _EmptyFinalizeAfterSearchPlanner:
 class _SingleDensePlanner:
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
         return [LLMToolCall(tool_name="dense_search", arguments={"query": "dense once"})]
+
+
+class _DenseThenNoToolPlanner:
+    def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        if not request.tool_results:
+            return [LLMToolCall(tool_name="dense_search", arguments={"query": request.user_query})]
+        return []
 
 
 class _SequenceClock:

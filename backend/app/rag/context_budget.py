@@ -329,8 +329,6 @@ class ContextBudgetManager:
                 drop_reason = ContextDropReason.DUPLICATE_CHUNK
             elif item.char_count <= 0:
                 drop_reason = ContextDropReason.MISSING_TEXT
-            elif not item.citation_candidate:
-                drop_reason = ContextDropReason.NOT_SELECTED_BY_RERANK
             elif item.estimated_tokens > policy.max_tokens_per_item:
                 drop_reason = ContextDropReason.OVER_BUDGET
             else:
@@ -338,7 +336,19 @@ class ContextBudgetManager:
             seen_chunks.add(item.document_chunk_id)
             decided.append(item.model_copy(update={"drop_reason": drop_reason}))
 
-        ordered_indices = _selection_order(decided, eligible_indices, policy=policy)
+        citation_indices = [
+            index for index in eligible_indices if decided[index].citation_candidate
+        ]
+        extra_indices = [
+            index for index in eligible_indices if not decided[index].citation_candidate
+        ]
+        ordered_indices = _selection_order(
+            decided, citation_indices, policy=policy
+        ) + _selection_order(
+            decided,
+            extra_indices,
+            policy=policy,
+        )
         selected_count = 0
         selected_tokens = 0
         budget_exhausted = False
@@ -353,17 +363,23 @@ class ContextBudgetManager:
                     update={"drop_reason": ContextDropReason.MAX_ITEMS_EXCEEDED}
                 )
                 continue
+            if not item.citation_candidate and selected_count >= policy.min_citation_candidates:
+                decided[index] = item.model_copy(
+                    update={"drop_reason": ContextDropReason.NOT_SELECTED_BY_RERANK}
+                )
+                continue
             if selected_tokens + item.estimated_tokens > policy.max_context_tokens:
                 budget_exhausted = True
                 decided[index] = item.model_copy(
                     update={"drop_reason": ContextDropReason.OVER_BUDGET}
                 )
                 continue
-            reason = (
-                "source_diversity"
-                if policy.preserve_source_diversity and index in source_diversity_first
-                else "high_score"
-            )
+            if not item.citation_candidate:
+                reason = "min_citation_candidates"
+            elif policy.preserve_source_diversity and index in source_diversity_first:
+                reason = "source_diversity"
+            else:
+                reason = "high_score"
             selected_count += 1
             selected_tokens += item.estimated_tokens
             decided[index] = item.model_copy(
@@ -377,6 +393,50 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return int(math.ceil(len(text) / 4))
+
+
+def finalize_context_budget_selection(
+    decision: ContextBudgetDecision,
+    *,
+    selected_item_ids: set[int],
+    drop_reason: ContextDropReason = ContextDropReason.OVER_BUDGET,
+) -> ContextBudgetDecision:
+    if set(decision.selected_item_ids) == selected_item_ids:
+        return decision
+    finalized_items: list[ContextItem] = []
+    for item in decision.items:
+        if item.retrieval_run_item_id in selected_item_ids:
+            finalized_items.append(item.model_copy(update={"selected": True, "drop_reason": None}))
+            continue
+        finalized_items.append(
+            item.model_copy(
+                update={
+                    "selected": False,
+                    "reason": None,
+                    "drop_reason": (drop_reason if item.selected else item.drop_reason)
+                    or ContextDropReason.UNKNOWN,
+                }
+            )
+        )
+    trace = decision.trace
+    policy = ContextBudgetPolicy(
+        enabled=trace.enabled,
+        max_context_tokens=trace.budget.max_context_tokens,
+        reserve_answer_tokens=trace.budget.reserve_answer_tokens,
+        max_context_items=trace.budget.max_context_items,
+        max_tokens_per_item=trace.budget.max_tokens_per_item,
+        min_citation_candidates=trace.budget.min_citation_candidates,
+        drop_low_score_first=trace.budget.drop_low_score_first,
+        preserve_source_diversity=trace.budget.preserve_source_diversity,
+        token_estimator=trace.budget.token_estimator,
+    )
+    return _decision(
+        finalized_items,
+        policy=policy,
+        estimated_prompt_tokens=trace.usage.estimated_prompt_tokens,
+        strategy=trace.strategy,
+        budget_exhausted=True,
+    )
 
 
 def sanitize_context_budget_json(value: dict[str, Any] | None) -> dict[str, object] | None:
