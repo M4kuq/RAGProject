@@ -235,6 +235,7 @@ class RetrievalRepository:
         strategy_decision_json: dict[str, object] | None = None,
         latency_breakdown_json: dict[str, object] | None = None,
         retrieval_settings_json: dict[str, object] | None = None,
+        context_budget_json: dict[str, object] | None = None,
     ) -> None:
         if query_plan_json is not None:
             run.query_plan_json = query_plan_json
@@ -244,6 +245,25 @@ class RetrievalRepository:
             run.latency_breakdown_json = latency_breakdown_json
         if retrieval_settings_json is not None:
             run.retrieval_settings_json = retrieval_settings_json
+        if context_budget_json is not None:
+            run.context_budget_json = context_budget_json
+        db.flush()
+
+    def update_context_selection(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        selected_item_ids: set[int],
+    ) -> None:
+        items = self.list_items_for_run(db, retrieval_run_id=retrieval_run_id)
+        for item in items:
+            selected = item.retrieval_run_item_id in selected_item_ids
+            item.selected_flag = selected
+            if item.score_breakdown_json is not None:
+                score_breakdown = dict(item.score_breakdown_json)
+                score_breakdown["selected_flag"] = selected
+                item.score_breakdown_json = score_breakdown
         db.flush()
 
     def final_check_candidates(

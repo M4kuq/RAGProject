@@ -308,6 +308,36 @@
 - Upload, archive, approve, retry, remote MCP, OAuth, raw chunk text, full
   context, tokens, secrets, and local paths remain absent from MCP output.
 
+## PR-40 Context Budget / Trace / Debug Tests
+
+- `ContextBudgetPolicy` validates enabled flag, max context tokens, answer
+  reserve, max context items, max tokens per item, minimum citation candidates,
+  source-diversity toggle, and heuristic estimator.
+- Token estimation is deterministic and uses `ceil(char_count / 4)` without
+  model downloads or heavyweight tokenizer dependencies.
+- `ContextBudgetManager` selects within budget, drops over-budget items, drops
+  items beyond max item count, preserves source diversity when enabled, counts
+  citation candidates, counts sources, and records drop reason counts.
+- `context_budget_json` stores only safe refs and bounded count metadata. It
+  does not store raw prompt, full context, raw chunk text, snippets, raw tool
+  results, PII, token values, secrets, credentials, cookies, sessions, or local
+  paths.
+- `/rag/ask` dense, hybrid, `agentic_router`, and `llm_tool_orchestrator` runs
+  persist context budget trace before generation.
+- If retrieval completed but budget selection leaves no context, the failed
+  `no_context_found` run still stores safe context budget metadata.
+- Generation and citation failure paths retain safe context budget metadata when
+  retrieval and budget selection completed.
+- Admin retrieval-run detail includes safe `context_budget_json`; viewer access
+  remains `403`, and missing run remains `404`.
+- Admin Retrieval Debug renders the Context Budget panel, selected/dropped
+  counts, drop reasons, budget exhausted state, source breakdown, and selected /
+  dropped safe refs.
+- Viewer chat UI does not render internal context budget debug.
+- Safe structured logs use only allowed fields: request ID, retrieval run ID,
+  strategy labels, candidate/selected/dropped counts, estimated context tokens,
+  remaining context tokens, exhausted flag, and drop reason counts.
+
 ## Checks
 
 - `ruff format --check .`

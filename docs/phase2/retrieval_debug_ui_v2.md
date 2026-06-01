@@ -109,3 +109,26 @@ The Strategy Decision panel displays:
   `sufficiency_check_ms`, `merge_dedupe_ms`, and `rerank_after_merge_ms`
 
 Multi-query execution, metadata-filtered execution, version-aware retrieval, Graph-RAG, OCR, and external observability export remain out of scope.
+
+## PR-40 Context Budget Panel
+
+PR-40 adds a Context Budget panel to the same admin Retrieval Debug surface. The
+panel reads safe `retrieval_runs.context_budget_json` metadata when present.
+Search-only runs can show an empty state because context budget is applied to
+`/rag/ask` immediately before generation.
+
+Displayed fields:
+
+- max context tokens
+- estimated context tokens
+- remaining context tokens
+- selected and dropped context item counts
+- drop reason counts
+- citation candidate count
+- source count and source breakdown
+- selected and dropped safe item refs
+- budget exhausted flag
+
+The panel does not display raw prompt, full context, raw chunk text, snippets,
+raw tool output, PII, token values, secrets, credentials, sessions, cookies, or
+local paths. Numeric token estimates are safe bounded counts.

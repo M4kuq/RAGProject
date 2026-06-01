@@ -195,6 +195,47 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         False,
         "Keep admin/write tools unavailable to the LLM retrieval orchestrator.",
     ),
+    "rag.context_budget.enabled": (
+        True,
+        "Enable safe context budget selection before RAG answer generation.",
+    ),
+    "rag.context_budget.max_context_tokens": (
+        6000,
+        "Maximum estimated context tokens passed to answer generation.",
+    ),
+    "rag.context_budget.reserve_answer_tokens": (
+        1000,
+        "Reserved answer-token estimate kept out of context selection.",
+    ),
+    "rag.context_budget.max_context_items": (
+        12,
+        "Maximum context items passed to answer generation.",
+    ),
+    "rag.context_budget.max_tokens_per_item": (
+        1200,
+        "Maximum estimated tokens allowed for one context item; "
+        "PR-40 drops rather than compresses.",
+    ),
+    "rag.context_budget.min_citation_candidates": (
+        1,
+        "Minimum citation candidate target for context selection when budget allows.",
+    ),
+    "rag.context_budget.drop_low_score_first": (
+        True,
+        "Preserve higher-ranked or higher-scored context items when budget is tight.",
+    ),
+    "rag.context_budget.preserve_source_diversity": (
+        True,
+        "Prefer one context item per source before adding additional items from the same source.",
+    ),
+    "rag.context_budget.token_estimator": (
+        "heuristic",
+        "Deterministic PR-40 token estimate method; heuristic is ceil(chars / 4).",
+    ),
+    "rag.context_budget.store_debug_trace": (
+        True,
+        "Persist safe context budget summaries in retrieval_runs.context_budget_json.",
+    ),
     "rag.trace.enabled": (
         True,
         "Store redacted retrieval trace metadata.",

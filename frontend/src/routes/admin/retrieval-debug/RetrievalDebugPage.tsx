@@ -9,6 +9,8 @@ import {
   useRetrievalRunDebugDetail
 } from "../../../features/retrievalDebug/retrievalDebugHooks";
 import type {
+  ContextBudgetItemRef,
+  ContextBudgetTrace,
   RagSearchDebugItem,
   RetrievalRunDebugDetail,
   RetrievalRunDebugItem,
@@ -183,6 +185,7 @@ export function RetrievalDebugPage() {
           {detail.isLoading ? <LoadingState label="Loading trace..." /> : null}
           {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
+          {detail.data ? <ContextBudgetPanel trace={detail.data.retrieval_run.context_budget_json} /> : null}
           <ScoreBreakdownTable items={displayItems} />
           <RetrievalRunItemsTable items={displayItems} />
         </>
@@ -349,6 +352,117 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
       <TraceCard title="Retrieval Score Summary">
         <KeyValueTable record={summary} />
       </TraceCard>
+    </section>
+  );
+}
+
+function ContextBudgetPanel({ trace }: { trace: ContextBudgetTrace | null }) {
+  if (!trace) {
+    return (
+      <section className="admin-section">
+        <h2>Context Budget</h2>
+        <EmptyState title="No context budget trace">
+          Context budget data is recorded for RAG ask runs after PR-40.
+        </EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <section className="admin-section">
+      <h2>Context Budget</h2>
+      <dl className="detail-grid">
+        <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
+        <Detail label="max_context_tokens" value={trace.budget.max_context_tokens} />
+        <Detail label="estimated_context_tokens" value={trace.usage.estimated_context_tokens} />
+        <Detail label="remaining_context_tokens" value={trace.usage.remaining_context_tokens} />
+        <Detail label="selected_count" value={trace.items.selected_count} />
+        <Detail label="dropped_count" value={trace.items.dropped_count} />
+        <Detail label="citation_candidate_count" value={trace.items.citation_candidate_count} />
+        <Detail label="source_count" value={trace.items.source_count} />
+        <Detail label="budget_exhausted" value={formatUnknownValue(trace.usage.budget_exhausted)} />
+      </dl>
+      <div className="retrieval-debug-grid">
+        <TraceCard title="Drop Reasons">
+          <KeyValueTable record={trace.drop_reasons} />
+        </TraceCard>
+        <TraceCard title="Source Breakdown">
+          <table className="admin-table compact-table">
+            <thead>
+              <tr>
+                <th>source</th>
+                <th>candidates</th>
+                <th>selected</th>
+                <th>dropped</th>
+                <th>tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trace.sources.by_source.map((source) => (
+                <tr key={source.source_group_key}>
+                  <td>{formatDebugText(source.source_label ?? source.source_group_key, 80)}</td>
+                  <td>{source.candidate_count}</td>
+                  <td>{source.selected_count}</td>
+                  <td>{source.dropped_count}</td>
+                  <td>{source.estimated_tokens}</td>
+                </tr>
+              ))}
+              {trace.sources.by_source.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>No sources.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </TraceCard>
+      </div>
+      <ContextBudgetItemTable title="Selected Context Items" items={trace.selected_item_refs} />
+      <ContextBudgetItemTable title="Dropped Context Items" items={trace.dropped_item_refs} />
+    </section>
+  );
+}
+
+function ContextBudgetItemTable({
+  items,
+  title
+}: {
+  items: ContextBudgetItemRef[];
+  title: string;
+}) {
+  return (
+    <section>
+      <h3>{title}</h3>
+      <table className="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Chunk</th>
+            <th>Source</th>
+            <th>Rank</th>
+            <th>Chars</th>
+            <th>Tokens</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={`${title}-${item.retrieval_run_item_id}`}>
+              <td>{item.retrieval_run_item_id}</td>
+              <td>{item.document_chunk_id}</td>
+              <td>{formatDebugText(item.source_label ?? null, 80)}</td>
+              <td>{formatUnknownValue(item.rank ?? item.rerank_order)}</td>
+              <td>{item.char_count}</td>
+              <td>{item.estimated_tokens}</td>
+              <td>{formatUnknownValue(item.reason ?? item.drop_reason)}</td>
+            </tr>
+          ))}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={7}>No items.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
     </section>
   );
 }

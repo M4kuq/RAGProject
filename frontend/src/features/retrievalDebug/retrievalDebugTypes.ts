@@ -60,6 +60,7 @@ export type RetrievalRunDebugSummary = {
   strategy_decision_json: Record<string, unknown> | null;
   latency_breakdown_json: Record<string, unknown> | null;
   retrieval_settings_json: Record<string, unknown> | null;
+  context_budget_json: ContextBudgetTrace | null;
   rerank_score_top1: number | null;
   answer_confidence: number | null;
   groundedness_score: number | null;
@@ -67,6 +68,68 @@ export type RetrievalRunDebugSummary = {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+};
+
+export type ContextBudgetTrace = {
+  schema_version: "phase2.context_budget.v1";
+  enabled: boolean;
+  budget: {
+    max_context_tokens: number;
+    reserve_answer_tokens: number;
+    max_context_items: number;
+    max_tokens_per_item: number;
+    min_citation_candidates: number;
+    token_estimator: "heuristic";
+    preserve_source_diversity: boolean;
+    drop_low_score_first: boolean;
+  };
+  usage: {
+    estimated_prompt_tokens: number;
+    estimated_context_tokens: number;
+    estimated_total_input_tokens: number;
+    reserve_answer_tokens: number;
+    remaining_context_tokens: number;
+    budget_exhausted: boolean;
+  };
+  items: {
+    candidate_count: number;
+    selected_count: number;
+    dropped_count: number;
+    citation_candidate_count: number;
+    source_count: number;
+  };
+  drop_reasons: Record<string, number>;
+  sources: {
+    source_count: number;
+    by_source: {
+      source_group_key: string;
+      source_label?: string | null;
+      candidate_count: number;
+      selected_count: number;
+      dropped_count: number;
+      estimated_tokens: number;
+    }[];
+  };
+  selected_item_refs: ContextBudgetItemRef[];
+  dropped_item_refs: ContextBudgetItemRef[];
+};
+
+export type ContextBudgetItemRef = {
+  retrieval_run_item_id: number;
+  document_chunk_id: number;
+  source_label?: string | null;
+  section_title?: string | null;
+  page_from?: number | null;
+  page_to?: number | null;
+  score?: number | null;
+  rank?: number | null;
+  rerank_score?: number | null;
+  rerank_order?: number | null;
+  estimated_tokens: number;
+  char_count: number;
+  retrieval_source?: string | null;
+  reason?: string | null;
+  drop_reason?: string | null;
 };
 
 export type RetrievalRunDebugItem = {

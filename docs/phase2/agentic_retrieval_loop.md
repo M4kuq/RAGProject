@@ -95,3 +95,16 @@ The loop stores only counts, hashes, scores, durations, reason codes, strategy n
 ## PR-30 Handoff
 
 PR-30 can add `agentic_router` to strategy evaluation and use these trace fields for `strategy_selection_accuracy`, failure dataset promotion, and no-context improvement analysis.
+
+## PR-40 Context Budget Handoff
+
+After PR-40, explicit `/rag/ask strategy=agentic_router` runs pass the final
+agentic candidates through `ContextBudgetManager` before answer generation.
+`strategy_decision_json` continues to describe router and loop behavior, while
+`retrieval_runs.context_budget_json` records safe context selection counts,
+char/token estimates, source breakdown, selected item refs, dropped item refs,
+and drop reasons.
+
+The agentic loop still does not store raw query, raw prompt, full context, raw
+chunk text, raw exception messages, PII, secrets, token values, or external tool
+actions. Context compression and Evidence Pack construction remain PR-41 scope.

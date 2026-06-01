@@ -196,6 +196,17 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert "generation_ms" in run.latency_breakdown_json
         assert "citation_build_ms" in run.latency_breakdown_json
         assert "confidence_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["schema_version"] == "phase2.context_budget.v1"
+        assert run.context_budget_json["items"]["candidate_count"] == 2
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_budget_json["items"]["dropped_count"] == 1
+        assert run.context_budget_json["drop_reasons"] == {"not_selected_by_rerank": 1}
+        assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
+        budget_dump = str(run.context_budget_json)
+        assert "full active chunk text should not be returned whole" not in budget_dump
+        assert "raw_prompt" not in budget_dump
+        assert "full_context" not in budget_dump
         assert run.answer_confidence is not None
         assert run.groundedness_score is not None
         assert run.confidence_label in {"High", "Medium", "Low"}
@@ -207,6 +218,9 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
             .all()
         )
         assert len(run_items) == 2
+        assert run.context_budget_json["selected_item_refs"][0]["retrieval_run_item_id"] == (
+            run_items[0].retrieval_run_item_id
+        )
         assert all(item.retrieval_source == "dense" for item in run_items)
         assert all(item.score_breakdown_json is not None for item in run_items)
         first_breakdown = run_items[0].score_breakdown_json
@@ -344,6 +358,61 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert admin.status_code == 200
 
 
+def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    caplog.set_level("INFO", logger="app.services.rag_service")
+    settings = _settings(
+        context_budget_max_context_tokens=1,
+        context_budget_max_tokens_per_item=1,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="budget ask")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "budget-msg-1",
+            "message": "alpha policy summary",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    budget_logs = [
+        record for record in caplog.records if record.getMessage() == "rag.context_budget.exhausted"
+    ]
+    assert budget_logs
+    log_payload = budget_logs[-1].__dict__["rag_context_budget"]
+    assert log_payload["selected_count"] == 0
+    assert log_payload["budget_exhausted"] is True
+    assert "raw" not in str(log_payload).lower()
+    assert "secret" not in str(log_payload).lower()
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["items"]["candidate_count"] == 2
+        assert run.context_budget_json["items"]["selected_count"] == 0
+        assert run.context_budget_json["drop_reasons"]["over_budget"] == 1
+        dumped = str(run.context_budget_json)
+        assert "full active chunk text should not be returned whole" not in dumped
+        assert "raw_prompt" not in dumped
+
+
 def test_rag_ask_agentic_router_opt_in_persists_router_decision(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -390,6 +459,10 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert run.latency_breakdown_json is not None
         assert run.latency_breakdown_json["strategy_router_ms"] >= 0
         assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "agentic_router"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -439,6 +512,10 @@ def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
         assert run.strategy_decision_json["execution_strategy"] == "hybrid"
         assert run.latency_breakdown_json is not None
         assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "hybrid"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -491,6 +568,11 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert run.latency_breakdown_json is not None
         assert "llm_orchestrator_ms" in run.latency_breakdown_json
         assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "llm_tool_orchestrator"
+        assert run.context_budget_json["strategy"]["selected_strategy"] == "llm_tool_orchestrator"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
         settings_snapshot = run.retrieval_settings_json
         assert settings_snapshot is not None
         assert settings_snapshot["max_tool_calls"] == 5
@@ -1673,19 +1755,22 @@ class _StaticAnswerGenerator:
         return GenerationResult(content=self.content)
 
 
-def _settings() -> Settings:
+def _settings(**overrides: Any) -> Settings:
     return Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+        **{
+            "app_env": "test",
+            "embedding_provider": "fake",
+            "embedding_fake_dimension": 4,
+            "retrieval_top_k_default": 2,
+            "retrieval_top_k_max": 5,
+            "rerank_provider": "fake",
+            "rerank_top_n_default": 1,
+            "rerank_top_n_max": 5,
+            "qdrant_collection_name": "document_chunks",
+            "search_snippet_max_chars": 32,
+            "generation_provider": "fake",
+            **overrides,
+        }
     )
 
 

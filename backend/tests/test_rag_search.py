@@ -611,6 +611,49 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
             "session_id": "session-must-not-leak",
             "cookie": "cookie-must-not-leak",
         }
+        run.context_budget_json = {
+            "schema_version": "phase2.context_budget.v1",
+            "enabled": True,
+            "budget": {
+                "max_context_tokens": 6000,
+                "reserve_answer_tokens": 1000,
+                "max_context_items": 12,
+                "max_tokens_per_item": 1200,
+                "min_citation_candidates": 1,
+                "token_estimator": "heuristic",
+                "preserve_source_diversity": True,
+                "drop_low_score_first": True,
+            },
+            "usage": {
+                "estimated_prompt_tokens": 3,
+                "estimated_context_tokens": 4,
+                "estimated_total_input_tokens": 7,
+                "reserve_answer_tokens": 1000,
+                "remaining_context_tokens": 5996,
+                "budget_exhausted": False,
+            },
+            "items": {
+                "candidate_count": 1,
+                "selected_count": 1,
+                "dropped_count": 0,
+                "citation_candidate_count": 1,
+                "source_count": 1,
+            },
+            "drop_reasons": {"raw_prompt": 1, "over_budget": 0},
+            "sources": {"source_count": 0, "by_source": []},
+            "selected_item_refs": [
+                {
+                    "retrieval_run_item_id": 1,
+                    "document_chunk_id": 100,
+                    "source_label": "hand book.pdf",
+                    "estimated_tokens": 4,
+                    "char_count": 16,
+                    "raw_chunk_text": "raw budget chunk must not leak",
+                }
+            ],
+            "raw_prompt": "budget raw prompt must not leak",
+            "full_context": "budget full context must not leak",
+        }
         item = (
             db.query(RetrievalRunItem)
             .filter_by(retrieval_run_id=retrieval_run_id)
@@ -643,6 +686,9 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert detail["retrieval_run"]["origin_type"] == "standalone"
     assert detail["retrieval_run"]["strategy_type"] == "dense"
     assert detail["retrieval_run"]["query_plan_json"]["safe_value"] == "redacted"
+    assert detail["retrieval_run"]["context_budget_json"]["budget"]["max_context_tokens"] == 6000
+    assert detail["retrieval_run"]["context_budget_json"]["usage"]["estimated_context_tokens"] == 4
+    assert "raw_prompt" not in detail["retrieval_run"]["context_budget_json"]
     assert "raw_prompt" not in detail["retrieval_run"]["query_plan_json"]
     assert "apikey" not in detail["retrieval_run"]["query_plan_json"]
     assert "csrf" not in detail["retrieval_run"]["query_plan_json"]
@@ -657,6 +703,9 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     serialized = str(detail_response.json())
     assert "full prompt must not leak" not in serialized
     assert "raw chunk text must not leak" not in serialized
+    assert "raw budget chunk must not leak" not in serialized
+    assert "budget raw prompt must not leak" not in serialized
+    assert "budget full context must not leak" not in serialized
     assert "secret-token" not in serialized
     assert "secret-value" not in serialized
     assert "sk-uncovered-secret" not in serialized
