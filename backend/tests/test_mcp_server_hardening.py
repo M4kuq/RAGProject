@@ -91,6 +91,7 @@ def test_jsonrpc_list_methods_are_exposed(mcp_adapter: McpServiceAdapter) -> Non
         "rag_ask",
         "rag_ask_hybrid",
         "rag_ask_agentic",
+        "rag_ask_auto",
         "rag_get_retrieval_trace",
         "rag_compare_strategies",
         "rag_get_evaluation_summary",

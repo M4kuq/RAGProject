@@ -195,6 +195,7 @@ def test_tool_registry_exposes_read_mostly_phase2_tools(
         "rag_search_hybrid",
         "rag_search_agentic",
         "rag_ask",
+        "rag_ask_auto",
         "rag_ask_hybrid",
         "rag_ask_agentic",
         "rag_get_retrieval_trace",
@@ -273,6 +274,14 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
             "include_trace_summary": True,
         },
     )
+    auto_ask = mcp_adapter.rag_ask_auto(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
     trace = mcp_adapter.rag_get_retrieval_trace(
         {"retrieval_run_id": agentic_search["retrieval_run_id"]},
     )
@@ -291,6 +300,11 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert agentic_ask["strategy"] == "agentic_router"
     assert agentic_ask["status"] == "succeeded"
     assert agentic_ask["citations"]
+    assert auto_ask["strategy"] == "llm_tool_orchestrator"
+    assert auto_ask["status"] == "succeeded"
+    assert auto_ask["citations"]
+    assert auto_ask["auto_strategy_summary"]["selected_strategy"] == "llm_tool_orchestrator"
+    assert auto_ask["trace_summary"]["tool_result_compression"]["summary"]["output_item_count"] >= 1
     assert agentic_ask["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
     assert trace["retrieval_run_id"] == agentic_search["retrieval_run_id"]
     assert trace["strategy_decision"]["requested_strategy"] == "agentic_router"
@@ -298,7 +312,7 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert {item["strategy"] for item in comparison["metrics"]} >= {"dense", "hybrid"}
     assert summary["agentic_summary"]["strategy_type"] == "agentic_router"
     dumped = json.dumps(
-        [hybrid, agentic_search, hybrid_ask, agentic_ask, trace, comparison, summary]
+        [hybrid, agentic_search, hybrid_ask, agentic_ask, auto_ask, trace, comparison, summary]
     )
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
     assert "secret_token" not in dumped.lower()

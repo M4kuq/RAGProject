@@ -16,6 +16,16 @@ from app.rag.agentic import (
 )
 from app.rag.generation import _lmstudio_model_name
 from app.rag.strategy import RetrievalStrategy
+from app.rag.tool_result_compression import (
+    CompressedToolResult,
+    OrchestratorContextGuard,
+    ToolResultBudgetManager,
+    ToolResultCandidate,
+    ToolResultCompressionPolicy,
+    ToolResultCompressionTrace,
+    ToolResultCompressor,
+    ToolResultItem,
+)
 from app.rag.trace import LatencyTracker, TraceRedactor
 from app.repositories.retrieval_repository import CheckedRetrievalCandidate
 
@@ -35,32 +45,12 @@ class LLMToolCall:
 
 
 @dataclass(frozen=True)
-class LLMToolResultItem:
-    document_chunk_id: int
-    source_label: str
-    snippet: str
-    retrieval_score: float
-    rank_order: int
-
-    def to_payload(self) -> dict[str, object]:
-        return TraceRedactor.safe_dict(
-            {
-                "document_chunk_id": self.document_chunk_id,
-                "source_label": self.source_label,
-                "snippet": self.snippet,
-                "retrieval_score": round(float(self.retrieval_score), 6),
-                "rank_order": self.rank_order,
-            }
-        )
-
-
-@dataclass(frozen=True)
 class LLMToolResult:
     tool_call_id: str
     tool_name: str
     status: str
     item_count: int = 0
-    items: list[LLMToolResultItem] = field(default_factory=list)
+    items: list[ToolResultItem] = field(default_factory=list)
     error_code: str | None = None
     trace_summary: dict[str, object] | None = None
 
@@ -71,7 +61,7 @@ class LLMToolResult:
                 "tool_name": self.tool_name,
                 "status": self.status,
                 "item_count": self.item_count,
-                "items": [item.to_payload() for item in self.items],
+                "items": [item.to_planner_payload() for item in self.items],
                 "error_code": self.error_code,
                 "trace_summary": self.trace_summary,
             }
@@ -211,6 +201,7 @@ class LLMToolOrchestratorExecutionResult:
     best_effort_finalize_used: bool
     no_context: bool
     reason_codes: list[str]
+    tool_result_compression_trace: ToolResultCompressionTrace | None = None
 
     def decision_trace_fields(self) -> dict[str, object]:
         retrieval_result = self.retrieval_result
@@ -237,6 +228,11 @@ class LLMToolOrchestratorExecutionResult:
                 "no_context": self.no_context,
                 "sufficiency_score": None,
                 "sufficiency_reason_codes": [],
+                "tool_result_compression_enabled": (
+                    self.tool_result_compression_trace.enabled
+                    if self.tool_result_compression_trace is not None
+                    else None
+                ),
                 "merged_candidate_count": retrieval_result.merged_candidate_count,
                 "deduped_candidate_count": retrieval_result.deduped_candidate_count,
                 "final_selected_count": retrieval_result.final_selected_count,
@@ -262,6 +258,14 @@ class LLMToolOrchestratorExecutionResult:
                 "finalize_called": self.finalize_called,
                 "best_effort_finalize_used": self.best_effort_finalize_used,
                 "no_context": self.no_context,
+                "tool_result_compression": (
+                    self.tool_result_compression_trace.summary.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                    )
+                    if self.tool_result_compression_trace is not None
+                    else None
+                ),
             }
         )
 
@@ -296,12 +300,10 @@ class LLMToolCallingRetrievalOrchestrator:
         )
         timeout_seconds = max(1.0, float(self.settings.llm_orchestrator_timeout_seconds))
         max_query_chars = _bounded_int(self.settings.llm_orchestrator_max_query_chars, 1, 1000)
-        result_item_limit = _bounded_int(
-            self.settings.llm_orchestrator_max_tool_result_items,
-            1,
-            20,
-        )
-        snippet_chars = _bounded_int(self.settings.llm_orchestrator_max_snippet_chars, 20, 1000)
+        compression_policy = _tool_result_compression_policy(self.settings)
+        compressor = ToolResultCompressor()
+        budget_manager = ToolResultBudgetManager(compression_policy)
+        context_guard = OrchestratorContextGuard()
 
         tool_results: list[LLMToolResult] = []
         attempts_by_tool_call_id: dict[str, RetrievalAttemptResult] = {}
@@ -314,6 +316,21 @@ class LLMToolCallingRetrievalOrchestrator:
         timeout_exceeded = False
         reason_codes: list[str] = ["llm_tool_orchestrator_started"]
         available_tools = _available_tool_names(self.settings)
+
+        def append_error_result(
+            *,
+            tool_call_id: str,
+            tool_name: str,
+            error_code: str,
+        ) -> None:
+            compressed = compressor.error_result(
+                policy=compression_policy,
+                budget_manager=budget_manager,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                error_code=error_code,
+            )
+            tool_results.append(_llm_tool_result_from_compressed(compressed))
 
         with latency_tracker.span("llm_orchestrator_ms"):
             while tool_call_count < max_tool_calls:
@@ -379,13 +396,10 @@ class LLMToolCallingRetrievalOrchestrator:
                     tool_call_id = f"tc_{tool_call_count}"
                     tool_name = planned_call.tool_name
                     if tool_name not in ALLOWED_TOOL_NAMES:
-                        tool_results.append(
-                            LLMToolResult(
-                                tool_call_id=tool_call_id,
-                                tool_name="unknown",
-                                status="failed",
-                                error_code="tool_not_allowed",
-                            )
+                        append_error_result(
+                            tool_call_id=tool_call_id,
+                            tool_name="unknown",
+                            error_code="tool_not_allowed",
                         )
                         reason_codes.append("tool_not_allowed")
                         continue
@@ -403,13 +417,10 @@ class LLMToolCallingRetrievalOrchestrator:
                         break
                     if tool_name == "inspect_retrieval_trace":
                         if not self.settings.llm_orchestrator_allow_trace_inspection:
-                            tool_results.append(
-                                LLMToolResult(
-                                    tool_call_id=tool_call_id,
-                                    tool_name=tool_name,
-                                    status="failed",
-                                    error_code="trace_inspection_disabled",
-                                )
+                            append_error_result(
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                                error_code="trace_inspection_disabled",
                             )
                             reason_codes.append("trace_inspection_disabled")
                             continue
@@ -417,35 +428,36 @@ class LLMToolCallingRetrievalOrchestrator:
                             planned_call.arguments.get("retrieval_run_id")
                         )
                         if requested_run_id is not None and requested_run_id != retrieval_run_id:
-                            tool_results.append(
-                                LLMToolResult(
-                                    tool_call_id=tool_call_id,
-                                    tool_name=tool_name,
-                                    status="failed",
-                                    error_code="trace_scope_not_allowed",
-                                )
+                            append_error_result(
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                                error_code="trace_scope_not_allowed",
                             )
                             reason_codes.append("trace_scope_not_allowed")
                             continue
+                        budget_manager.record(
+                            CompressedToolResult(
+                                tool_call_id=tool_call_id,
+                                tool_name=tool_name,
+                                status="succeeded",
+                            )
+                        )
                         tool_results.append(
                             LLMToolResult(
                                 tool_call_id=tool_call_id,
                                 tool_name=tool_name,
                                 status="succeeded",
-                                trace_summary=inspect_trace(),
+                                trace_summary=context_guard.safe_trace_summary(inspect_trace()),
                             )
                         )
                         reason_codes.append("inspect_retrieval_trace_called")
                         continue
 
                     if search_call_count >= max_search_calls:
-                        tool_results.append(
-                            LLMToolResult(
-                                tool_call_id=tool_call_id,
-                                tool_name=tool_name,
-                                status="failed",
-                                error_code="max_search_calls_exhausted",
-                            )
+                        append_error_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            error_code="max_search_calls_exhausted",
                         )
                         reason_codes.append("max_search_calls_exhausted")
                         continue
@@ -453,13 +465,10 @@ class LLMToolCallingRetrievalOrchestrator:
                     normalized_key = (tool_name, _normalized_query(tool_query))
                     if normalized_key in seen_searches:
                         repeated_query_detected = True
-                        tool_results.append(
-                            LLMToolResult(
-                                tool_call_id=tool_call_id,
-                                tool_name=tool_name,
-                                status="failed",
-                                error_code="repeated_query",
-                            )
+                        append_error_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            error_code="repeated_query",
                         )
                         reason_codes.append("repeated_query_detected")
                         break
@@ -467,13 +476,10 @@ class LLMToolCallingRetrievalOrchestrator:
                     strategy = _tool_strategy(tool_name)
                     disabled_error = _strategy_disabled_error(self.settings, strategy)
                     if disabled_error is not None:
-                        tool_results.append(
-                            LLMToolResult(
-                                tool_call_id=tool_call_id,
-                                tool_name=tool_name,
-                                status="failed",
-                                error_code=disabled_error,
-                            )
+                        append_error_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            error_code=disabled_error,
                         )
                         reason_codes.append(disabled_error)
                         continue
@@ -484,19 +490,35 @@ class LLMToolCallingRetrievalOrchestrator:
                             tool_query[:max_query_chars],
                         )
                     search_call_count += 1
-                    attempts_by_tool_call_id[tool_call_id] = attempt
-                    tool_results.append(
-                        LLMToolResult(
+                    compressed = compressor.compress(
+                        _tool_result_candidates(
+                            attempt.candidates,
                             tool_call_id=tool_call_id,
                             tool_name=tool_name,
-                            status="succeeded",
-                            item_count=len(attempt.candidates),
-                            items=_safe_tool_items(
-                                attempt.candidates[:result_item_limit],
-                                max_snippet_chars=snippet_chars,
-                            ),
-                        )
+                        ),
+                        policy=compression_policy,
+                        budget_manager=budget_manager,
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
                     )
+                    attempts_by_tool_call_id[tool_call_id] = _attempt_with_candidates(
+                        attempt,
+                        compressed.items,
+                    )
+                    tool_results.append(_llm_tool_result_from_compressed(compressed))
+                    if compressed.repeated_result:
+                        reason_codes.append("repeated_tool_result_detected")
+                    if compressed.oversized_rejected:
+                        reason_codes.append("oversized_tool_output_rejected")
+                    if compressed.budget_exhausted:
+                        reason_codes.append("tool_result_budget_exhausted")
+                    reason_codes.append(
+                        "tool_result_compression_applied"
+                        if compression_policy.enabled
+                        else "tool_result_compression_skipped"
+                    )
+                    if compressed.status == "failed":
+                        reason_codes.append(compressed.error_code or "tool_result_failed")
                     reason_codes.append(f"{tool_name}_called")
                 if finalize_called or repeated_query_detected:
                     break
@@ -578,6 +600,7 @@ class LLMToolCallingRetrievalOrchestrator:
             best_effort_finalize_used=best_effort_finalize_used,
             no_context=no_context,
             reason_codes=_deduped_reason_codes(reason_codes),
+            tool_result_compression_trace=budget_manager.trace(),
         )
 
 
@@ -770,23 +793,80 @@ def _available_tool_names(settings: Settings) -> tuple[str, ...]:
     return tuple(tools)
 
 
-def _safe_tool_items(
+def _tool_result_candidates(
     candidates: Sequence[CheckedRetrievalCandidate],
     *,
-    max_snippet_chars: int,
-) -> list[LLMToolResultItem]:
-    items: list[LLMToolResultItem] = []
-    for candidate in candidates:
-        items.append(
-            LLMToolResultItem(
-                document_chunk_id=candidate.chunk.document_chunk_id,
-                source_label=_candidate_source_label(candidate),
-                snippet=_safe_snippet(candidate.chunk.content_text, max_chars=max_snippet_chars),
-                retrieval_score=round(float(candidate.retrieval_score), 6),
-                rank_order=candidate.rank_order,
-            )
+    tool_call_id: str,
+    tool_name: str,
+) -> list[ToolResultCandidate]:
+    return [
+        ToolResultCandidate(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            document_chunk_id=candidate.chunk.document_chunk_id,
+            text=candidate.chunk.content_text,
+            source_label=_candidate_source_label(candidate),
+            section_title=candidate.chunk.section_title,
+            page_from=candidate.chunk.page_from,
+            page_to=candidate.chunk.page_to,
+            rank=candidate.rank_order,
+            retrieval_score=round(float(candidate.retrieval_score), 6),
+            fusion_score=_payload_float(candidate, "fused_score")
+            or _payload_float(candidate, "fusion_score"),
+            citation_candidate=True,
+            source_group_key=f"logical_document:{candidate.logical_document.logical_document_id}",
         )
-    return items
+        for candidate in candidates
+    ]
+
+
+def _attempt_with_candidates(
+    attempt: RetrievalAttemptResult,
+    items: Sequence[ToolResultItem],
+) -> RetrievalAttemptResult:
+    candidate_by_chunk_id = {
+        candidate.chunk.document_chunk_id: candidate for candidate in attempt.candidates
+    }
+    filtered = [
+        candidate_by_chunk_id[item.document_chunk_id]
+        for item in items
+        if item.document_chunk_id in candidate_by_chunk_id
+    ]
+    return RetrievalAttemptResult(
+        strategy=attempt.strategy,
+        candidates=filtered,
+        qdrant_candidate_count=attempt.qdrant_candidate_count,
+        sparse_candidate_count=attempt.sparse_candidate_count,
+        hybrid_candidate_count=attempt.hybrid_candidate_count,
+        excluded_by_rdb_check_count=attempt.excluded_by_rdb_check_count,
+        role=attempt.role,
+    )
+
+
+def _llm_tool_result_from_compressed(result: CompressedToolResult) -> LLMToolResult:
+    return LLMToolResult(
+        tool_call_id=result.tool_call_id,
+        tool_name=result.tool_name,
+        status=result.status,
+        item_count=result.output_item_count,
+        items=result.items,
+        error_code=result.error_code,
+    )
+
+
+def _tool_result_compression_policy(settings: Settings) -> ToolResultCompressionPolicy:
+    return ToolResultCompressionPolicy(
+        enabled=settings.tool_result_compression_enabled,
+        max_items_per_tool=settings.tool_result_compression_max_items_per_tool,
+        max_total_items_per_turn=settings.tool_result_compression_max_total_items_per_turn,
+        max_snippet_chars=settings.tool_result_compression_max_snippet_chars,
+        max_tokens_per_tool=settings.tool_result_compression_max_tokens_per_tool,
+        max_total_tool_result_tokens=settings.tool_result_compression_max_total_tool_result_tokens,
+        drop_low_score_first=settings.tool_result_compression_drop_low_score_first,
+        group_by_source=settings.tool_result_compression_group_by_source,
+        reject_oversized_output=settings.tool_result_compression_reject_oversized_output,
+        store_debug_trace=settings.tool_result_compression_store_debug_trace,
+    )
 
 
 def _candidate_source_label(candidate: CheckedRetrievalCandidate) -> str:
@@ -800,9 +880,11 @@ def _candidate_source_label(candidate: CheckedRetrievalCandidate) -> str:
     return safe[:255]
 
 
-def _safe_snippet(text: str, *, max_chars: int) -> str:
-    safe = TraceRedactor.safe_string(text, max_length=max_chars)
-    return safe or "redacted"
+def _payload_float(candidate: CheckedRetrievalCandidate, key: str) -> float | None:
+    value = candidate.payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return round(float(value), 6)
 
 
 def _normalized_query(query: str) -> str:

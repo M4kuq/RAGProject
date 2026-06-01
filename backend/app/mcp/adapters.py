@@ -181,6 +181,11 @@ class McpServiceAdapter:
             ),
             "error_code": result.error_code,
         }
+        if payload.strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value:
+            data["auto_strategy_summary"] = _safe_auto_strategy_summary(
+                data.get("retrieval_score_summary"),
+                trace_summary=trace_summary,
+            )
         if not payload.include_citations:
             data["citations"] = []
         if not payload.include_confidence:
@@ -199,6 +204,11 @@ class McpServiceAdapter:
 
     def rag_ask_agentic(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.AGENTIC_ROUTER.value})
+
+    def rag_ask_auto(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.rag_ask(
+            {**arguments, "strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value}
+        )
 
     def rag_ask_hybrid(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.HYBRID.value})
@@ -292,6 +302,17 @@ class McpServiceAdapter:
                     RetrievalStrategy.AGENTIC_ROUTER.value in self.mcp_settings.allowed_strategies
                 ),
                 "mcp_tools": ["rag_search", "rag_search_agentic", "rag_ask", "rag_ask_agentic"],
+            },
+            {
+                "strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+                "description": (
+                    "Auto LLM tool-calling retrieval orchestrator with compressed tool results."
+                ),
+                "available": (
+                    RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+                    in self.mcp_settings.allowed_strategies
+                ),
+                "mcp_tools": ["rag_ask_auto"],
             },
         ]
         return _safe_output(
@@ -404,8 +425,11 @@ class McpServiceAdapter:
             RetrievalStrategy.DENSE.value,
             RetrievalStrategy.HYBRID.value,
             RetrievalStrategy.AGENTIC_ROUTER.value,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
         }:
-            raise McpInvalidRequest("rag_ask supports dense, hybrid, or agentic_router only")
+            raise McpInvalidRequest(
+                "rag_ask supports dense, hybrid, agentic_router, or llm_tool_orchestrator only"
+            )
 
     def _latest_evaluation_run(
         self,
@@ -579,6 +603,9 @@ def _safe_retrieval_trace_summary(data: dict[str, Any], *, max_chars: int) -> di
             "score_summary": score_summary,
             "latency_summary": latency,
             "retrieval_settings": _safe_numeric_mapping(run_data.get("retrieval_settings_json")),
+            "tool_result_compression": _safe_tool_result_compression_summary(
+                run_data.get("tool_result_compression_json")
+            ),
             "item_count": len(item_data),
             "selected_count": selected_count,
             "rerank_score_top1": run_data.get("rerank_score_top1"),
@@ -657,6 +684,45 @@ def _safe_numeric_mapping(value: object) -> dict[str, object]:
             if len(string_values) == len(item) and all(_is_safe_enum_like(entry) for entry in item):
                 safe[key_text] = string_values
     return safe
+
+
+def _safe_tool_result_compression_summary(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    summary = _safe_numeric_mapping(value.get("summary"))
+    budget = _safe_numeric_mapping(value.get("budget"))
+    drop_reasons = _safe_numeric_mapping(value.get("drop_reasons"))
+    return {
+        "enabled": value.get("enabled") if isinstance(value.get("enabled"), bool) else None,
+        "summary": summary,
+        "budget": budget,
+        "drop_reasons": drop_reasons,
+    }
+
+
+def _safe_auto_strategy_summary(
+    score_summary: object,
+    *,
+    trace_summary: dict[str, Any] | None,
+) -> dict[str, object]:
+    summary = score_summary if isinstance(score_summary, dict) else {}
+    trace = trace_summary if isinstance(trace_summary, dict) else {}
+    return _safe_output(
+        {
+            "selected_strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            "tools_used": summary.get("tools_used")
+            if isinstance(summary.get("tools_used"), list)
+            else [],
+            "tool_call_count": summary.get("tool_call_count"),
+            "search_call_count": summary.get("search_call_count"),
+            "budget_exhausted": summary.get("budget_exhausted"),
+            "no_context": summary.get("no_context"),
+            "tool_result_compression": trace.get("tool_result_compression")
+            if isinstance(trace.get("tool_result_compression"), dict)
+            else {},
+        },
+        500,
+    )
 
 
 def _is_safe_enum_like(value: str) -> bool:

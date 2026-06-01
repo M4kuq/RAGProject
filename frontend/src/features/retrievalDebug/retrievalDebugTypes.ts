@@ -62,6 +62,7 @@ export type RetrievalRunDebugSummary = {
   retrieval_settings_json: Record<string, unknown> | null;
   context_budget_json: ContextBudgetTrace | null;
   context_compression_json: EvidencePackTrace | null;
+  tool_result_compression_json: ToolResultCompressionTrace | null;
   rerank_score_top1: number | null;
   answer_confidence: number | null;
   groundedness_score: number | null;
@@ -208,6 +209,91 @@ export type DroppedEvidenceRef = {
   source_label?: string | null;
   rank?: number | null;
   rerank_order?: number | null;
+  estimated_tokens: number;
+  original_char_count: number;
+  drop_reason: string;
+};
+
+export type ToolResultCompressionTrace = {
+  schema_version: "phase2.tool_result_compression.v1";
+  enabled: boolean;
+  budget: {
+    max_items_per_tool: number;
+    max_total_items_per_turn: number;
+    max_snippet_chars: number;
+    max_tokens_per_tool: number;
+    max_total_tool_result_tokens: number;
+    token_estimator: "heuristic";
+    drop_low_score_first: boolean;
+    group_by_source: boolean;
+    reject_oversized_output: boolean;
+  };
+  summary: {
+    tool_call_count: number;
+    search_tool_call_count: number;
+    original_item_count: number;
+    output_item_count: number;
+    dropped_item_count: number;
+    estimated_tokens_before: number;
+    estimated_tokens_after: number;
+    compression_ratio: number;
+    budget_exhausted: boolean;
+    repeated_result_count: number;
+    oversized_rejected_count: number;
+  };
+  drop_reasons: Record<string, number>;
+  by_tool: ToolResultByToolTrace[];
+  item_refs: ToolResultItemRef[];
+  dropped_item_refs: DroppedToolResultRef[];
+};
+
+export type ToolResultByToolTrace = {
+  tool_call_id: string;
+  tool_name: string;
+  status: "succeeded" | "failed";
+  original_item_count: number;
+  output_item_count: number;
+  dropped_item_count: number;
+  estimated_tokens_before: number;
+  estimated_tokens_after: number;
+  compression_ratio: number;
+  drop_reasons: Record<string, number>;
+  compression_methods: Record<string, number>;
+  budget_exhausted: boolean;
+  repeated_result: boolean;
+  oversized_rejected: boolean;
+  error_code?: string | null;
+};
+
+export type ToolResultItemRef = {
+  tool_call_id: string;
+  tool_name: string;
+  retrieval_run_item_id?: number | null;
+  document_chunk_id: number;
+  source_label?: string | null;
+  section_title?: string | null;
+  page_from?: number | null;
+  page_to?: number | null;
+  rank?: number | null;
+  retrieval_score?: number | null;
+  rerank_score?: number | null;
+  fusion_score?: number | null;
+  citation_candidate: boolean;
+  snippet_hash: string;
+  original_char_count: number;
+  snippet_char_count: number;
+  estimated_tokens: number;
+  source_group_key: string;
+  compression_method: string;
+};
+
+export type DroppedToolResultRef = {
+  tool_call_id: string;
+  tool_name: string;
+  retrieval_run_item_id?: number | null;
+  document_chunk_id?: number | null;
+  source_label?: string | null;
+  rank?: number | null;
   estimated_tokens: number;
   original_char_count: number;
   drop_reason: string;

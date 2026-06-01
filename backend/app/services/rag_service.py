@@ -93,6 +93,11 @@ from app.rag.strategy import (
     RetrievalSource,
     RetrievalStrategy,
 )
+from app.rag.tool_result_compression import (
+    ToolResultCompressionTrace,
+    attach_retrieval_run_item_ids,
+    sanitize_tool_result_compression_json,
+)
 from app.rag.trace import (
     LatencyTracker,
     TraceRedactor,
@@ -1352,6 +1357,10 @@ class RagService:
             db,
             retrieval_run_id=retrieval_run_id,
             orchestrator_result=orchestrator_result,
+            tool_result_compression_json=_tool_result_compression_json_with_run_items(
+                orchestrator_result.tool_result_compression_trace,
+                pipeline_result.context_candidates,
+            ),
         )
         summary_payload = pipeline_result.summary.model_dump(mode="json")
         summary_payload.update(orchestrator_result.summary_fields())
@@ -1758,6 +1767,7 @@ class RagService:
         *,
         retrieval_run_id: int,
         orchestrator_result: LLMToolOrchestratorExecutionResult,
+        tool_result_compression_json: dict[str, object] | None,
     ) -> None:
         run = self._require_run(db, retrieval_run_id)
         decision = dict(run.strategy_decision_json or {})
@@ -1772,11 +1782,32 @@ class RagService:
                 reason_codes.append(code)
         decision.update(orchestrator_fields)
         decision["reason_codes"] = reason_codes
+        update_payload: dict[str, object] | None = None
+        if (
+            self.settings.tool_result_compression_store_debug_trace
+            and tool_result_compression_json is not None
+        ):
+            update_payload = tool_result_compression_json
         self.repository.update_retrieval_run_trace(
             db,
             run=run,
             strategy_decision_json=TraceRedactor.safe_dict(decision),
+            tool_result_compression_json=update_payload,
         )
+        if tool_result_compression_json is not None:
+            _log_tool_result_compression(
+                run=run,
+                trace=tool_result_compression_json,
+                event=(
+                    "rag.tool_result_compression.skipped"
+                    if not tool_result_compression_json.get("enabled")
+                    else (
+                        "rag.tool_result_compression.rejected"
+                        if _tool_result_oversized_rejected(tool_result_compression_json)
+                        else "rag.tool_result_compression.applied"
+                    )
+                ),
+            )
 
     def _llm_orchestrator_trace_summary(
         self,
@@ -2427,6 +2458,9 @@ def _retrieval_run_debug_summary(run: RetrievalRun) -> RetrievalRunDebugSummary:
         retrieval_settings_json=_safe_json_object(run.retrieval_settings_json),
         context_budget_json=sanitize_context_budget_json(run.context_budget_json),
         context_compression_json=sanitize_context_compression_json(run.context_compression_json),
+        tool_result_compression_json=sanitize_tool_result_compression_json(
+            run.tool_result_compression_json
+        ),
         rerank_score_top1=_optional_rounded_float(run.rerank_score_top1),
         answer_confidence=_optional_rounded_float(run.answer_confidence),
         groundedness_score=_optional_rounded_float(run.groundedness_score),
@@ -2487,6 +2521,22 @@ def _retrieval_settings_snapshot(
                     "max_snippet_chars": settings.llm_orchestrator_max_snippet_chars,
                     "allow_trace_inspection": settings.llm_orchestrator_allow_trace_inspection,
                     "allow_admin_tools": False,
+                    "tool_result_compression_enabled": settings.tool_result_compression_enabled,
+                    "tool_result_max_items_per_tool": (
+                        settings.tool_result_compression_max_items_per_tool
+                    ),
+                    "tool_result_max_total_items_per_turn": (
+                        settings.tool_result_compression_max_total_items_per_turn
+                    ),
+                    "tool_result_max_snippet_chars": (
+                        settings.tool_result_compression_max_snippet_chars
+                    ),
+                    "tool_result_max_tokens_per_tool": (
+                        settings.tool_result_compression_max_tokens_per_tool
+                    ),
+                    "tool_result_max_total_tokens": (
+                        settings.tool_result_compression_max_total_tool_result_tokens
+                    ),
                 }
             )
         )
@@ -3183,6 +3233,21 @@ def _summary_with_final_context_refs(
     return RetrievalScoreSummary(**payload)
 
 
+def _tool_result_compression_json_with_run_items(
+    trace: ToolResultCompressionTrace | None,
+    refs: list[ContextCandidateRef],
+) -> dict[str, object] | None:
+    if trace is None:
+        return None
+    item_id_by_chunk_id = {
+        ref.candidate.chunk.document_chunk_id: ref.saved_item.retrieval_run_item_id for ref in refs
+    }
+    return attach_retrieval_run_item_ids(
+        trace.model_dump(mode="json", exclude_none=True),
+        item_id_by_chunk_id=item_id_by_chunk_id,
+    )
+
+
 def _log_context_budget(
     *,
     run: RetrievalRun,
@@ -3253,6 +3318,51 @@ def _log_evidence_pack_failed(
         "estimated_output_tokens": 0,
     }
     logger.info(event, extra={"rag_evidence_pack": payload})
+
+
+def _log_tool_result_compression(
+    *,
+    run: RetrievalRun,
+    trace: dict[str, object],
+    event: str,
+) -> None:
+    raw_summary = trace.get("summary")
+    summary: dict[str, object] = raw_summary if isinstance(raw_summary, dict) else {}
+    raw_drop_reasons = trace.get("drop_reasons")
+    drop_reasons: dict[str, object] = raw_drop_reasons if isinstance(raw_drop_reasons, dict) else {}
+    first_tool = _first_tool_result_trace(trace)
+    payload: dict[str, object] = {
+        "request_id": run.request_id,
+        "retrieval_run_id": run.retrieval_run_id,
+        "strategy_type": run.strategy_type,
+        "tool_name": first_tool.get("tool_name"),
+        "tool_call_id": first_tool.get("tool_call_id"),
+        "original_item_count": summary.get("original_item_count"),
+        "output_item_count": summary.get("output_item_count"),
+        "dropped_item_count": summary.get("dropped_item_count"),
+        "estimated_tokens_before": summary.get("estimated_tokens_before"),
+        "estimated_tokens_after": summary.get("estimated_tokens_after"),
+        "compression_ratio": summary.get("compression_ratio"),
+        "drop_reason_counts": drop_reasons,
+        "budget_exhausted": summary.get("budget_exhausted"),
+    }
+    logger.info(event, extra={"rag_tool_result_compression": TraceRedactor.safe_dict(payload)})
+
+
+def _first_tool_result_trace(trace: dict[str, object]) -> dict[str, object]:
+    by_tool = trace.get("by_tool")
+    if not isinstance(by_tool, list):
+        return {}
+    for item in by_tool:
+        if isinstance(item, dict):
+            return item
+    return {}
+
+
+def _tool_result_oversized_rejected(trace: dict[str, object]) -> bool:
+    raw_summary = trace.get("summary")
+    summary: dict[str, object] = raw_summary if isinstance(raw_summary, dict) else {}
+    return bool(summary.get("oversized_rejected_count"))
 
 
 def _safe_strategy_field(run: RetrievalRun, key: str) -> str | None:

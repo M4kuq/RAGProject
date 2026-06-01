@@ -19,7 +19,9 @@ import type {
   RetrievalRunDebugDetail,
   RetrievalRunDebugItem,
   RetrievalRunDebugSummary,
-  SupportedRetrievalDebugStrategy
+  SupportedRetrievalDebugStrategy,
+  ToolResultCompressionTrace,
+  ToolResultItemRef
 } from "../../../features/retrievalDebug/retrievalDebugTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
@@ -221,6 +223,9 @@ export function RetrievalDebugPage() {
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
           {detail.data ? <ContextBudgetPanel trace={detail.data.retrieval_run.context_budget_json} /> : null}
           {detail.data ? <EvidencePackPanel trace={detail.data.retrieval_run.context_compression_json} /> : null}
+          {detail.data ? (
+            <ToolResultCompressionPanel trace={detail.data.retrieval_run.tool_result_compression_json} />
+          ) : null}
           <ScoreBreakdownTable items={displayItems} />
           <RetrievalRunItemsTable items={displayItems} />
         </>
@@ -796,6 +801,132 @@ function DroppedEvidenceTable({ items }: { items: DroppedEvidenceRef[] }) {
           {items.length === 0 ? (
             <tr>
               <td colSpan={7}>No dropped evidence.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function ToolResultCompressionPanel({ trace }: { trace: ToolResultCompressionTrace | null }) {
+  if (!trace) {
+    return (
+      <section className="admin-section">
+        <h2>Tool Result Compression</h2>
+        <EmptyState title="No tool result compression trace">
+          Tool result compression data is recorded for Auto / LLM tool orchestrator ask runs after PR-42.
+        </EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <section className="admin-section">
+      <h2>Tool Result Compression</h2>
+      <dl className="detail-grid">
+        <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
+        <Detail label="tool_call_count" value={trace.summary.tool_call_count} />
+        <Detail label="search_tool_call_count" value={trace.summary.search_tool_call_count} />
+        <Detail label="original_items" value={trace.summary.original_item_count} />
+        <Detail label="output_items" value={trace.summary.output_item_count} />
+        <Detail label="dropped_items" value={trace.summary.dropped_item_count} />
+        <Detail label="compression_ratio" value={formatRatio(trace.summary.compression_ratio)} />
+        <Detail label="tokens_before" value={trace.summary.estimated_tokens_before} />
+        <Detail label="tokens_after" value={trace.summary.estimated_tokens_after} />
+        <Detail label="max_items_per_tool" value={trace.budget.max_items_per_tool} />
+        <Detail
+          label="max_total_tool_result_tokens"
+          value={trace.budget.max_total_tool_result_tokens}
+        />
+        <Detail label="budget_exhausted" value={formatUnknownValue(trace.summary.budget_exhausted)} />
+        <Detail label="oversized_rejected" value={trace.summary.oversized_rejected_count} />
+      </dl>
+      <div className="retrieval-debug-grid">
+        <TraceCard title="Drop Reasons">
+          <KeyValueTable record={trace.drop_reasons} />
+        </TraceCard>
+        <TraceCard title="By Tool">
+          <table className="admin-table compact-table">
+            <thead>
+              <tr>
+                <th>tool_call</th>
+                <th>tool</th>
+                <th>status</th>
+                <th>items</th>
+                <th>tokens</th>
+                <th>ratio</th>
+                <th>flags</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trace.by_tool.map((tool) => (
+                <tr key={tool.tool_call_id}>
+                  <td>{formatDebugText(tool.tool_call_id, 40)}</td>
+                  <td>{formatDebugText(tool.tool_name, 80)}</td>
+                  <td>{formatUnknownValue(tool.status)}</td>
+                  <td>{`${tool.output_item_count}/${tool.original_item_count}`}</td>
+                  <td>{`${tool.estimated_tokens_after}/${tool.estimated_tokens_before}`}</td>
+                  <td>{formatRatio(tool.compression_ratio)}</td>
+                  <td>
+                    {formatUnknownValue(
+                      [
+                        tool.budget_exhausted ? "budget_exhausted" : null,
+                        tool.repeated_result ? "repeated_result" : null,
+                        tool.oversized_rejected ? "oversized_rejected" : null,
+                        tool.error_code ?? null
+                      ].filter(Boolean)
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {trace.by_tool.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No tool calls.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </TraceCard>
+      </div>
+      <ToolResultItemTable items={trace.item_refs} />
+    </section>
+  );
+}
+
+function ToolResultItemTable({ items }: { items: ToolResultItemRef[] }) {
+  return (
+    <section>
+      <h3>Tool Result Items</h3>
+      <table className="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>tool_call</th>
+            <th>Item</th>
+            <th>Chunk</th>
+            <th>Source</th>
+            <th>Rank</th>
+            <th>Chars</th>
+            <th>Tokens</th>
+            <th>Method</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={`${item.tool_call_id}-${item.document_chunk_id}`}>
+              <td>{formatDebugText(item.tool_call_id, 40)}</td>
+              <td>{formatUnknownValue(item.retrieval_run_item_id)}</td>
+              <td>{item.document_chunk_id}</td>
+              <td>{formatDebugText(item.source_label ?? null, 80)}</td>
+              <td>{formatUnknownValue(item.rank)}</td>
+              <td>{`${item.snippet_char_count}/${item.original_char_count}`}</td>
+              <td>{item.estimated_tokens}</td>
+              <td>{formatUnknownValue(item.compression_method)}</td>
+            </tr>
+          ))}
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={8}>No tool result items.</td>
             </tr>
           ) : null}
         </tbody>

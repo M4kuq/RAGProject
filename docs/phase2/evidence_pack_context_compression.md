@@ -4,9 +4,11 @@ PR-41 adds deterministic Evidence Pack construction between PR-40 context budget
 selection and `/rag/ask` answer generation. It applies to dense, hybrid,
 `agentic_router`, and `llm_tool_orchestrator` ask runs.
 
-PR-41 compresses retrieved context only. It does not compress LLM tool results,
-call external summarizers, require LLM summarization, add Graph-RAG, OCR,
-multimodal retrieval, AWS/S3/OIDC, remote MCP, or external operation agents.
+PR-41 compresses retrieved context only. PR-42 handles the separate intermediate
+LLM orchestrator tool result compression boundary. PR-41 does not compress LLM
+tool results, call external summarizers, require LLM summarization, add
+Graph-RAG, OCR, multimodal retrieval, AWS/S3/OIDC, remote MCP, or external
+operation agents.
 
 ## Components
 

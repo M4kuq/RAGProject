@@ -154,6 +154,26 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             handler=adapter.rag_ask_agentic,
         ),
         McpTool(
+            name="rag_ask_auto",
+            description="Auto RAG ask wrapper for rag_ask(strategy=llm_tool_orchestrator).",
+            input_schema=_object_schema(
+                {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["question"],
+            ),
+            handler=adapter.rag_ask_auto,
+        ),
+        McpTool(
             name="rag_get_retrieval_trace",
             description="Get a safe retrieval trace summary by retrieval_run_id.",
             input_schema=_object_schema(
@@ -306,7 +326,7 @@ def call_tool(
     except McpError:
         raise
     is_error = (
-        name in {"rag_ask", "rag_ask_agentic", "rag_ask_hybrid"}
+        name in {"rag_ask", "rag_ask_agentic", "rag_ask_auto", "rag_ask_hybrid"}
         and structured.get("status") == "failed"
     )
     return _tool_success(structured, is_error=is_error)

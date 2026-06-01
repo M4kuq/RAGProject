@@ -195,6 +195,46 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         False,
         "Keep admin/write tools unavailable to the LLM retrieval orchestrator.",
     ),
+    "rag.tool_result_compression.enabled": (
+        True,
+        "Enable deterministic safe compression of LLM orchestrator retrieval tool results.",
+    ),
+    "rag.tool_result_compression.max_items_per_tool": (
+        8,
+        "Maximum compressed tool result items returned by one retrieval tool call.",
+    ),
+    "rag.tool_result_compression.max_total_items_per_turn": (
+        20,
+        "Maximum compressed tool result items returned across one orchestration turn.",
+    ),
+    "rag.tool_result_compression.max_snippet_chars": (
+        500,
+        "Maximum bounded snippet characters included in LLM tool results.",
+    ),
+    "rag.tool_result_compression.max_tokens_per_tool": (
+        1200,
+        "Maximum estimated compressed tool result tokens returned by one tool call.",
+    ),
+    "rag.tool_result_compression.max_total_tool_result_tokens": (
+        3000,
+        "Maximum estimated compressed tool result tokens across one orchestration turn.",
+    ),
+    "rag.tool_result_compression.drop_low_score_first": (
+        True,
+        "Prefer higher-ranked or higher-scored tool result items when budgets are tight.",
+    ),
+    "rag.tool_result_compression.group_by_source": (
+        True,
+        "Group compressed tool result trace metadata by safe source group.",
+    ),
+    "rag.tool_result_compression.reject_oversized_output": (
+        True,
+        "Reject tool outputs that cannot fit after deterministic bounding.",
+    ),
+    "rag.tool_result_compression.store_debug_trace": (
+        True,
+        "Persist safe tool result compression summaries in retrieval_runs.",
+    ),
     "rag.context_budget.enabled": (
         True,
         "Enable safe context budget selection before RAG answer generation.",

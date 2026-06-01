@@ -10,7 +10,8 @@ PR-40 does not compress, summarize, truncate, or semantically deduplicate
 retrieved evidence. If an item does not fit, the initial policy drops the whole
 item and records a safe reason. PR-41 consumes the selected refs and builds a
 deterministic Evidence Pack before generation. Tool Result Compression is handed
-off to PR-42.
+off to PR-42 and occurs earlier, before the LLM orchestrator planner sees
+retrieval tool results.
 
 ## ContextBudgetManager
 

@@ -895,6 +895,75 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
                 raw_prompt: "raw prompt must not appear",
                 full_context: "full context must not appear"
               },
+              tool_result_compression_json: {
+                schema_version: "phase2.tool_result_compression.v1",
+                enabled: true,
+                budget: {
+                  max_items_per_tool: 8,
+                  max_total_items_per_turn: 20,
+                  max_snippet_chars: 500,
+                  max_tokens_per_tool: 1200,
+                  max_total_tool_result_tokens: 3000,
+                  token_estimator: "heuristic",
+                  drop_low_score_first: true,
+                  group_by_source: true,
+                  reject_oversized_output: true
+                },
+                summary: {
+                  tool_call_count: 2,
+                  search_tool_call_count: 1,
+                  original_item_count: 3,
+                  output_item_count: 1,
+                  dropped_item_count: 2,
+                  estimated_tokens_before: 400,
+                  estimated_tokens_after: 80,
+                  compression_ratio: 0.2,
+                  budget_exhausted: false,
+                  repeated_result_count: 0,
+                  oversized_rejected_count: 0
+                },
+                drop_reasons: { max_items_limit: 2 },
+                by_tool: [
+                  {
+                    tool_call_id: "tc_1",
+                    tool_name: "dense_search",
+                    status: "succeeded",
+                    original_item_count: 3,
+                    output_item_count: 1,
+                    dropped_item_count: 2,
+                    estimated_tokens_before: 400,
+                    estimated_tokens_after: 80,
+                    compression_ratio: 0.2,
+                    drop_reasons: { max_items_limit: 2 },
+                    compression_methods: { max_chars_per_snippet: 1 },
+                    budget_exhausted: false,
+                    repeated_result: false,
+                    oversized_rejected: false
+                  }
+                ],
+                item_refs: [
+                  {
+                    tool_call_id: "tc_1",
+                    tool_name: "dense_search",
+                    retrieval_run_item_id: 900,
+                    document_chunk_id: 300,
+                    source_label: "phase2.md",
+                    rank: 1,
+                    retrieval_score: 0.73,
+                    citation_candidate: true,
+                    snippet_hash: "b".repeat(64),
+                    original_char_count: 320,
+                    snippet_char_count: 240,
+                    estimated_tokens: 80,
+                    source_group_key: "logical_document:10",
+                    compression_method: "max_chars_per_snippet",
+                    snippet: "raw tool snippet must not appear"
+                  }
+                ],
+                dropped_item_refs: [],
+                raw_tool_payload: "raw tool payload must not appear",
+                raw_prompt: "raw prompt must not appear"
+              },
               rerank_score_top1: null,
               answer_confidence: null,
               groundedness_score: null,
@@ -1019,6 +1088,9 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect((await screen.findAllByText("deterministic_evidence_pack")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("near_duplicate_removed")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("bounded_excerpt")).length).toBeGreaterThan(0);
+  expect(await screen.findByRole("heading", { name: "Tool Result Compression" })).toBeInTheDocument();
+  expect((await screen.findAllByText("dense_search")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("max_chars_per_snippet")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("phase2-budget.md")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("0.730")).length).toBeGreaterThan(0);
   expect(await screen.findByText("hybrid retrieval safe snippet")).toBeInTheDocument();
@@ -1027,6 +1099,8 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(document.body).not.toHaveTextContent("full context must not appear");
   expect(document.body).not.toHaveTextContent("raw chunk text must not appear");
   expect(document.body).not.toHaveTextContent("raw evidence text must not appear");
+  expect(document.body).not.toHaveTextContent("raw tool snippet must not appear");
+  expect(document.body).not.toHaveTextContent("raw tool payload must not appear");
   expect(document.body).not.toHaveTextContent("OPENAI_API_KEY");
   expect(document.body).not.toHaveTextContent("sk-secret");
 });

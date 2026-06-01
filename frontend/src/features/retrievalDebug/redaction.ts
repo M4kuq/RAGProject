@@ -13,10 +13,12 @@ const SENSITIVE_KEY_PARTS = [
   "pii",
   "private_key",
   "prompt",
+  "raw_tool",
   "raw_chunk",
   "raw_text",
   "secret",
   "session",
+  "snippet",
   "token"
 ];
 
