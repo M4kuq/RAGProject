@@ -67,6 +67,8 @@ class ContextBudgetPolicy(_ContextBudgetModel):
 
     @model_validator(mode="after")
     def validate_budget(self) -> ContextBudgetPolicy:
+        if self.reserve_answer_tokens >= self.max_context_tokens:
+            raise ValueError("reserve_answer_tokens must be < max_context_tokens")
         if self.max_tokens_per_item > self.max_context_tokens:
             raise ValueError("max_tokens_per_item must be <= max_context_tokens")
         if self.min_citation_candidates > self.max_context_items:
@@ -352,6 +354,7 @@ class ContextBudgetManager:
         selected_count = 0
         selected_tokens = 0
         budget_exhausted = False
+        effective_token_limit = _effective_context_token_limit(policy)
         source_diversity_first = _first_indices_by_source(decided, ordered_indices)
 
         for index in ordered_indices:
@@ -368,7 +371,7 @@ class ContextBudgetManager:
                     update={"drop_reason": ContextDropReason.NOT_SELECTED_BY_RERANK}
                 )
                 continue
-            if selected_tokens + item.estimated_tokens > policy.max_context_tokens:
+            if selected_tokens + item.estimated_tokens > effective_token_limit:
                 budget_exhausted = True
                 decided[index] = item.model_copy(
                     update={"drop_reason": ContextDropReason.OVER_BUDGET}
@@ -393,6 +396,10 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return int(math.ceil(len(text) / 4))
+
+
+def _effective_context_token_limit(policy: ContextBudgetPolicy) -> int:
+    return max(0, policy.max_context_tokens - policy.reserve_answer_tokens)
 
 
 def finalize_context_budget_selection(
@@ -481,6 +488,7 @@ def _decision(
     selected = [item for item in items if item.selected]
     dropped = [item for item in items if not item.selected]
     selected_tokens = sum(item.estimated_tokens for item in selected)
+    effective_token_limit = _effective_context_token_limit(policy)
     drop_reasons = Counter(
         (item.drop_reason or ContextDropReason.UNKNOWN).value for item in dropped
     )
@@ -502,7 +510,7 @@ def _decision(
             estimated_context_tokens=selected_tokens,
             estimated_total_input_tokens=max(0, estimated_prompt_tokens) + selected_tokens,
             reserve_answer_tokens=policy.reserve_answer_tokens,
-            remaining_context_tokens=max(0, policy.max_context_tokens - selected_tokens),
+            remaining_context_tokens=max(0, effective_token_limit - selected_tokens),
             budget_exhausted=budget_exhausted or bool(drop_reasons.get("over_budget")),
         ),
         items=ContextBudgetItemsSummary(

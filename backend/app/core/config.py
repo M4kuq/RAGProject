@@ -310,6 +310,10 @@ class Settings(BaseSettings):
         self.context_budget_token_estimator = self.context_budget_token_estimator.lower()
         if self.context_budget_token_estimator != "heuristic":
             raise ValueError("CONTEXT_BUDGET_TOKEN_ESTIMATOR must be heuristic")
+        if self.context_budget_reserve_answer_tokens >= self.context_budget_max_context_tokens:
+            raise ValueError(
+                "CONTEXT_BUDGET_RESERVE_ANSWER_TOKENS must be < CONTEXT_BUDGET_MAX_CONTEXT_TOKENS"
+            )
         if self.context_budget_max_tokens_per_item > self.context_budget_max_context_tokens:
             raise ValueError(
                 "CONTEXT_BUDGET_MAX_TOKENS_PER_ITEM must be <= CONTEXT_BUDGET_MAX_CONTEXT_TOKENS"

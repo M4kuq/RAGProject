@@ -64,7 +64,8 @@ The initial selection policy:
 3. Prefer higher-ranked / higher-scored items.
 4. Prefer one item per source before adding additional items from the same source.
 5. Drop items beyond `max_context_items`.
-6. Drop items that would exceed `max_context_tokens`.
+6. Drop items that would exceed the effective context limit:
+   `max_context_tokens - reserve_answer_tokens`.
 7. Promote additional non-rerank-selected candidates only when needed to satisfy
    `min_citation_candidates` and the token/char budget allows.
 8. Drop items whose own estimate exceeds `max_tokens_per_item`.
@@ -137,6 +138,8 @@ Shape:
 
 The persisted refs include bounded IDs, safe source labels, rank, score,
 char-count, estimated-token count, and reason fields only.
+`remaining_context_tokens` is calculated against the effective context limit
+after reserving answer headroom.
 
 ## Debug UI
 

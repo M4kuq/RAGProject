@@ -50,7 +50,13 @@ def test_token_estimate_is_deterministic() -> None:
 
 def test_context_budget_policy_validation() -> None:
     with pytest.raises(ValueError):
-        ContextBudgetPolicy(max_context_tokens=10, max_tokens_per_item=11)
+        ContextBudgetPolicy(max_context_tokens=10, reserve_answer_tokens=10)
+    with pytest.raises(ValueError):
+        ContextBudgetPolicy(
+            max_context_tokens=10,
+            reserve_answer_tokens=0,
+            max_tokens_per_item=11,
+        )
     with pytest.raises(ValueError):
         ContextBudgetPolicy(max_context_items=1, min_citation_candidates=2)
 
@@ -63,6 +69,7 @@ def test_context_budget_selects_within_budget_and_counts_sources() -> None:
         ],
         policy=ContextBudgetPolicy(
             max_context_tokens=30,
+            reserve_answer_tokens=0,
             max_context_items=3,
             max_tokens_per_item=30,
         ),
@@ -89,6 +96,7 @@ def test_context_budget_drops_over_budget_and_max_items() -> None:
         ],
         policy=ContextBudgetPolicy(
             max_context_tokens=25,
+            reserve_answer_tokens=0,
             max_context_items=1,
             max_tokens_per_item=25,
         ),
@@ -108,6 +116,7 @@ def test_context_budget_drops_over_budget_and_max_items() -> None:
         ],
         policy=ContextBudgetPolicy(
             max_context_tokens=20,
+            reserve_answer_tokens=0,
             max_context_items=3,
             max_tokens_per_item=20,
         ),
@@ -115,6 +124,26 @@ def test_context_budget_drops_over_budget_and_max_items() -> None:
     assert over_budget.selected_item_ids == [1]
     assert over_budget.trace.drop_reasons == {"over_budget": 1}
     assert over_budget.trace.usage.budget_exhausted is True
+
+
+def test_context_budget_reserves_answer_tokens_from_effective_context_limit() -> None:
+    decision = ContextBudgetManager().apply(
+        [
+            _candidate(1, 101, "a" * 80, rank=1),
+            _candidate(2, 102, "b" * 80, rank=2),
+        ],
+        policy=ContextBudgetPolicy(
+            max_context_tokens=30,
+            reserve_answer_tokens=10,
+            max_context_items=3,
+            max_tokens_per_item=30,
+        ),
+    )
+
+    assert decision.selected_item_ids == [1]
+    assert decision.trace.usage.estimated_context_tokens == 20
+    assert decision.trace.usage.remaining_context_tokens == 0
+    assert decision.trace.drop_reasons == {"over_budget": 1}
 
 
 def test_context_budget_promotes_extra_candidates_to_minimum_when_budget_allows() -> None:
@@ -126,6 +155,7 @@ def test_context_budget_promotes_extra_candidates_to_minimum_when_budget_allows(
         ],
         policy=ContextBudgetPolicy(
             max_context_tokens=30,
+            reserve_answer_tokens=0,
             max_context_items=3,
             max_tokens_per_item=30,
             min_citation_candidates=2,
@@ -146,6 +176,7 @@ def test_context_budget_preserves_source_diversity_when_enabled() -> None:
         ],
         policy=ContextBudgetPolicy(
             max_context_tokens=10,
+            reserve_answer_tokens=0,
             max_context_items=2,
             max_tokens_per_item=10,
         ),

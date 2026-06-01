@@ -318,6 +318,7 @@
 - `ContextBudgetManager` selects within budget, drops over-budget items, drops
   items beyond max item count, preserves source diversity when enabled, counts
   citation candidates, counts sources, and records drop reason counts.
+- `reserve_answer_tokens` is subtracted from the effective context token limit.
 - After generation context assembly applies the existing char cap, persisted
   selected refs match the context actually passed to generation.
 - `min_citation_candidates` promotes additional candidates only when budget and

@@ -374,6 +374,7 @@ def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
     settings = _settings(
         generation_max_context_chars=130,
         context_budget_max_context_tokens=1000,
+        context_budget_reserve_answer_tokens=0,
         context_budget_max_tokens_per_item=1000,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
@@ -430,6 +431,7 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
     caplog.set_level("INFO", logger="app.services.rag_service")
     settings = _settings(
         context_budget_max_context_tokens=1,
+        context_budget_reserve_answer_tokens=0,
         context_budget_max_tokens_per_item=1,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
