@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -40,6 +41,16 @@ from app.rag.citations import (
     validate_generation_citations,
 )
 from app.rag.confidence import ConfidenceInputs, calculate_confidence
+from app.rag.context_budget import (
+    ContextBudgetCandidate,
+    ContextBudgetDecision,
+    ContextBudgetManager,
+    ContextBudgetPolicy,
+    ContextBudgetStrategySummary,
+    estimate_tokens,
+    finalize_context_budget_selection,
+    sanitize_context_budget_json,
+)
 from app.rag.generation import (
     AnswerGenerationError,
     AnswerGenerator,
@@ -126,6 +137,7 @@ SENSITIVE_OUTPUT_RE = re.compile(
 )
 CITATION_MARKER_RE = re.compile(r"\[(\d{1,6})\]")
 MODEL_KEY_SEPARATOR = ":"
+logger = logging.getLogger(__name__)
 
 
 class RagPipelineError(RuntimeError):
@@ -149,7 +161,18 @@ class RetrievalPipelineResult:
     items: list[RagSearchItem]
     selected_candidates: list[CheckedRetrievalCandidate]
     citation_sources: list[CitationSource]
+    context_candidates: list[ContextCandidateRef]
     no_context: bool = False
+
+
+@dataclass(frozen=True)
+class ContextCandidateRef:
+    candidate: CheckedRetrievalCandidate
+    saved_item: RetrievalRunItem
+    rank: int
+    rerank_score: float | None
+    rerank_order: int | None
+    citation_candidate: bool
 
 
 class RagService:
@@ -169,6 +192,7 @@ class RagService:
         strategy_router: StrategyRouter | None = None,
         agentic_executor: AgenticRetrievalExecutor | None = None,
         llm_tool_orchestrator: LLMToolCallingRetrievalOrchestrator | None = None,
+        context_budget_manager: ContextBudgetManager | None = None,
         trace_export_service: TraceExportService | None = None,
     ) -> None:
         self.settings = settings
@@ -189,6 +213,7 @@ class RagService:
         self.llm_tool_orchestrator = llm_tool_orchestrator or LLMToolCallingRetrievalOrchestrator(
             settings
         )
+        self.context_budget_manager = context_budget_manager or ContextBudgetManager()
         self.trace_export_service = trace_export_service or TraceExportService(settings)
         self.chat_service = ChatService(self.chat_repository)
 
@@ -637,7 +662,22 @@ class RagService:
                     if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
                     else RetrievalSource.DENSE,
                 )
-            if result.no_context or not result.selected_candidates:
+            context_budget_decision = self._apply_context_budget(
+                db,
+                retrieval_run_id=run_id,
+                result=result,
+                estimated_prompt_tokens=estimate_tokens(payload.message),
+            )
+            selected_context_refs = _selected_context_refs(
+                result.context_candidates,
+                context_budget_decision,
+            )
+            selected_context_candidates = [ref.candidate for ref in selected_context_refs]
+            selected_citation_sources = _context_citation_sources(
+                selected_context_refs,
+                snippet_max_chars=self.settings.citation_preview_max_chars,
+            )
+            if result.no_context or not selected_context_candidates:
                 self._mark_failed_safely(
                     db,
                     retrieval_run_id=run_id,
@@ -649,13 +689,27 @@ class RagService:
 
             with latency_tracker.span("context_assembly_ms"):
                 context_items = _assemble_context(
-                    result.selected_candidates,
-                    citation_sources=result.citation_sources,
+                    selected_context_candidates,
+                    citation_sources=selected_citation_sources,
                     max_context_chars=self.settings.generation_max_context_chars,
                 )
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
-                    citation_sources=result.citation_sources,
+                    citation_sources=selected_citation_sources,
+                )
+                prompt_context_refs = _context_refs_for_citation_sources(
+                    selected_context_refs,
+                    prompt_citation_sources,
+                )
+                context_budget_decision = self._finalize_context_budget_after_assembly(
+                    db,
+                    retrieval_run_id=run_id,
+                    decision=context_budget_decision,
+                    prompt_context_refs=prompt_context_refs,
+                )
+                final_summary = _summary_with_final_context_refs(
+                    result.summary,
+                    prompt_context_refs,
                 )
             with latency_tracker.span("generation_ms"):
                 generation = answer_generator.generate(
@@ -703,7 +757,7 @@ class RagService:
             with latency_tracker.span("confidence_ms"):
                 confidence = calculate_confidence(
                     ConfidenceInputs(
-                        retrieval_score_summary=result.summary,
+                        retrieval_score_summary=final_summary,
                         marker_count=len(parsed_generation.markers),
                         unique_citation_count=len(cited_sources),
                         selected_count=len(prompt_citation_sources),
@@ -714,8 +768,8 @@ class RagService:
             self.repository.mark_succeeded(
                 db,
                 run=run,
-                retrieval_score_summary=result.summary.model_dump(mode="json"),
-                rerank_score_top1=_optional_decimal_score(result.summary.top1_rerank_score),
+                retrieval_score_summary=final_summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(final_summary.top1_rerank_score),
                 answer_confidence=_decimal_score(confidence.answer_confidence),
                 groundedness_score=_decimal_score(confidence.groundedness_score),
                 confidence_label=confidence.confidence_label,
@@ -826,6 +880,7 @@ class RagService:
                 items=[],
                 selected_candidates=[],
                 citation_sources=[],
+                context_candidates=[],
             )
 
         with latency_tracker.span("rerank_ms"):
@@ -912,6 +967,20 @@ class RagService:
                     start=1,
                 )
             ],
+            context_candidates=[
+                ContextCandidateRef(
+                    candidate=candidate,
+                    saved_item=saved_item,
+                    rank=index,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                    citation_candidate=index <= selected_count,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(ordered_candidates, saved_items, strict=True),
+                    start=1,
+                )
+            ],
         )
 
     def _retrieve_sparse(
@@ -955,6 +1024,7 @@ class RagService:
                 items=[],
                 selected_candidates=[],
                 citation_sources=[],
+                context_candidates=[],
             )
 
         selected_count = min(rerank_top_n, len(checked_candidates))
@@ -1010,6 +1080,20 @@ class RagService:
                         saved_items[:selected_count],
                         strict=True,
                     ),
+                    start=1,
+                )
+            ],
+            context_candidates=[
+                ContextCandidateRef(
+                    candidate=candidate,
+                    saved_item=saved_item,
+                    rank=index,
+                    rerank_score=None,
+                    rerank_order=None,
+                    citation_candidate=index <= selected_count,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(checked_candidates, saved_items, strict=True),
                     start=1,
                 )
             ],
@@ -1088,6 +1172,7 @@ class RagService:
                 items=[],
                 selected_candidates=[],
                 citation_sources=[],
+                context_candidates=[],
             )
 
         with latency_tracker.span("retrieval_items_persist_ms"):
@@ -1145,6 +1230,20 @@ class RagService:
                         saved_items[:selected_count],
                         strict=True,
                     ),
+                    start=1,
+                )
+            ],
+            context_candidates=[
+                ContextCandidateRef(
+                    candidate=candidate,
+                    saved_item=saved_item,
+                    rank=index,
+                    rerank_score=None,
+                    rerank_order=None,
+                    citation_candidate=index <= selected_count,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(visible_candidates, saved_items, strict=True),
                     start=1,
                 )
             ],
@@ -1249,6 +1348,7 @@ class RagService:
             items=pipeline_result.items,
             selected_candidates=pipeline_result.selected_candidates,
             citation_sources=pipeline_result.citation_sources,
+            context_candidates=pipeline_result.context_candidates,
             no_context=pipeline_result.no_context,
         )
 
@@ -1449,6 +1549,7 @@ class RagService:
                 items=[],
                 selected_candidates=[],
                 citation_sources=[],
+                context_candidates=[],
                 no_context=True,
             )
 
@@ -1497,6 +1598,20 @@ class RagService:
                 ],
                 selected_candidates=[],
                 citation_sources=[],
+                context_candidates=[
+                    ContextCandidateRef(
+                        candidate=candidate,
+                        saved_item=saved_item,
+                        rank=index,
+                        rerank_score=None,
+                        rerank_order=None,
+                        citation_candidate=False,
+                    )
+                    for index, (candidate, saved_item) in enumerate(
+                        zip(final_candidates, saved_items, strict=True),
+                        start=1,
+                    )
+                ],
                 no_context=True,
             )
 
@@ -1585,6 +1700,20 @@ class RagService:
                         saved_items[:selected_count],
                         strict=True,
                     ),
+                    start=1,
+                )
+            ],
+            context_candidates=[
+                ContextCandidateRef(
+                    candidate=candidate,
+                    saved_item=saved_item,
+                    rank=index,
+                    rerank_score=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score,
+                    rerank_order=rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order,
+                    citation_candidate=index <= selected_count,
+                )
+                for index, (candidate, saved_item) in enumerate(
+                    zip(ordered_candidates, saved_items, strict=True),
                     start=1,
                 )
             ],
@@ -1727,6 +1856,87 @@ class RagService:
         if run is None:
             raise RuntimeError("retrieval_run_missing")
         return run
+
+    def _apply_context_budget(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        result: RetrievalPipelineResult,
+        estimated_prompt_tokens: int,
+    ) -> ContextBudgetDecision:
+        run = self._require_run(db, retrieval_run_id)
+        policy = _context_budget_policy(self.settings)
+        if result.no_context:
+            policy = policy.model_copy(update={"min_citation_candidates": 0})
+        decision = self.context_budget_manager.apply(
+            _context_budget_candidates(result.context_candidates),
+            policy=policy,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+            strategy=_context_budget_strategy(run),
+        )
+        selected_item_ids = set(decision.selected_item_ids)
+        self.repository.update_context_selection(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            selected_item_ids=selected_item_ids,
+        )
+        if policy.store_debug_trace:
+            self.repository.update_retrieval_run_trace(
+                db,
+                run=run,
+                context_budget_json=decision.trace.model_dump(mode="json", exclude_none=True),
+            )
+        _log_context_budget(
+            run=run,
+            decision=decision,
+            event="rag.context_budget.skipped"
+            if not policy.enabled
+            else (
+                "rag.context_budget.exhausted"
+                if decision.trace.usage.budget_exhausted
+                else "rag.context_budget.applied"
+            ),
+        )
+        return decision
+
+    def _finalize_context_budget_after_assembly(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        decision: ContextBudgetDecision,
+        prompt_context_refs: list[ContextCandidateRef],
+    ) -> ContextBudgetDecision:
+        final_decision = finalize_context_budget_selection(
+            decision,
+            selected_item_ids={ref.saved_item.retrieval_run_item_id for ref in prompt_context_refs},
+        )
+        if final_decision is decision:
+            return decision
+        run = self._require_run(db, retrieval_run_id)
+        selected_item_ids = set(final_decision.selected_item_ids)
+        self.repository.update_context_selection(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            selected_item_ids=selected_item_ids,
+        )
+        if self.settings.context_budget_store_debug_trace:
+            self.repository.update_retrieval_run_trace(
+                db,
+                run=run,
+                context_budget_json=final_decision.trace.model_dump(mode="json", exclude_none=True),
+            )
+        _log_context_budget(
+            run=run,
+            decision=final_decision,
+            event=(
+                "rag.context_budget.exhausted"
+                if final_decision.trace.usage.budget_exhausted
+                else "rag.context_budget.applied"
+            ),
+        )
+        return final_decision
 
     def _ensure_direct_strategy_enabled(self, strategy_type: RetrievalStrategy) -> None:
         if strategy_type == RetrievalStrategy.HYBRID:
@@ -2162,6 +2372,7 @@ def _retrieval_run_debug_summary(run: RetrievalRun) -> RetrievalRunDebugSummary:
         strategy_decision_json=_safe_json_object(run.strategy_decision_json),
         latency_breakdown_json=_safe_json_object(run.latency_breakdown_json),
         retrieval_settings_json=_safe_json_object(run.retrieval_settings_json),
+        context_budget_json=sanitize_context_budget_json(run.context_budget_json),
         rerank_score_top1=_optional_rounded_float(run.rerank_score_top1),
         answer_confidence=_optional_rounded_float(run.answer_confidence),
         groundedness_score=_optional_rounded_float(run.groundedness_score),
@@ -2739,6 +2950,149 @@ def _safe_chunk_metadata(value: object) -> dict[str, object]:
         elif isinstance(item, int | float):
             safe[key] = item
     return safe
+
+
+def _context_budget_policy(settings: Settings) -> ContextBudgetPolicy:
+    return ContextBudgetPolicy(
+        enabled=settings.context_budget_enabled,
+        max_context_tokens=settings.context_budget_max_context_tokens,
+        reserve_answer_tokens=settings.context_budget_reserve_answer_tokens,
+        max_context_items=settings.context_budget_max_context_items,
+        max_tokens_per_item=settings.context_budget_max_tokens_per_item,
+        min_citation_candidates=settings.context_budget_min_citation_candidates,
+        drop_low_score_first=settings.context_budget_drop_low_score_first,
+        preserve_source_diversity=settings.context_budget_preserve_source_diversity,
+        token_estimator="heuristic",
+        store_debug_trace=settings.context_budget_store_debug_trace,
+    )
+
+
+def _context_budget_candidates(
+    refs: list[ContextCandidateRef],
+) -> list[ContextBudgetCandidate]:
+    return [
+        ContextBudgetCandidate(
+            retrieval_run_item_id=ref.saved_item.retrieval_run_item_id,
+            document_chunk_id=ref.candidate.chunk.document_chunk_id,
+            source_label=_source_label(ref.candidate),
+            section_title=_safe_display_text(ref.candidate.chunk.section_title),
+            page_from=ref.candidate.chunk.page_from,
+            page_to=ref.candidate.chunk.page_to,
+            score=_round_score(ref.candidate.retrieval_score),
+            rank=ref.rank,
+            rerank_score=_round_score(ref.rerank_score) if ref.rerank_score is not None else None,
+            rerank_order=ref.rerank_order,
+            text=_clean_context_text(ref.candidate.chunk.content_text),
+            citation_candidate=ref.citation_candidate,
+            source_group_key=f"logical_document:{ref.candidate.logical_document.logical_document_id}",
+            retrieval_source=ref.saved_item.retrieval_source,
+        )
+        for ref in refs
+    ]
+
+
+def _context_budget_strategy(run: RetrievalRun) -> ContextBudgetStrategySummary:
+    decision = run.strategy_decision_json if isinstance(run.strategy_decision_json, dict) else {}
+    tools_used = decision.get("tools_used")
+    return ContextBudgetStrategySummary(
+        strategy_type=run.strategy_type,
+        selected_strategy=_safe_string_value(decision.get("selected_strategy")),
+        execution_strategy=_safe_string_value(decision.get("execution_strategy")),
+        tools_used=tools_used if isinstance(tools_used, list) else [],
+    )
+
+
+def _selected_context_refs(
+    refs: list[ContextCandidateRef],
+    decision: ContextBudgetDecision,
+) -> list[ContextCandidateRef]:
+    selected_ids = set(decision.selected_item_ids)
+    return [ref for ref in refs if ref.saved_item.retrieval_run_item_id in selected_ids]
+
+
+def _context_citation_sources(
+    refs: list[ContextCandidateRef],
+    *,
+    snippet_max_chars: int,
+) -> list[CitationSource]:
+    return [
+        _citation_source(
+            ref.candidate,
+            saved_item=ref.saved_item,
+            local_citation_id=local_id,
+            snippet_max_chars=snippet_max_chars,
+        )
+        for local_id, ref in enumerate(refs, start=1)
+    ]
+
+
+def _context_refs_for_citation_sources(
+    refs: list[ContextCandidateRef],
+    citation_sources: list[CitationSource],
+) -> list[ContextCandidateRef]:
+    included_ids = {
+        source.retrieval_run_item_id
+        for source in citation_sources
+        if source.retrieval_run_item_id is not None
+    }
+    return [ref for ref in refs if ref.saved_item.retrieval_run_item_id in included_ids]
+
+
+def _summary_with_final_context_refs(
+    summary: RetrievalScoreSummary,
+    refs: list[ContextCandidateRef],
+) -> RetrievalScoreSummary:
+    payload = summary.model_dump(mode="json")
+    retrieval_scores = [ref.candidate.retrieval_score for ref in refs]
+    payload["selected_count"] = len(refs)
+    payload["top1_retrieval_score"] = (
+        _round_score(retrieval_scores[0]) if retrieval_scores else None
+    )
+    payload["top3_avg_retrieval_score"] = (
+        _round_score(sum(retrieval_scores[:3]) / min(3, len(retrieval_scores)))
+        if retrieval_scores
+        else None
+    )
+    top1_rerank_score = next(
+        (ref.rerank_score for ref in refs if ref.rerank_score is not None),
+        None,
+    )
+    payload["top1_rerank_score"] = (
+        _round_score(top1_rerank_score) if top1_rerank_score is not None else None
+    )
+    return RetrievalScoreSummary(**payload)
+
+
+def _log_context_budget(
+    *,
+    run: RetrievalRun,
+    decision: ContextBudgetDecision,
+    event: str,
+) -> None:
+    trace = decision.trace
+    strategy = trace.strategy
+    payload = {
+        "request_id": run.request_id,
+        "retrieval_run_id": run.retrieval_run_id,
+        "strategy_type": run.strategy_type,
+        "selected_strategy": strategy.selected_strategy if strategy else None,
+        "execution_strategy": strategy.execution_strategy if strategy else None,
+        "candidate_count": trace.items.candidate_count,
+        "selected_count": trace.items.selected_count,
+        "dropped_count": trace.items.dropped_count,
+        "estimated_context_tokens": trace.usage.estimated_context_tokens,
+        "remaining_context_tokens": trace.usage.remaining_context_tokens,
+        "budget_exhausted": trace.usage.budget_exhausted,
+        "drop_reason_counts": trace.drop_reasons,
+    }
+    logger.info(event, extra={"rag_context_budget": payload})
+
+
+def _safe_string_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    safe = TraceRedactor.safe_string(value, max_length=100)
+    return safe or None
 
 
 def _assemble_context(

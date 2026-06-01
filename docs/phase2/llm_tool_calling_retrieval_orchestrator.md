@@ -59,6 +59,23 @@ The trace does not store raw prompts, full context, raw chunk text, full tool
 payloads, PII, tokens, or secrets. Tool results shown to the planning LLM contain
 bounded snippets, source labels, score summaries, and chunk ids only.
 
+## PR-40 Context Budget
+
+After the orchestrator finalizes retrieval, PR-40 applies
+`ContextBudgetManager` to the final evidence candidates before answer
+generation. The safe `retrieval_runs.context_budget_json` trace records:
+
+- candidate, selected, dropped, source, and citation candidate counts
+- char count and heuristic token estimates
+- drop reason counts
+- selected and dropped safe item refs
+- selected and execution strategy labels
+- budget exhausted flag
+
+This does not compress tool results or retrieved context. Retrieved Context
+Compression / Evidence Pack is PR-41 scope, and Tool Result Compression is
+PR-42 scope.
+
 ## Local Use
 
 In the Chat UI, choose **LLM Agentic RAG** from the RAG mode selector. For local

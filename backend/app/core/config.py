@@ -153,6 +153,16 @@ class Settings(BaseSettings):
     llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     llm_orchestrator_allow_trace_inspection: bool = True
     llm_orchestrator_allow_admin_tools: bool = False
+    context_budget_enabled: bool = True
+    context_budget_max_context_tokens: int = Field(default=6000, ge=1, le=200_000)
+    context_budget_reserve_answer_tokens: int = Field(default=1000, ge=0, le=200_000)
+    context_budget_max_context_items: int = Field(default=12, ge=1, le=100)
+    context_budget_max_tokens_per_item: int = Field(default=1200, ge=1, le=200_000)
+    context_budget_min_citation_candidates: int = Field(default=1, ge=0, le=100)
+    context_budget_drop_low_score_first: bool = True
+    context_budget_preserve_source_diversity: bool = True
+    context_budget_token_estimator: str = "heuristic"
+    context_budget_store_debug_trace: bool = True
     evaluation_failure_low_recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_mrr_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     evaluation_failure_low_citation_coverage_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -297,6 +307,21 @@ class Settings(BaseSettings):
             )
         if self.llm_orchestrator_allow_admin_tools:
             raise ValueError("LLM_ORCHESTRATOR_ALLOW_ADMIN_TOOLS must be false")
+        self.context_budget_token_estimator = self.context_budget_token_estimator.lower()
+        if self.context_budget_token_estimator != "heuristic":
+            raise ValueError("CONTEXT_BUDGET_TOKEN_ESTIMATOR must be heuristic")
+        if self.context_budget_reserve_answer_tokens >= self.context_budget_max_context_tokens:
+            raise ValueError(
+                "CONTEXT_BUDGET_RESERVE_ANSWER_TOKENS must be < CONTEXT_BUDGET_MAX_CONTEXT_TOKENS"
+            )
+        if self.context_budget_max_tokens_per_item > self.context_budget_max_context_tokens:
+            raise ValueError(
+                "CONTEXT_BUDGET_MAX_TOKENS_PER_ITEM must be <= CONTEXT_BUDGET_MAX_CONTEXT_TOKENS"
+            )
+        if self.context_budget_min_citation_candidates > self.context_budget_max_context_items:
+            raise ValueError(
+                "CONTEXT_BUDGET_MIN_CITATION_CANDIDATES must be <= CONTEXT_BUDGET_MAX_CONTEXT_ITEMS"
+            )
         self.document_url_fetch_allowed_schemes = [
             item.lower() for item in self.document_url_fetch_allowed_schemes
         ]

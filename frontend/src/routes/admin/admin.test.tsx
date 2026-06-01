@@ -756,6 +756,73 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
                 fusion_method: "rrf",
                 router_enabled: false
               },
+              context_budget_json: {
+                schema_version: "phase2.context_budget.v1",
+                enabled: true,
+                budget: {
+                  max_context_tokens: 6000,
+                  reserve_answer_tokens: 1000,
+                  max_context_items: 12,
+                  max_tokens_per_item: 1200,
+                  min_citation_candidates: 1,
+                  token_estimator: "heuristic",
+                  preserve_source_diversity: true,
+                  drop_low_score_first: true
+                },
+                usage: {
+                  estimated_prompt_tokens: 4,
+                  estimated_context_tokens: 80,
+                  estimated_total_input_tokens: 84,
+                  reserve_answer_tokens: 1000,
+                  remaining_context_tokens: 5920,
+                  budget_exhausted: false
+                },
+                items: {
+                  candidate_count: 2,
+                  selected_count: 1,
+                  dropped_count: 1,
+                  citation_candidate_count: 2,
+                  source_count: 1
+                },
+                drop_reasons: { max_items_exceeded: 1 },
+                sources: {
+                  source_count: 1,
+                  by_source: [
+                    {
+                      source_group_key: "logical_document:10",
+                      source_label: "phase2.md",
+                      candidate_count: 2,
+                      selected_count: 1,
+                      dropped_count: 1,
+                      estimated_tokens: 80
+                    }
+                  ]
+                },
+                selected_item_refs: [
+                  {
+                    retrieval_run_item_id: 900,
+                    document_chunk_id: 300,
+                    source_label: "phase2.md",
+                    rank: 1,
+                    estimated_tokens: 80,
+                    char_count: 320,
+                    reason: "high_score"
+                  }
+                ],
+                dropped_item_refs: [
+                  {
+                    retrieval_run_item_id: 901,
+                    document_chunk_id: 301,
+                    source_label: "phase2-budget.md",
+                    rank: 2,
+                    estimated_tokens: 90,
+                    char_count: 360,
+                    drop_reason: "max_items_exceeded"
+                  }
+                ],
+                raw_prompt: "raw prompt must not appear",
+                full_context: "full context must not appear"
+              },
               rerank_score_top1: null,
               answer_confidence: null,
               groundedness_score: null,
@@ -872,10 +939,16 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect((await screen.findAllByText(/file_extension/)).length).toBeGreaterThan(0);
   expect((await screen.findAllByText(/explicit_strategy_hybrid/)).length).toBeGreaterThan(0);
   expect(await screen.findByText("42 ms")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Context Budget" })).toBeInTheDocument();
+  expect((await screen.findAllByText("6000")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("80")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("max_items_exceeded")).length).toBeGreaterThan(0);
+  expect(await screen.findByText("phase2-budget.md")).toBeInTheDocument();
   expect((await screen.findAllByText("0.730")).length).toBeGreaterThan(0);
   expect(await screen.findByText("hybrid retrieval safe snippet")).toBeInTheDocument();
   expect(await screen.findByText("recall_at_k")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent("raw prompt must not appear");
+  expect(document.body).not.toHaveTextContent("full context must not appear");
   expect(document.body).not.toHaveTextContent("raw chunk text must not appear");
   expect(document.body).not.toHaveTextContent("OPENAI_API_KEY");
   expect(document.body).not.toHaveTextContent("sk-secret");

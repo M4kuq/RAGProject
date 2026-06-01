@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0008_llm_tool_orch"
+    assert version == "0009_context_budget"
 
     expected_tables = {
         "roles",
@@ -483,6 +483,7 @@ def test_phase2_orm_fields_match_strategy_schema() -> None:
         "strategy_decision_json",
         "latency_breakdown_json",
         "retrieval_settings_json",
+        "context_budget_json",
     } <= set(run_columns.keys())
     assert {"metadata_json"} <= set(version_columns.keys())
     assert {"metadata_json"} <= set(chunk_columns.keys())
@@ -603,6 +604,16 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.router.no_context_after_budget_exhausted") is True
         assert _setting_value(db, "rag.router.fallback_strategy") == "fallback_dense"
         assert _setting_value(db, "rag.router.store_decision_trace") is True
+        assert _setting_value(db, "rag.context_budget.enabled") is True
+        assert _setting_value(db, "rag.context_budget.max_context_tokens") == 6000
+        assert _setting_value(db, "rag.context_budget.reserve_answer_tokens") == 1000
+        assert _setting_value(db, "rag.context_budget.max_context_items") == 12
+        assert _setting_value(db, "rag.context_budget.max_tokens_per_item") == 1200
+        assert _setting_value(db, "rag.context_budget.min_citation_candidates") == 1
+        assert _setting_value(db, "rag.context_budget.drop_low_score_first") is True
+        assert _setting_value(db, "rag.context_budget.preserve_source_diversity") is True
+        assert _setting_value(db, "rag.context_budget.token_estimator") == "heuristic"
+        assert _setting_value(db, "rag.context_budget.store_debug_trace") is True
         assert _setting_value(db, "rag.trace.enabled") is True
         assert _setting_value(db, "rag.sparse.enabled") is True
         assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
@@ -705,6 +716,13 @@ def test_seed_preserves_existing_phase2_strategy_setting(
                     description="Operator fallback override",
                 )
             )
+            db.add(
+                SystemSetting(
+                    setting_key="rag.context_budget.max_context_tokens",
+                    setting_value=4096,
+                    description="Operator context budget override",
+                )
+            )
             db.commit()
 
         with Session() as db:
@@ -720,6 +738,8 @@ def test_seed_preserves_existing_phase2_strategy_setting(
             assert _setting_value(db, "rag.router.fallback_strategy") == "dense"
             assert _setting_value(db, "rag.router.allow_agentic_search") is True
             assert _setting_value(db, "rag.router.allow_agentic_ask") is True
+            assert _setting_value(db, "rag.context_budget.max_context_tokens") == 4096
+            assert _setting_value(db, "rag.context_budget.max_context_items") == 12
             assert _setting_value(db, "rag.sparse.enabled") is True
             assert _setting_value(db, "rag.sparse.provider") == "postgres_fts"
             assert _setting_value(db, "rag.query_analyzer.enabled") is True
