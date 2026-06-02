@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ragproject-local
+  labels:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/part-of: ragproject
+    app.kubernetes.io/environment: local

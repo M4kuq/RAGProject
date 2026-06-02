@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/component: backend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ragproject
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragproject
+        app.kubernetes.io/component: backend
+    spec:
+      initContainers:
+        - name: wait-migration
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - sh
+            - -c
+            - until alembic current 2>/dev/null | grep -q "(head)"; do echo "waiting for alembic head"; sleep 2; done
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+        - name: wait-qdrant
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - sh
+            - -c
+            - until python -m app.scripts.healthcheck http://qdrant:6333/healthz; do echo "waiting for qdrant"; sleep 2; done
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      containers:
+        - name: backend
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: upload-storage
+              mountPath: /app/storage/uploads
+      volumes:
+        - name: upload-storage
+          persistentVolumeClaim:
+            claimName: upload-storage

@@ -1,0 +1,42 @@
+name: Kubernetes Manifest CI
+
+on:
+  pull_request:
+    paths:
+      - "k8s/**"
+      - "scripts/validate_k8s_manifests.py"
+      - ".github/workflows/k8s-manifest-ci.yml"
+      - "docs/phase2/kubernetes_local_baseline.md"
+  push:
+    branches:
+      - main
+    paths:
+      - "k8s/**"
+      - "scripts/validate_k8s_manifests.py"
+      - ".github/workflows/k8s-manifest-ci.yml"
+      - "docs/phase2/kubernetes_local_baseline.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-manifest-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate local k8s manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate manifest structure
+        run: python scripts/validate_k8s_manifests.py
