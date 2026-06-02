@@ -13,6 +13,26 @@ spec:
         app.kubernetes.io/name: ragproject
         app.kubernetes.io/component: migrate
     spec:
+      initContainers:
+        - name: wait-postgres
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - python
+            - -c
+            - from app.db.session import check_database; raise SystemExit(0 if check_database() else 1)
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
       restartPolicy: OnFailure
       containers:
         - name: migrate
