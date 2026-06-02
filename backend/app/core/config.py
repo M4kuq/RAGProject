@@ -153,6 +153,20 @@ class Settings(BaseSettings):
     llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     llm_orchestrator_allow_trace_inspection: bool = True
     llm_orchestrator_allow_admin_tools: bool = False
+    tool_result_compression_enabled: bool = True
+    tool_result_compression_max_items_per_tool: int = Field(default=8, ge=1, le=100)
+    tool_result_compression_max_total_items_per_turn: int = Field(default=20, ge=1, le=200)
+    tool_result_compression_max_snippet_chars: int = Field(default=500, ge=20, le=5000)
+    tool_result_compression_max_tokens_per_tool: int = Field(default=1200, ge=1, le=200_000)
+    tool_result_compression_max_total_tool_result_tokens: int = Field(
+        default=3000,
+        ge=1,
+        le=200_000,
+    )
+    tool_result_compression_drop_low_score_first: bool = True
+    tool_result_compression_group_by_source: bool = True
+    tool_result_compression_reject_oversized_output: bool = True
+    tool_result_compression_store_debug_trace: bool = True
     context_budget_enabled: bool = True
     context_budget_max_context_tokens: int = Field(default=6000, ge=1, le=200_000)
     context_budget_reserve_answer_tokens: int = Field(default=1000, ge=0, le=200_000)
@@ -233,7 +247,13 @@ class Settings(BaseSettings):
     mcp_allow_write_tools: bool = False
     mcp_enable_advanced_rag_tools: bool = True
     mcp_allowed_strategies: list[str] = Field(
-        default_factory=lambda: ["dense", "sparse", "hybrid", "agentic_router"]
+        default_factory=lambda: [
+            "dense",
+            "sparse",
+            "hybrid",
+            "agentic_router",
+            "llm_tool_orchestrator",
+        ]
     )
     mcp_include_trace_summary_default: bool = False
     mcp_max_answer_chars: int = Field(default=4000, ge=20, le=8000)
@@ -316,6 +336,22 @@ class Settings(BaseSettings):
             )
         if self.llm_orchestrator_allow_admin_tools:
             raise ValueError("LLM_ORCHESTRATOR_ALLOW_ADMIN_TOOLS must be false")
+        if (
+            self.tool_result_compression_max_items_per_tool
+            > self.tool_result_compression_max_total_items_per_turn
+        ):
+            raise ValueError(
+                "TOOL_RESULT_COMPRESSION_MAX_ITEMS_PER_TOOL must be <= "
+                "TOOL_RESULT_COMPRESSION_MAX_TOTAL_ITEMS_PER_TURN"
+            )
+        if (
+            self.tool_result_compression_max_tokens_per_tool
+            > self.tool_result_compression_max_total_tool_result_tokens
+        ):
+            raise ValueError(
+                "TOOL_RESULT_COMPRESSION_MAX_TOKENS_PER_TOOL must be <= "
+                "TOOL_RESULT_COMPRESSION_MAX_TOTAL_TOOL_RESULT_TOKENS"
+            )
         self.context_budget_token_estimator = self.context_budget_token_estimator.lower()
         if self.context_budget_token_estimator != "heuristic":
             raise ValueError("CONTEXT_BUDGET_TOKEN_ESTIMATOR must be heuristic")
@@ -424,12 +460,19 @@ class Settings(BaseSettings):
         if self.mcp_allow_write_tools:
             raise ValueError("MCP_ALLOW_WRITE_TOOLS must be false in Phase1")
         self.mcp_allowed_strategies = [item.lower() for item in self.mcp_allowed_strategies]
-        allowed_mcp_strategies = {"dense", "sparse", "hybrid", "agentic_router"}
+        allowed_mcp_strategies = {
+            "dense",
+            "sparse",
+            "hybrid",
+            "agentic_router",
+            "llm_tool_orchestrator",
+        }
         if not self.mcp_allowed_strategies or any(
             item not in allowed_mcp_strategies for item in self.mcp_allowed_strategies
         ):
             raise ValueError(
-                "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, agentic_router"
+                "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, "
+                "agentic_router, llm_tool_orchestrator"
             )
         if self.mcp_allow_evaluation_run_create:
             raise ValueError("MCP_ALLOW_EVALUATION_RUN_CREATE must be false in PR-38")

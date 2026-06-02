@@ -713,6 +713,55 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
             "raw_prompt": "compression raw prompt must not leak",
             "full_context": "compression full context must not leak",
         }
+        run.tool_result_compression_json = {
+            "schema_version": "phase2.tool_result_compression.v1",
+            "enabled": True,
+            "budget": {
+                "max_items_per_tool": 8,
+                "max_total_items_per_turn": 20,
+                "max_snippet_chars": 500,
+                "max_tokens_per_tool": 1200,
+                "max_total_tool_result_tokens": 3000,
+                "token_estimator": "heuristic",
+                "drop_low_score_first": True,
+                "group_by_source": True,
+                "reject_oversized_output": True,
+            },
+            "summary": {
+                "tool_call_count": 1,
+                "search_tool_call_count": 1,
+                "original_item_count": 1,
+                "output_item_count": 1,
+                "dropped_item_count": 0,
+                "estimated_tokens_before": 10,
+                "estimated_tokens_after": 5,
+                "compression_ratio": 0.5,
+                "budget_exhausted": False,
+                "repeated_result_count": 0,
+                "oversized_rejected_count": 0,
+            },
+            "drop_reasons": {"raw_prompt": 1, "max_items_limit": 0},
+            "by_tool": [],
+            "item_refs": [
+                {
+                    "tool_call_id": "tc_1",
+                    "tool_name": "dense_search",
+                    "document_chunk_id": 100,
+                    "source_label": "hand book.pdf",
+                    "citation_candidate": True,
+                    "snippet_hash": "a" * 64,
+                    "original_char_count": 40,
+                    "snippet_char_count": 20,
+                    "estimated_tokens": 5,
+                    "source_group_key": "logical_document:10",
+                    "compression_method": "max_chars_per_snippet",
+                    "snippet": "raw tool snippet must not leak",
+                }
+            ],
+            "dropped_item_refs": [],
+            "raw_prompt": "tool result raw prompt must not leak",
+            "raw_tool_payload": "raw tool payload must not leak",
+        }
         item = (
             db.query(RetrievalRunItem)
             .filter_by(retrieval_run_id=retrieval_run_id)
@@ -751,8 +800,13 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert detail["retrieval_run"]["context_compression_json"]["drops"] == {
         "near_duplicate_removed": 0
     }
+    assert (
+        detail["retrieval_run"]["tool_result_compression_json"]["summary"]["output_item_count"] == 1
+    )
     assert "raw_prompt" not in detail["retrieval_run"]["context_budget_json"]
     assert "raw_prompt" not in detail["retrieval_run"]["context_compression_json"]
+    assert "raw_prompt" not in detail["retrieval_run"]["tool_result_compression_json"]
+    assert "snippet" not in detail["retrieval_run"]["tool_result_compression_json"]
     assert "evidence_text_for_generation" not in detail["retrieval_run"]["context_compression_json"]
     assert "raw_prompt" not in detail["retrieval_run"]["query_plan_json"]
     assert "apikey" not in detail["retrieval_run"]["query_plan_json"]
@@ -773,6 +827,9 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     assert "budget full context must not leak" not in serialized
     assert "compression raw prompt must not leak" not in serialized
     assert "compression full context must not leak" not in serialized
+    assert "tool result raw prompt must not leak" not in serialized
+    assert "raw tool payload must not leak" not in serialized
+    assert "raw tool snippet must not leak" not in serialized
     assert "raw evidence text must not leak" not in serialized
     assert "secret-token" not in serialized
     assert "secret-value" not in serialized

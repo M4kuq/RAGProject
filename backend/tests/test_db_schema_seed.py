@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0010_context_compression"
+    assert version == "0011_tool_result_compression"
 
     expected_tables = {
         "roles",
@@ -485,6 +485,7 @@ def test_phase2_orm_fields_match_strategy_schema() -> None:
         "retrieval_settings_json",
         "context_budget_json",
         "context_compression_json",
+        "tool_result_compression_json",
     } <= set(run_columns.keys())
     assert {"metadata_json"} <= set(version_columns.keys())
     assert {"metadata_json"} <= set(chunk_columns.keys())
@@ -605,6 +606,18 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.router.no_context_after_budget_exhausted") is True
         assert _setting_value(db, "rag.router.fallback_strategy") == "fallback_dense"
         assert _setting_value(db, "rag.router.store_decision_trace") is True
+        assert _setting_value(db, "rag.tool_result_compression.enabled") is True
+        assert _setting_value(db, "rag.tool_result_compression.max_items_per_tool") == 8
+        assert _setting_value(db, "rag.tool_result_compression.max_total_items_per_turn") == 20
+        assert _setting_value(db, "rag.tool_result_compression.max_snippet_chars") == 500
+        assert _setting_value(db, "rag.tool_result_compression.max_tokens_per_tool") == 1200
+        assert (
+            _setting_value(db, "rag.tool_result_compression.max_total_tool_result_tokens") == 3000
+        )
+        assert _setting_value(db, "rag.tool_result_compression.drop_low_score_first") is True
+        assert _setting_value(db, "rag.tool_result_compression.group_by_source") is True
+        assert _setting_value(db, "rag.tool_result_compression.reject_oversized_output") is True
+        assert _setting_value(db, "rag.tool_result_compression.store_debug_trace") is True
         assert _setting_value(db, "rag.context_budget.enabled") is True
         assert _setting_value(db, "rag.context_budget.max_context_tokens") == 6000
         assert _setting_value(db, "rag.context_budget.reserve_answer_tokens") == 1000

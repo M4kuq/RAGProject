@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -730,11 +731,23 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert run.context_compression_json is not None
         assert run.context_compression_json["output"]["evidence_item_count"] == 1
         assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
+        assert run.tool_result_compression_json is not None
+        assert (
+            run.tool_result_compression_json["schema_version"]
+            == "phase2.tool_result_compression.v1"
+        )
+        assert run.tool_result_compression_json["summary"]["search_tool_call_count"] == 1
+        assert run.tool_result_compression_json["summary"]["output_item_count"] >= 1
+        assert run.tool_result_compression_json["item_refs"][0]["retrieval_run_item_id"] is not None
+        compression_dump = json.dumps(run.tool_result_compression_json, sort_keys=True)
+        assert '"snippet":' not in compression_dump
+        assert "full active chunk text" not in compression_dump
         settings_snapshot = run.retrieval_settings_json
         assert settings_snapshot is not None
         assert settings_snapshot["max_tool_calls"] == 8
         assert settings_snapshot["max_search_calls"] == 8
         assert settings_snapshot["timeout_seconds"] == 600.0
+        assert settings_snapshot["tool_result_compression_enabled"] is True
         items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
         assert items
         assert all(item.retrieval_source == "hybrid" for item in items)
@@ -747,6 +760,7 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
                 "decision": run.strategy_decision_json,
                 "settings": run.retrieval_settings_json,
                 "summary": run.retrieval_score_summary,
+                "tool_result_compression": run.tool_result_compression_json,
                 "items": [item.score_breakdown_json for item in items],
             }
         )
@@ -924,6 +938,58 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_without_candidates_retur
         assert run.strategy_decision_json["budget_exhausted"] is True
         assert run.strategy_decision_json["best_effort_finalize_used"] is True
         assert run.strategy_decision_json["no_context"] is True
+
+
+def test_rag_ask_llm_tool_orchestrator_oversized_tool_output_rejected_safely(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        tool_result_compression_max_snippet_chars=100,
+        tool_result_compression_max_tokens_per_tool=1,
+        tool_result_compression_max_total_tool_result_tokens=1,
+        llm_orchestrator_max_tool_calls=1,
+        llm_orchestrator_max_search_calls=1,
+    )
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_SingleDensePlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm oversized")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-oversized-msg-1",
+            "message": "alpha oversized",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        compression_trace = run.tool_result_compression_json
+        assert compression_trace is not None
+        assert compression_trace["summary"]["oversized_rejected_count"] == 1
+        assert compression_trace["drop_reasons"]["oversized_rejected"] >= 1
+        strategy_decision = run.strategy_decision_json
+        assert strategy_decision is not None
+        assert strategy_decision["tool_results"][0]["error_code"] == ("oversized_tool_output")
+        dumped = json.dumps(compression_trace, sort_keys=True)
+        assert '"snippet":' not in dumped
+        assert "full active chunk text" not in dumped
 
 
 def test_rag_ask_llm_tool_orchestrator_retrieval_failure_propagates(
@@ -1241,6 +1307,104 @@ def test_rag_ask_llm_tool_orchestrator_repeated_query_best_effort_finalizes_with
         dumped = str(run.strategy_decision_json)
         assert "alpha repeat" not in dumped
         assert "full active chunk text" not in dumped
+
+
+def test_rag_ask_llm_tool_orchestrator_repeated_tool_result_is_traced(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseDifferentQueriesThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm repeated result")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-repeated-result-msg-1",
+            "message": "alpha repeated result",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    assert len(vector_client.query_vectors) >= 1
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        compression_trace = run.tool_result_compression_json
+        assert compression_trace is not None
+        assert compression_trace["summary"]["search_tool_call_count"] == 2
+        assert compression_trace["summary"]["repeated_result_count"] == 1
+        assert compression_trace["drop_reasons"] == {"repeated_result": 2}
+        strategy_decision = run.strategy_decision_json
+        assert strategy_decision is not None
+        assert "repeated_tool_result_detected" in strategy_decision["reason_codes"]
+
+
+def test_rag_ask_llm_tool_orchestrator_compression_disabled_preserves_final_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        tool_result_compression_enabled=False,
+        tool_result_compression_max_items_per_tool=1,
+        tool_result_compression_max_total_items_per_turn=1,
+        llm_orchestrator_max_tool_result_items=1,
+    )
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_DenseThenNoToolPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=NoopRerankerClient(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm compression disabled")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-compression-disabled-msg-1",
+            "message": "alpha policy compression disabled",
+            "strategy": "llm_tool_orchestrator",
+            "top_k": 2,
+            "rerank_top_n": 2,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["tool_result_compression_enabled"] is False
+        assert "tool_result_compression_skipped" in run.strategy_decision_json["reason_codes"]
+        assert "tool_result_compression_applied" not in run.strategy_decision_json["reason_codes"]
+        assert run.strategy_decision_json["tool_results"][0]["item_count"] == 2
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["items"]["selected_count"] == 2
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 2
+        assert run.tool_result_compression_json is not None
+        assert run.tool_result_compression_json["enabled"] is False
+        assert run.tool_result_compression_json["summary"]["output_item_count"] == 0
 
 
 def test_rag_ask_llm_tool_orchestrator_repeated_query_without_candidates_returns_no_context(
@@ -2192,6 +2356,15 @@ class _DenseThenNoToolPlanner:
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
         if not request.tool_results:
             return [LLMToolCall(tool_name="dense_search", arguments={"query": request.user_query})]
+        return []
+
+
+class _DenseDifferentQueriesThenNoToolPlanner:
+    def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        if len(request.tool_results) == 0:
+            return [LLMToolCall(tool_name="dense_search", arguments={"query": "alpha first"})]
+        if len(request.tool_results) == 1:
+            return [LLMToolCall(tool_name="dense_search", arguments={"query": "alpha second"})]
         return []
 
 

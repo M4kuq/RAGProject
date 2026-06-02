@@ -119,6 +119,7 @@ class RetrievalRunDebugSummary(BaseModel):
     retrieval_settings_json: dict[str, object] | None = None
     context_budget_json: dict[str, object] | None = None
     context_compression_json: dict[str, object] | None = None
+    tool_result_compression_json: dict[str, object] | None = None
     rerank_score_top1: float | None = None
     answer_confidence: float | None = None
     groundedness_score: float | None = None

@@ -374,6 +374,35 @@
 - Context Budget panel, RAG ask/search/Auto/MCP, retrieval debug, and strategy
   evaluation regressions remain green.
 
+## PR-42 Tool Result Compression / Orchestrator Context Guard Tests
+
+- `ToolResultCompressionPolicy` validates per-tool and per-turn item/token
+  budgets.
+- `ToolResultCompressor` enforces max items per tool, max total items per turn,
+  max snippet chars, max tokens per tool, and max total tool result tokens.
+- Duplicate text, same chunk, and repeated tool result outputs are detected
+  deterministically.
+- Oversized compressed tool outputs are rejected safely and cannot be selected
+  by `finalize_answer`.
+- Compressed tool result planner payloads include bounded snippets only; the
+  persisted trace stores refs, hashes, counts, ratios, and drop reasons only.
+- `tool_result_compression_json` does not contain raw prompt, full context, raw
+  chunk text, raw tool result payload, snippets, PII, token values, secrets,
+  cookies, sessions, credentials, or local paths.
+- Auto / `llm_tool_orchestrator` dense and hybrid retrieval tool results are
+  compressed before the planner sees them.
+- Rejected or all-dropped tool results lead to safe empty/no-context behavior
+  without leaking raw tool outputs.
+- Context Budget and Evidence Pack still run after compressed Auto tool result
+  selection.
+- MCP `rag_ask_auto` uses `llm_tool_orchestrator`, returns bounded output, and
+  does not expose raw tool result payloads or raw trace payloads.
+- Admin Retrieval Debug renders the Tool Result Compression panel and empty
+  state when trace is missing.
+- Viewer chat UI does not render Tool Result Compression internals.
+- Existing dense ask, hybrid ask, agentic_router ask, Auto ask, retrieval debug,
+  strategy evaluation, and MCP regressions remain green.
+
 ## Checks
 
 - `ruff format --check .`

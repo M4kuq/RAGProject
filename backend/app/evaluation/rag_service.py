@@ -24,6 +24,7 @@ from app.rag.citations import (
     validate_generation_citations,
 )
 from app.rag.confidence import ConfidenceInputs, calculate_confidence
+from app.rag.context_budget import estimate_tokens
 from app.rag.generation import (
     AnswerGenerationError,
     GenerationContextItem,
@@ -38,6 +39,7 @@ from app.rag.retrieval import (
     VectorSearchClient,
 )
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RagSearchRequestStrategy, RetrievalStrategy
+from app.rag.trace import LatencyTracker
 from app.schemas.rag import (
     RagAskCitation,
     RagAskConfidence,
@@ -52,11 +54,19 @@ from app.services.rag_service import (
     _citation_input,
     _citation_response,
     _confidence_response,
+    _context_citation_sources,
+    _context_refs_for_citation_sources,
     _decimal_score,
+    _is_insufficient_evidence_answer,
     _optional_decimal_score,
     _prompt_citation_sources,
     _query_hash,
+    _retrieval_settings_snapshot,
+    _selected_context_refs,
+    _summary_with_final_context_refs,
     _validate_generation_output_safety,
+    build_llm_tool_orchestrator_query_plan,
+    build_llm_tool_orchestrator_strategy_decision,
 )
 
 
@@ -258,6 +268,14 @@ class EvaluationRagQuestionService:
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
+        if strategy_type == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+            return self._answer_question_with_llm_tool_orchestrator(
+                db,
+                question=question,
+                request_id=request_id,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
         try:
             response = self.service.search(
                 db,
@@ -392,6 +410,229 @@ class EvaluationRagQuestionService:
                 _latest_retrieval_run_id(db, request_id=request_id),
                 exc.error_code,
             )
+
+    def _answer_question_with_llm_tool_orchestrator(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        top_k: int | None,
+        rerank_top_n: int | None,
+    ) -> RagEvaluationResult:
+        if not self.service.settings.llm_orchestrator_enabled:
+            return _failed_evaluation_result(None, "strategy_not_enabled")
+
+        effective_top_k = self.service._effective_ask_top_k(top_k)
+        effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
+        filters = RetrievalFilters()
+        query_hash = _query_hash(question)
+        query_plan_build = self.service.query_plan_builder.build(
+            question,
+            filters=filters,
+            requested_strategy=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+        )
+        retrieval_query = query_plan_build.retrieval_query
+        latency_tracker = LatencyTracker()
+        run = self.service.repository.create_standalone_run(
+            db,
+            top_k=effective_top_k,
+            query_hash=query_hash,
+            request_id=request_id,
+            started_at=datetime.now(UTC),
+            strategy_type=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            query_plan_json=build_llm_tool_orchestrator_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                plan_metadata=query_plan_build.trace_metadata,
+            ),
+            strategy_decision_json=build_llm_tool_orchestrator_strategy_decision(),
+            retrieval_settings_json=_retrieval_settings_snapshot(
+                settings=self.service.settings,
+                top_k=effective_top_k,
+                rerank_top_n=effective_rerank_top_n,
+                filters=filters,
+                strategy_type=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            ),
+        )
+        db.commit()
+        db.refresh(run)
+        run_id = run.retrieval_run_id
+
+        try:
+            result = self.service._retrieve_llm_tool_orchestrator(
+                db,
+                query=retrieval_query,
+                top_k=effective_top_k,
+                rerank_top_n=effective_rerank_top_n,
+                filters=filters,
+                retrieval_run_id=run_id,
+                latency_tracker=latency_tracker,
+            )
+            context_budget_decision = self.service._apply_context_budget(
+                db,
+                retrieval_run_id=run_id,
+                result=result,
+                estimated_prompt_tokens=estimate_tokens(question),
+            )
+            selected_context_refs = _selected_context_refs(
+                result.context_candidates,
+                context_budget_decision,
+            )
+            selected_citation_sources = _context_citation_sources(
+                selected_context_refs,
+                snippet_max_chars=self.service.settings.citation_preview_max_chars,
+            )
+            with latency_tracker.span("evidence_pack_ms"):
+                evidence_pack = self.service._build_evidence_pack(
+                    db,
+                    retrieval_run_id=run_id,
+                    selected_context_refs=selected_context_refs,
+                    selected_citation_sources=selected_citation_sources,
+                    candidate_context_items=context_budget_decision.trace.items.candidate_count,
+                )
+            if result.no_context or not evidence_pack.items:
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="no_context_found",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                return _failed_evaluation_result(
+                    run_id,
+                    "no_context_found",
+                    retrieval_score_summary=result.summary,
+                )
+            with latency_tracker.span("context_assembly_ms"):
+                context_items = evidence_pack.to_generation_context_items()
+                prompt_citation_sources = _prompt_citation_sources(
+                    context_items=context_items,
+                    citation_sources=selected_citation_sources,
+                )
+                prompt_context_refs = _context_refs_for_citation_sources(
+                    selected_context_refs,
+                    prompt_citation_sources,
+                )
+                self.service._finalize_context_budget_after_assembly(
+                    db,
+                    retrieval_run_id=run_id,
+                    decision=context_budget_decision,
+                    prompt_context_refs=prompt_context_refs,
+                )
+                final_summary = _summary_with_final_context_refs(
+                    result.summary,
+                    prompt_context_refs,
+                )
+            with latency_tracker.span("generation_ms"):
+                generation = self.service.answer_generator.generate(
+                    GenerationRequest(
+                        message=question,
+                        context_items=context_items,
+                        max_output_chars=self.service.settings.generation_max_output_chars,
+                    )
+                )
+            parsed_generation = parse_generation_output(generation.content)
+            _validate_generation_output_safety(
+                parsed_generation.answer_text,
+                context_items=context_items,
+            )
+            if _is_insufficient_evidence_answer(parsed_generation.answer_text):
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="no_context_found",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                return _failed_evaluation_result(
+                    run_id,
+                    "no_context_found",
+                    retrieval_score_summary=final_summary,
+                )
+            cited_sources = validate_generation_citations(
+                parsed_generation,
+                source_map=prompt_citation_sources,
+            )
+            self.service.repository.save_citations(
+                db,
+                citations=[
+                    _citation_input(source, retrieval_run_id=run_id) for source in cited_sources
+                ],
+            )
+            citation_records = self.service.repository.list_citations_for_run(
+                db,
+                retrieval_run_id=run_id,
+            )
+            confidence = calculate_confidence(
+                ConfidenceInputs(
+                    retrieval_score_summary=final_summary,
+                    marker_count=len(parsed_generation.markers),
+                    unique_citation_count=len(cited_sources),
+                    selected_count=len(prompt_citation_sources),
+                ),
+                self.service.settings,
+            )
+            run = self.service._require_run(db, run_id)
+            self.service.repository.mark_succeeded(
+                db,
+                run=run,
+                retrieval_score_summary=final_summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(final_summary.top1_rerank_score),
+                answer_confidence=_decimal_score(confidence.answer_confidence),
+                groundedness_score=_decimal_score(confidence.groundedness_score),
+                confidence_label=confidence.confidence_label,
+                finished_at=datetime.now(UTC),
+                latency_breakdown_json=latency_tracker.snapshot(),
+            )
+            db.commit()
+            db.refresh(run)
+            return RagEvaluationResult(
+                retrieval_run_id=run_id,
+                status="succeeded",
+                answer_text=parsed_generation.answer_text,
+                citations=[_citation_response(record) for record in citation_records],
+                confidence=_confidence_response(run),
+                retrieval_score_summary=final_summary,
+                retrieved_items=[],
+                context_sources_for_safety=[item.text for item in context_items],
+            )
+        except CitationBuildError:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="citation_build_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "citation_build_failed")
+        except AnswerGenerationError:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="generation_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "generation_failed")
+        except (EmbeddingAdapterError, RetrievalError):
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="retrieval_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "retrieval_failed")
+        except RerankError:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "rerank_failed")
 
     def evaluate_strategy(
         self,

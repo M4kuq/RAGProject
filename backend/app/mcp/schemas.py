@@ -33,7 +33,7 @@ class McpRagSearchInput(McpInputModel):
 
 class McpRagAskInput(McpInputModel):
     question: str = Field(min_length=1, max_length=8000)
-    strategy: Literal["dense", "hybrid", "agentic_router"] = "dense"
+    strategy: Literal["dense", "hybrid", "agentic_router", "llm_tool_orchestrator"] = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     include_citations: bool = True

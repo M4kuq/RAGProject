@@ -159,3 +159,31 @@ The panel does not display raw prompt, raw query, full context, raw chunk text,
 `evidence_text_for_generation`, raw tool output, snippets, PII, token values,
 secrets, credentials, sessions, cookies, or local paths. Viewer chat UI does not
 render Evidence Pack debug internals.
+
+## PR-42 Tool Result Compression Panel
+
+PR-42 adds a Tool Result Compression panel to the same admin Retrieval Debug
+surface. The panel reads safe `retrieval_runs.tool_result_compression_json`
+metadata when present. Search-only runs and non-Auto ask runs can show an empty
+state because tool result compression applies to `llm_tool_orchestrator` / Auto
+retrieval tool calls before the planner sees tool results.
+
+Displayed fields:
+
+- enabled
+- tool call and search tool call counts
+- original, output, and dropped tool result item counts
+- compression ratio
+- estimated tool result tokens before and after compression
+- max items per tool
+- max total tool result tokens
+- drop reason counts
+- per-tool summary
+- budget exhausted flag
+- oversized rejected count
+- safe tool result item refs
+
+The panel does not display raw prompt, raw query, full context, raw chunk text,
+raw tool result payloads, snippets, PII, token values, secrets, credentials,
+sessions, cookies, or local paths. Viewer chat UI does not render Tool Result
+Compression debug internals.
