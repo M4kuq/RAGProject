@@ -27,6 +27,43 @@ The Phase2 smoke does not run destructive cleanup, does not print `.env`
 values, and does not require external API keys, LangSmith, GPU, or mandatory
 heavy model downloads.
 
+## Local Kubernetes Baseline
+
+PR-43 adds a local kind/minikube baseline without replacing Docker Compose. See
+[`docs/phase2/kubernetes_local_baseline.md`](docs/phase2/kubernetes_local_baseline.md).
+
+Validate manifests:
+
+```powershell
+python scripts\validate_k8s_manifests.py
+kubectl kustomize k8s/local
+```
+
+```sh
+python scripts/validate_k8s_manifests.py
+kubectl kustomize k8s/local
+```
+
+Build and load local images before applying the manifests:
+
+```powershell
+scripts\k8s_load_images.ps1 -Runtime kind
+kubectl apply -k k8s/local
+scripts\k8s_smoke.ps1
+kubectl -n ragproject-local port-forward svc/frontend 5173:5173
+```
+
+```sh
+K8S_RUNTIME=kind sh scripts/k8s_load_images.sh
+kubectl apply -k k8s/local
+sh scripts/k8s_smoke.sh
+kubectl -n ragproject-local port-forward svc/frontend 5173:5173
+```
+
+The committed Kubernetes Secret is a template with local placeholders only.
+Do not commit real Kubernetes secrets, `.env` values, API keys, DB dumps,
+Qdrant data, generated logs, or debug artifacts.
+
 RAGProject は、文書アップロード、抽出、chunking、embedding、Qdrant index、retrieval、rerank、回答生成、citation、confidence、evaluation、MCP stdio server までを Docker Compose のローカル環境で確認する Phase1 RAG ポートフォリオである。
 
 Phase1 の目的は、クラウド公開ではなく、第三者が README 通りに起動し、5分デモを実行し、手動テストケースと smoke で受け入れ確認できる状態にすることにある。

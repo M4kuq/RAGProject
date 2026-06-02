@@ -403,6 +403,42 @@
 - Existing dense ask, hybrid ask, agentic_router ask, Auto ask, retrieval debug,
   strategy evaluation, and MCP regressions remain green.
 
+## PR-43 Kubernetes Baseline / Local Deploy Tests
+
+- `k8s/local/kustomization.yaml` includes the namespace, ConfigMap, Secret
+  template, PVCs, Services, StatefulSets, Deployments, and migration/seed Jobs.
+- The local Secret manifest is a template/example with placeholder values only;
+  no real secrets, `.env` values, tokens, private keys, API keys, DB dumps,
+  Qdrant data, logs, or debug artifacts are committed.
+- Postgres and Qdrant run as StatefulSets with PVC-backed storage,
+  ClusterIP Services, readiness probes, liveness probes, and resource
+  requests/limits.
+- Backend, worker, and frontend run as Deployments with readiness probes,
+  liveness probes, and resource requests/limits.
+- Backend and worker mount the upload PVC at `/app/storage/uploads`.
+- Migration and seed Jobs use the backend image and local ConfigMap/Secret
+  references.
+- Backend, worker, frontend, migration, and seed use `imagePullPolicy: Never`
+  so kind/minikube local image loading is explicit.
+- The default K8s ConfigMap uses fake embedding, fake rerank, and fake
+  generation so the baseline does not require external APIs, GPU, model
+  downloads, LM Studio, or Ollama.
+- `scripts/validate_k8s_manifests.py` verifies required files, workload
+  probes, resources, Services, PVCs, safe Secret template shape, and absence of
+  EKS/AWS/Terraform/RDS/OIDC/Ingress scope.
+- `.github/workflows/k8s-manifest-ci.yml` runs the manifest validator for K8s
+  changes.
+- `scripts/k8s_load_images.*` builds and loads `ragproject-backend:local`,
+  `ragproject-worker:local`, and `ragproject-frontend:local` into kind or
+  minikube.
+- `scripts/k8s_smoke.*` waits for StatefulSets, Jobs, and Deployments, then
+  runs in-cluster backend, Qdrant, and frontend health checks.
+- Docs explain port-forward access through `svc/frontend` and direct backend
+  health checks through `svc/backend`.
+- Cleanup instructions warn that deleting the kustomization also deletes local
+  PVC-backed K8s data.
+- Existing Docker Compose files and Compose smoke behavior remain unchanged.
+
 ## Checks
 
 - `ruff format --check .`
@@ -410,4 +446,5 @@
 - `mypy .`
 - backend pytest
 - frontend lint / typecheck / test / build when frontend files change
+- `python scripts/validate_k8s_manifests.py`
 - Docker compose CI config and smoke when available

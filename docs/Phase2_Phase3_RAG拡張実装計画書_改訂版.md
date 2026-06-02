@@ -1,6 +1,6 @@
 # Phase2 / Phase3 RAG拡張実装計画書 改訂版
 
-This revised note reflects the post-PR-41 repository state used by PR-42.
+This revised note reflects the post-PR-42 repository state used by PR-43.
 `docs/Phase2_Phase3_RAG拡張実装計画書.md` remains as the older roadmap; this file
 records the Phase2.5 / pre-Phase3 extension order currently implemented on
 `main`.
@@ -19,10 +19,32 @@ records the Phase2.5 / pre-Phase3 extension order currently implemented on
 - PR-39: LLM Tool-Calling Retrieval Orchestrator for explicit ask mode.
 - PR-40: Context Budget / Context Trace / Context Debug Foundation.
 - PR-41: Retrieved Context Compression / Evidence Pack.
+- PR-42: Tool Result Compression / Orchestrator Context Guard.
 
 ## Current PR
 
-PR-42 implements Tool Result Compression / Orchestrator Context Guard:
+PR-43 implements Kubernetes Baseline / Local K8s Deploy /
+Compose-to-K8s Hardening:
+
+- local Kubernetes manifests under `k8s/local`
+- frontend / backend / worker Deployments
+- postgres / qdrant StatefulSets
+- migration and seed Jobs
+- ConfigMap and Secret template with local placeholders only
+- PVCs for Postgres, Qdrant, and upload storage
+- ClusterIP Services and port-forward-first access
+- readiness/liveness probes and resource requests/limits
+- kind/minikube local image loading scripts
+- local K8s smoke scripts and manifest validation
+- docs for deploy, smoke, cleanup, and secret handling
+
+PR-43 does not implement EKS, AWS, Terraform, S3, Bedrock, RDS, OIDC,
+production Ingress, WAF/NAT/private subnet design, production Secrets
+management, Graph-RAG, OCR, remote MCP, or external operation agents.
+
+## Completed PR-42
+
+PR-42 added Tool Result Compression / Orchestrator Context Guard:
 
 - `ToolResultCompressor`
 - `ToolResultBudgetManager`
@@ -36,10 +58,6 @@ PR-42 implements Tool Result Compression / Orchestrator Context Guard:
 - local MCP `rag_ask_auto` wrapper
 - admin Retrieval Debug Tool Result Compression panel
 - safe structured Tool Result Compression logs
-
-PR-42 compresses intermediate orchestrator tool results. It does not
-reimplement Evidence Pack, Context Budget, Graph-RAG, OCR, AWS/S3/OIDC, remote
-MCP, or external operation agents.
 
 ## Completed PR-41
 
@@ -73,7 +91,7 @@ PR-40 added Context Budget / Context Trace / Context Debug Foundation:
 
 ## Explicitly Deferred
 
-- PR-43: Phase2.5 Final Hardening / Context Engineering Demo Docs.
+- PR-44: Phase2.5 Final Hardening / Context Engineering Demo Docs.
 - Later Phase3: Graph-RAG, OCR, multimodal retrieval, AWS/S3/OIDC, remote MCP,
   and external operation agents.
 

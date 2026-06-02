@@ -1,0 +1,112 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ragproject-migrate
+  labels:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragproject
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - alembic
+            - upgrade
+            - head
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ragproject-seed
+  labels:
+    app.kubernetes.io/name: ragproject
+    app.kubernetes.io/component: seed
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ragproject
+        app.kubernetes.io/component: seed
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-migration
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - sh
+            - -c
+            - until alembic current 2>/dev/null | grep -q "(head)"; do echo "waiting for alembic head"; sleep 2; done
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+        - name: wait-qdrant
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - sh
+            - -c
+            - until python -m app.scripts.healthcheck http://qdrant:6333/healthz; do echo "waiting for qdrant"; sleep 2; done
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      containers:
+        - name: seed
+          image: ragproject-backend:local
+          imagePullPolicy: Never
+          command:
+            - python
+            - -m
+            - app.scripts.seed
+          envFrom:
+            - configMapRef:
+                name: ragproject-config
+            - secretRef:
+                name: ragproject-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

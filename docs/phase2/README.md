@@ -9,7 +9,7 @@ Phase2 extends the Phase1 dense RAG baseline with four central themes:
 - Evaluation
 - Observability
 
-PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-26 adds Retrieval Debug UI v2. PR-27 adds Query Analyzer / Query Planner. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard, PR-36 adds safe document version compare plus citation source navigation, PR-37 finalizes demo, acceptance, smoke, and Phase3 handoff documentation, PR-38 adds MCP hybrid / agentic tools, PR-39 adds the LLM tool-calling retrieval orchestrator, PR-40 adds safe context budget / trace / debug foundation before generation, PR-41 adds deterministic Evidence Pack construction for retrieved context compression, and PR-42 adds safe Tool Result Compression / Orchestrator Context Guard for Auto tool outputs.
+PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace recording to the existing dense `/rag/search` and `/rag/ask` flows. PR-22 adds dataset, case, and strategy metric schema management so later PRs can compare dense / sparse / hybrid / agentic_router on the same dataset. PR-23 adds standalone sparse lexical retrieval for `/rag/search`. PR-24 adds standalone hybrid dense+sparse retrieval and score fusion for `/rag/search`. PR-25 adds the deterministic strategy evaluation runner for dense / sparse / hybrid. PR-26 adds Retrieval Debug UI v2. PR-27 adds Query Analyzer / Query Planner. PR-28 adds explicit `agentic_router` routing for one retrieval call with safe dense fallback. PR-29 adds the bounded agentic retrieval loop, PR-30 adds agentic strategy evaluation plus failure dataset promotion, PR-31 adds lightweight CI retrieval evaluation smoke runs, PR-32 adds optional no-op-by-default external trace export, PR-33 adds a local opt-in SentenceTransformers experiment harness, PR-34 adds `.xlsx` / `.pptx` ingestion with metadata-only parent-child chunking, PR-35 adds `.html` / `.htm` / `.xml` file ingestion plus single-URL ingestion behind an SSRF guard, PR-36 adds safe document version compare plus citation source navigation, PR-37 finalizes demo, acceptance, smoke, and Phase3 handoff documentation, PR-38 adds MCP hybrid / agentic tools, PR-39 adds the LLM tool-calling retrieval orchestrator, PR-40 adds safe context budget / trace / debug foundation before generation, PR-41 adds deterministic Evidence Pack construction for retrieved context compression, PR-42 adds safe Tool Result Compression / Orchestrator Context Guard for Auto tool outputs, and PR-43 adds a local Kubernetes baseline for kind/minikube.
 
 ## PR Plan
 
@@ -38,6 +38,7 @@ PR-20 fixed the strategy and trace schema baseline. PR-21 connected safe trace r
 | PR-40 | Context Budget / Context Trace / Context Debug Foundation |
 | PR-41 | Retrieved Context Compression / Evidence Pack |
 | PR-42 | Tool Result Compression / Orchestrator Context Guard |
+| PR-43 | Kubernetes Baseline / Local K8s Deploy / Compose-to-K8s Hardening |
 
 ## Phase2 Final Docs
 
@@ -82,6 +83,7 @@ Use these files for final handoff and demo validation:
 - [Context budget trace debug](context_budget_trace_debug.md)
 - [Evidence Pack context compression](evidence_pack_context_compression.md)
 - [Tool Result Compression / Orchestrator Guard](tool_result_compression_orchestrator_guard.md)
+- [Local Kubernetes baseline](kubernetes_local_baseline.md)
 - [Phase2 test strategy](test_strategy.md)
 - [PR-by-PR acceptance criteria](acceptance_criteria.md)
 

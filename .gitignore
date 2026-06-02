@@ -30,3 +30,6 @@ data/ollama/
 .DS_Store
 Thumbs.db
 *.log
+
+k8s/local/secret.local.yaml
+k8s/local/*.secret.yaml

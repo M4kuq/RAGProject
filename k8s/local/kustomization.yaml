@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ragproject-local
+resources:
+  - namespace.yaml
+  - secret.template.yaml
+  - configmap.yaml
+  - upload-pvc.yaml
+  - postgres.yaml
+  - qdrant.yaml
+  - migration-jobs.yaml
+  - backend.yaml
+  - worker.yaml
+  - frontend.yaml
