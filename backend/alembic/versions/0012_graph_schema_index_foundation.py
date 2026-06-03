@@ -287,6 +287,13 @@ def upgrade() -> None:
         "graph_relations",
         ["source_document_chunk_id"],
     )
+    op.create_index(
+        "ux_graph_relations_source_target_type_no_chunk",
+        "graph_relations",
+        ["source_entity_id", "target_entity_id", "relation_type"],
+        unique=True,
+        postgresql_where=sa.text("source_document_chunk_id IS NULL"),
+    )
 
     op.create_table(
         "graph_entity_mentions",
@@ -350,7 +357,9 @@ def upgrade() -> None:
             "graph_entity_id",
             "document_chunk_id",
             "mention_text_hash",
-            name="uq_graph_entity_mentions_entity_chunk_hash",
+            "mention_offset_start",
+            "mention_offset_end",
+            name="uq_graph_entity_mentions_entity_chunk_hash_offsets",
         ),
     )
     op.create_index(
@@ -417,7 +426,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    _delete_graph_settings()
+    # Keep rag.graph.* settings on rollback. The upgrade uses ON CONFLICT DO NOTHING,
+    # so downgrade cannot distinguish migration-seeded defaults from pre-existing
+    # operator-provided settings without risking destructive configuration loss.
     op.drop_table("graph_retrieval_paths")
     op.drop_table("graph_entity_mentions")
     op.drop_table("graph_relations")
@@ -441,13 +452,4 @@ def _seed_graph_settings() -> None:
                 "setting_value": json.dumps(value),
                 "description": description,
             },
-        )
-
-
-def _delete_graph_settings() -> None:
-    bind = op.get_bind()
-    for key in _GRAPH_SETTINGS:
-        bind.execute(
-            sa.text("DELETE FROM system_settings WHERE setting_key = :setting_key"),
-            {"setting_key": key},
         )
