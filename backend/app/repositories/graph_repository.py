@@ -30,7 +30,7 @@ _TERMINAL_GRAPH_INDEX_STATUSES = frozenset(
         "failed",
         "cancelled",
         "skipped",
-    }
+    },
 )
 
 
@@ -62,7 +62,7 @@ class GraphRepository:
                 func.lower(GraphEntity.canonical_name)
                 == canonical_name.strip().lower(),
                 GraphEntity.entity_type == entity_type.strip(),
-            )
+            ),
         )
 
     def create_relation(self, db: Session, data: GraphRelationCreate) -> GraphRelation:
@@ -91,7 +91,7 @@ class GraphRepository:
             or_(
                 GraphRelation.source_entity_id == graph_entity_id,
                 GraphRelation.target_entity_id == graph_entity_id,
-            )
+            ),
         ]
         if relation_type is not None:
             conditions.append(GraphRelation.relation_type == relation_type)
@@ -275,7 +275,7 @@ def _assert_chunk_belongs_to_version(
     actual_version_id = db.scalar(
         select(DocumentChunk.document_version_id).where(
             DocumentChunk.document_chunk_id == document_chunk_id,
-        )
+        ),
     )
     if actual_version_id is None:
         raise ValueError("document_chunk_id must reference an existing document chunk")
@@ -297,8 +297,8 @@ def _assert_source_chunks_belong_to_retrieval_run(
             select(RetrievalRunItem.document_chunk_id).where(
                 RetrievalRunItem.retrieval_run_id == retrieval_run_id,
                 RetrievalRunItem.document_chunk_id.in_(expected_chunk_ids),
-            )
-        ).all()
+            ),
+        ).all(),
     )
     if actual_chunk_ids != expected_chunk_ids:
         raise ValueError(
