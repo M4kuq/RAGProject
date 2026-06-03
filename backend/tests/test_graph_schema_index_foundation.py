@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text
+from sqlalchemy import ForeignKeyConstraint, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -109,11 +109,14 @@ def test_graph_orm_tables_do_not_store_raw_text_columns() -> None:
     assert "mention_text_hash" in GraphEntityMention.__table__.columns
     assert "source_document_chunk_id" in GraphRelation.__table__.columns
     assert "source_chunk_ids_json" in GraphRetrievalPath.__table__.columns
-    source_chunk_fk = next(
-        constraint
-        for constraint in GraphRelation.__table__.foreign_key_constraints
-        if any(column.name == "source_document_chunk_id" for column in constraint.columns)
-    )
+    source_chunk_fk: ForeignKeyConstraint | None = None
+    for constraint in GraphRelation.__table__.constraints:
+        if not isinstance(constraint, ForeignKeyConstraint):
+            continue
+        if any(column.name == "source_document_chunk_id" for column in constraint.columns):
+            source_chunk_fk = constraint
+            break
+    assert source_chunk_fk is not None
     assert source_chunk_fk.ondelete == "CASCADE"
 
 
