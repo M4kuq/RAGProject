@@ -149,8 +149,8 @@ class GraphEntityMentionCreate(BaseModel):
     document_chunk_id: StrictInt = Field(gt=0)
     document_version_id: StrictInt = Field(gt=0)
     mention_text_hash: str | None = None
-    mention_offset_start: int | None = Field(default=None, ge=0)
-    mention_offset_end: int | None = Field(default=None, ge=0)
+    mention_offset_start: StrictInt | None = Field(default=None, ge=0)
+    mention_offset_end: StrictInt | None = Field(default=None, ge=0)
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
