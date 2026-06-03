@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -294,7 +294,7 @@ def validate_safe_graph_metadata(value: dict[str, object]) -> dict[str, object]:
     return value
 
 
-def _assert_safe_mapping(value: Mapping[object, object], *, parent_key: str = "") -> None:
+def _assert_safe_mapping(value: Mapping[Any, object], *, parent_key: str = "") -> None:
     for raw_key, raw_value in value.items():
         key = str(raw_key)
         lowered = key.lower()
