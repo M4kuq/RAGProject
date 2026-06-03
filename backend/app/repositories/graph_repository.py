@@ -152,7 +152,11 @@ class GraphRepository:
         run: GraphIndexRun,
         started_at: datetime | None = None,
     ) -> None:
-        _assert_graph_index_run_transition(run, allowed_statuses={"queued"}, target_status="running")
+        _assert_graph_index_run_transition(
+            run,
+            allowed_statuses={"queued"},
+            target_status="running",
+        )
         now = started_at or datetime.now(UTC)
         run.status = "running"
         run.started_at = now
@@ -172,7 +176,11 @@ class GraphRepository:
         mention_count: int,
         finished_at: datetime | None = None,
     ) -> None:
-        _assert_graph_index_run_transition(run, allowed_statuses={"running"}, target_status="succeeded")
+        _assert_graph_index_run_transition(
+            run,
+            allowed_statuses={"running"},
+            target_status="succeeded",
+        )
         now = finished_at or datetime.now(UTC)
         run.status = "succeeded"
         run.entity_count = entity_count
