@@ -377,7 +377,8 @@ def _seed_graph_settings() -> None:
 
 def _delete_graph_settings() -> None:
     bind = op.get_bind()
-    bind.execute(
-        sa.text("DELETE FROM system_settings WHERE setting_key = ANY(:setting_keys)"),
-        {"setting_keys": list(_GRAPH_SETTINGS)},
-    )
+    for key in _GRAPH_SETTINGS:
+        bind.execute(
+            sa.text("DELETE FROM system_settings WHERE setting_key = :setting_key"),
+            {"setting_key": key},
+        )
