@@ -132,14 +132,13 @@ def test_graph_repository_and_service_lifecycle(
             db,
             GraphEntityCreate(canonical_name="Graph Index", entity_type="concept"),
         )
-        assert (
-            repository.find_entity_by_canonical_name(
-                db,
-                canonical_name="graph schema",
-                entity_type="concept",
-            ).graph_entity_id
-            == source.graph_entity_id
+        found = repository.find_entity_by_canonical_name(
+            db,
+            canonical_name="graph schema",
+            entity_type="concept",
         )
+        assert found is not None
+        assert found.graph_entity_id == source.graph_entity_id
 
         relation = repository.create_relation(
             db,

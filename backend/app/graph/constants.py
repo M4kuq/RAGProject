@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-GRAPH_INDEX_BUILD_JOB_TYPE = "graph_index_build"
+from typing import Final, Literal
+
+GRAPH_INDEX_BUILD_JOB_TYPE: Final[Literal["graph_index_build"]] = "graph_index_build"
 
 GRAPH_INDEX_RUN_STATUSES = frozenset(
     {
