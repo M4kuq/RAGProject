@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.errors import ResourceNotFound
+from app.db.graph_models import GraphIndexRun
 from app.db.models import DocumentVersion
 from app.graph.constants import DEFAULT_GRAPH_EXTRACTOR_TYPE, GRAPH_INDEX_BUILD_JOB_TYPE
 from app.repositories.graph_repository import GraphRepository
@@ -28,7 +29,7 @@ class GraphIndexService:
         extractor_type: str = DEFAULT_GRAPH_EXTRACTOR_TYPE,
         extractor_version: str | None = None,
         metadata_json: dict[str, object] | None = None,
-    ):
+    ) -> GraphIndexRun:
         if db.get(DocumentVersion, document_version_id) is None:
             raise ResourceNotFound()
         return self.repository.create_graph_index_run(
@@ -54,7 +55,7 @@ class GraphIndexService:
             graph_index_run_id=graph_index_run_id,
         ).model_dump(exclude_none=True)
 
-    def mark_index_run_running(self, db: Session, *, graph_index_run_id: int):
+    def mark_index_run_running(self, db: Session, *, graph_index_run_id: int) -> GraphIndexRun:
         run = self.repository.get_graph_index_run(db, graph_index_run_id, for_update=True)
         if run is None:
             raise ResourceNotFound()
@@ -67,7 +68,7 @@ class GraphIndexService:
         *,
         graph_index_run_id: int,
         summary: GraphIndexSummary,
-    ):
+    ) -> GraphIndexRun:
         run = self.repository.get_graph_index_run(db, graph_index_run_id, for_update=True)
         if run is None:
             raise ResourceNotFound()
@@ -87,7 +88,7 @@ class GraphIndexService:
         graph_index_run_id: int,
         error_code: str,
         error_message: str | None = None,
-    ):
+    ) -> GraphIndexRun:
         run = self.repository.get_graph_index_run(db, graph_index_run_id, for_update=True)
         if run is None:
             raise ResourceNotFound()
