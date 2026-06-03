@@ -14,6 +14,7 @@ from app.db.graph_models import (
     GraphRelation,
     GraphRetrievalPath,
 )
+from app.db.models import DocumentChunk
 from app.schemas.graph import (
     GraphEntityCreate,
     GraphEntityMentionCreate,
@@ -22,6 +23,8 @@ from app.schemas.graph import (
     GraphRetrievalPathCreate,
     validate_safe_graph_metadata,
 )
+
+_TERMINAL_GRAPH_INDEX_STATUSES = frozenset({"succeeded", "failed", "cancelled", "skipped"})
 
 
 class GraphRepository:
@@ -96,6 +99,11 @@ class GraphRepository:
         db: Session,
         data: GraphEntityMentionCreate,
     ) -> GraphEntityMention:
+        _assert_chunk_belongs_to_version(
+            db,
+            document_chunk_id=data.document_chunk_id,
+            document_version_id=data.document_version_id,
+        )
         mention = GraphEntityMention(
             graph_entity_id=data.graph_entity_id,
             document_chunk_id=data.document_chunk_id,
@@ -144,6 +152,7 @@ class GraphRepository:
         run: GraphIndexRun,
         started_at: datetime | None = None,
     ) -> None:
+        _assert_graph_index_run_transition(run, allowed_statuses={"queued"}, target_status="running")
         now = started_at or datetime.now(UTC)
         run.status = "running"
         run.started_at = now
@@ -163,6 +172,7 @@ class GraphRepository:
         mention_count: int,
         finished_at: datetime | None = None,
     ) -> None:
+        _assert_graph_index_run_transition(run, allowed_statuses={"running"}, target_status="succeeded")
         now = finished_at or datetime.now(UTC)
         run.status = "succeeded"
         run.entity_count = entity_count
@@ -183,6 +193,11 @@ class GraphRepository:
         error_message: str | None,
         finished_at: datetime | None = None,
     ) -> None:
+        _assert_graph_index_run_transition(
+            run,
+            allowed_statuses={"queued", "running"},
+            target_status="failed",
+        )
         now = finished_at or datetime.now(UTC)
         run.status = "failed"
         run.error_code = error_code
@@ -221,6 +236,33 @@ class GraphRepository:
             )
         )
         return list(db.scalars(statement).all())
+
+
+def _assert_chunk_belongs_to_version(
+    db: Session,
+    *,
+    document_chunk_id: int,
+    document_version_id: int,
+) -> None:
+    actual_version_id = db.scalar(
+        select(DocumentChunk.document_version_id).where(
+            DocumentChunk.document_chunk_id == document_chunk_id,
+        )
+    )
+    if actual_version_id is None:
+        raise ValueError("document_chunk_id must reference an existing document chunk")
+    if int(actual_version_id) != document_version_id:
+        raise ValueError("document_chunk_id must belong to document_version_id")
+
+
+def _assert_graph_index_run_transition(
+    run: GraphIndexRun,
+    *,
+    allowed_statuses: set[str],
+    target_status: str,
+) -> None:
+    if run.status in _TERMINAL_GRAPH_INDEX_STATUSES or run.status not in allowed_statuses:
+        raise ValueError(f"cannot transition graph_index_run from {run.status} to {target_status}")
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:

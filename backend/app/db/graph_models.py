@@ -176,7 +176,9 @@ class GraphEntityMention(Base):
             "graph_entity_id",
             "document_chunk_id",
             "mention_text_hash",
-            name="uq_graph_entity_mentions_entity_chunk_hash",
+            "mention_offset_start",
+            "mention_offset_end",
+            name="uq_graph_entity_mentions_entity_chunk_hash_offsets",
         ),
     )
 
@@ -323,6 +325,15 @@ Index(
     GraphRelation.relation_type,
 )
 Index("ix_graph_relations_source_chunk", GraphRelation.source_document_chunk_id)
+Index(
+    "ux_graph_relations_source_target_type_no_chunk",
+    GraphRelation.source_entity_id,
+    GraphRelation.target_entity_id,
+    GraphRelation.relation_type,
+    unique=True,
+    postgresql_where=GraphRelation.source_document_chunk_id.is_(None),
+    sqlite_where=GraphRelation.source_document_chunk_id.is_(None),
+)
 Index("ix_graph_entity_mentions_entity", GraphEntityMention.graph_entity_id)
 Index("ix_graph_entity_mentions_chunk", GraphEntityMention.document_chunk_id)
 Index("ix_graph_entity_mentions_version", GraphEntityMention.document_version_id)

@@ -52,6 +52,7 @@ _SAFE_PAYLOAD_KEYS = frozenset(
     {
         "logical_document_id",
         "document_version_id",
+        "graph_index_run_id",
         "requested_by_user_id",
         "evaluation_run_id",
         "chat_session_id",

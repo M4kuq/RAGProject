@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -11,6 +12,13 @@ from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE, GRAPH_INDEX_RUN_STAT
 
 GraphIndexRunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "skipped"]
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UNSAFE_LABEL_RE = re.compile(
+    r"(raw[_ -]?(document|chunk|prompt)|full[_ -]?context|"
+    r"evidence[_ -]?text|mention[_ -]?text|"
+    r"password\s*[:=]|secret\s*[:=]|token\s*[:=]|credential\s*[:=]|"
+    r"api[_ -]?key\s*[:=]|bearer\s+)",
+    re.IGNORECASE,
+)
 _FORBIDDEN_METADATA_KEYS = {
     "raw_document_text",
     "raw_chunk_text",
@@ -32,7 +40,7 @@ class GraphEntityCreate(BaseModel):
     canonical_name: str = Field(min_length=1, max_length=255)
     entity_type: str = Field(min_length=1, max_length=80)
     aliases_json: list[str] = Field(default_factory=list)
-    description: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=240)
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("canonical_name", "entity_type")
@@ -42,6 +50,28 @@ class GraphEntityCreate(BaseModel):
         if not normalized:
             raise ValueError("value must not be empty")
         return normalized
+
+    @field_validator("aliases_json")
+    @classmethod
+    def validate_aliases(cls, value: list[str]) -> list[str]:
+        if len(value) > 32:
+            raise ValueError("aliases_json must contain at most 32 aliases")
+        normalized_aliases: list[str] = []
+        seen: set[str] = set()
+        for alias in value:
+            normalized = validate_safe_graph_label(alias, field_name="aliases_json", max_length=120)
+            dedupe_key = normalized.lower()
+            if dedupe_key not in seen:
+                normalized_aliases.append(normalized)
+                seen.add(dedupe_key)
+        return normalized_aliases
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_graph_label(value, field_name="description", max_length=240)
 
     @field_validator("metadata_json")
     @classmethod
@@ -64,7 +94,7 @@ class GraphRelationCreate(BaseModel):
     source_entity_id: int = Field(gt=0)
     target_entity_id: int = Field(gt=0)
     relation_type: str = Field(min_length=1, max_length=120)
-    relation_label: str | None = Field(default=None, max_length=255)
+    relation_label: str | None = Field(default=None, max_length=120)
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     source_document_chunk_id: int | None = Field(default=None, gt=0)
     evidence_text_hash: str | None = None
@@ -77,6 +107,13 @@ class GraphRelationCreate(BaseModel):
         if not normalized:
             raise ValueError("relation_type must not be empty")
         return normalized
+
+    @field_validator("relation_label")
+    @classmethod
+    def validate_relation_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_graph_label(value, field_name="relation_label", max_length=120)
 
     @field_validator("evidence_text_hash", mode="after")
     @classmethod
@@ -195,6 +232,14 @@ class GraphRetrievalPathCreate(BaseModel):
     def validate_path_metadata(cls, value: dict[str, object]) -> dict[str, object]:
         return validate_safe_graph_metadata(value)
 
+    @field_validator("source_chunk_ids_json")
+    @classmethod
+    def validate_source_chunk_ids(cls, value: list[int]) -> list[int]:
+        for chunk_id in value:
+            if isinstance(chunk_id, bool) or not isinstance(chunk_id, int) or chunk_id <= 0:
+                raise ValueError("source_chunk_ids_json must contain positive integer ids")
+        return value
+
 
 class GraphRetrievalPathRead(BaseModel):
     graph_retrieval_path_id: int
@@ -231,20 +276,47 @@ def validate_graph_index_status(value: str) -> str:
     return value
 
 
+def validate_safe_graph_label(value: str, *, field_name: str, max_length: int) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if any(char in normalized for char in ("\n", "\r", "\t")):
+        raise ValueError(f"{field_name} must be a single-line safe label")
+    if len(normalized) > max_length:
+        raise ValueError(f"{field_name} is too long")
+    if _UNSAFE_LABEL_RE.search(normalized):
+        raise ValueError(f"{field_name} contains unsafe graph text")
+    return normalized
+
+
 def validate_safe_graph_metadata(value: dict[str, object]) -> dict[str, object]:
     _assert_safe_mapping(value)
     return value
 
 
-def _assert_safe_mapping(value: dict[str, object], *, parent_key: str = "") -> None:
+def _assert_safe_mapping(value: Mapping[object, object], *, parent_key: str = "") -> None:
     for raw_key, raw_value in value.items():
         key = str(raw_key)
         lowered = key.lower()
-        if lowered.endswith("_hash"):
-            pass
-        elif any(part in lowered for part in _FORBIDDEN_METADATA_KEYS):
-            raise ValueError(f"unsafe graph metadata key: {parent_key}{key}")
-        if isinstance(raw_value, dict):
-            _assert_safe_mapping(raw_value, parent_key=f"{parent_key}{key}.")
-        elif isinstance(raw_value, str) and len(raw_value) > 1000:
-            raise ValueError(f"graph metadata string is too long: {parent_key}{key}")
+        has_forbidden_part = any(part in lowered for part in _FORBIDDEN_METADATA_KEYS)
+        if has_forbidden_part:
+            if lowered.endswith("_hash"):
+                if not isinstance(raw_value, str) or not _SHA256_RE.fullmatch(raw_value):
+                    raise ValueError(f"unsafe graph metadata hash value: {parent_key}{key}")
+            else:
+                raise ValueError(f"unsafe graph metadata key: {parent_key}{key}")
+        _assert_safe_metadata_value(raw_value, parent_key=f"{parent_key}{key}")
+
+
+def _assert_safe_metadata_value(value: object, *, parent_key: str) -> None:
+    if isinstance(value, Mapping):
+        _assert_safe_mapping(value, parent_key=f"{parent_key}.")
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        for index, item in enumerate(value):
+            _assert_safe_metadata_value(item, parent_key=f"{parent_key}[{index}]")
+        return
+    if isinstance(value, str) and len(value) > 1000:
+        raise ValueError(f"graph metadata string is too long: {parent_key}")
+    if isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"graph metadata bytes are not allowed: {parent_key}")

@@ -30,8 +30,11 @@ class GraphIndexService:
         extractor_version: str | None = None,
         metadata_json: dict[str, object] | None = None,
     ) -> GraphIndexRun:
-        if db.get(DocumentVersion, document_version_id) is None:
+        version = db.get(DocumentVersion, document_version_id)
+        if version is None:
             raise ResourceNotFound()
+        if version.status != "ready":
+            raise ValueError("document_version_id must reference a ready document version")
         return self.repository.create_graph_index_run(
             db,
             GraphIndexRunCreate(
