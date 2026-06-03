@@ -15,6 +15,7 @@ from app.core.job_utils import (
     sanitize_result_json,
 )
 from app.db.models import Job
+from app.workers.worker_config import SUPPORTED_JOB_TYPES
 
 
 class JobRepository:
@@ -100,7 +101,9 @@ class JobRepository:
                 ),
             )
         ]
-        if enabled_job_types is not None:
+        if enabled_job_types is None:
+            conditions.append(Job.job_type.in_(SUPPORTED_JOB_TYPES))
+        else:
             conditions.append(Job.job_type.in_(enabled_job_types))
 
         stmt = (

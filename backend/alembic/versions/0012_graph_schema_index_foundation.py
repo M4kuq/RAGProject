@@ -377,6 +377,14 @@ def upgrade() -> None:
         "graph_entity_mentions",
         ["document_version_id"],
     )
+    op.execute(
+        "CREATE UNIQUE INDEX ux_graph_entity_mentions_entity_chunk_hash_offsets_coalesced "
+        "ON graph_entity_mentions ("
+        "graph_entity_id, document_chunk_id, "
+        "COALESCE(mention_text_hash, ''), "
+        "COALESCE(mention_offset_start, -1), "
+        "COALESCE(mention_offset_end, -1))"
+    )
 
     op.create_table(
         "graph_retrieval_paths",

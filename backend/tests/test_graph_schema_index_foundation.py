@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -35,6 +35,7 @@ from app.db.models import (
 )
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE, PHASE3_GRAPH_SYSTEM_SETTINGS
 from app.repositories.graph_repository import GraphRepository
+from app.repositories.job_repository import JobRepository
 from app.schemas.graph import (
     GraphEntityCreate,
     GraphEntityMentionCreate,
@@ -293,6 +294,12 @@ def test_graph_schemas_reject_unsafe_text_and_invalid_hashes() -> None:
         GraphEntityCreate(
             canonical_name="Unsafe",
             entity_type="concept",
+            metadata_json={"note": "api_key=redacted"},
+        )
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
             aliases_json=["unsafe label with password=value"],
         )
     with pytest.raises(ValidationError):
@@ -302,11 +309,27 @@ def test_graph_schemas_reject_unsafe_text_and_invalid_hashes() -> None:
             description="unsafe label with secret=value",
         )
     with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="password=value",
+            entity_type="concept",
+        )
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="raw chunk label",
+        )
+    with pytest.raises(ValidationError):
         GraphRelationCreate(
             source_entity_id=1,
             target_entity_id=2,
             relation_type="supports",
             relation_label="unsafe label with token=value",
+        )
+    with pytest.raises(ValidationError):
+        GraphRelationCreate(
+            source_entity_id=1,
+            target_entity_id=2,
+            relation_type="secret=value",
         )
     with pytest.raises(ValidationError):
         GraphRetrievalPathCreate(
@@ -320,6 +343,23 @@ def test_graph_schemas_reject_unsafe_text_and_invalid_hashes() -> None:
         entity_type="concept",
         metadata_json={"raw_chunk_text_hash": HASH_A},
     ).metadata_json == {"raw_chunk_text_hash": HASH_A}
+
+
+def test_graph_schemas_reject_boolean_ids() -> None:
+    with pytest.raises(ValidationError):
+        GraphRelationCreate(source_entity_id=True, target_entity_id=2, relation_type="supports")
+    with pytest.raises(ValidationError):
+        GraphEntityMentionCreate(graph_entity_id=True, document_chunk_id=1, document_version_id=1)
+    with pytest.raises(ValidationError):
+        GraphRetrievalPathCreate(retrieval_run_id=True, path_json={"path_ref": "p1"})
+    with pytest.raises(ValidationError):
+        GraphRetrievalPathCreate(
+            retrieval_run_id=1,
+            path_json={"path_ref": "p1"},
+            source_chunk_ids_json=[True],
+        )
+    with pytest.raises(ValidationError):
+        GraphIndexJobPayload(document_version_id=True)
 
 
 def test_graph_entity_mentions_require_chunk_version_match(
@@ -352,6 +392,26 @@ def test_graph_entity_mentions_require_chunk_version_match(
                     mention_offset_end=5,
                 ),
             )
+
+
+def test_graph_entity_mentions_without_hash_offsets_are_idempotent(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    repository = GraphRepository()
+    with graph_session_factory() as db:
+        version, chunk = _seed_document_version_and_chunk(db)
+        entity = repository.create_entity(
+            db,
+            GraphEntityCreate(canonical_name="Nullable Mention", entity_type="concept"),
+        )
+        mention_data = GraphEntityMentionCreate(
+            graph_entity_id=entity.graph_entity_id,
+            document_chunk_id=chunk.document_chunk_id,
+            document_version_id=version.document_version_id,
+        )
+        repository.create_entity_mention(db, mention_data)
+        with pytest.raises(IntegrityError):
+            repository.create_entity_mention(db, mention_data)
 
 
 def test_graph_relation_without_source_chunk_is_idempotent(
@@ -403,6 +463,28 @@ def test_graph_job_type_is_future_skeleton_not_worker_enabled_by_default() -> No
     assert GRAPH_INDEX_BUILD_JOB_TYPE == "graph_index_build"
     with pytest.raises(WorkerConfigError):
         parse_enabled_job_types(GRAPH_INDEX_BUILD_JOB_TYPE)
+
+
+def test_default_worker_does_not_acquire_future_graph_jobs(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    job_repository = JobRepository()
+    with graph_session_factory() as db:
+        graph_job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            payload_json={"document_version_id": 1, "graph_index_run_id": 1},
+        )
+        supported_job = job_repository.create_job(db, job_type="temporary_chat_cleanup")
+        acquired = job_repository.acquire_jobs(
+            db,
+            worker_instance_id="worker-1",
+            enabled_job_types=None,
+            lease_duration=timedelta(seconds=30),
+            batch_size=10,
+        )
+        assert [job.job_id for job in acquired] == [supported_job.job_id]
+        assert graph_job.status == "queued"
 
 
 def test_graph_system_settings_defaults_are_safe() -> None:
@@ -473,6 +555,7 @@ def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: 
         "ix_graph_entity_mentions_entity",
         "ix_graph_entity_mentions_chunk",
         "ix_graph_entity_mentions_version",
+        "ux_graph_entity_mentions_entity_chunk_hash_offsets_coalesced",
         "ix_graph_index_runs_document_status",
         "ix_graph_retrieval_paths_retrieval_run",
     }

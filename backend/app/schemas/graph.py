@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE, GRAPH_INDEX_RUN_STATUSES
 
@@ -43,13 +43,15 @@ class GraphEntityCreate(BaseModel):
     description: str | None = Field(default=None, max_length=240)
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("canonical_name", "entity_type")
+    @field_validator("canonical_name")
     @classmethod
-    def normalize_non_empty(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("value must not be empty")
-        return normalized
+    def validate_canonical_name(cls, value: str) -> str:
+        return validate_safe_graph_label(value, field_name="canonical_name", max_length=255)
+
+    @field_validator("entity_type")
+    @classmethod
+    def validate_entity_type(cls, value: str) -> str:
+        return validate_safe_graph_label(value, field_name="entity_type", max_length=80)
 
     @field_validator("aliases_json")
     @classmethod
@@ -91,22 +93,19 @@ class GraphEntityRead(BaseModel):
 
 
 class GraphRelationCreate(BaseModel):
-    source_entity_id: int = Field(gt=0)
-    target_entity_id: int = Field(gt=0)
+    source_entity_id: StrictInt = Field(gt=0)
+    target_entity_id: StrictInt = Field(gt=0)
     relation_type: str = Field(min_length=1, max_length=120)
     relation_label: str | None = Field(default=None, max_length=120)
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
-    source_document_chunk_id: int | None = Field(default=None, gt=0)
+    source_document_chunk_id: StrictInt | None = Field(default=None, gt=0)
     evidence_text_hash: str | None = None
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("relation_type")
     @classmethod
-    def normalize_relation_type(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("relation_type must not be empty")
-        return normalized
+    def validate_relation_type(cls, value: str) -> str:
+        return validate_safe_graph_label(value, field_name="relation_type", max_length=120)
 
     @field_validator("relation_label")
     @classmethod
@@ -146,9 +145,9 @@ class GraphRelationRead(BaseModel):
 
 
 class GraphEntityMentionCreate(BaseModel):
-    graph_entity_id: int = Field(gt=0)
-    document_chunk_id: int = Field(gt=0)
-    document_version_id: int = Field(gt=0)
+    graph_entity_id: StrictInt = Field(gt=0)
+    document_chunk_id: StrictInt = Field(gt=0)
+    document_version_id: StrictInt = Field(gt=0)
     mention_text_hash: str | None = None
     mention_offset_start: int | None = Field(default=None, ge=0)
     mention_offset_end: int | None = Field(default=None, ge=0)
@@ -190,8 +189,8 @@ class GraphEntityMentionRead(BaseModel):
 
 
 class GraphIndexRunCreate(BaseModel):
-    document_version_id: int | None = Field(default=None, gt=0)
-    job_id: int | None = Field(default=None, gt=0)
+    document_version_id: StrictInt | None = Field(default=None, gt=0)
+    job_id: StrictInt | None = Field(default=None, gt=0)
     extractor_type: str = Field(default="none", min_length=1, max_length=80)
     extractor_version: str | None = Field(default=None, max_length=80)
     metadata_json: dict[str, object] = Field(default_factory=dict)
@@ -222,10 +221,10 @@ class GraphIndexRunRead(BaseModel):
 
 
 class GraphRetrievalPathCreate(BaseModel):
-    retrieval_run_id: int = Field(gt=0)
+    retrieval_run_id: StrictInt = Field(gt=0)
     path_json: dict[str, object]
     score_breakdown_json: dict[str, object] = Field(default_factory=dict)
-    source_chunk_ids_json: list[int] = Field(default_factory=list)
+    source_chunk_ids_json: list[StrictInt] = Field(default_factory=list)
 
     @field_validator("path_json", "score_breakdown_json")
     @classmethod
@@ -252,8 +251,8 @@ class GraphRetrievalPathRead(BaseModel):
 
 class GraphIndexJobPayload(BaseModel):
     job_type: Literal["graph_index_build"] = GRAPH_INDEX_BUILD_JOB_TYPE
-    document_version_id: int = Field(gt=0)
-    graph_index_run_id: int | None = Field(default=None, gt=0)
+    document_version_id: StrictInt = Field(gt=0)
+    graph_index_run_id: StrictInt | None = Field(default=None, gt=0)
 
 
 class GraphIndexSummary(BaseModel):
@@ -316,7 +315,10 @@ def _assert_safe_metadata_value(value: object, *, parent_key: str) -> None:
         for index, item in enumerate(value):
             _assert_safe_metadata_value(item, parent_key=f"{parent_key}[{index}]")
         return
-    if isinstance(value, str) and len(value) > 1000:
-        raise ValueError(f"graph metadata string is too long: {parent_key}")
+    if isinstance(value, str):
+        if len(value) > 1000:
+            raise ValueError(f"graph metadata string is too long: {parent_key}")
+        if _UNSAFE_LABEL_RE.search(value):
+            raise ValueError(f"graph metadata string contains unsafe content: {parent_key}")
     if isinstance(value, (bytes, bytearray)):
         raise ValueError(f"graph metadata bytes are not allowed: {parent_key}")

@@ -338,6 +338,15 @@ Index("ix_graph_entity_mentions_entity", GraphEntityMention.graph_entity_id)
 Index("ix_graph_entity_mentions_chunk", GraphEntityMention.document_chunk_id)
 Index("ix_graph_entity_mentions_version", GraphEntityMention.document_version_id)
 Index(
+    "ux_graph_entity_mentions_entity_chunk_hash_offsets_coalesced",
+    GraphEntityMention.graph_entity_id,
+    GraphEntityMention.document_chunk_id,
+    func.coalesce(GraphEntityMention.mention_text_hash, ""),
+    func.coalesce(GraphEntityMention.mention_offset_start, -1),
+    func.coalesce(GraphEntityMention.mention_offset_end, -1),
+    unique=True,
+)
+Index(
     "ix_graph_index_runs_document_status",
     GraphIndexRun.document_version_id,
     GraphIndexRun.status,
