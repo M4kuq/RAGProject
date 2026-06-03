@@ -26,8 +26,8 @@ from app.db.models import big_int, jsonb, pg_check
 class GraphEntity(Base):
     __tablename__ = "graph_entities"
     __table_args__ = (
-        CheckConstraint("btrim(canonical_name) <> ''", name="ck_graph_entities_name"),
-        CheckConstraint("btrim(entity_type) <> ''", name="ck_graph_entities_type"),
+        pg_check("btrim(canonical_name) <> ''", name="ck_graph_entities_name"),
+        pg_check("btrim(entity_type) <> ''", name="ck_graph_entities_type"),
     )
 
     graph_entity_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
@@ -88,7 +88,7 @@ class GraphRelation(Base):
             "source_entity_id <> target_entity_id",
             name="ck_graph_relations_no_self",
         ),
-        CheckConstraint("btrim(relation_type) <> ''", name="ck_graph_relations_type"),
+        pg_check("btrim(relation_type) <> ''", name="ck_graph_relations_type"),
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="ck_graph_relations_confidence",
