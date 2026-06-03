@@ -1,30 +1,44 @@
 # Phase3 Handoff
 
-Phase2.5 finishes the local Advanced Retrieval, Context Engineering, MCP Auto, and local Kubernetes baseline handoff. Phase3 should build on this foundation without weakening the Phase2/Phase2.5 redaction and bounded-execution rules.
+Phase2.5 finishes the local Advanced Retrieval, Context Engineering, MCP Auto, and local Kubernetes baseline handoff. PR-45 starts Phase3 by fixing the Graph-RAG design baseline under [`docs/phase3/README.md`](../phase3/README.md).
 
-## Phase3 Candidate
+Phase3 should build on this foundation without weakening the Phase2/Phase2.5 redaction and bounded-execution rules.
 
-Use this as the next PR candidate:
+## Phase3 Start PR
+
+Use this as the active Phase3 start PR:
 
 ```text
-Phase3 Design Baseline / Graph-RAG Planning
+PR-45 Phase3 Design Baseline / Graph-RAG Planning
 ```
+
+Design baseline entry points:
+
+- [Phase3 README](../phase3/README.md)
+- [Phase3 Roadmap](../phase3/phase3_roadmap.md)
+- [Graph-RAG Architecture](../phase3/graph_rag_architecture.md)
+- [Graph Schema Draft](../phase3/graph_schema_draft.md)
+- [Security / Redaction Policy](../phase3/security_redaction_policy.md)
 
 ## Candidate Phase3 PRs
 
 | Candidate | Scope |
 |---|---|
-| Phase3 Design Baseline / Graph-RAG Planning | Lock Graph-RAG, OCR, multimodal, provider, deployment, and auth boundaries before implementation. |
-| Graph-RAG schema foundation | Add graph entities, relations, mentions, and graph index run tracking. |
-| Entity / Relation Extraction | Extract safe graph candidates from approved document chunks. |
-| Graph-aware Router | Add graph-aware strategy decisions and fallback rules. |
-| Graph + Vector Hybrid | Combine graph paths with dense/hybrid retrieval evidence. |
-| Graph Citation | Connect graph nodes/edges/path evidence to citation mapping. |
-| OCR / PaddleOCR | Add scanned document/image OCR with confidence and region metadata. |
-| Image upload | Extend approved upload and processing paths for images. |
-| Multimodal citation UI | Navigate OCR/image regions without exposing raw private content. |
-| External LLM provider | Add optional provider switching with explicit secret handling. |
-| Online evaluation / A-B / Alerting | Add production evaluation, alerting, and monitoring loops. |
+| PR-45 Phase3 Design Baseline / Graph-RAG Planning | Lock Graph-RAG, OCR, multimodal, provider, deployment, auth, evaluation, and redaction boundaries before implementation. |
+| PR-46 Graph Schema / Graph Index Foundation | Add graph entities, relations, mentions, graph index runs, and retrieval path tracking. |
+| PR-47 Entity / Relation Extraction Pipeline | Extract safe graph candidates from approved document chunks. |
+| PR-48 Graph Retrieval Strategy / Graph-aware Router | Add graph-aware strategy decisions and fallback rules. |
+| PR-49 Graph + Vector Hybrid / Graph Citation | Combine graph paths with dense/hybrid retrieval evidence and source citations. |
+| PR-50 Graph Debug UI / Graph Evaluation | Add admin-safe graph panels and graph quality metrics. |
+| PR-51 OCR / PaddleOCR | Add scanned document/image OCR with confidence and region metadata. |
+| PR-52 Image Upload | Extend approved upload and processing paths for images. |
+| PR-53 Multimodal Citation UI | Navigate OCR/image regions without exposing raw private content. |
+| PR-54 External LLM Provider | Add optional provider switching with explicit secret/export handling. |
+| PR-55 S3 Storage Adapter | Add optional object storage path. |
+| PR-56 OIDC / OAuth | Add external identity while preserving viewer/admin boundaries. |
+| PR-57 AWS Deploy Foundation | Add cloud deployment foundation outside local `k8s/local`. |
+| PR-58 Online Evaluation / A-B / Alerting | Add production evaluation, alerting, and monitoring loops. |
+| PR-59 Phase3 Final Hardening | Finalize demo, acceptance, smoke, docs, and handoff. |
 
 ## Context Engineering Handoff
 
@@ -50,7 +64,7 @@ Phase3 must extend the Phase2.5 Context Engineering path instead of bypassing it
 ## Security Handoff
 
 - Keep external calls opt-in and secret-free by default.
-- Do not store raw prompts, full context, raw chunk text, full fetched bodies, raw OCR text, raw image data, raw graph path dumps, tokens, credentials, or secret-like URL values in trace, evaluation artifacts, logs, UI, or MCP output.
+- Do not store raw prompts, full context, raw chunk text, full fetched bodies, raw OCR text, raw image data, raw graph path dumps, credential values, or secret-like URL values in trace, evaluation artifacts, logs, UI, or MCP output.
 - Preserve viewer/admin authorization differences for citation previews, document diff, and retrieval debug.
 - Continue to reject or sandbox high-risk inputs such as SVG, macro-enabled Office files, private URL targets, embedded executable content, and unsafe redirects.
 - Treat RAG context as evidence only, not as system instruction.
