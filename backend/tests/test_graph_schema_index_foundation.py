@@ -30,6 +30,7 @@ from app.db.models import (
     DocumentVersion,
     LogicalDocument,
     RetrievalRun,
+    RetrievalRunItem,
     Role,
     User,
 )
@@ -108,6 +109,12 @@ def test_graph_orm_tables_do_not_store_raw_text_columns() -> None:
     assert "mention_text_hash" in GraphEntityMention.__table__.columns
     assert "source_document_chunk_id" in GraphRelation.__table__.columns
     assert "source_chunk_ids_json" in GraphRetrievalPath.__table__.columns
+    source_chunk_fk = next(
+        constraint
+        for constraint in GraphRelation.__table__.foreign_key_constraints
+        if any(column.name == "source_document_chunk_id" for column in constraint.columns)
+    )
+    assert source_chunk_fk.ondelete == "CASCADE"
 
 
 def test_graph_repository_and_service_lifecycle(
@@ -119,6 +126,16 @@ def test_graph_repository_and_service_lifecycle(
         version, chunk = _seed_document_version_and_chunk(db)
         retrieval_run = RetrievalRun(status="running", started_at=datetime.now(UTC), top_k=5)
         db.add(retrieval_run)
+        db.flush()
+        db.add(
+            RetrievalRunItem(
+                retrieval_run_id=retrieval_run.retrieval_run_id,
+                document_chunk_id=chunk.document_chunk_id,
+                retrieval_score=Decimal("0.900000"),
+                rank_order=1,
+                selected_flag=True,
+            )
+        )
         db.flush()
 
         source = repository.create_entity(
@@ -332,6 +349,10 @@ def test_graph_schemas_reject_unsafe_text_and_invalid_hashes() -> None:
             relation_type="secret=value",
         )
     with pytest.raises(ValidationError):
+        GraphIndexRunCreate(extractor_type="secret=value")
+    with pytest.raises(ValidationError):
+        GraphIndexRunCreate(extractor_version="raw chunk text")
+    with pytest.raises(ValidationError):
         GraphRetrievalPathCreate(
             retrieval_run_id=1,
             path_json={"path_ref": "p1"},
@@ -435,6 +456,44 @@ def test_graph_relation_without_source_chunk_is_idempotent(
         repository.create_relation(db, relation_data)
         with pytest.raises(IntegrityError):
             repository.create_relation(db, relation_data)
+
+
+def test_graph_retrieval_path_requires_retrieval_run_items(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    repository = GraphRepository()
+    with graph_session_factory() as db:
+        version, chunk = _seed_document_version_and_chunk(db)
+        _, other_chunk = _seed_document_version_and_chunk(
+            db,
+            version_no=2,
+            status="ready",
+            is_active=False,
+            logical_document_id=version.logical_document_id,
+            created_by=version.created_by,
+        )
+        retrieval_run = RetrievalRun(status="running", started_at=datetime.now(UTC), top_k=5)
+        db.add(retrieval_run)
+        db.flush()
+        db.add(
+            RetrievalRunItem(
+                retrieval_run_id=retrieval_run.retrieval_run_id,
+                document_chunk_id=chunk.document_chunk_id,
+                retrieval_score=Decimal("0.500000"),
+                rank_order=1,
+            )
+        )
+        db.flush()
+
+        with pytest.raises(ValueError):
+            repository.create_graph_retrieval_path(
+                db,
+                GraphRetrievalPathCreate(
+                    retrieval_run_id=retrieval_run.retrieval_run_id,
+                    path_json={"path_ref": "p1"},
+                    source_chunk_ids_json=[other_chunk.document_chunk_id],
+                ),
+            )
 
 
 def test_graph_index_service_missing_version_raises(
