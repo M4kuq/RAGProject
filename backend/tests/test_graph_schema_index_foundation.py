@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
 from app.core.errors import ResourceNotFound
+from app.core.job_utils import sanitize_job_payload
 from app.db import graph_models  # noqa: F401
 from app.db.base import Base
 from app.db.graph_models import (
@@ -172,6 +173,19 @@ def test_graph_repository_and_service_lifecycle(
             ),
         )
         assert mention.mention_text_hash == HASH_B
+        repeated_mention = repository.create_entity_mention(
+            db,
+            GraphEntityMentionCreate(
+                graph_entity_id=source.graph_entity_id,
+                document_chunk_id=chunk.document_chunk_id,
+                document_version_id=version.document_version_id,
+                mention_text_hash=HASH_B,
+                mention_offset_start=6,
+                mention_offset_end=11,
+                confidence=Decimal("0.70000"),
+            ),
+        )
+        assert repeated_mention.graph_entity_mention_id != mention.graph_entity_mention_id
 
         run = service.create_index_run_for_document_version(
             db,
@@ -187,17 +201,26 @@ def test_graph_repository_and_service_lifecycle(
             "document_version_id": version.document_version_id,
             "graph_index_run_id": run.graph_index_run_id,
         }
+        assert sanitize_job_payload(payload)["graph_index_run_id"] == run.graph_index_run_id
 
         service.mark_index_run_running(db, graph_index_run_id=run.graph_index_run_id)
         service.record_index_summary(
             db,
             graph_index_run_id=run.graph_index_run_id,
-            summary=GraphIndexSummary(entity_count=1, relation_count=1, mention_count=1),
+            summary=GraphIndexSummary(entity_count=1, relation_count=1, mention_count=2),
         )
         assert run.status == "succeeded"
         assert run.entity_count == 1
         assert run.relation_count == 1
-        assert run.mention_count == 1
+        assert run.mention_count == 2
+        with pytest.raises(ValueError):
+            service.mark_index_run_running(db, graph_index_run_id=run.graph_index_run_id)
+        with pytest.raises(ValueError):
+            service.record_index_summary(
+                db,
+                graph_index_run_id=run.graph_index_run_id,
+                summary=GraphIndexSummary(entity_count=1, relation_count=1, mention_count=2),
+            )
 
         failed = repository.create_graph_index_run(
             db,
@@ -207,10 +230,16 @@ def test_graph_repository_and_service_lifecycle(
             db,
             graph_index_run_id=failed.graph_index_run_id,
             error_code="extractor_failed",
-            error_message="raw chunk text appeared in an unsafe failure",
+            error_message="unsafe failure included source text",
         )
         assert failed.status == "failed"
         assert failed.error_message == "Job failed with a redacted error."
+        with pytest.raises(ValueError):
+            service.mark_index_run_failed(
+                db,
+                graph_index_run_id=failed.graph_index_run_id,
+                error_code="extractor_failed",
+            )
 
         path = repository.create_graph_retrieval_path(
             db,
@@ -232,7 +261,7 @@ def test_graph_repository_and_service_lifecycle(
         ) == [path]
 
 
-def test_graph_schemas_reject_raw_text_and_invalid_hashes() -> None:
+def test_graph_schemas_reject_unsafe_text_and_invalid_hashes() -> None:
     with pytest.raises(ValidationError):
         GraphRelationCreate(
             source_entity_id=1,
@@ -252,9 +281,100 @@ def test_graph_schemas_reject_raw_text_and_invalid_hashes() -> None:
         GraphEntityCreate(
             canonical_name="Unsafe",
             entity_type="concept",
-            metadata_json={"raw_chunk_text": "do not store this"},
+            metadata_json={"items": [{"raw_chunk_text": "blocked"}]},
+        )
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            metadata_json={"raw_chunk_text_hash": "not-a-hash"},
+        )
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            aliases_json=["unsafe label with password=value"],
+        )
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            description="unsafe label with secret=value",
+        )
+    with pytest.raises(ValidationError):
+        GraphRelationCreate(
+            source_entity_id=1,
+            target_entity_id=2,
+            relation_type="supports",
+            relation_label="unsafe label with token=value",
+        )
+    with pytest.raises(ValidationError):
+        GraphRetrievalPathCreate(
+            retrieval_run_id=1,
+            path_json={"path_ref": "p1"},
+            source_chunk_ids_json=[1, 0],
         )
     assert GraphIndexJobPayload(document_version_id=1).job_type == GRAPH_INDEX_BUILD_JOB_TYPE
+    assert GraphEntityCreate(
+        canonical_name="Safe",
+        entity_type="concept",
+        metadata_json={"raw_chunk_text_hash": HASH_A},
+    ).metadata_json == {"raw_chunk_text_hash": HASH_A}
+
+
+def test_graph_entity_mentions_require_chunk_version_match(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    repository = GraphRepository()
+    with graph_session_factory() as db:
+        version, chunk = _seed_document_version_and_chunk(db)
+        other_version, _ = _seed_document_version_and_chunk(
+            db,
+            version_no=2,
+            status="ready",
+            is_active=False,
+            logical_document_id=version.logical_document_id,
+            created_by=version.created_by,
+        )
+        entity = repository.create_entity(
+            db,
+            GraphEntityCreate(canonical_name="Graph Entity", entity_type="concept"),
+        )
+        with pytest.raises(ValueError):
+            repository.create_entity_mention(
+                db,
+                GraphEntityMentionCreate(
+                    graph_entity_id=entity.graph_entity_id,
+                    document_chunk_id=chunk.document_chunk_id,
+                    document_version_id=other_version.document_version_id,
+                    mention_text_hash=HASH_B,
+                    mention_offset_start=0,
+                    mention_offset_end=5,
+                ),
+            )
+
+
+def test_graph_relation_without_source_chunk_is_idempotent(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    repository = GraphRepository()
+    with graph_session_factory() as db:
+        source = repository.create_entity(
+            db,
+            GraphEntityCreate(canonical_name="Source", entity_type="concept"),
+        )
+        target = repository.create_entity(
+            db,
+            GraphEntityCreate(canonical_name="Target", entity_type="concept"),
+        )
+        relation_data = GraphRelationCreate(
+            source_entity_id=source.graph_entity_id,
+            target_entity_id=target.graph_entity_id,
+            relation_type="supports",
+        )
+        repository.create_relation(db, relation_data)
+        with pytest.raises(IntegrityError):
+            repository.create_relation(db, relation_data)
 
 
 def test_graph_index_service_missing_version_raises(
@@ -264,6 +384,19 @@ def test_graph_index_service_missing_version_raises(
     with graph_session_factory() as db:
         with pytest.raises(ResourceNotFound):
             service.create_index_run_for_document_version(db, document_version_id=999)
+
+
+def test_graph_index_service_requires_ready_version(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    service = GraphIndexService()
+    with graph_session_factory() as db:
+        version, _ = _seed_document_version_and_chunk(db, status="processing", is_active=False)
+        with pytest.raises(ValueError):
+            service.create_index_run_for_document_version(
+                db,
+                document_version_id=version.document_version_id,
+            )
 
 
 def test_graph_job_type_is_future_skeleton_not_worker_enabled_by_default() -> None:
@@ -317,6 +450,7 @@ def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: 
         "ck_graph_index_runs_entity_count",
         "ck_graph_index_runs_failed_error_code",
         "ck_graph_paths_path_object",
+        "uq_graph_entity_mentions_entity_chunk_hash_offsets",
     }
     actual_constraints = _scalar_set(
         pg_engine,
@@ -335,6 +469,7 @@ def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: 
         "ix_graph_relations_source_type",
         "ix_graph_relations_target_type",
         "ix_graph_relations_source_chunk",
+        "ux_graph_relations_source_target_type_no_chunk",
         "ix_graph_entity_mentions_entity",
         "ix_graph_entity_mentions_chunk",
         "ix_graph_entity_mentions_version",
@@ -409,44 +544,59 @@ def test_graph_postgres_constraints_reject_invalid_values(pg_engine: Engine) -> 
             transaction.rollback()
 
 
-def _seed_document_version_and_chunk(db: Session) -> tuple[DocumentVersion, DocumentChunk]:
-    role = Role(role_name=f"role-{uuid.uuid4().hex[:8]}", description="Graph test")
-    db.add(role)
-    db.flush()
-    user = User(
-        role_id=role.role_id,
-        email=f"graph-{uuid.uuid4().hex[:8]}@example.com",
-        display_name="Graph Test",
-        status="active",
-    )
-    db.add(user)
-    db.flush()
-    logical = LogicalDocument(owner_user_id=user.user_id, title="Graph Test", status="active")
-    db.add(logical)
-    db.flush()
+def _seed_document_version_and_chunk(
+    db: Session,
+    *,
+    version_no: int = 1,
+    status: str = "ready",
+    is_active: bool = True,
+    logical_document_id: int | None = None,
+    created_by: int | None = None,
+) -> tuple[DocumentVersion, DocumentChunk]:
+    if logical_document_id is None or created_by is None:
+        role = Role(role_name=f"role-{uuid.uuid4().hex[:8]}", description="Graph test")
+        db.add(role)
+        db.flush()
+        user = User(
+            role_id=role.role_id,
+            email=f"graph-{uuid.uuid4().hex[:8]}@example.com",
+            display_name="Graph Test",
+            status="active",
+        )
+        db.add(user)
+        db.flush()
+        logical = LogicalDocument(owner_user_id=user.user_id, title="Graph Test", status="active")
+        db.add(logical)
+        db.flush()
+        logical_document_id = logical.logical_document_id
+        created_by = user.user_id
     version = DocumentVersion(
-        logical_document_id=logical.logical_document_id,
-        version_no=1,
-        content_hash=HASH_A,
-        status="ready",
-        is_active=True,
-        file_name="graph-test.txt",
+        logical_document_id=logical_document_id,
+        version_no=version_no,
+        content_hash=_hash_for_version(version_no),
+        status=status,
+        is_active=is_active,
+        file_name=f"graph-test-v{version_no}.txt",
         mime_type="text/plain",
         file_size_bytes=12,
-        created_by=user.user_id,
+        created_by=created_by,
     )
     db.add(version)
     db.flush()
     chunk = DocumentChunk(
         document_version_id=version.document_version_id,
         chunk_index=0,
-        chunk_hash=HASH_B,
+        chunk_hash=_hash_for_version(version_no + 100),
         content_text="graph test chunk",
         modality="text",
     )
     db.add(chunk)
     db.flush()
     return version, chunk
+
+
+def _hash_for_version(version_no: int) -> str:
+    return f"{version_no:064x}"[-64:]
 
 
 def _scalar_set(engine: Engine, sql: str) -> set[str]:
