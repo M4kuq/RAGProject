@@ -1,35 +1,5 @@
 # RAGProject
 
-## Phase2.5 Final Handoff
-
-Phase2.5 final demo, Context Engineering acceptance, local Kubernetes demo, known limitations, and Phase3/deploy handoff material lives under [`docs/phase2/phase2_5_readme.md`](docs/phase2/phase2_5_readme.md).
-
-Start with:
-
-- [`docs/phase2/phase2_5_readme.md`](docs/phase2/phase2_5_readme.md)
-- [`docs/phase2/phase2_5_demo_scenario.md`](docs/phase2/phase2_5_demo_scenario.md)
-- [`docs/phase2/context_engineering_readme.md`](docs/phase2/context_engineering_readme.md)
-- [`docs/phase2/context_engineering_manual_test_cases.md`](docs/phase2/context_engineering_manual_test_cases.md)
-- [`docs/phase2/context_engineering_acceptance_checklist.md`](docs/phase2/context_engineering_acceptance_checklist.md)
-- [`docs/phase2/context_engineering_known_limitations.md`](docs/phase2/context_engineering_known_limitations.md)
-- [`docs/phase2/kubernetes_baseline.md`](docs/phase2/kubernetes_baseline.md)
-- [`docs/phase2/phase3_handoff.md`](docs/phase2/phase3_handoff.md)
-- [`docs/phase2/deploy_aws_handoff.md`](docs/phase2/deploy_aws_handoff.md)
-
-Safe Phase2.5 smoke:
-
-```powershell
-scripts\smoke_phase2_5.ps1
-scripts\smoke_phase2_5.ps1 -K8sDryRun
-```
-
-```sh
-sh scripts/smoke_phase2_5.sh
-sh scripts/smoke_phase2_5.sh --k8s-dry-run
-```
-
-The Phase2.5 smoke does not run destructive cleanup, does not print `.env` values, does not print kubeconfig, and does not require external API keys, external exports, GPU, or mandatory model downloads.
-
 ## Phase2 Handoff
 
 Phase2 final demo, acceptance, smoke, and Phase3 handoff material lives under
@@ -60,7 +30,7 @@ heavy model downloads.
 ## Local Kubernetes Baseline
 
 PR-43 adds a local kind/minikube baseline without replacing Docker Compose. See
-[`docs/phase2/kubernetes_local_baseline.md`](docs/phase2/kubernetes_local_baseline.md) and the Phase2.5 entrypoint [`docs/phase2/kubernetes_baseline.md`](docs/phase2/kubernetes_baseline.md).
+[`docs/phase2/kubernetes_local_baseline.md`](docs/phase2/kubernetes_local_baseline.md).
 
 Validate manifests:
 
@@ -179,7 +149,6 @@ python -m app.mcp.server --transport stdio
 
 - `rag_search`
 - `rag_ask`
-- `rag_ask_auto`
 - `list_documents`
 - `get_document_status`
 - `get_job_status`
@@ -252,3 +221,170 @@ Compose 起動時に `migrate` と `seed` service が実行される。個別実
 docker compose run --rm migrate
 docker compose run --rm seed
 ```
+
+seed は idempotent に作る。admin / viewer、user_settings、system_settings、demo documents、old/new version pair、sample question metadata、evaluation fixture reference を投入する。
+
+## Start / Stop
+
+```bash
+docker compose up --build
+```
+
+停止だけなら次を使う。
+
+```bash
+docker compose stop
+```
+
+初期状態に戻す前に、次の注意を確認する。
+
+> docker compose down -v deletes local database, qdrant data, and uploaded files.
+
+このコマンドは local volume を消す。必要な demo data や検証結果を残したい場合は使わない。
+
+## Local Validation Commands
+
+Windows:
+
+```powershell
+.\scripts\test.ps1
+.\scripts\test.ps1 -Smoke
+.\scripts\smoke_phase1.ps1
+.\scripts\smoke_phase1.ps1 -Deep
+```
+
+Ubuntu:
+
+```bash
+sh scripts/test.sh
+sh scripts/test.sh --smoke
+sh scripts/smoke_phase1.sh
+sh scripts/smoke_phase1.sh --deep
+```
+
+Backend:
+
+```bash
+cd backend
+uv run --extra dev ruff format --check .
+uv run --extra dev ruff check .
+uv run --extra dev mypy .
+uv run --extra dev pytest
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+Compose:
+
+```bash
+docker compose config
+docker compose -f docker-compose.ci.yml config
+docker compose -f docker-compose.ci.yml run --rm backend-test
+docker compose -f docker-compose.ci.yml run --rm frontend-test
+docker compose -f docker-compose.ci.yml run --rm --no-deps smoke
+```
+
+Retrieval evaluation smoke:
+
+```powershell
+.\scripts\run_retrieval_eval_smoke.ps1 -Dataset phase2_strategy_smoke -Strategies dense,hybrid,agentic_router -ThresholdMode warn
+```
+
+```bash
+sh scripts/run_retrieval_eval_smoke.sh
+```
+
+## CI/CD
+
+GitHub Actions は次の workflow を使う。
+
+| workflow | Target | Local equivalent |
+|---|---|---|
+| Backend CI | ruff format check、ruff check、mypy、pytest | `cd backend && uv run --extra dev pytest` など |
+| Frontend CI | npm install、lint、typecheck、Vitest、build | `cd frontend && npm run build` など |
+| Docker CI | compose config、image build | `docker compose -f docker-compose.ci.yml build ...` |
+| Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
+| Retrieval Evaluation Smoke | manual/scheduled deterministic strategy evaluation | `scripts/run_retrieval_eval_smoke.*` |
+| Retrieval Model Experiment | local opt-in embedding/reranker comparison | `scripts/run_retrieval_model_experiment.*` |
+
+Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents、小型 local embedding model cache を使い、answer generation は実行しません。fake embedding / fake reranker / fake evaluator には fallback せず、local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
+
+Optional trace export:
+
+```text
+TRACE_EXPORT_ENABLED=false
+TRACE_EXPORT_PROVIDER=none
+```
+
+LangSmith export is opt-in only. Normal CI and local smoke runs do not require
+LangSmith secrets, and exported payloads are minimized/redacted summaries rather
+than raw prompts, full context, raw chunk text, answers, PII, tokens, or
+credentials. See `docs/phase2/langsmith_optional_adapter.md`.
+
+SentenceTransformers experiment harness:
+
+```powershell
+.\scripts\run_retrieval_model_experiment.ps1 -Mode dry-run
+.\scripts\run_retrieval_model_experiment.ps1 -Mode local -DownloadPolicy if-cached
+```
+
+```bash
+sh scripts/run_retrieval_model_experiment.sh
+```
+
+Experiments are local opt-in only. Normal CI does not download models, require a
+GPU, or require external API keys. Dry-run validates the manifest, model
+registry, availability status, and safe artifact/report shape. Local mode uses
+cached public SentenceTransformers models by default and writes only aggregate
+metrics and reason codes. See
+`docs/phase2/sentence_transformers_experiment_harness.md`.
+
+## Demo / Test Docs
+
+- [5min demo](docs/demo/5min_demo.md)
+- [UI demo](docs/demo/ui_demo.md)
+- [CLI demo](docs/demo/cli_demo.md)
+- [MCP demo](docs/demo/mcp_demo.md)
+- [MCP advanced RAG tools](docs/phase2/mcp_advanced_rag_tools.md)
+- [sample questions](docs/demo/sample_questions.md)
+- [demo data](docs/demo/demo_data.md)
+- [manual test cases](docs/test-cases/phase1_manual_test_cases.md)
+- [acceptance checklist](docs/test-cases/phase1_acceptance_checklist.md)
+- [troubleshooting](docs/troubleshooting.md)
+
+## Troubleshooting
+
+詳細は [docs/troubleshooting.md](docs/troubleshooting.md) に置く。よく使う確認は次である。
+
+```bash
+docker compose ps
+docker compose logs backend
+docker compose logs worker
+docker compose -f docker-compose.ci.yml config
+```
+
+## Known Limitations
+
+- Phase1 は local Docker Compose 検証向けであり、cloud deploy は扱わない。
+- MCP は stdio / local-only であり、remote MCP は扱わない。
+- OCR、GraphRAG、Agentic RAG は扱わない。
+- CI の通常確認は fake adapter を優先する。
+- PDF / DOCX の大きな demo fixture は repository に追加しない。必要な場合は手動 upload 手順で確認する。
+- worker の重い実ジョブ確認は環境差が出るため、最終受け入れでは manual test と optional smoke に分ける。
+
+## Phase2 Roadmap
+
+- cloud deploy と secrets management を設計する。
+- real embedding / reranker / generator の検証 profile を追加する。
+- OCR と large document handling を拡張する。
+- evaluation metrics と regression dashboard を拡張する。
+- remote MCP、OAuth、client-specific integration を検討する。
