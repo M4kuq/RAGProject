@@ -25,7 +25,12 @@ from app.schemas.graph import (
 )
 
 _TERMINAL_GRAPH_INDEX_STATUSES = frozenset(
-    {"succeeded", "failed", "cancelled", "skipped"}
+    {
+        "succeeded",
+        "failed",
+        "cancelled",
+        "skipped",
+    }
 )
 
 
@@ -54,7 +59,8 @@ class GraphRepository:
     ) -> GraphEntity | None:
         return db.scalar(
             select(GraphEntity).where(
-                func.lower(GraphEntity.canonical_name) == canonical_name.strip().lower(),
+                func.lower(GraphEntity.canonical_name)
+                == canonical_name.strip().lower(),
                 GraphEntity.entity_type == entity_type.strip(),
             )
         )
@@ -92,7 +98,10 @@ class GraphRepository:
         statement = (
             select(GraphRelation)
             .where(*conditions)
-            .order_by(GraphRelation.created_at.asc(), GraphRelation.graph_relation_id.asc())
+            .order_by(
+                GraphRelation.created_at.asc(),
+                GraphRelation.graph_relation_id.asc(),
+            )
         )
         return list(db.scalars(statement).all())
 
@@ -303,7 +312,10 @@ def _assert_graph_index_run_transition(
     allowed_statuses: set[str],
     target_status: str,
 ) -> None:
-    if run.status in _TERMINAL_GRAPH_INDEX_STATUSES or run.status not in allowed_statuses:
+    if (
+        run.status in _TERMINAL_GRAPH_INDEX_STATUSES
+        or run.status not in allowed_statuses
+    ):
         raise ValueError(
             f"cannot transition graph_index_run from {run.status} to {target_status}"
         )
