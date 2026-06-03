@@ -24,14 +24,7 @@ from app.schemas.graph import (
     validate_safe_graph_metadata,
 )
 
-_TERMINAL_GRAPH_INDEX_STATUSES = frozenset(
-    {
-        "succeeded",
-        "failed",
-        "cancelled",
-        "skipped",
-    },
-)
+_TERMINAL_GRAPH_INDEX_STATUSES = frozenset({"succeeded", "failed", "cancelled", "skipped"})
 
 
 class GraphRepository:
@@ -59,10 +52,9 @@ class GraphRepository:
     ) -> GraphEntity | None:
         return db.scalar(
             select(GraphEntity).where(
-                func.lower(GraphEntity.canonical_name)
-                == canonical_name.strip().lower(),
+                func.lower(GraphEntity.canonical_name) == canonical_name.strip().lower(),
                 GraphEntity.entity_type == entity_type.strip(),
-            ),
+            )
         )
 
     def create_relation(self, db: Session, data: GraphRelationCreate) -> GraphRelation:
@@ -98,10 +90,7 @@ class GraphRepository:
         statement = (
             select(GraphRelation)
             .where(*conditions)
-            .order_by(
-                GraphRelation.created_at.asc(),
-                GraphRelation.graph_relation_id.asc(),
-            )
+            .order_by(GraphRelation.created_at.asc(), GraphRelation.graph_relation_id.asc())
         )
         return list(db.scalars(statement).all())
 
@@ -129,11 +118,7 @@ class GraphRepository:
         db.flush()
         return mention
 
-    def create_graph_index_run(
-        self,
-        db: Session,
-        data: GraphIndexRunCreate,
-    ) -> GraphIndexRun:
+    def create_graph_index_run(self, db: Session, data: GraphIndexRunCreate) -> GraphIndexRun:
         run = GraphIndexRun(
             document_version_id=data.document_version_id,
             job_id=data.job_id,
@@ -275,7 +260,7 @@ def _assert_chunk_belongs_to_version(
     actual_version_id = db.scalar(
         select(DocumentChunk.document_version_id).where(
             DocumentChunk.document_chunk_id == document_chunk_id,
-        ),
+        )
     )
     if actual_version_id is None:
         raise ValueError("document_chunk_id must reference an existing document chunk")
@@ -297,13 +282,11 @@ def _assert_source_chunks_belong_to_retrieval_run(
             select(RetrievalRunItem.document_chunk_id).where(
                 RetrievalRunItem.retrieval_run_id == retrieval_run_id,
                 RetrievalRunItem.document_chunk_id.in_(expected_chunk_ids),
-            ),
-        ).all(),
+            )
+        ).all()
     )
     if actual_chunk_ids != expected_chunk_ids:
-        raise ValueError(
-            "source_chunk_ids_json must reference chunks selected by retrieval_run_id"
-        )
+        raise ValueError("source_chunk_ids_json must reference chunks selected by retrieval_run_id")
 
 
 def _assert_graph_index_run_transition(
@@ -312,13 +295,8 @@ def _assert_graph_index_run_transition(
     allowed_statuses: set[str],
     target_status: str,
 ) -> None:
-    if (
-        run.status in _TERMINAL_GRAPH_INDEX_STATUSES
-        or run.status not in allowed_statuses
-    ):
-        raise ValueError(
-            f"cannot transition graph_index_run from {run.status} to {target_status}"
-        )
+    if run.status in _TERMINAL_GRAPH_INDEX_STATUSES or run.status not in allowed_statuses:
+        raise ValueError(f"cannot transition graph_index_run from {run.status} to {target_status}")
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:
