@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.engine import Engine, URL, make_url
+from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.engine.url import URL
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import get_settings
@@ -56,7 +57,6 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from alembic import command
-
     from app.core.config import get_settings
 
     pg_engine, database_url = isolated_pg_database
