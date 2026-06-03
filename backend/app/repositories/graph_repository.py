@@ -24,7 +24,9 @@ from app.schemas.graph import (
     validate_safe_graph_metadata,
 )
 
-_TERMINAL_GRAPH_INDEX_STATUSES = frozenset({"succeeded", "failed", "cancelled", "skipped"})
+_TERMINAL_GRAPH_INDEX_STATUSES = frozenset(
+    {"succeeded", "failed", "cancelled", "skipped"}
+)
 
 
 class GraphRepository:
@@ -118,7 +120,11 @@ class GraphRepository:
         db.flush()
         return mention
 
-    def create_graph_index_run(self, db: Session, data: GraphIndexRunCreate) -> GraphIndexRun:
+    def create_graph_index_run(
+        self,
+        db: Session,
+        data: GraphIndexRunCreate,
+    ) -> GraphIndexRun:
         run = GraphIndexRun(
             document_version_id=data.document_version_id,
             job_id=data.job_id,
@@ -298,7 +304,9 @@ def _assert_graph_index_run_transition(
     target_status: str,
 ) -> None:
     if run.status in _TERMINAL_GRAPH_INDEX_STATUSES or run.status not in allowed_statuses:
-        raise ValueError(f"cannot transition graph_index_run from {run.status} to {target_status}")
+        raise ValueError(
+            f"cannot transition graph_index_run from {run.status} to {target_status}"
+        )
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:
