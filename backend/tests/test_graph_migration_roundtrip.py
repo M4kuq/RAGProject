@@ -59,6 +59,7 @@ def _alembic_config() -> Any:
     from alembic.config import Config
 
     backend_dir = Path(__file__).resolve().parents[1]
-    config = Config(str(backend_dir / "alembic.ini"))
+    config = Config()
     config.set_main_option("script_location", str(backend_dir / "alembic"))
+    config.set_main_option("prepend_sys_path", str(backend_dir))
     return config
