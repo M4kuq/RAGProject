@@ -24,7 +24,14 @@ from app.db.graph_models import (
     GraphRelation,
     GraphRetrievalPath,
 )
-from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun, Role, User
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    LogicalDocument,
+    RetrievalRun,
+    Role,
+    User,
+)
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE, PHASE3_GRAPH_SYSTEM_SETTINGS
 from app.repositories.graph_repository import GraphRepository
 from app.schemas.graph import (
@@ -148,7 +155,10 @@ def test_graph_repository_and_service_lifecycle(
             ),
         )
         assert relation.evidence_text_hash == HASH_A
-        assert len(repository.list_relations_for_entity(db, graph_entity_id=source.graph_entity_id)) == 1
+        assert (
+            len(repository.list_relations_for_entity(db, graph_entity_id=source.graph_entity_id))
+            == 1
+        )
 
         mention = repository.create_entity_mention(
             db,

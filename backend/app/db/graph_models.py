@@ -307,14 +307,30 @@ Index(
     unique=True,
 )
 Index("ix_graph_entities_entity_type", GraphEntity.entity_type)
-Index("ix_graph_entities_aliases_json", GraphEntity.aliases_json, postgresql_using="gin")
-Index("ix_graph_relations_source_type", GraphRelation.source_entity_id, GraphRelation.relation_type)
-Index("ix_graph_relations_target_type", GraphRelation.target_entity_id, GraphRelation.relation_type)
+Index(
+    "ix_graph_entities_aliases_json",
+    GraphEntity.aliases_json,
+    postgresql_using="gin",
+)
+Index(
+    "ix_graph_relations_source_type",
+    GraphRelation.source_entity_id,
+    GraphRelation.relation_type,
+)
+Index(
+    "ix_graph_relations_target_type",
+    GraphRelation.target_entity_id,
+    GraphRelation.relation_type,
+)
 Index("ix_graph_relations_source_chunk", GraphRelation.source_document_chunk_id)
 Index("ix_graph_entity_mentions_entity", GraphEntityMention.graph_entity_id)
 Index("ix_graph_entity_mentions_chunk", GraphEntityMention.document_chunk_id)
 Index("ix_graph_entity_mentions_version", GraphEntityMention.document_version_id)
-Index("ix_graph_index_runs_document_status", GraphIndexRun.document_version_id, GraphIndexRun.status)
+Index(
+    "ix_graph_index_runs_document_status",
+    GraphIndexRun.document_version_id,
+    GraphIndexRun.status,
+)
 Index("ix_graph_index_runs_status_created", GraphIndexRun.status, GraphIndexRun.created_at)
 Index("ix_graph_index_runs_job", GraphIndexRun.job_id)
 Index("ix_graph_retrieval_paths_retrieval_run", GraphRetrievalPath.retrieval_run_id)

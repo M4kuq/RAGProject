@@ -131,7 +131,7 @@ class GraphRepository:
         for_update: bool = False,
     ) -> GraphIndexRun | None:
         stmt = select(GraphIndexRun).where(
-            GraphIndexRun.graph_index_run_id == graph_index_run_id
+            GraphIndexRun.graph_index_run_id == graph_index_run_id,
         )
         if for_update:
             stmt = stmt.with_for_update()
