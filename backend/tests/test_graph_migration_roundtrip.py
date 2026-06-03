@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-from alembic import command
-from alembic.config import Config
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
@@ -38,6 +37,8 @@ def pg_engine() -> Iterator[Engine]:
 
 
 def test_graph_migration_downgrade_upgrade_roundtrip(pg_engine: Engine) -> None:
+    from alembic import command
+
     config = _alembic_config()
     try:
         command.downgrade(config, "0011_tool_result_compression")
@@ -54,7 +55,9 @@ def test_graph_migration_downgrade_upgrade_roundtrip(pg_engine: Engine) -> None:
     assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
 
 
-def _alembic_config() -> Config:
+def _alembic_config() -> Any:
+    from alembic.config import Config
+
     backend_dir = Path(__file__).resolve().parents[1]
     config = Config(str(backend_dir / "alembic.ini"))
     config.set_main_option("script_location", str(backend_dir / "alembic"))
