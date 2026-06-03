@@ -1,5 +1,20 @@
 # RAGProject
 
+## Phase3 Design Baseline
+
+Phase3 Graph-RAG planning starts in [`docs/phase3/README.md`](docs/phase3/README.md).
+
+Start with:
+
+- [`docs/phase3/phase3_roadmap.md`](docs/phase3/phase3_roadmap.md)
+- [`docs/phase3/graph_rag_architecture.md`](docs/phase3/graph_rag_architecture.md)
+- [`docs/phase3/graph_schema_draft.md`](docs/phase3/graph_schema_draft.md)
+- [`docs/phase3/graph_retrieval_strategy.md`](docs/phase3/graph_retrieval_strategy.md)
+- [`docs/phase3/graph_citation_design.md`](docs/phase3/graph_citation_design.md)
+- [`docs/phase3/security_redaction_policy.md`](docs/phase3/security_redaction_policy.md)
+
+PR-45 is a design baseline only. It does not add Graph-RAG runtime code, database migrations, OCR, image upload, AWS/S3/OIDC, external provider integration, or online evaluation implementation.
+
 ## Phase2 Handoff
 
 Phase2 final demo, acceptance, smoke, and Phase3 handoff material lives under
