@@ -4,10 +4,11 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import ForeignKeyConstraint, create_engine, text
+from sqlalchemy import ForeignKeyConstraint, Table, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -109,8 +110,9 @@ def test_graph_orm_tables_do_not_store_raw_text_columns() -> None:
     assert "mention_text_hash" in GraphEntityMention.__table__.columns
     assert "source_document_chunk_id" in GraphRelation.__table__.columns
     assert "source_chunk_ids_json" in GraphRetrievalPath.__table__.columns
+    graph_relation_table = cast(Table, GraphRelation.__table__)
     source_chunk_fk: ForeignKeyConstraint | None = None
-    for constraint in GraphRelation.__table__.constraints:
+    for constraint in graph_relation_table.constraints:
         if not isinstance(constraint, ForeignKeyConstraint):
             continue
         if any(column.name == "source_document_chunk_id" for column in constraint.columns):
