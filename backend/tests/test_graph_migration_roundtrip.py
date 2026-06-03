@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-import pytest
 from alembic import command
 from alembic.config import Config
+import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
