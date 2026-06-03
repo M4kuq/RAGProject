@@ -19,15 +19,43 @@ down_revision = "0011_tool_result_compression"
 branch_labels = None
 depends_on = None
 
-_GRAPH_INDEX_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "skipped")
+_GRAPH_INDEX_STATUSES = (
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "skipped",
+)
 _GRAPH_SETTINGS = {
-    "rag.graph.enabled": (False, "Enable Graph-RAG retrieval. PR-46 default is disabled."),
-    "rag.graph.indexing.enabled": (False, "Enable graph index build jobs. PR-46 default is disabled."),
-    "rag.graph.extractor.default": ("none", "Default graph extractor. PR-47 connects extractors."),
-    "rag.graph.max_entities_per_chunk": (20, "Maximum entity candidates per chunk."),
-    "rag.graph.max_relations_per_chunk": (40, "Maximum relation candidates per chunk."),
-    "rag.graph.store_raw_evidence_text": (False, "Raw graph evidence text must not be stored."),
-    "rag.graph.retrieval.enabled": (False, "Enable graph retrieval strategies. PR-48 connects retrieval."),
+    "rag.graph.enabled": (
+        False,
+        "Enable Graph-RAG retrieval. PR-46 default is disabled.",
+    ),
+    "rag.graph.indexing.enabled": (
+        False,
+        "Enable graph index build jobs. PR-46 default is disabled.",
+    ),
+    "rag.graph.extractor.default": (
+        "none",
+        "Default graph extractor. PR-47 connects extractors.",
+    ),
+    "rag.graph.max_entities_per_chunk": (
+        20,
+        "Maximum entity candidates per chunk.",
+    ),
+    "rag.graph.max_relations_per_chunk": (
+        40,
+        "Maximum relation candidates per chunk.",
+    ),
+    "rag.graph.store_raw_evidence_text": (
+        False,
+        "Raw graph evidence text must not be stored.",
+    ),
+    "rag.graph.retrieval.enabled": (
+        False,
+        "Enable graph retrieval strategies. PR-48 connects retrieval.",
+    ),
 }
 
 
@@ -69,7 +97,11 @@ def upgrade() -> None:
         "CREATE UNIQUE INDEX ux_graph_entities_lower_name_type "
         "ON graph_entities (lower(canonical_name), entity_type)"
     )
-    op.create_index("ix_graph_entities_entity_type", "graph_entities", ["entity_type"])
+    op.create_index(
+        "ix_graph_entities_entity_type",
+        "graph_entities",
+        ["entity_type"],
+    )
     op.create_index(
         "ix_graph_entities_aliases_json",
         "graph_entities",
@@ -85,7 +117,11 @@ def upgrade() -> None:
             sa.BigInteger(),
             sa.ForeignKey("document_versions.document_version_id", ondelete="SET NULL"),
         ),
-        sa.Column("job_id", sa.BigInteger(), sa.ForeignKey("jobs.job_id", ondelete="SET NULL")),
+        sa.Column(
+            "job_id",
+            sa.BigInteger(),
+            sa.ForeignKey("jobs.job_id", ondelete="SET NULL"),
+        ),
         sa.Column(
             "status",
             sa.String(30),
@@ -99,9 +135,24 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("extractor_version", sa.String(80)),
-        sa.Column("entity_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
-        sa.Column("relation_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
-        sa.Column("mention_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column(
+            "entity_count",
+            sa.Integer(),
+            server_default=sa.text("0"),
+            nullable=False,
+        ),
+        sa.Column(
+            "relation_count",
+            sa.Integer(),
+            server_default=sa.text("0"),
+            nullable=False,
+        ),
+        sa.Column(
+            "mention_count",
+            sa.Integer(),
+            server_default=sa.text("0"),
+            nullable=False,
+        ),
         sa.Column("error_code", sa.String(120)),
         sa.Column("error_message", sa.Text()),
         sa.Column("started_at", sa.DateTime(timezone=True)),
@@ -129,7 +180,10 @@ def upgrade() -> None:
             name="ck_graph_index_runs_status",
         ),
         sa.CheckConstraint("entity_count >= 0", name="ck_graph_index_runs_entity_count"),
-        sa.CheckConstraint("relation_count >= 0", name="ck_graph_index_runs_relation_count"),
+        sa.CheckConstraint(
+            "relation_count >= 0",
+            name="ck_graph_index_runs_relation_count",
+        ),
         sa.CheckConstraint("mention_count >= 0", name="ck_graph_index_runs_mention_count"),
         sa.CheckConstraint(
             "finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at",
@@ -154,7 +208,11 @@ def upgrade() -> None:
         "graph_index_runs",
         ["document_version_id", "status"],
     )
-    op.create_index("ix_graph_index_runs_status_created", "graph_index_runs", ["status", "created_at"])
+    op.create_index(
+        "ix_graph_index_runs_status_created",
+        "graph_index_runs",
+        ["status", "created_at"],
+    )
     op.create_index("ix_graph_index_runs_job", "graph_index_runs", ["job_id"])
 
     op.create_table(
@@ -193,7 +251,10 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint("source_entity_id <> target_entity_id", name="ck_graph_relations_no_self"),
+        sa.CheckConstraint(
+            "source_entity_id <> target_entity_id",
+            name="ck_graph_relations_no_self",
+        ),
         sa.CheckConstraint("btrim(relation_type) <> ''", name="ck_graph_relations_type"),
         sa.CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
@@ -292,8 +353,16 @@ def upgrade() -> None:
             name="uq_graph_entity_mentions_entity_chunk_hash",
         ),
     )
-    op.create_index("ix_graph_entity_mentions_entity", "graph_entity_mentions", ["graph_entity_id"])
-    op.create_index("ix_graph_entity_mentions_chunk", "graph_entity_mentions", ["document_chunk_id"])
+    op.create_index(
+        "ix_graph_entity_mentions_entity",
+        "graph_entity_mentions",
+        ["graph_entity_id"],
+    )
+    op.create_index(
+        "ix_graph_entity_mentions_chunk",
+        "graph_entity_mentions",
+        ["document_chunk_id"],
+    )
     op.create_index(
         "ix_graph_entity_mentions_version",
         "graph_entity_mentions",

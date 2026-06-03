@@ -125,9 +125,14 @@ def test_graph_repository_and_service_lifecycle(
             db,
             GraphEntityCreate(canonical_name="Graph Index", entity_type="concept"),
         )
-        assert repository.find_entity_by_canonical_name(
-            db, canonical_name="graph schema", entity_type="concept"
-        ).graph_entity_id == source.graph_entity_id
+        assert (
+            repository.find_entity_by_canonical_name(
+                db,
+                canonical_name="graph schema",
+                entity_type="concept",
+            ).graph_entity_id
+            == source.graph_entity_id
+        )
 
         relation = repository.create_relation(
             db,
@@ -213,7 +218,8 @@ def test_graph_repository_and_service_lifecycle(
         )
         assert path.source_chunk_ids_json == [chunk.document_chunk_id]
         assert repository.list_graph_retrieval_paths_by_retrieval_run(
-            db, retrieval_run_id=retrieval_run.retrieval_run_id
+            db,
+            retrieval_run_id=retrieval_run.retrieval_run_id,
         ) == [path]
 
 

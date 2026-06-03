@@ -84,7 +84,10 @@ class GraphRelation(Base):
             ["document_chunks.document_chunk_id"],
             ondelete="SET NULL",
         ),
-        CheckConstraint("source_entity_id <> target_entity_id", name="ck_graph_relations_no_self"),
+        CheckConstraint(
+            "source_entity_id <> target_entity_id",
+            name="ck_graph_relations_no_self",
+        ),
         CheckConstraint("btrim(relation_type) <> ''", name="ck_graph_relations_type"),
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
@@ -240,9 +243,15 @@ class GraphIndexRun(Base):
         String(80), default="none", server_default=text("'none'"), nullable=False
     )
     extractor_version: Mapped[str | None] = mapped_column(String(80))
-    entity_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
-    relation_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
-    mention_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
+    entity_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    relation_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    mention_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     error_code: Mapped[str | None] = mapped_column(String(120))
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -267,8 +276,14 @@ class GraphRetrievalPath(Base):
             ondelete="CASCADE",
         ),
         pg_check("jsonb_typeof(path_json) = 'object'", name="ck_graph_paths_path_object"),
-        pg_check("jsonb_typeof(score_breakdown_json) = 'object'", name="ck_graph_paths_score_object"),
-        pg_check("jsonb_typeof(source_chunk_ids_json) = 'array'", name="ck_graph_paths_source_chunks_array"),
+        pg_check(
+            "jsonb_typeof(score_breakdown_json) = 'object'",
+            name="ck_graph_paths_score_object",
+        ),
+        pg_check(
+            "jsonb_typeof(source_chunk_ids_json) = 'array'",
+            name="ck_graph_paths_source_chunks_array",
+        ),
     )
 
     graph_retrieval_path_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
@@ -285,7 +300,12 @@ class GraphRetrievalPath(Base):
     )
 
 
-Index("ux_graph_entities_lower_name_type", func.lower(GraphEntity.canonical_name), GraphEntity.entity_type, unique=True)
+Index(
+    "ux_graph_entities_lower_name_type",
+    func.lower(GraphEntity.canonical_name),
+    GraphEntity.entity_type,
+    unique=True,
+)
 Index("ix_graph_entities_entity_type", GraphEntity.entity_type)
 Index("ix_graph_entities_aliases_json", GraphEntity.aliases_json, postgresql_using="gin")
 Index("ix_graph_relations_source_type", GraphRelation.source_entity_id, GraphRelation.relation_type)

@@ -130,7 +130,9 @@ class GraphRepository:
         *,
         for_update: bool = False,
     ) -> GraphIndexRun | None:
-        stmt = select(GraphIndexRun).where(GraphIndexRun.graph_index_run_id == graph_index_run_id)
+        stmt = select(GraphIndexRun).where(
+            GraphIndexRun.graph_index_run_id == graph_index_run_id
+        )
         if for_update:
             stmt = stmt.with_for_update()
         return db.scalar(stmt)
@@ -213,7 +215,10 @@ class GraphRepository:
         statement = (
             select(GraphRetrievalPath)
             .where(GraphRetrievalPath.retrieval_run_id == retrieval_run_id)
-            .order_by(GraphRetrievalPath.created_at.asc(), GraphRetrievalPath.graph_retrieval_path_id.asc())
+            .order_by(
+                GraphRetrievalPath.created_at.asc(),
+                GraphRetrievalPath.graph_retrieval_path_id.asc(),
+            )
         )
         return list(db.scalars(statement).all())
 
