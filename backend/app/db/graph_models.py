@@ -82,7 +82,7 @@ class GraphRelation(Base):
         ForeignKeyConstraint(
             ["source_document_chunk_id"],
             ["document_chunks.document_chunk_id"],
-            ondelete="SET NULL",
+            ondelete="CASCADE",
         ),
         CheckConstraint(
             "source_entity_id <> target_entity_id",

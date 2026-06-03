@@ -195,6 +195,18 @@ class GraphIndexRunCreate(BaseModel):
     extractor_version: str | None = Field(default=None, max_length=80)
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
+    @field_validator("extractor_type")
+    @classmethod
+    def validate_extractor_type(cls, value: str) -> str:
+        return validate_safe_graph_label(value, field_name="extractor_type", max_length=80)
+
+    @field_validator("extractor_version")
+    @classmethod
+    def validate_extractor_version(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_graph_label(value, field_name="extractor_version", max_length=80)
+
     @field_validator("metadata_json")
     @classmethod
     def validate_metadata(cls, value: dict[str, object]) -> dict[str, object]:

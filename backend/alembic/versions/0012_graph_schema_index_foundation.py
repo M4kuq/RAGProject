@@ -236,7 +236,7 @@ def upgrade() -> None:
         sa.Column(
             "source_document_chunk_id",
             sa.BigInteger(),
-            sa.ForeignKey("document_chunks.document_chunk_id", ondelete="SET NULL"),
+            sa.ForeignKey("document_chunks.document_chunk_id", ondelete="CASCADE"),
         ),
         sa.Column("evidence_text_hash", sa.String(64)),
         sa.Column(

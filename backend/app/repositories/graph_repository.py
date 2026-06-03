@@ -14,7 +14,7 @@ from app.db.graph_models import (
     GraphRelation,
     GraphRetrievalPath,
 )
-from app.db.models import DocumentChunk
+from app.db.models import DocumentChunk, RetrievalRunItem
 from app.schemas.graph import (
     GraphEntityCreate,
     GraphEntityMentionCreate,
@@ -219,6 +219,11 @@ class GraphRepository:
         db: Session,
         data: GraphRetrievalPathCreate,
     ) -> GraphRetrievalPath:
+        _assert_source_chunks_belong_to_retrieval_run(
+            db,
+            retrieval_run_id=data.retrieval_run_id,
+            source_chunk_ids=list(data.source_chunk_ids_json),
+        )
         path = GraphRetrievalPath(
             retrieval_run_id=data.retrieval_run_id,
             path_json=validate_safe_graph_metadata(dict(data.path_json)),
@@ -261,6 +266,29 @@ def _assert_chunk_belongs_to_version(
         raise ValueError("document_chunk_id must reference an existing document chunk")
     if int(actual_version_id) != document_version_id:
         raise ValueError("document_chunk_id must belong to document_version_id")
+
+
+def _assert_source_chunks_belong_to_retrieval_run(
+    db: Session,
+    *,
+    retrieval_run_id: int,
+    source_chunk_ids: list[int],
+) -> None:
+    if not source_chunk_ids:
+        return
+    expected_chunk_ids = set(source_chunk_ids)
+    actual_chunk_ids = set(
+        db.scalars(
+            select(RetrievalRunItem.document_chunk_id).where(
+                RetrievalRunItem.retrieval_run_id == retrieval_run_id,
+                RetrievalRunItem.document_chunk_id.in_(expected_chunk_ids),
+            )
+        ).all()
+    )
+    if actual_chunk_ids != expected_chunk_ids:
+        raise ValueError(
+            "source_chunk_ids_json must reference chunks selected by retrieval_run_id"
+        )
 
 
 def _assert_graph_index_run_transition(
