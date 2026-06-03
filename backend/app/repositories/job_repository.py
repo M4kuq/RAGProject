@@ -87,6 +87,7 @@ class JobRepository:
         enabled_job_types: frozenset[str] | None,
         lease_duration: timedelta,
         batch_size: int,
+        supported_job_types: frozenset[str] | None = SUPPORTED_JOB_TYPES,
         now: datetime | None = None,
     ) -> list[Job]:
         acquired_at = now or datetime.now(UTC)
@@ -101,10 +102,10 @@ class JobRepository:
                 ),
             )
         ]
-        if enabled_job_types is None:
-            conditions.append(Job.job_type.in_(SUPPORTED_JOB_TYPES))
-        else:
+        if enabled_job_types is not None:
             conditions.append(Job.job_type.in_(enabled_job_types))
+        elif supported_job_types is not None:
+            conditions.append(Job.job_type.in_(supported_job_types))
 
         stmt = (
             select(Job)

@@ -18,6 +18,10 @@ class JobDispatcher:
     def __init__(self, handlers: Mapping[str, JobHandler] | None = None) -> None:
         self._handlers = dict(handlers or _default_handlers())
 
+    @property
+    def supported_job_types(self) -> frozenset[str]:
+        return frozenset(self._handlers)
+
     def dispatch(self, context: JobExecutionContext) -> JobHandlerResult:
         handler = self._handlers.get(context.job_type)
         if handler is None:
