@@ -1,10 +1,23 @@
 # Phase3 Security / Redaction Policy
 
-Phase3 expands evidence types. The security policy is to minimize and reference evidence rather than copy it into traces, tables, docs, logs, artifacts, UI, or MCP output.
+Phase3 expands evidence types. The policy is to minimize and reference evidence rather than copy it into traces, tables, docs, logs, artifacts, UI, or MCP output.
 
-## Forbidden Outputs
+## PR-46 Database Policy
 
-Do not output or persist these in docs, logs, artifacts, debug traces, UI, MCP output, graph tables, or PR comments:
+Graph tables store:
+
+- entity IDs
+- canonical labels and bounded aliases
+- relation labels/types
+- confidence scores
+- source chunk refs
+- document version refs
+- sha256 hashes
+- counts
+- safe metadata
+- graph path summaries
+
+Graph tables do not store:
 
 - raw document text
 - raw chunk text
@@ -20,78 +33,39 @@ Do not output or persist these in docs, logs, artifacts, debug traces, UI, MCP o
 - local DB/Qdrant dumps
 - kubeconfig or generated secret manifests
 
-## Graph Tables
+## Evidence References
 
-Graph tables must store IDs, hashes, counts, confidence, labels, and source refs. They must not store raw document text or raw chunk text.
+Relations use:
 
-Use:
+- `source_document_chunk_id`
+- `evidence_text_hash`
+
+Mentions use:
 
 - `document_chunk_id`
 - `document_version_id`
-- `source_document_chunk_id`
 - `mention_text_hash`
-- `evidence_text_hash`
+- optional offsets
+
+Retrieval paths use:
+
+- `retrieval_run_id`
+- safe `path_json`
+- `score_breakdown_json`
 - `source_chunk_ids_json`
 
-Avoid:
+## Metadata Guard
 
-- copied source passages
-- copied extraction prompt material
-- full path payload dumps containing evidence text
+Repository and DTO paths validate or sanitize graph metadata. Metadata must not include raw text dumps, prompt material, full context, PII, token values, credential values, password values, or secret values.
 
-## PII Masking
+## Error Handling
 
-PII-like data should be masked or represented through safe labels only when needed for retrieval. Admin debug should show counts, categories, hashes, and refs rather than private values.
+`GraphIndexService` and `GraphRepository` store safe error code/message only. Error messages pass through existing redaction before persistence.
 
-## External LLM Export
+## Viewer/Admin Boundary
 
-External LLM provider use is optional and future work. Before enabling it:
+PR-46 does not add API or UI. Future admin debug surfaces may show counts, IDs, refs, scores, and validation summaries. Viewer-facing responses must not expose graph internals or raw evidence.
 
-- apply Context Budget
-- apply Evidence Pack
-- apply Tool Result Compression for tool outputs
-- send the smallest source-backed evidence set
-- record safe export summaries only
-- keep provider credentials out of docs, logs, traces, and artifacts
+## deploy/aws Boundary
 
-## OCR Text Handling
-
-OCR may internally process image/scanned text. Raw OCR text must not be written to logs, trace JSON, graph debug panels, MCP output, or evaluation artifacts. Use OCR text hashes, region metadata, confidence, and source locator refs.
-
-## Image Metadata Handling
-
-Image metadata should be bounded and sanitized. Location-like, device-like, author-like, or credential-like metadata should be stripped or masked unless a later accepted design proves it is required.
-
-## Graph Path Logging
-
-Graph path logs may include:
-
-- path ref ID
-- entity IDs and safe labels
-- relation IDs and safe labels/types
-- hop count
-- source chunk IDs
-- score summaries
-- validation status
-- drop reason counts
-
-Graph path logs must not include raw source passages or raw OCR text.
-
-## Audit Logging
-
-Audit logs record action, target type, target ID, status, and safe error code. They should not include raw evidence, full context, or credential values.
-
-## Viewer/Admin Debug Boundary
-
-- Viewer: answer, citations, confidence, bounded source previews, safe strategy label.
-- Admin: safe summaries for retrieval, graph, context budget, evidence pack, compression, and validation.
-
-Admin access is not a reason to expose raw evidence payloads.
-
-## Secret Management Boundary
-
-Local `.env` values, kubeconfig, provider credentials, generated secret manifests, and cloud secrets are never copied into docs or committed files. AWS or provider secrets belong to a future deploy/aws or provider integration design.
-
-## deploy/aws Relationship
-
-AWS work must preserve this redaction policy before adding S3, Bedrock, RDS, ECS/EKS, OIDC, Secrets Manager, WAF, NAT, or private subnet decisions.
+External provider and AWS export decisions remain future work. Before any graph, OCR, or image evidence leaves local runtime, the export policy must preserve Context Budget, Evidence Pack, Tool Result Compression, and this redaction policy.

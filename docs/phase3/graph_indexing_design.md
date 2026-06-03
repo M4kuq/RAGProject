@@ -1,77 +1,90 @@
 # Graph Indexing Design
 
-PR-45 defines the graph indexing plan. Implementation starts in PR-46/PR-47.
+PR-46 implements the graph index state foundation. It does not run entity/relation extraction.
 
-## Responsibilities
+## Implemented Foundation
 
-Graph indexing converts safe extraction results into queryable graph state:
+- `graph_index_runs` table
+- `GraphIndexService` skeleton
+- `GraphRepository` lifecycle methods
+- `graph_index_build` future job type constant
+- `GraphIndexJobPayload` DTO
+- disabled graph settings defaults in `system_settings`
 
-- create or update canonical entities
-- create entity mentions linked to chunks and versions
-- create relations linked to entities and source chunks
-- update `graph_index_runs` lifecycle
-- maintain stale/version-aware state
-- expose only safe summaries to debug/evaluation
-
-## Pipeline
+## Lifecycle
 
 ```text
-document_version ready
- -> graph_index_run created
- -> load chunk refs internally
- -> run extractor
- -> normalize entities
- -> validate relations
- -> upsert entities / mentions / relations
- -> write safe counts and terminal status
+queued -> running -> succeeded
+queued -> running -> failed
+queued -> skipped
+queued/running -> cancelled
 ```
+
+PR-46 supports lifecycle state changes through repository/service methods:
+
+- `create_index_run_for_document_version`
+- `mark_index_run_running`
+- `record_index_summary`
+- `mark_index_run_failed`
+
+`record_index_summary` records counts only: entity, relation, and mention counts. It does not store extracted text.
+
+## Job Type Skeleton
+
+Future job type:
+
+```text
+graph_index_build
+```
+
+PR-46 only adds the constant and payload schema. The default worker dispatcher does not register a graph handler yet, and PR-46 does not automatically enqueue graph indexing jobs.
+
+Safe payload fields:
+
+- `document_version_id`
+- `graph_index_run_id`
+- `job_type`
+
+Unsafe payload fields remain forbidden:
+
+- raw document text
+- raw chunk text
+- raw prompt
+- full context
+- credential or secret values
+
+## Settings
+
+PR-46 seeds these disabled defaults:
+
+| Key | Default |
+|---|---|
+| `rag.graph.enabled` | `false` |
+| `rag.graph.indexing.enabled` | `false` |
+| `rag.graph.extractor.default` | `none` |
+| `rag.graph.max_entities_per_chunk` | `20` |
+| `rag.graph.max_relations_per_chunk` | `40` |
+| `rag.graph.store_raw_evidence_text` | `false` |
+| `rag.graph.retrieval.enabled` | `false` |
+
+## PR-47 Handoff
+
+PR-47 should add extractor implementations and a worker handler. The handler should:
+
+1. Acquire a `graph_index_build` job.
+2. Mark the corresponding `graph_index_runs` row `running`.
+3. Read approved chunk text internally.
+4. Persist entities, relations, mentions, hashes, refs, confidence, and counts.
+5. Mark the run `succeeded` or `failed` with a safe error code/message.
 
 ## Transaction Boundary
 
-Follow existing Worker principles:
+Extraction/model work must not run inside long DB transactions. The worker should follow existing Worker / Job rules: short DB transactions, external I/O outside DB locks, idempotent retry, and safe terminal updates.
 
-- Do not run external extraction calls inside a DB transaction.
-- Use short transactions for state transitions and writes.
-- Make graph writes idempotent by document version and normalized keys.
-- Treat graph index state and job state as related but separate.
+## Known Limitations
 
-## Idempotency
-
-Candidate natural keys:
-
-- entity: `(entity_type, canonical_name)` plus alias metadata.
-- mention: `(graph_entity_id, document_chunk_id, mention_text_hash)`.
-- relation: `(source_entity_id, target_entity_id, relation_type, source_document_chunk_id, evidence_text_hash)`.
-- index run: `(document_version_id, extractor_type, extractor_version, reindex policy)` with service-level active-run guard.
-
-## Version Handling
-
-Graph rows should retain `document_version_id` or source chunk references that resolve to version. Retrieval should prefer active versions by default and allow version-aware graph search later.
-
-## Stale Graph Handling
-
-A graph path is stale if all supporting source chunks belong to inactive or archived document versions and the request is not version-aware. Stale paths can remain visible to admin debug as safe summaries but should not ground default viewer answers.
-
-## Graph Store Choice
-
-The first implementation should use PostgreSQL tables. A dedicated graph database is out of scope until the schema, retrieval behavior, and evaluation metrics are stable.
-
-## Backfill
-
-Graph backfill must be an explicit worker job, not a migration side effect. Backfill should support dry-run counts and safe summaries.
-
-## Observability
-
-Safe graph index run summaries can include:
-
-- document version ID
-- extractor type/version
-- status
-- entity count
-- relation count
-- mention count
-- skipped count
-- safe error code
-- duration
-
-Do not log raw document text, raw chunk text, full context, prompt material, PII, credential values, or secret values.
+- No extractor implementation.
+- No automatic graph job creation.
+- No graph handler registration.
+- No backfill job.
+- No graph retrieval.
