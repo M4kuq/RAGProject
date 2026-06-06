@@ -25,9 +25,7 @@ _API_KEY_VALUE_RE = re.compile(
     r"(AKIA|ASIA)[A-Z0-9]{16}|"
     r"xox[baprs]-[A-Za-z0-9-]{10,})\b"
 )
-_JWT_VALUE_RE = re.compile(
-    r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"
-)
+_JWT_VALUE_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _EMAIL_VALUE_RE = re.compile(
     r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
     re.IGNORECASE,
