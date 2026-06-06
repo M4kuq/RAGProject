@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.graph import GraphEntityCreate
+
+
+def test_graph_labels_reject_bare_credential_values() -> None:
+    fake_api_key = "sk-" + "x" * 16
+
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(canonical_name=fake_api_key, entity_type="concept")
+
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            aliases_json=[fake_api_key],
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata_json",
+    [
+        {"note": "sk-" + "x" * 16},
+        {"owner": "alice@example.com"},
+        {"contact": "090-1234-5678"},
+        {"items": [{"owner": "alice@example.com"}]},
+    ],
+)
+def test_graph_metadata_rejects_credential_and_pii_values(
+    metadata_json: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            metadata_json=metadata_json,
+        )
