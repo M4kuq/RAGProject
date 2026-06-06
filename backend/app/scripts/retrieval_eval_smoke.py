@@ -55,6 +55,8 @@ ALLOWED_STRATEGIES = {
     RetrievalStrategy.SPARSE.value,
     RetrievalStrategy.HYBRID.value,
     RetrievalStrategy.AGENTIC_ROUTER.value,
+    RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+    RetrievalStrategy.LANGCHAIN_AGENTIC.value,
 }
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_VALUE_RE = re.compile(
@@ -874,14 +876,22 @@ def _requires_vector_retrieval(config: SmokeConfig, settings: Settings) -> bool:
     return (
         RetrievalStrategy.DENSE.value in strategies
         or RetrievalStrategy.AGENTIC_ROUTER.value in strategies
+        or RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value in strategies
+        or RetrievalStrategy.LANGCHAIN_AGENTIC.value in strategies
         or (RetrievalStrategy.HYBRID.value in strategies and settings.hybrid_dense_weight > 0)
     )
 
 
 def _requires_sparse_retrieval(config: SmokeConfig, settings: Settings) -> bool:
     strategies = set(config.strategies)
-    return RetrievalStrategy.SPARSE.value in strategies or (
-        RetrievalStrategy.HYBRID.value in strategies and settings.hybrid_sparse_weight > 0
+    tool_agentic_requested = (
+        RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value in strategies
+        or RetrievalStrategy.LANGCHAIN_AGENTIC.value in strategies
+    )
+    return (
+        RetrievalStrategy.SPARSE.value in strategies
+        or (RetrievalStrategy.HYBRID.value in strategies and settings.hybrid_sparse_weight > 0)
+        or (tool_agentic_requested and settings.sparse_enabled)
     )
 
 
@@ -892,6 +902,8 @@ def _requires_rerank(config: SmokeConfig) -> bool:
         & {
             RetrievalStrategy.DENSE.value,
             RetrievalStrategy.AGENTIC_ROUTER.value,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            RetrievalStrategy.LANGCHAIN_AGENTIC.value,
         }
     )
 

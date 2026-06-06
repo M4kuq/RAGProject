@@ -4,7 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-McpSearchStrategy = Literal["dense", "sparse", "hybrid", "agentic_router"]
+McpSearchStrategy = Literal[
+    "dense",
+    "sparse",
+    "hybrid",
+    "agentic_router",
+    "llm_tool_orchestrator",
+    "langchain_agentic",
+]
 
 
 def _default_compare_strategies() -> list[McpSearchStrategy]:
@@ -33,7 +40,13 @@ class McpRagSearchInput(McpInputModel):
 
 class McpRagAskInput(McpInputModel):
     question: str = Field(min_length=1, max_length=8000)
-    strategy: Literal["dense", "hybrid", "agentic_router", "llm_tool_orchestrator"] = "dense"
+    strategy: Literal[
+        "dense",
+        "hybrid",
+        "agentic_router",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
+    ] = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     include_citations: bool = True
@@ -85,7 +98,7 @@ class McpCompareStrategiesInput(McpInputModel):
     strategies: list[McpSearchStrategy] = Field(
         default_factory=_default_compare_strategies,
         min_length=1,
-        max_length=4,
+        max_length=6,
     )
     mode: Literal["latest_results"] = "latest_results"
 

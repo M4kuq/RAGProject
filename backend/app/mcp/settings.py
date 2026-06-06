@@ -52,7 +52,14 @@ def validate_mcp_settings(settings: McpSettings) -> None:
         raise ValueError("MCP write tools are disabled in Phase1")
     if settings.allow_evaluation_run_create:
         raise ValueError("MCP evaluation run creation is disabled in PR-38")
-    allowed = {"dense", "sparse", "hybrid", "agentic_router", "llm_tool_orchestrator"}
+    allowed = {
+        "dense",
+        "sparse",
+        "hybrid",
+        "agentic_router",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
+    }
     if not settings.allowed_strategies or any(
         strategy not in allowed for strategy in settings.allowed_strategies
     ):

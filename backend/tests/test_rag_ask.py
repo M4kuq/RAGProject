@@ -773,6 +773,107 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
         assert "rewritten_query_preview" not in dumped
 
 
+def test_rag_ask_langchain_agentic_uses_langchain_tools_and_saves_safe_trace(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="langchain agentic ask")
+    message = "Compare alpha secondary retrieval evidence"
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "langchain-agentic-msg-1",
+            "message": message,
+            "strategy": "langchain_agentic",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["retrieval_summary"]["strategy_type"] == "langchain_agentic"
+    assert data["retrieval_summary"]["selected_strategy"] == "langchain_agentic"
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "langchain_agentic"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "langchain_agentic"
+        assert run.query_plan_json["query_mode"] == "langchain_agentic_retrieval"
+        assert "analysis" in run.query_plan_json
+        assert "planner" in run.query_plan_json
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "langchain_agentic"
+        assert run.strategy_decision_json["execution_strategy"] == "langchain_agentic"
+        assert run.strategy_decision_json["orchestrator_provider"] == "langchain"
+        assert run.strategy_decision_json["tool_call_count"] == 2
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["fallback_used"] is False
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert "langchain_runnable_planner" in run.strategy_decision_json["reason_codes"]
+        assert "langchain_structured_tools" in run.strategy_decision_json["reason_codes"]
+        assert run.latency_breakdown_json is not None
+        assert "langchain_agentic_ms" in run.latency_breakdown_json
+        assert "langchain_planning_ms" in run.latency_breakdown_json
+        assert "langchain_tool_execution_ms" in run.latency_breakdown_json
+        assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "langchain_agentic"
+        assert run.context_budget_json["strategy"]["selected_strategy"] == "langchain_agentic"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
+        assert run.tool_result_compression_json is not None
+        assert (
+            run.tool_result_compression_json["schema_version"]
+            == "phase2.tool_result_compression.v1"
+        )
+        assert run.tool_result_compression_json["summary"]["search_tool_call_count"] == 1
+        assert run.tool_result_compression_json["summary"]["output_item_count"] >= 1
+        settings_snapshot = run.retrieval_settings_json
+        assert settings_snapshot is not None
+        assert settings_snapshot["orchestrator_provider"] == "langchain"
+        assert settings_snapshot["langchain_agentic_enabled"] is True
+        assert settings_snapshot["max_tool_calls"] == 8
+        assert settings_snapshot["max_search_calls"] == 8
+        assert settings_snapshot["timeout_seconds"] == 600.0
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        assert items[0].score_breakdown_json is not None
+        assert items[0].score_breakdown_json["retrieval_source"] == "langchain_agentic"
+        dumped = str(
+            {
+                "query_plan": run.query_plan_json,
+                "decision": run.strategy_decision_json,
+                "settings": run.retrieval_settings_json,
+                "summary": run.retrieval_score_summary,
+                "tool_result_compression": run.tool_result_compression_json,
+                "items": [item.score_breakdown_json for item in items],
+            }
+        )
+        assert message not in dumped
+        assert "full active chunk text" not in dumped
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+        assert "normalized_query_preview" not in dumped
+        assert "rewritten_query_preview" not in dumped
+
+
 def test_rag_ask_hybrid_disabled_returns_strategy_not_enabled(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

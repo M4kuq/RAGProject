@@ -1261,7 +1261,11 @@ class EvaluationService:
         case_metadata_json: dict[str, object] | None,
         rag_result: RagEvaluationResult,
     ) -> list[MetricValue]:
-        if strategy_type != RetrievalStrategy.AGENTIC_ROUTER:
+        if strategy_type not in {
+            RetrievalStrategy.AGENTIC_ROUTER,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
             return []
         retrieval_run = (
             db.get(RetrievalRun, rag_result.retrieval_run_id)
@@ -1807,6 +1811,8 @@ def _strategy_values(config: dict[str, object]) -> list[str]:
         RetrievalStrategy.SPARSE.value,
         RetrievalStrategy.HYBRID.value,
         RetrievalStrategy.AGENTIC_ROUTER.value,
+        RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+        RetrievalStrategy.LANGCHAIN_AGENTIC.value,
     }
     filtered = [strategy for strategy in values if strategy in enabled]
     return filtered or [DEFAULT_RETRIEVAL_STRATEGY.value]

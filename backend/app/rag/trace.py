@@ -33,6 +33,9 @@ _RETRIEVAL_LATENCY_KEYS = (
     "llm_orchestrator_ms",
     "llm_tool_planning_ms",
     "llm_tool_execution_ms",
+    "langchain_agentic_ms",
+    "langchain_planning_ms",
+    "langchain_tool_execution_ms",
     "strategy_router_ms",
     "query_embedding_ms",
     "qdrant_search_ms",
@@ -46,6 +49,8 @@ _LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS = frozenset(
     {
         "llm_tool_planning_ms",
         "llm_tool_execution_ms",
+        "langchain_planning_ms",
+        "langchain_tool_execution_ms",
         "query_embedding_ms",
         "qdrant_search_ms",
         "sparse_search_ms",
@@ -389,6 +394,7 @@ def build_retrieval_settings_snapshot(
                 RetrievalStrategy.SPARSE,
                 RetrievalStrategy.HYBRID,
                 RetrievalStrategy.AGENTIC_ROUTER,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
             }
             else None
         ),
@@ -399,6 +405,7 @@ def build_retrieval_settings_snapshot(
                 RetrievalStrategy.SPARSE,
                 RetrievalStrategy.HYBRID,
                 RetrievalStrategy.AGENTIC_ROUTER,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
             }
             else None
         ),
@@ -409,6 +416,7 @@ def build_retrieval_settings_snapshot(
                 RetrievalStrategy.SPARSE,
                 RetrievalStrategy.HYBRID,
                 RetrievalStrategy.AGENTIC_ROUTER,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
             }
             else None
         ),
@@ -492,7 +500,7 @@ def _elapsed_ms(started_at: float, finished_at: float) -> int:
 
 
 def _retrieval_latency_keys_for(spans: Mapping[str, int]) -> tuple[str, ...]:
-    if "llm_orchestrator_ms" not in spans:
+    if "llm_orchestrator_ms" not in spans and "langchain_agentic_ms" not in spans:
         return _RETRIEVAL_LATENCY_KEYS
     return tuple(
         key for key in _RETRIEVAL_LATENCY_KEYS if key not in _LLM_ORCHESTRATOR_NESTED_LATENCY_KEYS

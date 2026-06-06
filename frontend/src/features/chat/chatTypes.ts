@@ -2,7 +2,12 @@ import type { DocumentSourceLocator } from "../documents/documentTypes";
 
 export type ChatMode = "active" | "archived" | "temporary" | "temporary_expired";
 export type ChatMessageRole = "user" | "assistant" | "system";
-export type RagStrategy = "dense" | "hybrid" | "agentic_router" | "llm_tool_orchestrator";
+export type RagStrategy =
+  | "dense"
+  | "hybrid"
+  | "agentic_router"
+  | "llm_tool_orchestrator"
+  | "langchain_agentic";
 
 export type ChatSession = {
   chat_session_id: number;

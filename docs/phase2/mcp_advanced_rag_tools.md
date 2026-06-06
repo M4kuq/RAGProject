@@ -13,10 +13,11 @@ The MCP surface supports:
 - `rag_search` with `strategy=dense|sparse|hybrid|agentic_router`
 - `rag_search_hybrid` as a wrapper for `rag_search(strategy=hybrid)`
 - `rag_search_agentic` as a wrapper for `rag_search(strategy=agentic_router)`
-- `rag_ask` with default dense behavior and explicit `strategy=hybrid|agentic_router`
+- `rag_ask` with default dense behavior and explicit `strategy=hybrid|agentic_router|llm_tool_orchestrator|langchain_agentic`
 - `rag_ask_hybrid` as a wrapper for `rag_ask(strategy=hybrid)`
 - `rag_ask_agentic` as a wrapper for `rag_ask(strategy=agentic_router)`
 - `rag_ask_auto` as a wrapper for `rag_ask(strategy=llm_tool_orchestrator)`
+- `rag_ask_langchain_agentic` as a wrapper for `rag_ask(strategy=langchain_agentic)`
 - `rag_get_retrieval_trace` for safe retrieval trace summaries
 - `rag_compare_strategies` for latest stored strategy comparison summaries
 - `rag_get_evaluation_summary` for safe evaluation run summaries
@@ -57,7 +58,7 @@ MCP_LOCAL_ONLY=true
 MCP_ACTOR_MODE=mcp_local
 MCP_ALLOW_WRITE_TOOLS=false
 MCP_ENABLE_ADVANCED_RAG_TOOLS=true
-MCP_ALLOWED_STRATEGIES=dense,sparse,hybrid,agentic_router,llm_tool_orchestrator
+MCP_ALLOWED_STRATEGIES=dense,sparse,hybrid,agentic_router,llm_tool_orchestrator,langchain_agentic
 MCP_INCLUDE_TRACE_SUMMARY_DEFAULT=false
 MCP_MAX_ANSWER_CHARS=4000
 MCP_ALLOW_EVALUATION_RUN_CREATE=false
@@ -168,7 +169,14 @@ Strategy comparison:
   "params": {
     "name": "rag_compare_strategies",
     "arguments": {
-      "strategies": ["dense", "sparse", "hybrid", "agentic_router"],
+      "strategies": [
+        "dense",
+        "sparse",
+        "hybrid",
+        "agentic_router",
+        "llm_tool_orchestrator",
+        "langchain_agentic"
+      ],
       "mode": "latest_results"
     }
   }
@@ -184,7 +192,8 @@ MCP outputs and resources include only bounded, safe data:
 - query plan and router decision fields are allowlisted
 - score, latency, fallback, sufficiency, and count fields are summarized
 - evaluation summaries omit raw case prompts and full contexts
-- `rag_ask_auto` uses the same PR-42 compressed tool result path as backend Auto
+- `rag_ask_auto` and `rag_ask_langchain_agentic` use the same compressed
+  retrieval tool result path as backend Auto
 
 Never exposed:
 
@@ -203,5 +212,6 @@ Never exposed:
 - `rag_compare_strategies` reads latest stored results only.
 - MCP does not start long-running evaluation jobs.
 - Agentic tools use the existing bounded Phase2 agentic retrieval loop.
-- Auto ask uses `llm_tool_orchestrator` and PR-42 deterministic tool result compression.
+- Auto ask uses `llm_tool_orchestrator`; LangChain Agentic ask uses
+  `langchain_agentic` with the same retrieval-only tool boundary.
 - Remote MCP, OAuth, Graph-RAG, OCR, and external operation agents are deferred.

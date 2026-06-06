@@ -40,6 +40,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "version_aware",
         "agentic_router",
         "llm_tool_orchestrator",
+        "langchain_agentic",
         "fallback_dense",
     )
     assert RETRIEVAL_SOURCE_VALUES == (
@@ -64,6 +65,7 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
         "hybrid",
         "agentic_router",
         "llm_tool_orchestrator",
+        "langchain_agentic",
     )
     assert "fallback_dense" not in RAG_SEARCH_REQUEST_STRATEGY_VALUES
     assert "fallback_dense" not in RAG_ASK_REQUEST_STRATEGY_VALUES
@@ -81,12 +83,15 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "hybrid",
         "agentic_router",
         "llm_tool_orchestrator",
+        "langchain_agentic",
     )
     assert _field_enum_values(EvaluationRunCreateRequest.model_json_schema(), "strategy_type") == (
         "dense",
         "sparse",
         "hybrid",
         "agentic_router",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
     )
     assert "fallback_dense" not in _field_enum_values(
         EvaluationRunCreateRequest.model_json_schema(), "strategy_type"
@@ -111,6 +116,20 @@ def test_llm_orchestrator_strategy_migration_downgrade_rewrites_rows() -> None:
     assert "_rewrite_orchestrator_strategy_rows()" in source
     assert "WHERE strategy_type = 'llm_tool_orchestrator'" in source
     assert "SET strategy_type = 'agentic_router'" in source
+
+
+def test_langchain_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0013_langchain_agentic_strategy.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert "_rewrite_langchain_strategy_rows()" in source
+    assert "WHERE strategy_type = 'langchain_agentic'" in source
+    assert "SET strategy_type = 'llm_tool_orchestrator'" in source
 
 
 def test_phase2_trace_dtos_are_json_serializable_and_redacted() -> None:
@@ -186,7 +205,7 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "0008_llm_tool_orchestrator_strategy.py"
+        / "0013_langchain_agentic_strategy.py"
     )
     tree = ast.parse(migration.read_text(encoding="utf-8"))
     constants: dict[str, tuple[str, ...]] = {}
@@ -202,7 +221,7 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         if node.targets[0].id == "NEW_RETRIEVAL_STRATEGY_VALUES":
             assert old_strategy_values is not None
             constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(
-                (*old_strategy_values[:-1], "llm_tool_orchestrator", old_strategy_values[-1])
+                (*old_strategy_values[:-1], "langchain_agentic", old_strategy_values[-1])
             )
             continue
 

@@ -477,6 +477,8 @@ CREATE TABLE retrieval_runs (
                 'metadata_filtered',
                 'version_aware',
                 'agentic_router',
+                'llm_tool_orchestrator',
+                'langchain_agentic',
                 'fallback_dense'
             )
         ),
@@ -668,6 +670,8 @@ CREATE TABLE evaluation_runs (
             'metadata_filtered',
             'version_aware',
             'agentic_router',
+            'llm_tool_orchestrator',
+            'langchain_agentic',
             'fallback_dense'
         )),
     CONSTRAINT ck_evaluation_runs_trigger_type
@@ -716,6 +720,8 @@ CREATE TABLE evaluation_run_items (
             'metadata_filtered',
             'version_aware',
             'agentic_router',
+            'llm_tool_orchestrator',
+            'langchain_agentic',
             'fallback_dense'
         ))
 );
@@ -748,6 +754,8 @@ CREATE TABLE evaluation_results (
             'metadata_filtered',
             'version_aware',
             'agentic_router',
+            'llm_tool_orchestrator',
+            'langchain_agentic',
             'fallback_dense'
         ))
 );

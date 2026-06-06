@@ -6,7 +6,6 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.job_utils import redact_error_message
 from app.db.graph_models import (
     GraphEntity,
     GraphEntityMention,
@@ -21,6 +20,7 @@ from app.schemas.graph import (
     GraphIndexRunCreate,
     GraphRelationCreate,
     GraphRetrievalPathCreate,
+    validate_safe_graph_label,
     validate_safe_graph_metadata,
 )
 
@@ -206,10 +206,12 @@ class GraphRepository:
             allowed_statuses={"queued", "running"},
             target_status="failed",
         )
+        safe_error_code = _safe_graph_failure_code(error_code)
+        safe_error_message = _safe_graph_failure_message(error_message)
         now = finished_at or datetime.now(UTC)
         run.status = "failed"
-        run.error_code = error_code
-        run.error_message = redact_error_message(error_message)
+        run.error_code = safe_error_code
+        run.error_message = safe_error_message
         run.finished_at = _terminal_time(run, now)
         run.updated_at = now
         db.flush()
@@ -297,6 +299,15 @@ def _assert_graph_index_run_transition(
 ) -> None:
     if run.status in _TERMINAL_GRAPH_INDEX_STATUSES or run.status not in allowed_statuses:
         raise ValueError(f"cannot transition graph_index_run from {run.status} to {target_status}")
+
+
+def _safe_graph_failure_code(error_code: str) -> str:
+    return validate_safe_graph_label(error_code, field_name="error_code", max_length=80)
+
+
+def _safe_graph_failure_message(error_message: str | None) -> str:
+    message = "Job failed with a redacted error." if error_message else "Job failed."
+    return validate_safe_graph_label(message, field_name="error_message", max_length=240)
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:

@@ -185,6 +185,14 @@ class McpServiceAdapter:
             data["auto_strategy_summary"] = _safe_auto_strategy_summary(
                 data.get("retrieval_score_summary"),
                 trace_summary=trace_summary,
+                selected_strategy=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            )
+        if payload.strategy == RetrievalStrategy.LANGCHAIN_AGENTIC.value:
+            data["langchain_strategy_summary"] = _safe_auto_strategy_summary(
+                data.get("retrieval_score_summary"),
+                trace_summary=trace_summary,
+                selected_strategy=RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+                orchestrator_provider="langchain",
             )
         if not payload.include_citations:
             data["citations"] = []
@@ -209,6 +217,9 @@ class McpServiceAdapter:
         return self.rag_ask(
             {**arguments, "strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value}
         )
+
+    def rag_ask_langchain_agentic(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.rag_ask({**arguments, "strategy": RetrievalStrategy.LANGCHAIN_AGENTIC.value})
 
     def rag_ask_hybrid(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.HYBRID.value})
@@ -313,6 +324,17 @@ class McpServiceAdapter:
                     in self.mcp_settings.allowed_strategies
                 ),
                 "mcp_tools": ["rag_ask_auto"],
+            },
+            {
+                "strategy": RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+                "description": (
+                    "LangChain Runnable + StructuredTool retrieval orchestrator for ask."
+                ),
+                "available": (
+                    RetrievalStrategy.LANGCHAIN_AGENTIC.value
+                    in self.mcp_settings.allowed_strategies
+                ),
+                "mcp_tools": ["rag_ask_langchain_agentic"],
             },
         ]
         return _safe_output(
@@ -426,9 +448,11 @@ class McpServiceAdapter:
             RetrievalStrategy.HYBRID.value,
             RetrievalStrategy.AGENTIC_ROUTER.value,
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            RetrievalStrategy.LANGCHAIN_AGENTIC.value,
         }:
             raise McpInvalidRequest(
-                "rag_ask supports dense, hybrid, agentic_router, or llm_tool_orchestrator only"
+                "rag_ask supports dense, hybrid, agentic_router, "
+                "llm_tool_orchestrator, or langchain_agentic only"
             )
 
     def _latest_evaluation_run(
@@ -704,12 +728,17 @@ def _safe_auto_strategy_summary(
     score_summary: object,
     *,
     trace_summary: dict[str, Any] | None,
+    selected_strategy: str,
+    orchestrator_provider: str | None = None,
 ) -> dict[str, object]:
     summary = score_summary if isinstance(score_summary, dict) else {}
     trace = trace_summary if isinstance(trace_summary, dict) else {}
     return _safe_output(
         {
-            "selected_strategy": RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+            "selected_strategy": selected_strategy,
+            "orchestrator_provider": summary.get("orchestrator_provider")
+            if isinstance(summary.get("orchestrator_provider"), str)
+            else orchestrator_provider,
             "tools_used": summary.get("tools_used")
             if isinstance(summary.get("tools_used"), list)
             else [],

@@ -1707,7 +1707,90 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
-def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() -> None:
+def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="tool_agentic_strategy_compare",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="tool_agentic_case",
+                    question="Compare tool agentic retrieval",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["llm_tool_orchestrator", "langchain_agentic"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _ToolAgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-tool-agentic-compare",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["case_count"] == 2
+            strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
+            assert set(strategy_metrics) >= {
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+            }
+            assert (
+                strategy_metrics["llm_tool_orchestrator"]["metric_summary"]["fallback_rate"] == 0.0
+            )
+            assert strategy_metrics["langchain_agentic"]["metric_summary"]["fallback_rate"] == 0.0
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == [
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+            ]
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.strategies == [
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+            ]
+            assert {metric.strategy_type for metric in detail.strategy_comparison} >= {
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+            }
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -1730,7 +1813,14 @@ def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() ->
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategies=["dense", "sparse", "hybrid", "agentic_router"],
+                    strategies=[
+                        "dense",
+                        "sparse",
+                        "hybrid",
+                        "agentic_router",
+                        "llm_tool_orchestrator",
+                        "langchain_agentic",
+                    ],
                 ),
                 user=user,
             )
@@ -1743,12 +1833,14 @@ def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() ->
                 "sparse",
                 "hybrid",
                 "agentic_router",
+                "llm_tool_orchestrator",
+                "langchain_agentic",
             ]
     finally:
         engine.dispose()
 
 
-def test_evaluation_api_allows_agentic_router_and_rejects_fallback_dense_strategies(
+def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_strategies(
     evaluation_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     client, _ = evaluation_client
@@ -1760,12 +1852,16 @@ def test_evaluation_api_allows_agentic_router_and_rejects_fallback_dense_strateg
         json={
             "dataset_name": "phase1_smoke",
             "case_limit": 1,
-            "strategies": ["dense", "agentic_router"],
+            "strategies": ["dense", "llm_tool_orchestrator", "langchain_agentic"],
         },
         headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
     )
     assert accepted.status_code == 202
-    assert accepted.json()["data"]["strategies"] == ["dense", "agentic_router"]
+    assert accepted.json()["data"]["strategies"] == [
+        "dense",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
+    ]
 
     for payload in (
         {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
@@ -2288,6 +2384,95 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
             else [],
             context_sources_for_safety=[],
             error_code=None if has_context else "no_context_found",
+        )
+
+
+class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
+        if strategy_type not in {
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+            )
+
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+            strategy_decision_json={
+                "requested_strategy": strategy_type.value,
+                "selected_strategy": strategy_type.value,
+                "execution_strategy": strategy_type.value,
+                "orchestrator_provider": (
+                    "langchain" if strategy_type == RetrievalStrategy.LANGCHAIN_AGENTIC else "llm"
+                ),
+                "fallback_used": False,
+                "budget_exhausted": False,
+                "retrieval_call_count": 1,
+                "max_retrieval_calls": 8,
+                "sufficiency_score": None,
+                "sufficiency_reason_codes": [],
+            },
+            retrieval_score_summary={
+                "requested_top_k": 5,
+                "qdrant_candidate_count": 1,
+                "post_filter_candidate_count": 1,
+                "selected_count": 1,
+                "excluded_by_rdb_check_count": 0,
+                "retrieval_call_count": 1,
+                "fallback_used": False,
+                "budget_exhausted": False,
+            },
+        )
+        snippet = f"{strategy_type.value} safe target citation preview."
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=100,
+                    source_label="strategy-seed.md",
+                    snippet=snippet,
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=100,
+                    logical_document_id=10,
+                    rank_order=1,
+                    snippet=snippet,
+                )
+            ],
+            context_sources_for_safety=[],
         )
 
 
