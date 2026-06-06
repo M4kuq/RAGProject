@@ -19,6 +19,23 @@ _UNSAFE_LABEL_RE = re.compile(
     r"api[_ -]?key\s*[:=]|bearer\s+)",
     re.IGNORECASE,
 )
+_API_KEY_VALUE_RE = re.compile(
+    r"\b((sk|pk)-[A-Za-z0-9_-]{12,}|"
+    r"(sk|pk|ghp|gho|ghu|github_pat)_[A-Za-z0-9_-]{12,}|"
+    r"(AKIA|ASIA)[A-Z0-9]{16}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,})\b"
+)
+_JWT_VALUE_RE = re.compile(
+    r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"
+)
+_EMAIL_VALUE_RE = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+    re.IGNORECASE,
+)
+_PHONE_VALUE_RE = re.compile(
+    r"(?<!\w)(?:\+?\d{1,3}[\s.-]?)?"
+    r"(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{3,4}[\s.-]\d{4}(?!\w)"
+)
 _FORBIDDEN_METADATA_KEYS = {
     "raw_document_text",
     "raw_chunk_text",
@@ -299,7 +316,7 @@ def validate_safe_graph_label(value: str, *, field_name: str, max_length: int) -
         raise ValueError(f"{field_name} must be a single-line safe label")
     if len(normalized) > max_length:
         raise ValueError(f"{field_name} is too long")
-    if _UNSAFE_LABEL_RE.search(normalized):
+    if _contains_unsafe_graph_text(normalized):
         raise ValueError(f"{field_name} contains unsafe graph text")
     return normalized
 
@@ -334,7 +351,20 @@ def _assert_safe_metadata_value(value: object, *, parent_key: str) -> None:
     if isinstance(value, str):
         if len(value) > 1000:
             raise ValueError(f"graph metadata string is too long: {parent_key}")
-        if _UNSAFE_LABEL_RE.search(value):
+        if _contains_unsafe_graph_text(value):
             raise ValueError(f"graph metadata string contains unsafe content: {parent_key}")
     if isinstance(value, (bytes, bytearray)):
         raise ValueError(f"graph metadata bytes are not allowed: {parent_key}")
+
+
+def _contains_unsafe_graph_text(value: str) -> bool:
+    return any(
+        pattern.search(value)
+        for pattern in (
+            _UNSAFE_LABEL_RE,
+            _API_KEY_VALUE_RE,
+            _JWT_VALUE_RE,
+            _EMAIL_VALUE_RE,
+            _PHONE_VALUE_RE,
+        )
+    )
