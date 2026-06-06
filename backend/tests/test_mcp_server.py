@@ -730,6 +730,30 @@ def test_jsonrpc_rag_ask_no_context_failure_contract(
     assert response["result"]["structuredContent"]["citations"] == []
 
 
+def test_jsonrpc_langchain_agentic_ask_no_context_failure_contract(
+    empty_mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(empty_mcp_adapter)
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "rag_ask_langchain_agentic",
+                "arguments": {"question": "Summarize missing context"},
+            },
+        },
+    )
+
+    assert response is not None
+    assert response["result"]["isError"] is True
+    assert response["result"]["structuredContent"]["status"] == "failed"
+    assert response["result"]["structuredContent"]["error_code"] == "no_context_found"
+    assert response["result"]["structuredContent"]["strategy"] == "langchain_agentic"
+    assert response["result"]["structuredContent"]["citations"] == []
+
+
 def test_jsonrpc_rag_search_pipeline_failure_contract(
     empty_mcp_adapter: McpServiceAdapter,
 ) -> None:
@@ -768,6 +792,11 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
         {"name": "list_documents", "arguments": []},
         {"name": "rag_search", "arguments": {"query": "   "}},
         {"name": "rag_search", "arguments": {"query": "alpha", "unexpected": True}},
+        {"name": "rag_search", "arguments": {"query": "alpha", "strategy": "langchain_agentic"}},
+        {
+            "name": "rag_search",
+            "arguments": {"query": "alpha", "strategy": "llm_tool_orchestrator"},
+        },
         {"name": "get_document_status", "arguments": {"logical_document_id": 0}},
         {"name": "get_job_status", "arguments": {"job_id": 0}},
         {"name": "get_evaluation_result", "arguments": {"evaluation_run_id": 0}},

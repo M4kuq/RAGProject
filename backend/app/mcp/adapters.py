@@ -443,6 +443,15 @@ class McpServiceAdapter:
             and not self.mcp_settings.enable_advanced_rag_tools
         ):
             raise McpInvalidRequest("advanced RAG MCP tools are disabled")
+        if not ask and strategy not in {
+            RetrievalStrategy.DENSE.value,
+            RetrievalStrategy.SPARSE.value,
+            RetrievalStrategy.HYBRID.value,
+            RetrievalStrategy.AGENTIC_ROUTER.value,
+        }:
+            raise McpInvalidRequest(
+                "rag_search supports dense, sparse, hybrid, or agentic_router only"
+            )
         if ask and strategy not in {
             RetrievalStrategy.DENSE.value,
             RetrievalStrategy.HYBRID.value,

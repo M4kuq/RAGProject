@@ -361,7 +361,14 @@ def call_tool(
     except McpError:
         raise
     is_error = (
-        name in {"rag_ask", "rag_ask_agentic", "rag_ask_auto", "rag_ask_hybrid"}
+        name
+        in {
+            "rag_ask",
+            "rag_ask_agentic",
+            "rag_ask_auto",
+            "rag_ask_hybrid",
+            "rag_ask_langchain_agentic",
+        }
         and structured.get("status") == "failed"
     )
     return _tool_success(structured, is_error=is_error)
