@@ -506,7 +506,6 @@ def _empty_search_keys(
         (result.tool_name, result.normalized_query)
         for result in tool_results
         if result.tool_name in LANGCHAIN_SEARCH_TOOL_NAMES
-        and result.status == "succeeded"
         and result.item_count == 0
         and result.normalized_query is not None
     }
