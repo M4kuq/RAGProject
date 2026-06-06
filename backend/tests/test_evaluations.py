@@ -1839,6 +1839,116 @@ def test_langchain_agentic_evaluation_marks_retrieval_run_failed_on_internal_err
         engine.dispose()
 
 
+def test_langchain_agentic_evaluation_populates_retrieved_items_for_metrics() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=user.user_id,
+                title="LangChain evaluation source",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="c" * 64,
+                status="ready",
+                is_active=True,
+                file_name="langchain-eval.md",
+                mime_type="text/markdown",
+                file_size_bytes=100,
+                created_by=user.user_id,
+            )
+            db.add(version)
+            db.flush()
+            chunk = DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=0,
+                chunk_hash=hashlib.sha256(b"langchain eval recall marker").hexdigest(),
+                content_text="langchain eval recall marker qdrant citation evidence",
+                modality="text",
+            )
+            db.add(chunk)
+            db.flush()
+            logical_document_id = logical.logical_document_id
+            document_chunk_id = chunk.document_chunk_id
+            db.commit()
+
+            service = RagService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    embedding_fake_dimension=4,
+                    retrieval_top_k_default=1,
+                    retrieval_top_k_max=5,
+                    rerank_provider="fake",
+                    rerank_top_n_default=1,
+                    rerank_top_n_max=5,
+                    qdrant_collection_name="document_chunks",
+                    generation_provider="fake",
+                    langchain_agentic_enabled=True,
+                    sparse_enabled=False,
+                    hybrid_enabled=False,
+                ),
+                embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+                vector_client=_FakeVectorClient(
+                    [
+                        VectorSearchCandidate(
+                            document_chunk_id=document_chunk_id,
+                            retrieval_score=0.91,
+                            qdrant_order=1,
+                            payload={},
+                        )
+                    ]
+                ),
+                reranker=FakeRerankerClient(),
+                answer_generator=FakeAnswerGenerator(),
+            )
+            evaluator = EvaluationRagQuestionService(service)
+
+            result = evaluator.evaluate_question(
+                db,
+                question="langchain eval recall marker",
+                request_id="test-langchain-retrieved-items",
+                strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+            )
+
+        assert result.status == "succeeded"
+        assert result.retrieved_items == [
+            RetrievedEvaluationItem(
+                document_chunk_id=document_chunk_id,
+                logical_document_id=logical_document_id,
+                rank_order=1,
+                snippet="langchain eval recall marker qdrant citation evidence",
+            )
+        ]
+        metrics = calculate_metrics(
+            EvaluationMetricInputs(
+                case=EvaluationCase(
+                    case_id="langchain_retrieved_items",
+                    question="langchain eval recall marker",
+                    expected_keywords=(),
+                    required_citation=True,
+                    expected_document_ids=(logical_document_id,),
+                    expected_chunk_ids=(document_chunk_id,),
+                ),
+                answer_text=result.answer_text,
+                citations=result.citations,
+                confidence=result.confidence,
+                retrieval_summary=result.retrieval_score_summary,
+                retrieved_items=result.retrieved_items,
+            )
+        )
+        by_name = {metric.metric_name: metric for metric in metrics}
+        assert by_name["recall_at_k"].metric_score == 1.0
+        assert by_name["mrr"].metric_score == 1.0
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -2093,6 +2203,9 @@ class _IntegrityErrorEvaluationRepository(EvaluationRepository):
 
 
 class _FakeVectorClient(VectorSearchClient):
+    def __init__(self, candidates: Sequence[VectorSearchCandidate] = ()) -> None:
+        self.candidates = list(candidates)
+
     def search(
         self,
         *,
@@ -2101,7 +2214,7 @@ class _FakeVectorClient(VectorSearchClient):
         limit: int,
         filters: RetrievalFilters,
     ) -> list[VectorSearchCandidate]:
-        return []
+        return self.candidates[:limit]
 
 
 class _FakeEvaluationRagService:

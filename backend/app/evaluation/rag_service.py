@@ -48,6 +48,7 @@ from app.schemas.rag import (
     RetrievalScoreSummary,
 )
 from app.services.rag_service import (
+    ContextCandidateRef,
     RagSearchPipelineError,
     RagService,
     _assemble_context,
@@ -604,7 +605,14 @@ class EvaluationRagQuestionService:
                 citations=[_citation_response(record) for record in citation_records],
                 confidence=_confidence_response(run),
                 retrieval_score_summary=final_summary,
-                retrieved_items=[],
+                retrieved_items=[
+                    _retrieved_item_from_context_ref(
+                        ref,
+                        rank_order=rank_order,
+                        snippet_max_chars=self.service.settings.search_snippet_max_chars,
+                    )
+                    for rank_order, ref in enumerate(selected_context_refs, start=1)
+                ],
                 context_sources_for_safety=[item.text for item in context_items],
             )
         except CitationBuildError:
@@ -870,7 +878,14 @@ class EvaluationRagQuestionService:
                 citations=[_citation_response(record) for record in citation_records],
                 confidence=_confidence_response(run),
                 retrieval_score_summary=final_summary,
-                retrieved_items=[],
+                retrieved_items=[
+                    _retrieved_item_from_context_ref(
+                        ref,
+                        rank_order=rank_order,
+                        snippet_max_chars=self.service.settings.search_snippet_max_chars,
+                    )
+                    for rank_order, ref in enumerate(selected_context_refs, start=1)
+                ],
                 context_sources_for_safety=[item.text for item in context_items],
             )
         except CitationBuildError:
@@ -938,6 +953,20 @@ def _retrieved_item_from_search_item(item: RagSearchItem) -> RetrievedEvaluation
         logical_document_id=_safe_int(item.payload_snapshot.get("logical_document_id")),
         rank_order=item.rank_order,
         snippet=item.snippet,
+    )
+
+
+def _retrieved_item_from_context_ref(
+    ref: ContextCandidateRef,
+    *,
+    rank_order: int,
+    snippet_max_chars: int,
+) -> RetrievedEvaluationItem:
+    return RetrievedEvaluationItem(
+        document_chunk_id=ref.candidate.chunk.document_chunk_id,
+        logical_document_id=ref.candidate.logical_document.logical_document_id,
+        rank_order=rank_order,
+        snippet=_clean_context_text(ref.candidate.chunk.content_text)[:snippet_max_chars],
     )
 
 

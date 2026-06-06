@@ -49,6 +49,7 @@ class LangChainToolResult:
     item_count: int = 0
     items: list[ToolResultItem] = field(default_factory=list)
     error_code: str | None = None
+    normalized_query: str | None = None
 
     def to_trace(self) -> dict[str, object]:
         return TraceRedactor.safe_dict(
@@ -347,7 +348,12 @@ class LangChainAgenticRetrievalOrchestrator:
                             attempt,
                             compressed.items,
                         )
-                        tool_results.append(_langchain_tool_result_from_compressed(compressed))
+                        tool_results.append(
+                            _langchain_tool_result_from_compressed(
+                                compressed,
+                                normalized_query=search_key[1],
+                            )
+                        )
                         if compressed.repeated_result:
                             reason_codes.append("repeated_tool_result_detected")
                         if compressed.oversized_rejected:
@@ -372,6 +378,7 @@ class LangChainAgenticRetrievalOrchestrator:
                                     max_item_count=legacy_result_item_limit,
                                     max_snippet_chars=legacy_snippet_chars,
                                 ),
+                                normalized_query=search_key[1],
                             )
                         )
                         reason_codes.append("tool_result_compression_skipped")
@@ -461,6 +468,7 @@ class LangChainAgenticRetrievalOrchestrator:
 
 
 def _plan_next_calls(state: LangChainPlanningState) -> list[LangChainToolCall]:
+    query = state.user_query[: state.max_query_chars]
     successful_search_results = [
         result
         for result in state.tool_results
@@ -482,26 +490,40 @@ def _plan_next_calls(state: LangChainPlanningState) -> list[LangChainToolCall]:
         ]
     if state.remaining_search_calls <= 0:
         return []
-    if "hybrid_search" in state.available_tools:
-        return [
-            LangChainToolCall(
-                tool_name="hybrid_search",
-                arguments={"query": state.user_query[: state.max_query_chars]},
-            )
-        ]
-    if "sparse_search" in state.available_tools and _looks_keyword_heavy(state.user_query):
-        return [
-            LangChainToolCall(
-                tool_name="sparse_search",
-                arguments={"query": state.user_query[: state.max_query_chars]},
-            )
-        ]
-    return [
-        LangChainToolCall(
-            tool_name="dense_search",
-            arguments={"query": state.user_query[: state.max_query_chars]},
-        )
-    ]
+    empty_search_keys = _empty_search_keys(state.tool_results)
+    normalized_query = _normalized_query(query)
+    for tool_name in _search_tool_priority(state):
+        if (tool_name, normalized_query) in empty_search_keys:
+            continue
+        return [LangChainToolCall(tool_name=tool_name, arguments={"query": query})]
+    return []
+
+
+def _empty_search_keys(
+    tool_results: Sequence[LangChainToolResult],
+) -> set[tuple[str, str]]:
+    return {
+        (result.tool_name, result.normalized_query)
+        for result in tool_results
+        if result.tool_name in LANGCHAIN_SEARCH_TOOL_NAMES
+        and result.status == "succeeded"
+        and result.item_count == 0
+        and result.normalized_query is not None
+    }
+
+
+def _search_tool_priority(state: LangChainPlanningState) -> list[str]:
+    available_tools = set(state.available_tools)
+    tools: list[str] = []
+    if "hybrid_search" in available_tools:
+        tools.append("hybrid_search")
+    if "sparse_search" in available_tools and _looks_keyword_heavy(state.user_query):
+        tools.append("sparse_search")
+    if "dense_search" in available_tools:
+        tools.append("dense_search")
+    if "sparse_search" in available_tools and "sparse_search" not in tools:
+        tools.append("sparse_search")
+    return tools
 
 
 def _search_tools(
@@ -655,7 +677,11 @@ def _attempt_with_candidates(
     )
 
 
-def _langchain_tool_result_from_compressed(result: CompressedToolResult) -> LangChainToolResult:
+def _langchain_tool_result_from_compressed(
+    result: CompressedToolResult,
+    *,
+    normalized_query: str | None = None,
+) -> LangChainToolResult:
     return LangChainToolResult(
         tool_call_id=result.tool_call_id,
         tool_name=result.tool_name,
@@ -663,6 +689,7 @@ def _langchain_tool_result_from_compressed(result: CompressedToolResult) -> Lang
         item_count=result.output_item_count,
         items=result.items,
         error_code=result.error_code,
+        normalized_query=normalized_query,
     )
 
 

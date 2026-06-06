@@ -37,6 +37,12 @@ from app.rag.generation import (
     GenerationRequest,
     GenerationResult,
 )
+from app.rag.langchain_agentic import (
+    LangChainPlanningState,
+    LangChainToolCall,
+    LangChainToolResult,
+    _plan_next_calls,
+)
 from app.rag.llm_orchestrator import (
     LLMToolCall,
     LLMToolCallingRetrievalOrchestrator,
@@ -872,6 +878,72 @@ def test_rag_ask_langchain_agentic_uses_langchain_tools_and_saves_safe_trace(
         assert "content_text" not in dumped
         assert "normalized_query_preview" not in dumped
         assert "rewritten_query_preview" not in dumped
+
+
+def test_langchain_agentic_planner_tries_alternate_tools_after_empty_searches() -> None:
+    query = "alpha beta gamma delta epsilon zeta retrieval evidence"
+    available_tools = ("dense_search", "sparse_search", "hybrid_search", "finalize_answer")
+    first_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=4,
+            remaining_search_calls=4,
+            available_tools=available_tools,
+            tool_results=[],
+        )
+    )
+
+    assert first_call == [LangChainToolCall(tool_name="hybrid_search", arguments={"query": query})]
+
+    second_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=3,
+            remaining_search_calls=3,
+            available_tools=available_tools,
+            tool_results=[
+                LangChainToolResult(
+                    tool_call_id="lc_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                )
+            ],
+        )
+    )
+
+    assert second_call == [LangChainToolCall(tool_name="sparse_search", arguments={"query": query})]
+
+    third_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=2,
+            remaining_search_calls=2,
+            available_tools=available_tools,
+            tool_results=[
+                LangChainToolResult(
+                    tool_call_id="lc_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+                LangChainToolResult(
+                    tool_call_id="lc_2",
+                    tool_name="sparse_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+            ],
+        )
+    )
+
+    assert third_call == [LangChainToolCall(tool_name="dense_search", arguments={"query": query})]
 
 
 def test_rag_ask_hybrid_disabled_returns_strategy_not_enabled(
