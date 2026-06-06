@@ -41,9 +41,15 @@ from app.evaluation.metrics import (
     RetrievedEvaluationItem,
     calculate_metrics,
 )
-from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
+from app.evaluation.rag_service import (
+    DatabaseVectorSearchClient,
+    EvaluationRagQuestionService,
+    RagEvaluationResult,
+)
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
+from app.rag.generation import FakeAnswerGenerator
+from app.rag.rerank import FakeRerankerClient
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository
@@ -61,6 +67,7 @@ from app.services.evaluation_service import (
     EvaluationService,
     _strategy_metrics_summary_json,
 )
+from app.services.rag_service import RagService
 from app.workers.handlers.base import JobExecutionContext
 from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
 
@@ -1790,6 +1797,48 @@ def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> No
         engine.dispose()
 
 
+def test_langchain_agentic_evaluation_marks_retrieval_run_failed_on_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session_factory = _session_factory()
+    try:
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+
+        def fail_langchain_retrieval(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            raise RuntimeError("synthetic_langchain_failure")
+
+        monkeypatch.setattr(service, "_retrieve_langchain_agentic", fail_langchain_retrieval)
+        evaluator = EvaluationRagQuestionService(service)
+
+        with session_factory() as db:
+            with pytest.raises(RuntimeError, match="synthetic_langchain_failure"):
+                evaluator.evaluate_question(
+                    db,
+                    question="Compare LangChain failure handling",
+                    request_id="test-langchain-internal-error",
+                    strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+                )
+
+            run = db.scalar(
+                select(RetrievalRun).where(
+                    RetrievalRun.request_id == "test-langchain-internal-error"
+                )
+            )
+            assert run is not None
+            assert run.status == "failed"
+            assert run.error_code == "internal_error"
+            assert run.finished_at is not None
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -2388,13 +2437,13 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
 
 
 class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
-    def evaluate_strategy(
+    def evaluate_question(
         self,
         db: Session,
         *,
         question: str,
         request_id: str | None,
-        strategy_type: RetrievalStrategy,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
@@ -2403,7 +2452,7 @@ class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
             RetrievalStrategy.LANGCHAIN_AGENTIC,
         }:
-            return self.evaluate_question(
+            return super().evaluate_question(
                 db,
                 question=question,
                 request_id=request_id,
@@ -2473,6 +2522,30 @@ class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 )
             ],
             context_sources_for_safety=[],
+        )
+
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        if strategy_type in {
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
+            raise AssertionError("ask-only evaluation strategies must use evaluate_question")
+        return self.evaluate_question(
+            db,
+            question=question,
+            request_id=request_id,
+            strategy_type=strategy_type,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
         )
 
 

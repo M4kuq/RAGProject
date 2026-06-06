@@ -128,8 +128,15 @@ def test_langchain_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
     source = migration.read_text(encoding="utf-8")
 
     assert "_rewrite_langchain_strategy_rows()" in source
+    assert "_rewrite_langchain_strategy_json()" in source
     assert "WHERE strategy_type = 'langchain_agentic'" in source
     assert "SET strategy_type = 'llm_tool_orchestrator'" in source
+    assert "evaluation_runs" in source
+    assert "metrics_config" in source
+    assert "jobs" in source
+    assert "payload_json" in source
+    assert "job_type = 'evaluation_run'" in source
+    assert "jsonb_array_elements_text" in source
 
 
 def test_phase2_trace_dtos_are_json_serializable_and_redacted() -> None:

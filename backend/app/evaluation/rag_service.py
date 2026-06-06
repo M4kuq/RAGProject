@@ -909,6 +909,14 @@ class EvaluationRagQuestionService:
                 rollback=False,
             )
             return _failed_evaluation_result(run_id, "rerank_failed")
+        except Exception:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="internal_error",
+                latency_tracker=latency_tracker,
+            )
+            raise
 
 
 def _citation_from_search_item(index: int, item: RagSearchItem) -> RagAskCitation:

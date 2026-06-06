@@ -59,6 +59,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     _rewrite_langchain_strategy_rows()
+    _rewrite_langchain_strategy_json()
     _replace_strategy_constraint(
         "retrieval_runs",
         "ck_retrieval_runs_strategy_type",
@@ -93,6 +94,57 @@ def _rewrite_langchain_strategy_rows() -> None:
             "SET strategy_type = 'llm_tool_orchestrator' "
             "WHERE strategy_type = 'langchain_agentic'"
         )
+
+
+def _rewrite_langchain_strategy_json() -> None:
+    _rewrite_strategy_json_column("evaluation_runs", "metrics_config")
+    _rewrite_strategy_json_column(
+        "jobs",
+        "payload_json",
+        where_clause="job_type = 'evaluation_run' AND ",
+    )
+
+
+def _rewrite_strategy_json_column(
+    table_name: str,
+    column_name: str,
+    *,
+    where_clause: str = "",
+) -> None:
+    op.execute(
+        f"UPDATE {table_name} "
+        f"SET {column_name} = jsonb_set("
+        f"{column_name}, "
+        "'{strategy_type}', "
+        "to_jsonb('llm_tool_orchestrator'::text), "
+        "true"
+        ") "
+        f"WHERE {where_clause}{column_name}->>'strategy_type' = 'langchain_agentic'"
+    )
+    op.execute(
+        f"UPDATE {table_name} "
+        f"SET {column_name} = jsonb_set("
+        f"{column_name}, "
+        "'{strategies}', "
+        "("
+        "SELECT jsonb_agg("
+        "CASE "
+        "WHEN strategy.value = 'langchain_agentic' "
+        "THEN to_jsonb('llm_tool_orchestrator'::text) "
+        "ELSE to_jsonb(strategy.value) "
+        "END"
+        ") "
+        f"FROM jsonb_array_elements_text({column_name}->'strategies') AS strategy(value)"
+        "), "
+        "false"
+        ") "
+        f"WHERE {where_clause}jsonb_typeof({column_name}->'strategies') = 'array' "
+        "AND EXISTS ("
+        "SELECT 1 "
+        f"FROM jsonb_array_elements_text({column_name}->'strategies') AS strategy(value) "
+        "WHERE strategy.value = 'langchain_agentic'"
+        ")"
+    )
 
 
 def _replace_strategy_constraint(
