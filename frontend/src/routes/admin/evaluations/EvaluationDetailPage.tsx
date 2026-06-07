@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import {
+  compareMetricNames,
+  MetricHelp,
+  orderedMetricEntries
+} from "../../../components/admin/MetricHelp";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import {
@@ -133,9 +138,14 @@ export function EvaluationDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {Object.entries(run.data.metric_summary).map(([name, value]) => (
+            {orderedMetricEntries(Object.entries(run.data.metric_summary)).map(([name, value]) => (
               <tr key={name}>
-                <td>{name}</td>
+                <td>
+                  <span className="metric-name-cell">
+                    {name}
+                    <MetricHelp metricName={name} />
+                  </span>
+                </td>
                 <td>{value.toFixed(3)}</td>
               </tr>
             ))}
@@ -154,7 +164,12 @@ export function EvaluationDetailPage() {
           <thead>
             <tr>
               <th>Strategy</th>
-              <th>Metric</th>
+              <th>
+                <span className="metric-heading">
+                  Metric
+                  <MetricHelp metricName="metric_summary" />
+                </span>
+              </th>
               <th>Average</th>
               <th>p50</th>
               <th>p95</th>
@@ -163,10 +178,15 @@ export function EvaluationDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {run.data.strategy_comparison.map((metric) => (
+            {[...run.data.strategy_comparison].sort(compareStrategyMetrics).map((metric) => (
               <tr key={`${metric.strategy_type}-${metric.metric_name}`}>
                 <td>{metric.strategy_type}</td>
-                <td>{metric.metric_name}</td>
+                <td>
+                  <span className="metric-name-cell">
+                    {metric.metric_name}
+                    <MetricHelp metricName={metric.metric_name} />
+                  </span>
+                </td>
                 <td>{formatScore(metric.average)}</td>
                 <td>{formatScore(metric.p50)}</td>
                 <td>{formatScore(metric.p95)}</td>
@@ -188,7 +208,12 @@ export function EvaluationDetailPage() {
         <dl className="detail-grid">
           {agenticSummaryEntries(run.data.strategy_metrics_summary_json).map(([name, value]) => (
             <div key={name}>
-              <dt>{name}</dt>
+              <dt>
+                <span className="metric-name-cell">
+                  {name}
+                  <MetricHelp metricName={name} />
+                </span>
+              </dt>
               <dd>{value}</dd>
             </div>
           ))}
@@ -388,7 +413,12 @@ export function EvaluationDetailPage() {
               <th>Citation</th>
               <th>Context</th>
               <th>Error</th>
-              <th>Metrics</th>
+              <th>
+                <span className="metric-heading">
+                  Metrics
+                  <MetricHelp metricName="case_metrics" />
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -485,12 +515,39 @@ function formatMetricDetails(metrics: EvaluationMetricResult[]) {
   if (!safeMetrics.length) {
     return "-";
   }
-  return safeMetrics
-    .map((metric) => {
-      const label = metric.metric_label ? ` ${metric.metric_label}` : "";
-      return `${metric.metric_name}=${formatScore(metric.metric_score)}${label}`;
-    })
-    .join(", ");
+  return (
+    <span className="metric-detail-list">
+      {[...safeMetrics].sort(compareEvaluationMetrics).map((metric) => {
+        const label = metric.metric_label ? ` ${metric.metric_label}` : "";
+        return (
+          <span className="metric-detail-item" key={`${metric.strategy_type}-${metric.metric_name}`}>
+            <span>
+              {metric.metric_name}={formatScore(metric.metric_score)}
+              {label}
+            </span>
+            <MetricHelp metricName={metric.metric_name} />
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function compareStrategyMetrics(
+  left: { strategy_type: string; metric_name: string },
+  right: { strategy_type: string; metric_name: string }
+) {
+  return (
+    left.strategy_type.localeCompare(right.strategy_type) ||
+    compareMetricNames(left.metric_name, right.metric_name)
+  );
+}
+
+function compareEvaluationMetrics(left: EvaluationMetricResult, right: EvaluationMetricResult) {
+  return (
+    compareMetricNames(left.metric_name, right.metric_name) ||
+    left.strategy_type.localeCompare(right.strategy_type)
+  );
 }
 
 function agenticSummaryEntries(summary: Record<string, unknown> | null): Array<[string, string]> {
