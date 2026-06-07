@@ -759,9 +759,11 @@ textarea {
 }
 
 .chat-thread-list {
+  align-content: start;
   display: grid;
   flex: 1;
   gap: 2px;
+  grid-auto-rows: max-content;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
