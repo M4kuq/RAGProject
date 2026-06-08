@@ -30,3 +30,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix remaining PR review feedback"
           git push origin HEAD:${GITHUB_REF_NAME}
+
+# Triggered once after the workflow file exists on the branch.
