@@ -1,5 +1,6 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { AdminSidebar } from "../../components/admin/AdminSidebar";
+import { ContextBudgetHelpPortal } from "../../components/admin/ContextBudgetHelpPortal";
 import { ErrorState, LoadingState } from "../../components/common/States";
 import { RoleGuard } from "../../features/auth/RoleGuard";
 import { useCsrfToken } from "../../features/auth/authHooks";
@@ -25,6 +26,8 @@ export function AdminLayout() {
 
 function AdminShell() {
   const csrf = useCsrfToken();
+  const location = useLocation();
+  const showContextBudgetHelp = location.pathname.endsWith("/admin/retrieval-debug");
 
   return (
     <div className="admin-layout">
@@ -40,25 +43,28 @@ function AdminShell() {
         </main>
       ) : null}
       {csrf.isSuccess ? (
-        <Routes>
-          <Route index element={<AdminPage />} />
-          <Route path="evaluations" element={<EvaluationListPage />} />
-          <Route
-            path="evaluations/datasets/:evaluationDatasetId"
-            element={<EvaluationDatasetDetailPage />}
-          />
-          <Route path="evaluations/:evaluationRunId" element={<EvaluationDetailPage />} />
-          <Route path="retrieval-debug" element={<RetrievalDebugPage />} />
-          <Route path="documents" element={<DocumentListPage />} />
-          <Route path="documents/review" element={<DocumentReviewPage />} />
-          <Route path="documents/:logicalDocumentId" element={<DocumentDetailPage />} />
-          <Route
-            path="documents/:logicalDocumentId/versions/:documentVersionId"
-            element={<VersionDetailPage />}
-          />
-          <Route path="jobs" element={<JobListPage />} />
-          <Route path="jobs/:jobId" element={<JobDetailPage />} />
-        </Routes>
+        <>
+          <Routes>
+            <Route index element={<AdminPage />} />
+            <Route path="evaluations" element={<EvaluationListPage />} />
+            <Route
+              path="evaluations/datasets/:evaluationDatasetId"
+              element={<EvaluationDatasetDetailPage />}
+            />
+            <Route path="evaluations/:evaluationRunId" element={<EvaluationDetailPage />} />
+            <Route path="retrieval-debug" element={<RetrievalDebugPage />} />
+            <Route path="documents" element={<DocumentListPage />} />
+            <Route path="documents/review" element={<DocumentReviewPage />} />
+            <Route path="documents/:logicalDocumentId" element={<DocumentDetailPage />} />
+            <Route
+              path="documents/:logicalDocumentId/versions/:documentVersionId"
+              element={<VersionDetailPage />}
+            />
+            <Route path="jobs" element={<JobListPage />} />
+            <Route path="jobs/:jobId" element={<JobDetailPage />} />
+          </Routes>
+          {showContextBudgetHelp ? <ContextBudgetHelpPortal /> : null}
+        </>
       ) : null}
     </div>
   );
