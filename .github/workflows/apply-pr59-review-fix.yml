@@ -1,0 +1,32 @@
+name: Apply PR59 Review Fix
+
+on:
+  push:
+    branches:
+      - feature/pr-46-graph-schema-index-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, 'run pr59 review patch applicator')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+
+      - name: Apply review patch and remove applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/pr59-review-fix.patch
+          git apply --index .github/pr59-review-fix.patch
+          git rm .github/pr59-review-fix.patch .github/workflows/apply-pr59-review-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix remaining PR review feedback"
+          git push origin HEAD:${GITHUB_REF_NAME}
