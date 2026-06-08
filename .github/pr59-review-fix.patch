@@ -1,16 +1,7 @@
 diff --git a/backend/app/evaluation/rag_service.py b/backend/app/evaluation/rag_service.py
-index 80ca463..7bfa6aa 100644
 --- a/backend/app/evaluation/rag_service.py
 +++ b/backend/app/evaluation/rag_service.py
-@@ -58,6 +58,7 @@ from app.services.rag_service import (
-     _context_citation_sources,
-     _context_refs_for_citation_sources,
-     _decimal_score,
-+    _is_insufficient_evidence_answer,
-     _optional_decimal_score,
-     _prompt_citation_sources,
-     _query_hash,
-@@ -103,6 +104,31 @@ class EvaluationRagQuestionService:
+@@ -103,6 +103,31 @@ class EvaluationRagQuestionService:
      def __init__(self, service: RagService) -> None:
          self.service = service
  
@@ -42,7 +33,7 @@ index 80ca463..7bfa6aa 100644
      def evaluate_question(
          self,
          db: Session,
-@@ -174,6 +200,13 @@ class EvaluationRagQuestionService:
+@@ -174,6 +199,13 @@ class EvaluationRagQuestionService:
                  )
              )
              parsed_generation = parse_generation_output(generation.content)
@@ -56,7 +47,7 @@ index 80ca463..7bfa6aa 100644
              _validate_generation_output_safety(
                  parsed_generation.answer_text,
                  context_items=context_items,
-@@ -340,6 +373,13 @@ class EvaluationRagQuestionService:
+@@ -340,6 +372,13 @@ class EvaluationRagQuestionService:
                  )
              )
              parsed_generation = parse_generation_output(generation.content)
@@ -70,40 +61,7 @@ index 80ca463..7bfa6aa 100644
              _validate_generation_output_safety(
                  parsed_generation.answer_text,
                  context_items=context_items,
-@@ -543,6 +583,15 @@ class EvaluationRagQuestionService:
-                     )
-                 )
-             parsed_generation = parse_generation_output(generation.content)
-+            if no_context_result := self._no_context_result_if_insufficient_answer(
-+                db,
-+                retrieval_run_id=run_id,
-+                answer_text=parsed_generation.answer_text,
-+                retrieval_score_summary=final_summary,
-+                latency_tracker=latency_tracker,
-+                rollback=False,
-+            ):
-+                return no_context_result
-             _validate_generation_output_safety(
-                 parsed_generation.answer_text,
-                 context_items=context_items,
-@@ -803,6 +852,15 @@ class EvaluationRagQuestionService:
-                     )
-                 )
-             parsed_generation = parse_generation_output(generation.content)
-+            if no_context_result := self._no_context_result_if_insufficient_answer(
-+                db,
-+                retrieval_run_id=run_id,
-+                answer_text=parsed_generation.answer_text,
-+                retrieval_score_summary=final_summary,
-+                latency_tracker=latency_tracker,
-+                rollback=False,
-+            ):
-+                return no_context_result
-             _validate_generation_output_safety(
-                 parsed_generation.answer_text,
-                 context_items=context_items,
 diff --git a/backend/app/services/rag_service.py b/backend/app/services/rag_service.py
-index bea77dc..09a5b7d 100644
 --- a/backend/app/services/rag_service.py
 +++ b/backend/app/services/rag_service.py
 @@ -171,6 +171,10 @@ class RagAskPipelineError(RagPipelineError):
@@ -157,44 +115,19 @@ index bea77dc..09a5b7d 100644
      )
  
 diff --git a/backend/tests/test_rag_ask.py b/backend/tests/test_rag_ask.py
-index 62e11a8..993e4cf 100644
 --- a/backend/tests/test_rag_ask.py
 +++ b/backend/tests/test_rag_ask.py
-@@ -1752,7 +1752,7 @@ def test_rag_ask_llm_tool_orchestrator_prefers_named_project_source_for_citation
-         assert first_selected.document_chunk_id == 500
- 
- 
--def test_rag_ask_llm_tool_orchestrator_insufficient_answer_is_saved_when_context_exists(
-+def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
-     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
- ) -> None:
-     client, session_factory, vector_client = rag_ask_client
-@@ -1785,16 +1785,15 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_is_saved_when_context
-         headers=_unsafe_headers(csrf_token),
-     )
- 
--    assert response.status_code == 200
--    data = response.json()["data"]
--    assert data["assistant_message"]["content"].startswith("検索された文書には")
--    assert data["citations"][0]["document_chunk_id"] == 100
-+    assert response.status_code == 422
-+    assert response.json()["error"]["code"] == "no_context_found"
-     with session_factory() as db:
+@@ -1792,7 +1792,8 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
          run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
--        assert run.status == "succeeded"
--        assert run.error_code is None
--        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
--        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
-+        assert run.status == "failed"
-+        assert run.error_code == "no_context_found"
+         assert run.status == "failed"
+         assert run.error_code == "no_context_found"
+-        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 1
 +        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
 +        assert [message.role for message in messages] == ["user"]
-+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
  
  
- def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
 diff --git a/frontend/src/routes/admin/admin.test.tsx b/frontend/src/routes/admin/admin.test.tsx
-index 6386765..57f2833 100644
 --- a/frontend/src/routes/admin/admin.test.tsx
 +++ b/frontend/src/routes/admin/admin.test.tsx
 @@ -376,8 +376,20 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
