@@ -34,6 +34,16 @@ _PHONE_VALUE_RE = re.compile(
     r"(?<!\w)(?:\+?\d{1,3}[\s.-]?)?"
     r"(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{3,4}[\s.-]\d{4}(?!\w)"
 )
+
+
+def _metadata_key_forms(value: str) -> set[str]:
+    camel_separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    lowered = camel_separated.lower()
+    separated = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    compact = re.sub(r"[^a-z0-9]+", "", lowered)
+    return {value.lower(), separated, compact}
+
+
 _FORBIDDEN_METADATA_KEYS = {
     "raw_document_text",
     "raw_chunk_text",
@@ -52,6 +62,9 @@ _FORBIDDEN_METADATA_KEYS = {
     "credential",
     "password",
     "pii",
+}
+_FORBIDDEN_METADATA_KEY_FORMS = {
+    form for key in _FORBIDDEN_METADATA_KEYS for form in _metadata_key_forms(key)
 }
 
 
@@ -327,10 +340,17 @@ def validate_safe_graph_metadata(value: dict[str, object]) -> dict[str, object]:
 def _assert_safe_mapping(value: Mapping[Any, object], *, parent_key: str = "") -> None:
     for raw_key, raw_value in value.items():
         key = str(raw_key)
-        lowered = key.lower()
-        has_forbidden_part = any(part in lowered for part in _FORBIDDEN_METADATA_KEYS)
+        key_forms = _metadata_key_forms(key)
+        has_forbidden_part = any(
+            forbidden_part in key_form
+            for key_form in key_forms
+            for forbidden_part in _FORBIDDEN_METADATA_KEY_FORMS
+        )
         if has_forbidden_part:
-            if lowered.endswith("_hash"):
+            has_safe_hash_suffix = any(
+                key_form.endswith("_hash") or key_form.endswith("hash") for key_form in key_forms
+            )
+            if has_safe_hash_suffix:
                 if not isinstance(raw_value, str) or not _SHA256_RE.fullmatch(raw_value):
                     raise ValueError(f"unsafe graph metadata hash value: {parent_key}{key}")
             else:
