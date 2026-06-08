@@ -38,3 +38,30 @@ def test_graph_metadata_rejects_credential_and_pii_values(
             entity_type="concept",
             metadata_json=metadata_json,
         )
+
+
+@pytest.mark.parametrize(
+    "metadata_json",
+    [
+        {"rawChunkText": "copied source evidence"},
+        {"chunkText": "copied source evidence"},
+        {"items": [{"evidenceText": "copied source evidence"}]},
+    ],
+)
+def test_graph_metadata_rejects_camel_case_unsafe_keys(
+    metadata_json: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            metadata_json=metadata_json,
+        )
+
+
+def test_graph_metadata_allows_camel_case_hash_refs() -> None:
+    GraphEntityCreate(
+        canonical_name="Safe",
+        entity_type="concept",
+        metadata_json={"rawChunkTextHash": "a" * 64},
+    )
