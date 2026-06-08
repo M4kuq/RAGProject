@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
           persist-credentials: true
 
       - name: Apply review patch and remove applicator
@@ -37,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f .github/pr59-review-fix.patch
-          git apply --index .github/pr59-review-fix.patch
+          git apply --3way --index .github/pr59-review-fix.patch
           git rm .github/pr59-review-fix.patch .github/workflows/apply-pr59-review-fix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
