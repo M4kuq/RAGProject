@@ -1,22 +1,35 @@
 name: Apply PR59 Review Fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/pr-46-graph-schema-index-foundation
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - .github/pr59-review-fix.patch
+      - .github/workflows/apply-pr59-review-fix.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: contains(github.event.head_commit.message, 'run pr59 review patch applicator')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'feature/pr-46-graph-schema-index-foundation')
     runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ env.TARGET_BRANCH }}
           persist-credentials: true
 
       - name: Apply review patch and remove applicator
@@ -29,6 +42,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix remaining PR review feedback"
-          git push origin HEAD:${GITHUB_REF_NAME}
-
-# Triggered once after the workflow file exists on the branch.
+          git push origin HEAD:${TARGET_BRANCH}
