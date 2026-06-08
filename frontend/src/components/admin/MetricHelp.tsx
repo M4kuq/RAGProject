@@ -5,6 +5,13 @@ type MetricDefinition = {
   direction: string;
 };
 
+type HelpTooltipProps = {
+  ariaLabel?: string;
+  description: string;
+  direction?: string;
+  title: string;
+};
+
 const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
   budget_exhausted_rate: {
     description: "探索予算を使い切った評価項目の割合です。",
@@ -98,19 +105,29 @@ export function orderedMetricEntries<T>(entries: Array<[string, T]>): Array<[str
 }
 
 export function MetricHelp({ metricName }: { metricName: string }) {
-  const tooltipId = useId();
   const definition = METRIC_DEFINITIONS[metricName] ?? {
     description: "この評価実行で記録された指標です。",
     direction: "指標ごとに見方が異なります。"
   };
-  const title = metricName;
-  const plainDescription = `${metricName}: ${definition.description} ${definition.direction}`;
 
+  return (
+    <HelpTooltip
+      ariaLabel={`${metricName} の説明`}
+      description={definition.description}
+      direction={definition.direction}
+      title={metricName}
+    />
+  );
+}
+
+export function HelpTooltip({ ariaLabel, description, direction, title }: HelpTooltipProps) {
+  const tooltipId = useId();
+  const plainDescription = `${title}: ${description}${direction ? ` ${direction}` : ""}`;
   return (
     <span className="metric-help">
       <button
         aria-describedby={tooltipId}
-        aria-label={`${metricName} の説明`}
+        aria-label={ariaLabel ?? `${title} の説明`}
         className="metric-help-button"
         title={plainDescription}
         type="button"
@@ -119,8 +136,8 @@ export function MetricHelp({ metricName }: { metricName: string }) {
       </button>
       <span className="metric-help-tooltip" id={tooltipId} role="tooltip">
         <strong>{title}</strong>
-        <span>{definition.description}</span>
-        <span className="metric-help-direction">{definition.direction}</span>
+        <span>{description}</span>
+        {direction ? <span className="metric-help-direction">{direction}</span> : null}
       </span>
     </span>
   );
