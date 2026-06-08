@@ -171,6 +171,10 @@ class RagAskPipelineError(RagPipelineError):
     pass
 
 
+class InsufficientEvidenceAnswerError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class RetrievalPipelineResult:
     summary: RetrievalScoreSummary
@@ -839,6 +843,15 @@ class RagService:
                 retrieval_run_id=run_id,
                 replayed=False,
             )
+        except InsufficientEvidenceAnswerError:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="no_context_found",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            raise RagAskPipelineError("no_context_found", 422) from None
         except CitationBuildError:
             self._mark_failed_safely(
                 db,
@@ -3657,6 +3670,8 @@ def _validated_generation_or_fallback(
     prompt_citation_sources: list[CitationSource],
 ) -> tuple[ParsedGenerationOutput, list[CitationSource]]:
     parsed_generation = parse_generation_output(content)
+    if _is_insufficient_evidence_answer(parsed_generation.answer_text):
+        raise InsufficientEvidenceAnswerError()
     _validate_generation_output_safety(
         parsed_generation.answer_text,
         context_items=context_items,
@@ -3828,11 +3843,13 @@ def _is_insufficient_evidence_answer(answer_text: str) -> bool:
             "十分な根拠がない",
             "十分な情報がありません",
             "根拠が不足",
+            "検索された引用では、この質問への回答を確定できません",
             "insufficient evidence",
             "insufficient context",
             "not enough evidence",
             "not enough context",
             "no sufficient evidence",
+            "no usable context",
         )
     )
 

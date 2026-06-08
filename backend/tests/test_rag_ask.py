@@ -1791,7 +1791,8 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
         assert run.status == "failed"
         assert run.error_code == "no_context_found"
-        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 1
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
 
 

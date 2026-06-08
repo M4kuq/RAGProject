@@ -104,6 +104,31 @@ class EvaluationRagQuestionService:
     def __init__(self, service: RagService) -> None:
         self.service = service
 
+    def _no_context_result_if_insufficient_answer(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        answer_text: str,
+        retrieval_score_summary: RetrievalScoreSummary | None = None,
+        latency_tracker: LatencyTracker | None = None,
+        rollback: bool = True,
+    ) -> RagEvaluationResult | None:
+        if not _is_insufficient_evidence_answer(answer_text):
+            return None
+        self.service._mark_failed_safely(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            error_code="no_context_found",
+            latency_tracker=latency_tracker,
+            rollback=rollback,
+        )
+        return _failed_evaluation_result(
+            retrieval_run_id,
+            "no_context_found",
+            retrieval_score_summary=retrieval_score_summary,
+        )
+
     def evaluate_question(
         self,
         db: Session,
@@ -175,6 +200,13 @@ class EvaluationRagQuestionService:
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
+            if no_context_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=result.summary,
+            ):
+                return no_context_result
             _validate_generation_output_safety(
                 parsed_generation.answer_text,
                 context_items=context_items,
@@ -341,6 +373,13 @@ class EvaluationRagQuestionService:
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
+            if no_context_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=response.retrieval_run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=response.retrieval_score_summary,
+            ):
+                return no_context_result
             _validate_generation_output_safety(
                 parsed_generation.answer_text,
                 context_items=context_items,
