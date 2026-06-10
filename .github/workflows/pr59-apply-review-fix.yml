@@ -1,0 +1,175 @@
+name: PR59 Apply Review Fix
+
+on:
+  push:
+    branches:
+      - feature/pr-46-graph-schema-index-foundation
+    paths:
+      - ".github/workflows/pr59-apply-review-fix.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr59-apply-review-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, 'add PR59 one-shot LLM eval failure fix')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply review fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          rag_service = Path("backend/app/evaluation/rag_service.py")
+          text = rag_service.read_text(encoding="utf-8")
+          old = '''        except RerankError:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "rerank_failed")
+
+    def evaluate_strategy(
+'''
+          new = '''        except RerankError:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            return _failed_evaluation_result(run_id, "rerank_failed")
+        except Exception:
+            self.service._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="internal_error",
+                latency_tracker=latency_tracker,
+            )
+            raise
+
+    def evaluate_strategy(
+'''
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("target block for LLM failure handling was not found")
+              text = text.replace(old, new, 1)
+              rag_service.write_text(text, encoding="utf-8")
+
+          test_file = Path("backend/tests/test_evaluation_llm_orchestrator_failure.py")
+          test_file.write_text('''from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.config import Settings
+from app.db.base import Base
+from app.db.models import RetrievalRun
+from app.evaluation.rag_service import EvaluationRagQuestionService
+from app.ingest.embedding import FakeEmbeddingAdapter
+from app.rag.generation import FakeAnswerGenerator
+from app.rag.rerank import FakeRerankerClient
+from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
+from app.rag.strategy import RetrievalStrategy
+from app.services.rag_service import RagService
+
+
+class _FakeVectorClient(VectorSearchClient):
+    def search(
+        self,
+        *,
+        collection_name: str,
+        query_vector: Sequence[float],
+        limit: int,
+        filters: RetrievalFilters,
+    ) -> list[VectorSearchCandidate]:
+        del collection_name, query_vector, limit, filters
+        return []
+
+
+@pytest.fixture
+def session_factory() -> Iterator[sessionmaker[Session]]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    try:
+        yield sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    finally:
+        engine.dispose()
+
+
+def test_llm_tool_orchestrator_evaluation_marks_retrieval_run_failed_on_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: sessionmaker[Session],
+) -> None:
+    service = RagService(
+        settings=Settings(app_env="test"),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=_FakeVectorClient(),
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+
+    def fail_orchestrator(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("synthetic_llm_orchestrator_failure")
+
+    monkeypatch.setattr(service, "_retrieve_llm_tool_orchestrator", fail_orchestrator)
+    evaluator = EvaluationRagQuestionService(service)
+
+    with session_factory() as db:
+        with pytest.raises(RuntimeError, match="synthetic_llm_orchestrator_failure"):
+            evaluator.evaluate_question(
+                db,
+                question="Compare LLM orchestrator failure handling",
+                request_id="test-llm-orchestrator-internal-error",
+                strategy_type=RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            )
+
+        run = db.scalar(
+            select(RetrievalRun).where(
+                RetrievalRun.request_id == "test-llm-orchestrator-internal-error"
+            )
+        )
+        assert run is not None
+        assert run.strategy_type == "llm_tool_orchestrator"
+        assert run.status == "failed"
+        assert run.error_code == "internal_error"
+        assert run.finished_at is not None
+''', encoding="utf-8")
+
+          Path(".github/workflows/pr59-apply-review-fix.yml").unlink(missing_ok=True)
+          PY
+
+      - name: Commit review fix
+        run: |
+          git config user.name "M4kuq"
+          git config user.email "81303970+M4kuq@users.noreply.github.com"
+          git add backend/app/evaluation/rag_service.py backend/tests/test_evaluation_llm_orchestrator_failure.py .github/workflows/pr59-apply-review-fix.yml
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "fix LLM evaluation failure run state"
+          git push origin HEAD:feature/pr-46-graph-schema-index-foundation
