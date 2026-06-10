@@ -208,6 +208,10 @@ class GraphIndexService:
         if version.status != "ready":
             raise ValueError("document_version_id must reference a ready document version")
 
+        self.repository.acquire_graph_index_document_version_lock(
+            db,
+            document_version_id=snapshot.document_version_id,
+        )
         self.repository.delete_index_artifacts_for_document_version(
             db,
             document_version_id=snapshot.document_version_id,
@@ -261,6 +265,7 @@ class GraphIndexService:
                 mention.entity_key,
                 (mention.canonical_name, mention.entity_type),
             )
+        self.repository.acquire_graph_entity_key_locks(db, keys=set(names_by_key))
         entities = self.repository.list_entities_by_keys(db, keys=set(names_by_key))
         for key, (canonical_name, entity_type) in names_by_key.items():
             entity = entities.get(key)
