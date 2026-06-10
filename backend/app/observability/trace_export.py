@@ -211,7 +211,7 @@ class LangSmithTraceExporter:
             }
             if self._endpoint:
                 client_kwargs["api_url"] = self._endpoint
-            client = Client(**client_kwargs)
+            client = Client(**cast(Any, client_kwargs))
             client.create_run(
                 name=f"ragproject.{payload.trace_type}",
                 run_type=run_type,

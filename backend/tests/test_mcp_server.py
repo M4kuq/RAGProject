@@ -191,6 +191,7 @@ def test_tool_registry_exposes_read_mostly_phase2_tools(
         "rag_ask_auto",
         "rag_ask_hybrid",
         "rag_ask_agentic",
+        "rag_ask_langchain_agentic",
         "rag_get_retrieval_trace",
         "rag_compare_strategies",
         "rag_get_evaluation_summary",
@@ -275,11 +276,27 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
             "include_trace_summary": True,
         },
     )
+    langchain_ask = mcp_adapter.rag_ask_langchain_agentic(
+        {
+            "question": "Summarize alpha citation retrieval",
+            "top_k": 3,
+            "rerank_top_n": 2,
+            "include_trace_summary": True,
+        },
+    )
     trace = mcp_adapter.rag_get_retrieval_trace(
         {"retrieval_run_id": agentic_search["retrieval_run_id"]},
     )
     comparison = mcp_adapter.rag_compare_strategies(
-        {"strategies": ["dense", "hybrid", "agentic_router"]},
+        {
+            "strategies": [
+                "dense",
+                "hybrid",
+                "agentic_router",
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+            ]
+        },
     )
     summary = mcp_adapter.rag_get_evaluation_summary({"evaluation_run_id": 1})
 
@@ -298,6 +315,11 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert auto_ask["citations"]
     assert auto_ask["auto_strategy_summary"]["selected_strategy"] == "llm_tool_orchestrator"
     assert auto_ask["trace_summary"]["tool_result_compression"]["summary"]["output_item_count"] >= 1
+    assert langchain_ask["strategy"] == "langchain_agentic"
+    assert langchain_ask["status"] == "succeeded"
+    assert langchain_ask["citations"]
+    assert langchain_ask["langchain_strategy_summary"]["orchestrator_provider"] == "langchain"
+    assert langchain_ask["trace_summary"]["strategy_type"] == "langchain_agentic"
     assert agentic_ask["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
     assert trace["retrieval_run_id"] == agentic_search["retrieval_run_id"]
     assert trace["strategy_decision"]["requested_strategy"] == "agentic_router"
@@ -305,7 +327,17 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert {item["strategy"] for item in comparison["metrics"]} >= {"dense", "hybrid"}
     assert summary["agentic_summary"]["strategy_type"] == "agentic_router"
     dumped = json.dumps(
-        [hybrid, agentic_search, hybrid_ask, agentic_ask, auto_ask, trace, comparison, summary]
+        [
+            hybrid,
+            agentic_search,
+            hybrid_ask,
+            agentic_ask,
+            auto_ask,
+            langchain_ask,
+            trace,
+            comparison,
+            summary,
+        ]
     )
     assert "RAW_CHUNK_SHOULD_NOT_APPEAR" not in dumped
     assert "secret_token" not in dumped.lower()
@@ -574,6 +606,7 @@ def test_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> None:
 
     assert "Alpha handbook" in documents["contents"][0]["text"]
     assert '"agentic_router"' in strategies["contents"][0]["text"]
+    assert '"langchain_agentic"' in strategies["contents"][0]["text"]
     assert '"logical_document_id": 1' in document["contents"][0]["text"]
     assert '"job_id": 1' in job["contents"][0]["text"]
     assert '"evaluation_run_id": 1' in evaluation["contents"][0]["text"]
@@ -620,6 +653,7 @@ def test_jsonrpc_tools_resources_and_prompts(mcp_adapter: McpServiceAdapter) -> 
         ("rag_ask", {"question": "Summarize alpha citation"}),
         ("rag_ask_hybrid", {"question": "Summarize alpha citation"}),
         ("rag_ask_agentic", {"question": "Summarize alpha citation"}),
+        ("rag_ask_langchain_agentic", {"question": "Summarize alpha citation"}),
         ("rag_get_retrieval_trace", {"retrieval_run_id": 1}),
         ("rag_compare_strategies", {}),
         ("rag_get_evaluation_summary", {"evaluation_run_id": 1}),
@@ -696,6 +730,30 @@ def test_jsonrpc_rag_ask_no_context_failure_contract(
     assert response["result"]["structuredContent"]["citations"] == []
 
 
+def test_jsonrpc_langchain_agentic_ask_no_context_failure_contract(
+    empty_mcp_adapter: McpServiceAdapter,
+) -> None:
+    server = JsonRpcMcpServer(empty_mcp_adapter)
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "rag_ask_langchain_agentic",
+                "arguments": {"question": "Summarize missing context"},
+            },
+        },
+    )
+
+    assert response is not None
+    assert response["result"]["isError"] is True
+    assert response["result"]["structuredContent"]["status"] == "failed"
+    assert response["result"]["structuredContent"]["error_code"] == "no_context_found"
+    assert response["result"]["structuredContent"]["strategy"] == "langchain_agentic"
+    assert response["result"]["structuredContent"]["citations"] == []
+
+
 def test_jsonrpc_rag_search_pipeline_failure_contract(
     empty_mcp_adapter: McpServiceAdapter,
 ) -> None:
@@ -734,6 +792,11 @@ def test_jsonrpc_rejects_invalid_inputs_and_missing_resources(
         {"name": "list_documents", "arguments": []},
         {"name": "rag_search", "arguments": {"query": "   "}},
         {"name": "rag_search", "arguments": {"query": "alpha", "unexpected": True}},
+        {"name": "rag_search", "arguments": {"query": "alpha", "strategy": "langchain_agentic"}},
+        {
+            "name": "rag_search",
+            "arguments": {"query": "alpha", "strategy": "llm_tool_orchestrator"},
+        },
         {"name": "get_document_status", "arguments": {"logical_document_id": 0}},
         {"name": "get_job_status", "arguments": {"job_id": 0}},
         {"name": "get_evaluation_result", "arguments": {"evaluation_run_id": 0}},

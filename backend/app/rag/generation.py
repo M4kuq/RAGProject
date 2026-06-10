@@ -604,12 +604,35 @@ def _format_answer_text(text: str) -> str:
 
 
 def _truncate_output(value: str, max_chars: int) -> str:
-    text = _normalize_generated_text(value)
+    text = _rewrite_insufficient_evidence_answer(_normalize_generated_text(value))
     if len(text) <= max_chars:
         return text
     if max_chars <= 3:
         return text[:max_chars]
     return f"{text[: max_chars - 3]}..."
+
+
+def _rewrite_insufficient_evidence_answer(value: str) -> str:
+    normalized = " ".join(value.lower().split())
+    if not any(
+        phrase in normalized
+        for phrase in (
+            "十分な根拠がありません",
+            "十分な根拠がない",
+            "十分な情報がありません",
+            "根拠が不足",
+            "insufficient evidence",
+            "insufficient context",
+            "not enough evidence",
+            "not enough context",
+            "no sufficient evidence",
+            "no usable context",
+        )
+    ):
+        return value
+    marker_match = re.search(r"\[(\d+)\]", value)
+    marker = f" [{marker_match.group(1)}]" if marker_match else ""
+    return f"検索された引用では、この質問への回答を確定できません{marker}。"
 
 
 def _normalize_generated_text(value: str) -> str:

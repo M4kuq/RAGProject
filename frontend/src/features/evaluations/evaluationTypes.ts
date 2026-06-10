@@ -12,8 +12,15 @@ export type RetrievalStrategy =
   | "version_aware"
   | "agentic_router"
   | "llm_tool_orchestrator"
+  | "langchain_agentic"
   | "fallback_dense";
-export type EvaluationRunnableStrategy = "dense" | "sparse" | "hybrid" | "agentic_router";
+export type EvaluationRunnableStrategy =
+  | "dense"
+  | "sparse"
+  | "hybrid"
+  | "agentic_router"
+  | "llm_tool_orchestrator"
+  | "langchain_agentic";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
 
 export type EvaluationRunCreateRequest = {

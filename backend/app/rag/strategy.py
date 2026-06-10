@@ -15,6 +15,7 @@ class RetrievalStrategy(StrEnum):
     VERSION_AWARE = "version_aware"
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
+    LANGCHAIN_AGENTIC = "langchain_agentic"
     FALLBACK_DENSE = "fallback_dense"
 
 
@@ -30,6 +31,7 @@ class RagAskRequestStrategy(StrEnum):
     HYBRID = "hybrid"
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
+    LANGCHAIN_AGENTIC = "langchain_agentic"
 
 
 class RetrievalSource(StrEnum):
@@ -194,6 +196,26 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     "rag.llm_orchestrator.allow_admin_tools": (
         False,
         "Keep admin/write tools unavailable to the LLM retrieval orchestrator.",
+    ),
+    "rag.langchain_agentic.enabled": (
+        True,
+        "Enable explicit /rag/ask strategy=langchain_agentic requests.",
+    ),
+    "rag.langchain_agentic.max_tool_calls": (
+        5,
+        "Maximum bounded retrieval-only tool calls for the LangChain agentic RAG loop.",
+    ),
+    "rag.langchain_agentic.max_search_calls": (
+        3,
+        "Maximum dense/sparse/hybrid search tool calls for the LangChain agentic RAG loop.",
+    ),
+    "rag.langchain_agentic.timeout_seconds": (
+        30,
+        "Wall-clock timeout for the LangChain agentic RAG loop.",
+    ),
+    "rag.langchain_agentic.allow_admin_tools": (
+        False,
+        "Keep admin/write tools unavailable to the LangChain agentic RAG loop.",
     ),
     "rag.tool_result_compression.enabled": (
         True,

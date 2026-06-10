@@ -41,9 +41,15 @@ from app.evaluation.metrics import (
     RetrievedEvaluationItem,
     calculate_metrics,
 )
-from app.evaluation.rag_service import DatabaseVectorSearchClient, RagEvaluationResult
+from app.evaluation.rag_service import (
+    DatabaseVectorSearchClient,
+    EvaluationRagQuestionService,
+    RagEvaluationResult,
+)
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
+from app.rag.generation import FakeAnswerGenerator
+from app.rag.rerank import FakeRerankerClient
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository
@@ -61,6 +67,7 @@ from app.services.evaluation_service import (
     EvaluationService,
     _strategy_metrics_summary_json,
 )
+from app.services.rag_service import RagService
 from app.workers.handlers.base import JobExecutionContext
 from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
 
@@ -1707,7 +1714,242 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
-def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() -> None:
+def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="tool_agentic_strategy_compare",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="tool_agentic_case",
+                    question="Compare tool agentic retrieval",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["llm_tool_orchestrator", "langchain_agentic"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _ToolAgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-tool-agentic-compare",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["case_count"] == 2
+            strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
+            assert set(strategy_metrics) >= {
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+            }
+            assert (
+                strategy_metrics["llm_tool_orchestrator"]["metric_summary"]["fallback_rate"] == 0.0
+            )
+            assert strategy_metrics["langchain_agentic"]["metric_summary"]["fallback_rate"] == 0.0
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == [
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+            ]
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.strategies == [
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+            ]
+            assert {metric.strategy_type for metric in detail.strategy_comparison} >= {
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+            }
+    finally:
+        engine.dispose()
+
+
+def test_langchain_agentic_evaluation_marks_retrieval_run_failed_on_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session_factory = _session_factory()
+    try:
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+
+        def fail_langchain_retrieval(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            raise RuntimeError("synthetic_langchain_failure")
+
+        monkeypatch.setattr(service, "_retrieve_langchain_agentic", fail_langchain_retrieval)
+        evaluator = EvaluationRagQuestionService(service)
+
+        with session_factory() as db:
+            with pytest.raises(RuntimeError, match="synthetic_langchain_failure"):
+                evaluator.evaluate_question(
+                    db,
+                    question="Compare LangChain failure handling",
+                    request_id="test-langchain-internal-error",
+                    strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+                )
+
+            run = db.scalar(
+                select(RetrievalRun).where(
+                    RetrievalRun.request_id == "test-langchain-internal-error"
+                )
+            )
+            assert run is not None
+            assert run.status == "failed"
+            assert run.error_code == "internal_error"
+            assert run.finished_at is not None
+    finally:
+        engine.dispose()
+
+
+def test_langchain_agentic_evaluation_populates_retrieved_items_for_metrics() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=user.user_id,
+                title="LangChain evaluation source",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="c" * 64,
+                status="ready",
+                is_active=True,
+                file_name="langchain-eval.md",
+                mime_type="text/markdown",
+                file_size_bytes=100,
+                created_by=user.user_id,
+            )
+            db.add(version)
+            db.flush()
+            chunk = DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=0,
+                chunk_hash=hashlib.sha256(b"langchain eval recall marker").hexdigest(),
+                content_text="langchain eval recall marker qdrant citation evidence",
+                modality="text",
+            )
+            db.add(chunk)
+            db.flush()
+            logical_document_id = logical.logical_document_id
+            document_chunk_id = chunk.document_chunk_id
+            db.commit()
+
+            service = RagService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    embedding_fake_dimension=4,
+                    retrieval_top_k_default=1,
+                    retrieval_top_k_max=5,
+                    rerank_provider="fake",
+                    rerank_top_n_default=1,
+                    rerank_top_n_max=5,
+                    qdrant_collection_name="document_chunks",
+                    generation_provider="fake",
+                    langchain_agentic_enabled=True,
+                    sparse_enabled=False,
+                    hybrid_enabled=False,
+                ),
+                embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+                vector_client=_FakeVectorClient(
+                    [
+                        VectorSearchCandidate(
+                            document_chunk_id=document_chunk_id,
+                            retrieval_score=0.91,
+                            qdrant_order=1,
+                            payload={},
+                        )
+                    ]
+                ),
+                reranker=FakeRerankerClient(),
+                answer_generator=FakeAnswerGenerator(),
+            )
+            evaluator = EvaluationRagQuestionService(service)
+
+            result = evaluator.evaluate_question(
+                db,
+                question="langchain eval recall marker",
+                request_id="test-langchain-retrieved-items",
+                strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+            )
+
+        assert result.status == "succeeded"
+        assert result.retrieved_items == [
+            RetrievedEvaluationItem(
+                document_chunk_id=document_chunk_id,
+                logical_document_id=logical_document_id,
+                rank_order=1,
+                snippet="langchain eval recall marker qdrant citation evidence",
+            )
+        ]
+        metrics = calculate_metrics(
+            EvaluationMetricInputs(
+                case=EvaluationCase(
+                    case_id="langchain_retrieved_items",
+                    question="langchain eval recall marker",
+                    expected_keywords=(),
+                    required_citation=True,
+                    expected_document_ids=(logical_document_id,),
+                    expected_chunk_ids=(document_chunk_id,),
+                ),
+                answer_text=result.answer_text,
+                citations=result.citations,
+                confidence=result.confidence,
+                retrieval_summary=result.retrieval_score_summary,
+                retrieved_items=result.retrieved_items,
+            )
+        )
+        by_name = {metric.metric_name: metric for metric in metrics}
+        assert by_name["recall_at_k"].metric_score == 1.0
+        assert by_name["mrr"].metric_score == 1.0
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -1730,7 +1972,14 @@ def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() ->
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategies=["dense", "sparse", "hybrid", "agentic_router"],
+                    strategies=[
+                        "dense",
+                        "sparse",
+                        "hybrid",
+                        "agentic_router",
+                        "llm_tool_orchestrator",
+                        "langchain_agentic",
+                    ],
                 ),
                 user=user,
             )
@@ -1743,12 +1992,14 @@ def test_evaluation_create_allows_agentic_router_and_rejects_fallback_dense() ->
                 "sparse",
                 "hybrid",
                 "agentic_router",
+                "llm_tool_orchestrator",
+                "langchain_agentic",
             ]
     finally:
         engine.dispose()
 
 
-def test_evaluation_api_allows_agentic_router_and_rejects_fallback_dense_strategies(
+def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_strategies(
     evaluation_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     client, _ = evaluation_client
@@ -1760,12 +2011,16 @@ def test_evaluation_api_allows_agentic_router_and_rejects_fallback_dense_strateg
         json={
             "dataset_name": "phase1_smoke",
             "case_limit": 1,
-            "strategies": ["dense", "agentic_router"],
+            "strategies": ["dense", "llm_tool_orchestrator", "langchain_agentic"],
         },
         headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
     )
     assert accepted.status_code == 202
-    assert accepted.json()["data"]["strategies"] == ["dense", "agentic_router"]
+    assert accepted.json()["data"]["strategies"] == [
+        "dense",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
+    ]
 
     for payload in (
         {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
@@ -1948,6 +2203,9 @@ class _IntegrityErrorEvaluationRepository(EvaluationRepository):
 
 
 class _FakeVectorClient(VectorSearchClient):
+    def __init__(self, candidates: Sequence[VectorSearchCandidate] = ()) -> None:
+        self.candidates = list(candidates)
+
     def search(
         self,
         *,
@@ -1956,7 +2214,7 @@ class _FakeVectorClient(VectorSearchClient):
         limit: int,
         filters: RetrievalFilters,
     ) -> list[VectorSearchCandidate]:
-        return []
+        return self.candidates[:limit]
 
 
 class _FakeEvaluationRagService:
@@ -2288,6 +2546,119 @@ class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
             else [],
             context_sources_for_safety=[],
             error_code=None if has_context else "no_context_found",
+        )
+
+
+class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+    def evaluate_question(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n
+        if strategy_type not in {
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
+            return super().evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+            )
+
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy_type.value,
+            strategy_decision_json={
+                "requested_strategy": strategy_type.value,
+                "selected_strategy": strategy_type.value,
+                "execution_strategy": strategy_type.value,
+                "orchestrator_provider": (
+                    "langchain" if strategy_type == RetrievalStrategy.LANGCHAIN_AGENTIC else "llm"
+                ),
+                "fallback_used": False,
+                "budget_exhausted": False,
+                "retrieval_call_count": 1,
+                "max_retrieval_calls": 8,
+                "sufficiency_score": None,
+                "sufficiency_reason_codes": [],
+            },
+            retrieval_score_summary={
+                "requested_top_k": 5,
+                "qdrant_candidate_count": 1,
+                "post_filter_candidate_count": 1,
+                "selected_count": 1,
+                "excluded_by_rdb_check_count": 0,
+                "retrieval_call_count": 1,
+                "fallback_used": False,
+                "budget_exhausted": False,
+            },
+        )
+        snippet = f"{strategy_type.value} safe target citation preview."
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=100,
+                    source_label="strategy-seed.md",
+                    snippet=snippet,
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=100,
+                    logical_document_id=10,
+                    rank_order=1,
+                    snippet=snippet,
+                )
+            ],
+            context_sources_for_safety=[],
+        )
+
+    def evaluate_strategy(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        if strategy_type in {
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
+            raise AssertionError("ask-only evaluation strategies must use evaluate_question")
+        return self.evaluate_question(
+            db,
+            question=question,
+            request_id=request_id,
+            strategy_type=strategy_type,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
         )
 
 

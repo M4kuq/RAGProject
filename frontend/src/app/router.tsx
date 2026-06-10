@@ -1,4 +1,4 @@
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useCurrentUser } from "../features/auth/authHooks";
 import { ChatPage } from "../routes/ChatPage";
 import { LoginPage } from "../routes/LoginPage";
@@ -12,7 +12,12 @@ function userInitial(displayName: string | null): string {
 
 function TopNav() {
   const currentUser = useCurrentUser();
+  const location = useLocation();
   const displayName = currentUser.data?.display_name ?? null;
+
+  if (location.pathname === "/login") {
+    return null;
+  }
 
   return (
     <nav className="topnav">

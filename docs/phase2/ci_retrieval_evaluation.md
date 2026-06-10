@@ -37,7 +37,8 @@ The workflow is not mandatory on every pull request by default. Normal PR checks
 Manual inputs:
 
 - `dataset`: evaluation fixture name or persistent dataset id.
-- `strategies`: comma-separated list from `dense`, `sparse`, `hybrid`, `agentic_router`.
+- `strategies`: comma-separated list from `dense`, `sparse`, `hybrid`,
+  `agentic_router`, `llm_tool_orchestrator`, `langchain_agentic`.
 - `mode`: `local`.
 - `threshold_mode`: `warn` or `fail`.
 - `case_limit`.
@@ -62,6 +63,11 @@ DATASET=phase2_strategy_smoke STRATEGIES=dense,hybrid,agentic_router scripts/run
 ```
 
 The local command expects the backend environment to be initialized with migrated database tables, seeded and indexed demo data, reachable Qdrant, and non-fake local retrieval dependencies. For GitHub Actions, the workflow installs and caches the small local embedding prerequisite before preflight; if model/cache prerequisites are still unavailable, it reports `blocked` and uploads the safe artifact.
+
+`llm_tool_orchestrator` and `langchain_agentic` can be passed explicitly when
+comparing the two Agentic-RAG implementations. The default strategy set remains
+`dense,hybrid,agentic_router` so scheduled smoke runs stay short and avoid
+provider-specific LLM planning unless requested.
 
 Direct backend command:
 

@@ -70,6 +70,12 @@ from app.schemas.evaluations import (
 
 SCORE_QUANT = Decimal("0.000001")
 RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH = 100
+ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
+    {
+        RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+        RetrievalStrategy.LANGCHAIN_AGENTIC,
+    }
+)
 
 STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
@@ -1034,7 +1040,16 @@ class EvaluationService:
     ) -> dict[str, object]:
         started = time.perf_counter()
         strategy_runner = getattr(rag_service, "evaluate_strategy", None)
-        if callable(strategy_runner):
+        if strategy_type in ASK_ONLY_EVALUATION_STRATEGIES:
+            rag_result = rag_service.evaluate_question(
+                db,
+                question=case.question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+        elif callable(strategy_runner):
             rag_result = strategy_runner(
                 db,
                 question=case.question,
@@ -1261,7 +1276,11 @@ class EvaluationService:
         case_metadata_json: dict[str, object] | None,
         rag_result: RagEvaluationResult,
     ) -> list[MetricValue]:
-        if strategy_type != RetrievalStrategy.AGENTIC_ROUTER:
+        if strategy_type not in {
+            RetrievalStrategy.AGENTIC_ROUTER,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+        }:
             return []
         retrieval_run = (
             db.get(RetrievalRun, rag_result.retrieval_run_id)
@@ -1807,6 +1826,8 @@ def _strategy_values(config: dict[str, object]) -> list[str]:
         RetrievalStrategy.SPARSE.value,
         RetrievalStrategy.HYBRID.value,
         RetrievalStrategy.AGENTIC_ROUTER.value,
+        RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
+        RetrievalStrategy.LANGCHAIN_AGENTIC.value,
     }
     filtered = [strategy for strategy in values if strategy in enabled]
     return filtered or [DEFAULT_RETRIEVAL_STRATEGY.value]

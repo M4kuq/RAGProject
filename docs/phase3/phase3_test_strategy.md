@@ -1,117 +1,44 @@
 # Phase3 Test Strategy
 
-PR-45 defines the test strategy. It does not add tests because it does not change runtime behavior.
+PR-46 adds the first executable Graph-RAG foundation tests.
 
-## Graph Schema Tests
+## PR-46 Tests
 
-- migration applies and rolls back in isolated test DB
-- FK constraints for chunks, versions, and retrieval runs
-- unique/idempotency constraints for entities, mentions, relations
-- stale version filtering
-- JSON safe schema validation
+Added/expected coverage:
 
-## Entity Extraction Unit Tests
+- graph ORM tables exist in metadata
+- graph tables do not contain raw text/prompt/context/secret columns
+- GraphRepository creates entities, relations, mentions, index runs, and retrieval path summaries
+- GraphIndexService handles queued/running/succeeded/failed lifecycle
+- failed error messages are redacted
+- Pydantic DTOs reject invalid sha256 hashes and unsafe metadata keys
+- Graph settings defaults are disabled
+- `graph_index_build` is a future job type skeleton, not registered as an active worker handler
+- PostgreSQL-only checks validate migration head, tables, constraints, indexes, and seeded settings when a PostgreSQL DB is available
 
-- deterministic fake extractor output
-- rule-based extractor fixtures
-- normalization and alias merging
-- confidence boundaries
-- redaction of unsafe fields
-- failure error codes
+## Migration / DB
 
-## Relation Extraction Unit Tests
+PR-46 migration checks should cover:
 
-- relation type normalization
-- source chunk support required
-- `evidence_text_hash` created without storing evidence text
-- relation confidence filtering
-- duplicate relation idempotency
-- hallucination guard tests
+- upgrade to `0012_graph_schema_index`
+- downgrade back to `0011_tool_result_compression`
+- table existence
+- FK constraints
+- CHECK constraints
+- indexes
+- invalid status rejection
+- invalid confidence rejection
+- invalid hash rejection
+- negative count rejection
 
-## Graph Index Job Tests
+## Later PRs
 
-- queued/running/succeeded/failed lifecycle
-- retry/reclaim behavior
-- no external I/O inside DB transaction
-- version update/reindex behavior
-- partial failure recovery
+PR-47 adds extractor unit tests and worker handler tests.
 
-## Graph Retrieval Tests
+PR-48 adds graph retrieval tests.
 
-- entity lookup
-- relation traversal
-- multi-hop path search
-- neighborhood expansion bound
-- graph score breakdown
-- fallback hybrid/dense behavior
-- no-context behavior
+PR-49 adds graph citation/path validation tests.
 
-## Graph Citation Tests
+PR-50 adds Graph Debug UI and evaluation tests.
 
-- node to source chunk mapping
-- edge to source chunk mapping
-- path to citations
-- stale version handling
-- retrieval run item constraint
-- source locator integration
-- raw evidence absence
-
-## Graph Router Tests
-
-- multi-hop detection
-- relation query detection
-- entity comparison detection
-- graph disabled fallback
-- traversal budget fallback
-- Auto graph tool future gating
-- safe trace fields
-
-## Graph Evaluation Tests
-
-- entity precision/recall fixtures
-- relation accuracy fixtures
-- path relevance fixtures
-- graph citation coverage
-- dense vs hybrid vs graph comparison smoke
-
-## OCR Tests
-
-- scanned PDF fixture parsing
-- OCR confidence thresholds
-- region source locator mapping
-- OCR redaction tests
-- optional heavy model checks outside normal CI
-
-## Multimodal Tests
-
-- image upload validation
-- image metadata redaction
-- multimodal citation region mapping
-- viewer/admin boundary tests
-
-## Security / Redaction Tests
-
-- no unsafe keys in graph traces
-- no raw document text in graph tables
-- no raw chunk text in graph debug
-- no full context in artifacts
-- no credential or secret values in logs
-- MCP safe output tests
-
-## Regression Tests
-
-- dense retrieval unchanged
-- hybrid retrieval unchanged
-- agentic router unchanged
-- Auto / `llm_tool_orchestrator` unchanged unless graph explicitly enabled
-- Context Budget / Evidence Pack / Tool Result Compression still applied
-
-## Performance Smoke
-
-- graph traversal stays within hop/time/path budgets
-- graph + vector hybrid latency summary recorded
-- graph explosion guard drops paths deterministically
-
-## CI Strategy
-
-Default CI should use deterministic fake extractors and small fixtures. Heavy OCR, external providers, model downloads, AWS, and online evaluation should be opt-in jobs, not required PR gates until separately accepted.
+OCR, multimodal, external provider, and AWS tests remain opt-in until their respective PRs.

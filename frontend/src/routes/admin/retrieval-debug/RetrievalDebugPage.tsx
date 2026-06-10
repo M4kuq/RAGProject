@@ -43,6 +43,9 @@ const LATENCY_KEYS = [
   "total_ms",
   "retrieval_ms",
   "agentic_total_ms",
+  "langchain_agentic_ms",
+  "langchain_planning_ms",
+  "langchain_tool_execution_ms",
   "initial_retrieval_ms",
   "fallback_retrieval_ms",
   "sufficiency_check_ms",
@@ -252,14 +255,15 @@ function SearchResultSummary({
   const run = detail?.retrieval_run;
   const summary = safeRecord(run?.retrieval_score_summary ?? searchData?.retrieval_score_summary);
   const decision = safeRecord(run?.strategy_decision_json);
-  const preferSummaryTrace = run?.strategy_type === "llm_tool_orchestrator";
-  const isLlmToolOrchestrator = run?.strategy_type === "llm_tool_orchestrator";
+  const preferSummaryTrace =
+    run?.strategy_type === "llm_tool_orchestrator" || run?.strategy_type === "langchain_agentic";
+  const isToolOrchestrator = preferSummaryTrace;
   return (
     <section className="admin-section">
       <h2>Run Summary</h2>
-      {isLlmToolOrchestrator ? (
+      {isToolOrchestrator ? (
         <p className="section-help">
-          LLM tool orchestration uses retrieval tool calls instead of the rule-based sufficiency check.
+          Tool orchestration uses retrieval tool calls instead of the rule-based sufficiency check.
           Review tools_used, search_call_count, and fallback_reason for the retrieval path.
         </p>
       ) : null}
@@ -284,10 +288,10 @@ function SearchResultSummary({
           label="sufficiency_score"
           value={formatScoreWithNote(
             traceField(decision, summary, "sufficiency_score", undefined, preferSummaryTrace),
-            isLlmToolOrchestrator ? "not computed for LLM tool orchestration" : undefined
+            isToolOrchestrator ? "not computed for tool orchestration" : undefined
           )}
         />
-        {isLlmToolOrchestrator ? (
+        {isToolOrchestrator ? (
           <>
             <Detail label="tools_used" value={formatUnknownValue(summary.tools_used ?? decision.tools_used ?? [])} />
             <Detail
@@ -389,8 +393,9 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
   const settings = safeRecord(run.retrieval_settings_json);
   const latency = safeRecord(run.latency_breakdown_json);
   const summary = safeRecord(run.retrieval_score_summary);
-  const preferSummaryTrace = run.strategy_type === "llm_tool_orchestrator";
-  const isLlmToolOrchestrator = run.strategy_type === "llm_tool_orchestrator";
+  const preferSummaryTrace =
+    run.strategy_type === "llm_tool_orchestrator" || run.strategy_type === "langchain_agentic";
+  const isToolOrchestrator = preferSummaryTrace;
 
   return (
     <section className="admin-section retrieval-debug-grid">
@@ -433,10 +438,10 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
       </TraceCard>
 
       <TraceCard title="Strategy Decision">
-        {isLlmToolOrchestrator ? (
+        {isToolOrchestrator ? (
           <p className="section-help">
             This run was controlled by bounded retrieval tools. Router-only fields may be unavailable;
-            use the tool call fields below for LLM Agentic RAG behavior.
+            use the tool call fields below for Agentic RAG tool behavior.
           </p>
         ) : null}
         <dl className="detail-grid">
@@ -444,7 +449,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
           <Detail label="execution_strategy" value={formatUnknownValue(decision.execution_strategy)} />
           <Detail label="decision_source" value={formatUnknownValue(decision.decision_source ?? "default")} />
           <Detail label="router_enabled" value={formatUnknownValue(decision.router_enabled ?? false)} />
-          {isLlmToolOrchestrator ? (
+          {isToolOrchestrator ? (
             <>
               <Detail label="tools_used" value={formatUnknownValue(summary.tools_used ?? decision.tools_used ?? [])} />
               <Detail
@@ -493,7 +498,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
             label="sufficiency_score"
             value={formatScoreWithNote(
               traceField(decision, summary, "sufficiency_score", undefined, preferSummaryTrace),
-              isLlmToolOrchestrator ? "not computed for LLM tool orchestration" : undefined
+              isToolOrchestrator ? "not computed for tool orchestration" : undefined
             )}
           />
           <Detail

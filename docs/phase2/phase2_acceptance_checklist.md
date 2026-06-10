@@ -11,6 +11,7 @@ test runs, GitHub checks, screenshots, or manual notes, not to raw payload dumps
 | hybrid retrieval works | Ready | `docs/phase2/hybrid_retrieval.md`, hybrid tests | Dense+sparse fusion with score breakdown. |
 | agentic_router works | Ready | `docs/phase2/strategy_router.md`, agentic tests | Explicit opt-in for search/ask. |
 | LLM Agentic RAG works | Ready | `docs/phase2/llm_tool_calling_retrieval_orchestrator.md`, PR-39 tests | Bounded retrieval-only tool loop for `/rag/ask strategy=llm_tool_orchestrator`. |
+| LangChain Agentic RAG works | Ready | `docs/phase2/langchain_agentic_rag.md`, LangChain tests | LangChain Runnable/StructuredTool loop for `/rag/ask strategy=langchain_agentic`. |
 | context sufficiency works | Ready | `docs/phase2/agentic_retrieval_loop.md` | Rule-based, bounded checker. |
 | fallback works | Ready | Router/agentic tests | Dense fallback is safe and deterministic. |
 | query_plan_json saved | Ready | Retrieval trace/debug docs | Safe query analysis/planning only. |
@@ -18,7 +19,7 @@ test runs, GitHub checks, screenshots, or manual notes, not to raw payload dumps
 | latency_breakdown_json saved | Ready | Trace/debug docs | Includes retrieval/router/agentic spans. |
 | score_breakdown_json saved | Ready | Hybrid/agentic docs | No raw chunk text. |
 | Debug UI displays strategy / score / latency | Ready | `docs/phase2/retrieval_debug_ui_v2.md` | Admin-only. |
-| evaluation compares strategies | Ready | `docs/phase2/strategy_evaluation_runner.md` | Dense/sparse/hybrid/agentic_router. |
+| evaluation compares strategies | Ready | `docs/phase2/strategy_evaluation_runner.md` | Dense/sparse/hybrid/agentic_router/llm_tool_orchestrator/langchain_agentic. |
 | failure cases can be promoted | Ready | `docs/phase2/agentic_strategy_evaluation.md` | Idempotent promotion. |
 | CI retrieval evaluation can run | Ready | `.github/workflows/retrieval-eval-smoke.yml` | Manual dispatch and optional schedule. |
 | LangSmith optional adapter is no-op by default | Ready | `docs/phase2/langsmith_optional_adapter.md` | No secret required by default. |

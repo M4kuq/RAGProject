@@ -38,6 +38,11 @@ const RAG_STRATEGY_OPTIONS = [
     description: "LLM Agentic RAG: the model chooses dense, sparse, or hybrid retrieval tools within a budget."
   },
   {
+    value: "langchain_agentic" as const,
+    label: "LangChain Agentic",
+    description: "LangChain Agentic RAG: the same retrieval tools are orchestrated through LangChain runnables."
+  },
+  {
     value: "dense" as const,
     label: "Normal RAG",
     description: "Dense vector retrieval followed by answer generation."

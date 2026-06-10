@@ -15,6 +15,7 @@ from app.core.job_utils import (
     sanitize_result_json,
 )
 from app.db.models import Job
+from app.workers.worker_config import SUPPORTED_JOB_TYPES
 
 
 class JobRepository:
@@ -86,6 +87,7 @@ class JobRepository:
         enabled_job_types: frozenset[str] | None,
         lease_duration: timedelta,
         batch_size: int,
+        supported_job_types: frozenset[str] | None = SUPPORTED_JOB_TYPES,
         now: datetime | None = None,
     ) -> list[Job]:
         acquired_at = now or datetime.now(UTC)
@@ -102,6 +104,8 @@ class JobRepository:
         ]
         if enabled_job_types is not None:
             conditions.append(Job.job_type.in_(enabled_job_types))
+        elif supported_job_types is not None:
+            conditions.append(Job.job_type.in_(supported_job_types))
 
         stmt = (
             select(Job)

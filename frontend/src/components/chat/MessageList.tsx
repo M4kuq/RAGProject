@@ -7,6 +7,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   agentic_router: "Agentic Router",
   dense: "Normal RAG",
   hybrid: "Hybrid RAG",
+  langchain_agentic: "LangChain Agentic",
   llm_tool_orchestrator: "Auto",
   sparse: "Sparse RAG"
 };

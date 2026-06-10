@@ -80,6 +80,7 @@ Use these files for final handoff and demo validation:
 - [LLM tool-calling retrieval orchestrator](llm_tool_calling_retrieval_orchestrator.md)
 - [LLM tool-calling retrieval orchestrator Japanese](llm_tool_calling_retrieval_orchestrator.ja.md)
 - [LLM tool orchestrator smoke](llm_tool_orchestrator_smoke.md)
+- [LangChain Agentic RAG](langchain_agentic_rag.md)
 - [Context budget trace debug](context_budget_trace_debug.md)
 - [Evidence Pack context compression](evidence_pack_context_compression.md)
 - [Tool Result Compression / Orchestrator Guard](tool_result_compression_orchestrator_guard.md)

@@ -4,10 +4,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-McpSearchStrategy = Literal["dense", "sparse", "hybrid", "agentic_router"]
+McpRagSearchStrategy = Literal["dense", "sparse", "hybrid", "agentic_router"]
+McpCompareStrategy = Literal[
+    "dense",
+    "sparse",
+    "hybrid",
+    "agentic_router",
+    "llm_tool_orchestrator",
+    "langchain_agentic",
+]
 
 
-def _default_compare_strategies() -> list[McpSearchStrategy]:
+def _default_compare_strategies() -> list[McpCompareStrategy]:
     return ["dense", "sparse", "hybrid", "agentic_router"]
 
 
@@ -17,7 +25,7 @@ class McpInputModel(BaseModel):
 
 class McpRagSearchInput(McpInputModel):
     query: str = Field(min_length=1, max_length=8000)
-    strategy: Literal["dense", "sparse", "hybrid", "agentic_router"] = "dense"
+    strategy: McpRagSearchStrategy = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     include_trace_summary: bool | None = None
@@ -33,7 +41,13 @@ class McpRagSearchInput(McpInputModel):
 
 class McpRagAskInput(McpInputModel):
     question: str = Field(min_length=1, max_length=8000)
-    strategy: Literal["dense", "hybrid", "agentic_router", "llm_tool_orchestrator"] = "dense"
+    strategy: Literal[
+        "dense",
+        "hybrid",
+        "agentic_router",
+        "llm_tool_orchestrator",
+        "langchain_agentic",
+    ] = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     include_citations: bool = True
@@ -82,10 +96,10 @@ class McpGetRetrievalTraceInput(McpInputModel):
 
 class McpCompareStrategiesInput(McpInputModel):
     evaluation_dataset_id: int | None = Field(default=None, ge=1)
-    strategies: list[McpSearchStrategy] = Field(
+    strategies: list[McpCompareStrategy] = Field(
         default_factory=_default_compare_strategies,
         min_length=1,
-        max_length=4,
+        max_length=6,
     )
     mode: Literal["latest_results"] = "latest_results"
 
@@ -93,9 +107,9 @@ class McpCompareStrategiesInput(McpInputModel):
     @classmethod
     def normalize_strategies(
         cls,
-        value: list[McpSearchStrategy],
-    ) -> list[McpSearchStrategy]:
-        deduped: list[McpSearchStrategy] = []
+        value: list[McpCompareStrategy],
+    ) -> list[McpCompareStrategy]:
+        deduped: list[McpCompareStrategy] = []
         for strategy in value:
             if strategy not in deduped:
                 deduped.append(strategy)

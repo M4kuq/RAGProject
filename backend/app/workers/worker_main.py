@@ -67,6 +67,7 @@ class WorkerRunner:
                 enabled_job_types=self.config.enabled_job_types,
                 lease_duration=self.config.lease_duration,
                 batch_size=self.config.batch_size,
+                supported_job_types=_supported_job_types(self.dispatcher),
             )
             contexts = [_context_from_job(job, self.config.worker_instance_id) for job in jobs]
             db.commit()
@@ -219,6 +220,19 @@ def _context_from_job(
         payload=cast(dict[str, object], payload),
         worker_instance_id=worker_instance_id,
     )
+
+
+def _supported_job_types(dispatcher: object) -> frozenset[str] | None:
+    value = getattr(dispatcher, "supported_job_types", None)
+    if value is None:
+        return None
+    if callable(value):
+        value = value()
+    if isinstance(value, frozenset):
+        return cast(frozenset[str], value)
+    if isinstance(value, (set, list, tuple)):
+        return frozenset(str(item) for item in value)
+    return None
 
 
 class _LeaseHeartbeat:

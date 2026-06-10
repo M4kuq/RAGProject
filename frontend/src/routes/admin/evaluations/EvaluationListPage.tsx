@@ -1,5 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { MetricHelp, orderedMetricEntries } from "../../../components/admin/MetricHelp";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
@@ -90,7 +91,16 @@ export function EvaluationListPage() {
         <div className="field-group">
           strategies
           <span className="inline-options">
-            {(["dense", "sparse", "hybrid", "agentic_router"] as EvaluationRunnableStrategy[]).map((strategy) => (
+            {(
+              [
+                "dense",
+                "sparse",
+                "hybrid",
+                "agentic_router",
+                "llm_tool_orchestrator",
+                "langchain_agentic"
+              ] as EvaluationRunnableStrategy[]
+            ).map((strategy) => (
               <label key={strategy}>
                 <input
                   type="checkbox"
@@ -139,7 +149,12 @@ export function EvaluationListPage() {
                 <th>Strategy</th>
                 <th>Status</th>
                 <th>Cases</th>
-                <th>Metrics</th>
+                <th>
+                  <span className="metric-heading">
+                    Metrics
+                    <MetricHelp metricName="metric_summary" />
+                  </span>
+                </th>
                 <th>Job</th>
                 <th>Started</th>
                 <th>Finished</th>
@@ -212,9 +227,18 @@ export function EvaluationListPage() {
 }
 
 function formatMetricSummary(summary: Record<string, number>) {
-  const entries = Object.entries(summary);
+  const entries = orderedMetricEntries(Object.entries(summary));
   if (!entries.length) {
     return "-";
   }
-  return entries.map(([name, value]) => `${name}: ${value.toFixed(2)}`).join(", ");
+  return (
+    <span className="metric-detail-list">
+      {entries.map(([name, value]) => (
+        <span className="metric-detail-item" key={name}>
+          <span>{name}: {value.toFixed(2)}</span>
+          <MetricHelp metricName={name} />
+        </span>
+      ))}
+    </span>
+  );
 }

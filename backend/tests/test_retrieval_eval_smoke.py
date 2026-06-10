@@ -27,10 +27,15 @@ from app.scripts.retrieval_eval_smoke import (
 
 
 def test_parse_strategies_dedupes_and_rejects_unsupported() -> None:
-    assert parse_strategies("dense, hybrid, dense, agentic_router") == [
+    assert parse_strategies("dense, hybrid, dense, agentic_router, langchain_agentic") == [
         "dense",
         "hybrid",
         "agentic_router",
+        "langchain_agentic",
+    ]
+    assert parse_strategies("llm_tool_orchestrator,langchain_agentic") == [
+        "llm_tool_orchestrator",
+        "langchain_agentic",
     ]
 
     with pytest.raises(SmokeError, match="invalid_strategy:fallback_dense"):
@@ -195,6 +200,8 @@ def test_actual_smoke_uses_search_only_http_qdrant_retrieval_client() -> None:
 
 
 def test_timeout_wrapper_raises_before_blocking_call_returns() -> None:
+    if not smoke_module._can_use_signal_timeout():
+        pytest.skip("signal-based timeout is unavailable on this platform")
     started = time.perf_counter()
 
     with pytest.raises(SmokeError, match="timeout_exceeded"):

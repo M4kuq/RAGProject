@@ -376,8 +376,20 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
             case_count: 1,
             succeeded_count: 0,
             failed_count: 1,
-            metric_summary: {},
-            strategy_comparison: [],
+            metric_summary: { recall_at_k: 0.75 },
+            strategy_comparison: [
+              {
+                schema_version: "phase2.evaluation.v1",
+                strategy_type: "agentic_router",
+                metric_name: "recall_at_k",
+                average: 0.75,
+                p50: 0.75,
+                p95: 0.75,
+                count: 1,
+                failed_count: 0,
+                not_applicable_count: 0
+              }
+            ],
             strategy_metrics_summary_json: null,
             error_code: null,
             error_message: null,
@@ -463,6 +475,7 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   );
 
   expect(await screen.findByRole("heading", { name: "Evaluation #77" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "recall_at_k の説明" }).length).toBeGreaterThan(1);
   expect(screen.getByText(/Promote failed evaluation items/)).toBeInTheDocument();
   expect(screen.getByText(/strategy expectations only/)).toBeInTheDocument();
   expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();

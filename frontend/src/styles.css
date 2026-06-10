@@ -418,6 +418,93 @@ textarea {
   max-width: 860px;
 }
 
+.metric-heading,
+.metric-name-cell,
+.metric-detail-item {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.metric-detail-list {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.metric-help {
+  display: inline-flex;
+  position: relative;
+}
+
+.metric-help-button {
+  align-items: center;
+  background: #f6f8fa;
+  border: 1px solid #c9d1d9;
+  border-radius: 50%;
+  color: #57606a;
+  cursor: help;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  height: 18px;
+  justify-content: center;
+  line-height: 1;
+  min-height: 18px;
+  min-width: 18px;
+  padding: 0;
+  width: 18px;
+}
+
+.metric-help-button:hover,
+.metric-help-button:focus-visible {
+  border-color: #0969da;
+  color: #0969da;
+  outline: none;
+}
+
+.metric-help-tooltip {
+  background: #24292f;
+  border-radius: 6px;
+  bottom: calc(100% + 8px);
+  color: #ffffff;
+  display: grid;
+  font-size: 12px;
+  font-weight: 400;
+  gap: 4px;
+  left: 50%;
+  line-height: 1.4;
+  max-width: min(280px, 80vw);
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease;
+  visibility: hidden;
+  width: max-content;
+  z-index: 20;
+}
+
+.metric-help-tooltip strong {
+  font-weight: 700;
+}
+
+.metric-help-tooltip span {
+  display: block;
+}
+
+.metric-help-tooltip .metric-help-direction {
+  color: #c9d1d9;
+}
+
+.metric-help:hover .metric-help-tooltip,
+.metric-help:focus-within .metric-help-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
 .failure-promotion-controls {
   align-items: end;
   display: flex;
@@ -759,9 +846,11 @@ textarea {
 }
 
 .chat-thread-list {
+  align-content: start;
   display: grid;
   flex: 1;
   gap: 2px;
+  grid-auto-rows: max-content;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1371,11 +1460,11 @@ textarea {
   .chat-sidebar {
     border-bottom: 1px solid #deded8;
     border-right: 0;
-    max-height: 240px;
+    max-height: 360px;
   }
 
   .chat-thread-list {
-    max-height: 130px;
+    max-height: none;
   }
 
   .chatgpt-layout .message.user p,

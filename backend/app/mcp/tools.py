@@ -96,7 +96,13 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                     "question": {"type": "string", "minLength": 1, "maxLength": 8000},
                     "strategy": {
                         "type": "string",
-                        "enum": ["dense", "hybrid", "agentic_router"],
+                        "enum": [
+                            "dense",
+                            "hybrid",
+                            "agentic_router",
+                            "llm_tool_orchestrator",
+                            "langchain_agentic",
+                        ],
                         "default": "dense",
                     },
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
@@ -174,6 +180,28 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             handler=adapter.rag_ask_auto,
         ),
         McpTool(
+            name="rag_ask_langchain_agentic",
+            description=(
+                "LangChain Agentic RAG ask wrapper for rag_ask(strategy=langchain_agentic)."
+            ),
+            input_schema=_object_schema(
+                {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["question"],
+            ),
+            handler=adapter.rag_ask_langchain_agentic,
+        ),
+        McpTool(
             name="rag_get_retrieval_trace",
             description="Get a safe retrieval trace summary by retrieval_run_id.",
             input_schema=_object_schema(
@@ -195,10 +223,17 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                         "type": "array",
                         "items": {
                             "type": "string",
-                            "enum": ["dense", "sparse", "hybrid", "agentic_router"],
+                            "enum": [
+                                "dense",
+                                "sparse",
+                                "hybrid",
+                                "agentic_router",
+                                "llm_tool_orchestrator",
+                                "langchain_agentic",
+                            ],
                         },
                         "minItems": 1,
-                        "maxItems": 4,
+                        "maxItems": 6,
                     },
                     "mode": {"type": "string", "enum": ["latest_results"]},
                 },
@@ -326,7 +361,14 @@ def call_tool(
     except McpError:
         raise
     is_error = (
-        name in {"rag_ask", "rag_ask_agentic", "rag_ask_auto", "rag_ask_hybrid"}
+        name
+        in {
+            "rag_ask",
+            "rag_ask_agentic",
+            "rag_ask_auto",
+            "rag_ask_hybrid",
+            "rag_ask_langchain_agentic",
+        }
         and structured.get("status") == "failed"
     )
     return _tool_success(structured, is_error=is_error)
