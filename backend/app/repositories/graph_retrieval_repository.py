@@ -108,8 +108,7 @@ class GraphRetrievalRepository:
                 GraphEntity.graph_entity_id.in_(scoped_entity_ids)
             )
         rows = db.scalars(
-            statement
-            .order_by(
+            statement.order_by(
                 name_match_priority.asc(),
                 GraphEntity.updated_at.desc(),
                 GraphEntity.graph_entity_id.asc(),
@@ -509,9 +508,9 @@ def _entity_name_terms(entity: GraphEntity) -> set[str]:
 def _label_terms(value: str) -> tuple[str, ...]:
     return tuple(
         term
-        for term in (
-            " ".join(value.replace("_", " ").replace("-", " ").split()).lower().split()
-        )
+        for term in " ".join(
+            value.replace("_", " ").replace("-", " ").split()
+        ).lower().split()
         if len(term) >= 1
     )
 
