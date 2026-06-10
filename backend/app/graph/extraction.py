@@ -138,9 +138,7 @@ class EntityExtractionService:
             for match in regex.finditer(chunk.content_text):
                 text = match.groupdict().get("identifier") or match.group(0)
                 span = (
-                    match.span("identifier")
-                    if "identifier" in match.groupdict()
-                    else match.span(0)
+                    match.span("identifier") if "identifier" in match.groupdict() else match.span(0)
                 )
                 candidate = self._candidate_from_text(
                     chunk,
