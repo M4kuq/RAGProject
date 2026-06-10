@@ -1,6 +1,8 @@
 # Entity / Relation Extraction Design
 
-PR-45 documents extraction behavior for PR-47 and later. It does not implement extraction.
+PR-47 implements the first safe entity/relation extraction pipeline. It uses a
+deterministic rule-based extractor and a `graph_index_build` worker handler to
+index ready `document_versions` without persisting raw evidence text.
 
 ## Extraction Target
 
@@ -20,45 +22,48 @@ document_version ready -> graph_index job queued -> entity/relation extraction -
 
 If approval changes the active version, graph rows from old versions remain traceable but should not be selected for active retrieval unless explicitly version-aware.
 
-## Worker Job Proposal
+## Worker Job
 
-Candidate job type:
+Implemented job type:
 
 ```text
-graph_index_document_version
+graph_index_build
 ```
 
-Payload shape should include IDs and options only:
+Payload shape includes IDs and options only:
 
+- `job_type`
 - `document_version_id`
+- `graph_index_run_id`
 - `extractor_type`
 - `extractor_version`
 - `reindex_policy`
-- `requested_by_user_id`
 
 The payload must not include raw document text or raw chunk text.
 
 ## Extractor Interface
 
-Future implementation should define an interface similar to:
+The implementation snapshots chunk refs, runs extraction outside a long DB
+transaction, and persists the safe result:
 
 ```text
-extract(document_version_id, chunk_refs, options) -> GraphExtractionResult
+extract(chunk_refs) -> GraphExtractionResult
 ```
 
-`chunk_refs` may allow internal service code to load chunk text for extraction, but the extractor result and logs must contain only IDs, hashes, labels, counts, confidence, and safe metadata.
+`chunk_refs` include chunk text in memory for extraction. Extractor results,
+logs, job results, and graph rows contain only IDs, hashes, labels, offsets,
+counts, confidence, and safe metadata.
 
 ## Extractor Modes
 
 | Mode | Purpose | Phase3 use |
 |---|---|---|
-| deterministic_fake | Repeatable tests and CI | Required before LLM extractor. |
-| rule_based | Safe baseline for labels, headings, IDs, explicit relations | Useful for early graph shape. |
-| llm_optional | Higher recall extraction | Optional and gated by export policy. |
+| rule_based | Safe baseline for technical labels and explicit relation keywords | Implemented in PR-47. |
+| llm_optional | Higher recall extraction | Future, optional, and gated by export policy. |
 
 ## Raw Text Handling
 
-Extraction may internally read chunk text. It must not persist or log raw document text, raw chunk text, full context, prompt material, PII, credential values, or secret values. Use:
+Extraction internally reads chunk text. It must not persist or log raw document text, raw chunk text, full context, prompt material, PII, credential values, or secret values. Use:
 
 - `document_chunk_id`
 - `document_version_id`
@@ -107,10 +112,11 @@ Each relation must map to at least one source chunk through `source_document_chu
 ## Reindex / Version Update Behavior
 
 - New document version gets a new graph index run.
-- Old version graph rows remain for audit/version-aware retrieval unless cleanup policy removes them later.
+- PR-47 rebuilds a document version by replacing its existing mentions and relations.
+- Entities are merged by normalized canonical name and entity type.
 - Active retrieval filters should prefer active document versions.
 - Reindex failure should not corrupt existing ready graph rows.
-- Reindex retry uses job idempotency and version-level natural keys.
+- Reindex retry creates a new run when the payload references a failed run.
 
 ## Failure Handling
 
