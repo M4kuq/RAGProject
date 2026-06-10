@@ -307,7 +307,8 @@ class GraphPathSearchService:
                 tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
             ] = []
             for current_id, entity_path, relation_path, entity_match_score in frontier:
-                for relation_row in adjacency.get(current_id, [])[: settings.max_relations_per_entity]:
+                relations = adjacency.get(current_id, [])
+                for relation_row in relations[: settings.max_relations_per_entity]:
                     relation = relation_row.relation
                     next_id = (
                         relation.target_entity_id
