@@ -196,9 +196,10 @@ class GraphRetrievalRepository:
                     LogicalDocument.logical_document_id.in_(filters.logical_document_ids),
                 )
             statement = (
-            statement.outerjoin(
-                DocumentChunk,
-                    DocumentChunk.document_chunk_id == GraphRelation.source_document_chunk_id,
+                statement.outerjoin(
+                    DocumentChunk,
+                    DocumentChunk.document_chunk_id
+                    == GraphRelation.source_document_chunk_id,
                 )
                 .outerjoin(
                     DocumentVersion,
@@ -217,6 +218,7 @@ class GraphRetrievalRepository:
             )
         relation_rows = db.scalars(
             statement.order_by(
+                case((GraphRelation.source_document_chunk_id.is_(None), 1), else_=0).asc(),
                 func.coalesce(GraphRelation.confidence, 0).desc(),
                 GraphRelation.graph_relation_id.asc(),
             ).limit(limit)
@@ -301,15 +303,13 @@ class GraphRetrievalRepository:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_source_chunks < 1:
             return []
-        statement = (
+        mention_pairs = (
             select(
-                DocumentChunk,
-                DocumentVersion,
-                LogicalDocument,
                 GraphEntityMention.graph_entity_id,
+                GraphEntityMention.document_chunk_id,
             )
             .join(
-                GraphEntityMention,
+                DocumentChunk,
                 GraphEntityMention.document_chunk_id == DocumentChunk.document_chunk_id,
             )
             .join(
@@ -327,16 +327,42 @@ class GraphRetrievalRepository:
                 DocumentVersion.is_active.is_(True),
                 LogicalDocument.status == "active",
             )
+            .distinct()
             .order_by(
                 GraphEntityMention.graph_entity_id.asc(),
-                DocumentChunk.document_chunk_id.asc(),
+                GraphEntityMention.document_chunk_id.asc(),
             )
             .limit(max_source_chunks)
         )
         if filters.logical_document_ids:
-            statement = statement.where(
+            mention_pairs = mention_pairs.where(
                 LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
+        mention_pairs_subquery = mention_pairs.subquery()
+        statement = (
+            select(
+                DocumentChunk,
+                DocumentVersion,
+                LogicalDocument,
+                mention_pairs_subquery.c.graph_entity_id,
+            )
+            .join(
+                mention_pairs_subquery,
+                mention_pairs_subquery.c.document_chunk_id == DocumentChunk.document_chunk_id,
+            )
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .order_by(
+                mention_pairs_subquery.c.graph_entity_id.asc(),
+                DocumentChunk.document_chunk_id.asc(),
+            )
+        )
         rows = db.execute(statement).all()
         seen: set[tuple[int, int]] = set()
         results: list[GraphChunkRow] = []

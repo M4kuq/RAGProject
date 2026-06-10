@@ -774,7 +774,7 @@ def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
         modality="text",
     )
     redis = GraphEntity(
-        canonical_name="Redis",
+        canonical_name=f"Redis-{uuid.uuid4().hex[:8]}",
         entity_type="technology",
         aliases_json=[],
     )
