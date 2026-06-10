@@ -15,6 +15,7 @@ from app.db.graph_models import GraphEntity, GraphEntityMention, GraphIndexRun, 
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.graph.extraction import EntityMentionCandidate, GraphExtractionResult, RelationCandidate
+from app.repositories.graph_repository import GraphRepository
 from app.repositories.job_repository import JobRepository
 from app.services.graph_index_service import GraphIndexBuildSnapshot, GraphIndexService
 from app.workers.handlers.graph_index_build_handler import GraphIndexBuildHandler
@@ -41,7 +42,8 @@ def graph_session_factory() -> Iterator[sessionmaker[Session]]:
 def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
-    service = GraphIndexService()
+    repository = _RecordingGraphRepository()
+    service = GraphIndexService(repository=repository)
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -105,6 +107,12 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
         assert _graph_counts(db, version.document_version_id) == first_counts
         assert second_run.status == "succeeded"
         assert len(db.scalars(select(GraphIndexRun)).all()) == 2
+        assert repository.document_version_locks == [
+            version.document_version_id,
+            version.document_version_id,
+        ]
+        assert len(repository.entity_key_lock_sets) == 2
+        assert all(entity_keys for entity_keys in repository.entity_key_lock_sets)
 
 
 def test_graph_index_build_worker_is_registered_and_succeeds(
@@ -423,3 +431,30 @@ def _worker_config(*, enabled_job_types: frozenset[str] | None) -> WorkerConfig:
         enabled_job_types=enabled_job_types,
         worker_instance_id="worker-1",
     )
+
+
+class _RecordingGraphRepository(GraphRepository):
+    def __init__(self) -> None:
+        self.document_version_locks: list[int] = []
+        self.entity_key_lock_sets: list[set[tuple[str, str]]] = []
+
+    def acquire_graph_index_document_version_lock(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> None:
+        self.document_version_locks.append(document_version_id)
+        super().acquire_graph_index_document_version_lock(
+            db,
+            document_version_id=document_version_id,
+        )
+
+    def acquire_graph_entity_key_locks(
+        self,
+        db: Session,
+        *,
+        keys: set[tuple[str, str]],
+    ) -> None:
+        self.entity_key_lock_sets.append(set(keys))
+        super().acquire_graph_entity_key_locks(db, keys=keys)
