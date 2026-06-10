@@ -78,7 +78,11 @@ class GraphRetrievalRepository:
             matched_terms = _matched_terms(entity, safe_terms)
             if not matched_terms:
                 continue
-            score = _entity_match_score(entity, safe_terms=safe_terms, matched_terms=matched_terms)
+            score = _entity_match_score(
+                entity,
+                safe_terms=safe_terms,
+                matched_terms=matched_terms,
+            )
             if score < min_match_score:
                 continue
             results.append(
@@ -94,7 +98,12 @@ class GraphRetrievalRepository:
         )
         return results[:limit]
 
-    def has_active_graph_sources(self, db: Session, *, filters: RetrievalFilters) -> bool:
+    def has_active_graph_sources(
+        self,
+        db: Session,
+        *,
+        filters: RetrievalFilters,
+    ) -> bool:
         statement = (
             select(GraphEntityMention.graph_entity_mention_id)
             .join(
@@ -150,7 +159,11 @@ class GraphRetrievalRepository:
             .limit(limit)
         ).all()
         if filters is not None:
-            relation_rows = self._relations_matching_filters(db, relation_rows, filters=filters)
+            relation_rows = self._relations_matching_filters(
+                db,
+                relation_rows,
+                filters=filters,
+            )
         related_entity_ids = {
             entity_id
             for relation in relation_rows
@@ -361,7 +374,11 @@ def _safe_terms(query_terms: tuple[str, ...]) -> tuple[str, ...]:
         if len(normalized) < 2 or len(normalized) > 80 or normalized in seen:
             continue
         try:
-            validate_safe_graph_label(normalized, field_name="query_term", max_length=80)
+            validate_safe_graph_label(
+                normalized,
+                field_name="query_term",
+                max_length=80,
+            )
         except ValueError:
             continue
         safe.append(normalized)
@@ -371,7 +388,10 @@ def _safe_terms(query_terms: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(safe)
 
 
-def _matched_terms(entity: GraphEntity, query_terms: tuple[str, ...]) -> tuple[str, ...]:
+def _matched_terms(
+    entity: GraphEntity,
+    query_terms: tuple[str, ...],
+) -> tuple[str, ...]:
     haystack_parts = [entity.canonical_name, entity.entity_type]
     haystack_parts.extend(str(alias) for alias in (entity.aliases_json or []))
     haystack = " ".join(haystack_parts).lower()
@@ -399,7 +419,10 @@ def _entity_match_score(
 
 
 def _exact_entity_phrase_match(entity: GraphEntity, query_text: str) -> bool:
-    for label in (entity.canonical_name, *(str(alias) for alias in (entity.aliases_json or []))):
+    for label in (
+        entity.canonical_name,
+        *(str(alias) for alias in (entity.aliases_json or [])),
+    ):
         normalized = " ".join(label.split()).strip().lower()
         if normalized and normalized in query_text:
             return True
