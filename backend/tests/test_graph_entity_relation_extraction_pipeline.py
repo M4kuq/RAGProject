@@ -203,9 +203,7 @@ def test_graph_index_build_worker_retries_failed_run_with_new_run(
     with graph_session_factory() as db:
         stored_job = db.get(Job, job_id)
         runs = list(
-            db.scalars(
-                select(GraphIndexRun).order_by(GraphIndexRun.graph_index_run_id.asc())
-            ).all()
+            db.scalars(select(GraphIndexRun).order_by(GraphIndexRun.graph_index_run_id.asc())).all()
         )
         assert stored_job is not None
         assert stored_job.status == "succeeded"
