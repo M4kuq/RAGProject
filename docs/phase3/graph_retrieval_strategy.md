@@ -25,6 +25,7 @@ Implemented in PR-48:
 
 Not implemented in PR-48:
 
+- Public `/rag/search strategy=graph` and `/rag/ask strategy=graph` API dispatch.
 - Graph Citation Builder.
 - Graph Path Validation UI.
 - Graph Debug UI.
@@ -168,4 +169,6 @@ Graph path candidates consume context budget through their source chunk-backed e
 
 ## API Handoff
 
-`/rag/search strategy=graph` and `/rag/ask strategy=graph` are opt-in. Graph retrieval resolves each path back to `document_chunk_id`, so the existing Context Budget, Evidence Pack, citation, and confidence layers can consume the same chunk-backed candidate shape without exposing raw graph evidence.
+PR-48 introduces the graph retrieval strategy object and safe graph path persistence, but it does not expose `strategy=graph` through `/rag/search` or `/rag/ask` yet. The request enums and service dispatch must be extended in a follow-up API integration PR before callers can use graph retrieval directly.
+
+The implemented strategy already resolves each path back to `document_chunk_id`, so that follow-up can connect the existing Context Budget, Evidence Pack, citation, and confidence layers to the same chunk-backed candidate shape without exposing raw graph evidence.
