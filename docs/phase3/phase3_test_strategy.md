@@ -1,6 +1,7 @@
 # Phase3 Test Strategy
 
-PR-46 adds the first executable Graph-RAG foundation tests.
+PR-46 added the first executable Graph-RAG foundation tests. PR-47 adds the
+first executable extraction pipeline and worker tests.
 
 ## PR-46 Tests
 
@@ -13,8 +14,19 @@ Added/expected coverage:
 - failed error messages are redacted
 - Pydantic DTOs reject invalid sha256 hashes and unsafe metadata keys
 - Graph settings defaults are disabled
-- `graph_index_build` is a future job type skeleton, not registered as an active worker handler
+- `graph_index_build` is supported by worker configuration and the default dispatcher
 - PostgreSQL-only checks validate migration head, tables, constraints, indexes, and seeded settings when a PostgreSQL DB is available
+
+## PR-47 Tests
+
+Added/expected coverage:
+
+- rule-based entity extraction creates safe entity and mention candidates
+- rule-based relation extraction maps relations to source chunk refs and hashes
+- graph index rebuild replaces version-level mentions and relations idempotently
+- worker registration processes `graph_index_build` jobs
+- failed graph index runs retry with a new run
+- extraction failures mark jobs/runs failed without leaking raw text
 
 ## Migration / DB
 
@@ -32,8 +44,6 @@ PR-46 migration checks should cover:
 - negative count rejection
 
 ## Later PRs
-
-PR-47 adds extractor unit tests and worker handler tests.
 
 PR-48 adds graph retrieval tests.
 

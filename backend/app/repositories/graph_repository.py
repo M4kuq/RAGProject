@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.core.job_utils import redact_error_message
 from app.db.graph_models import (
     GraphEntity,
     GraphEntityMention,
@@ -57,20 +60,117 @@ class GraphRepository:
             )
         )
 
-    def create_relation(self, db: Session, data: GraphRelationCreate) -> GraphRelation:
-        relation = GraphRelation(
-            source_entity_id=data.source_entity_id,
-            target_entity_id=data.target_entity_id,
-            relation_type=data.relation_type,
-            relation_label=data.relation_label,
-            confidence=data.confidence,
-            source_document_chunk_id=data.source_document_chunk_id,
-            evidence_text_hash=data.evidence_text_hash,
-            metadata_json=validate_safe_graph_metadata(dict(data.metadata_json)),
+    def acquire_graph_index_document_version_lock(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> None:
+        _acquire_advisory_transaction_lock(
+            db,
+            namespace="graph_index_document_version",
+            key=str(document_version_id),
         )
-        db.add(relation)
+
+    def acquire_graph_entity_key_locks(
+        self,
+        db: Session,
+        *,
+        keys: set[tuple[str, str]],
+    ) -> None:
+        for canonical_name, entity_type in sorted(keys):
+            _acquire_advisory_transaction_lock(
+                db,
+                namespace="graph_entity_key",
+                key=f"{canonical_name.strip().lower()}:{entity_type.strip()}",
+            )
+
+    def list_entities_by_keys(
+        self,
+        db: Session,
+        *,
+        keys: set[tuple[str, str]],
+    ) -> dict[tuple[str, str], GraphEntity]:
+        normalized_keys = {
+            (canonical_name.strip().lower(), entity_type.strip())
+            for canonical_name, entity_type in keys
+            if canonical_name.strip() and entity_type.strip()
+        }
+        if not normalized_keys:
+            return {}
+        names = {canonical_name for canonical_name, _ in normalized_keys}
+        entity_types = {entity_type for _, entity_type in normalized_keys}
+        rows = db.scalars(
+            select(GraphEntity).where(
+                func.lower(GraphEntity.canonical_name).in_(names),
+                GraphEntity.entity_type.in_(entity_types),
+            )
+        ).all()
+        return {
+            (row.canonical_name.strip().lower(), row.entity_type.strip()): row
+            for row in rows
+            if (row.canonical_name.strip().lower(), row.entity_type.strip()) in normalized_keys
+        }
+
+    def merge_entity_aliases(
+        self,
+        db: Session,
+        *,
+        entity: GraphEntity,
+        aliases: tuple[str, ...],
+    ) -> None:
+        if not aliases:
+            return
+        existing_aliases = [
+            validate_safe_graph_label(str(alias), field_name="aliases_json", max_length=120)
+            for alias in (entity.aliases_json or [])
+        ]
+        seen = {entity.canonical_name.strip().lower()}
+        merged: list[str] = []
+        for alias in (*existing_aliases, *aliases):
+            safe_alias = validate_safe_graph_label(
+                str(alias),
+                field_name="aliases_json",
+                max_length=120,
+            )
+            dedupe_key = safe_alias.lower()
+            if dedupe_key in seen:
+                continue
+            merged.append(safe_alias)
+            seen.add(dedupe_key)
+            if len(merged) >= 32:
+                break
+        if merged != existing_aliases:
+            entity.aliases_json = merged
+            entity.updated_at = datetime.now(UTC)
+            db.flush()
+
+    def create_relation(self, db: Session, data: GraphRelationCreate) -> GraphRelation:
+        return self.create_relations(db, [data])[0]
+
+    def create_relations(
+        self,
+        db: Session,
+        items: Sequence[GraphRelationCreate],
+    ) -> list[GraphRelation]:
+        relations = [
+            GraphRelation(
+                source_entity_id=data.source_entity_id,
+                target_entity_id=data.target_entity_id,
+                relation_type=data.relation_type,
+                relation_label=data.relation_label,
+                confidence=data.confidence,
+                source_document_chunk_id=data.source_document_chunk_id,
+                evidence_text_hash=data.evidence_text_hash,
+                metadata_json=validate_safe_graph_metadata(dict(data.metadata_json)),
+            )
+            for data in items
+        ]
+        if not relations:
+            return []
+        db.add_all(relations)
         db.flush()
-        return relation
+        return relations
 
     def list_relations_for_entity(
         self,
@@ -99,24 +199,89 @@ class GraphRepository:
         db: Session,
         data: GraphEntityMentionCreate,
     ) -> GraphEntityMention:
-        _assert_chunk_belongs_to_version(
+        return self.create_entity_mentions_for_version(
             db,
-            document_chunk_id=data.document_chunk_id,
             document_version_id=data.document_version_id,
+            items=[data],
+        )[0]
+
+    def create_entity_mentions_for_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        items: Sequence[GraphEntityMentionCreate],
+    ) -> list[GraphEntityMention]:
+        mention_items = list(items)
+        if not mention_items:
+            return []
+
+        chunk_ids = {item.document_chunk_id for item in mention_items}
+        version_ids = {item.document_version_id for item in mention_items}
+        if version_ids != {document_version_id}:
+            raise ValueError("all entity mentions must belong to document_version_id")
+        _assert_chunks_belong_to_version(
+            db,
+            document_chunk_ids=chunk_ids,
+            document_version_id=document_version_id,
         )
-        mention = GraphEntityMention(
-            graph_entity_id=data.graph_entity_id,
-            document_chunk_id=data.document_chunk_id,
-            document_version_id=data.document_version_id,
-            mention_text_hash=data.mention_text_hash,
-            mention_offset_start=data.mention_offset_start,
-            mention_offset_end=data.mention_offset_end,
-            confidence=data.confidence,
-            metadata_json=validate_safe_graph_metadata(dict(data.metadata_json)),
-        )
-        db.add(mention)
+        mentions = [
+            GraphEntityMention(
+                graph_entity_id=data.graph_entity_id,
+                document_chunk_id=data.document_chunk_id,
+                document_version_id=data.document_version_id,
+                mention_text_hash=data.mention_text_hash,
+                mention_offset_start=data.mention_offset_start,
+                mention_offset_end=data.mention_offset_end,
+                confidence=data.confidence,
+                metadata_json=validate_safe_graph_metadata(dict(data.metadata_json)),
+            )
+            for data in mention_items
+        ]
+        db.add_all(mentions)
         db.flush()
-        return mention
+        return mentions
+
+    def list_chunks_for_graph_index(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> list[DocumentChunk]:
+        rows = db.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_version_id == document_version_id)
+            .order_by(DocumentChunk.chunk_index.asc(), DocumentChunk.document_chunk_id.asc())
+        ).all()
+        return list(rows)
+
+    def delete_index_artifacts_for_document_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> tuple[int, int]:
+        chunk_ids = list(
+            db.scalars(
+                select(DocumentChunk.document_chunk_id).where(
+                    DocumentChunk.document_version_id == document_version_id
+                )
+            ).all()
+        )
+        relation_count = 0
+        if chunk_ids:
+            relation_result = db.execute(
+                delete(GraphRelation).where(GraphRelation.source_document_chunk_id.in_(chunk_ids))
+            )
+            relation_count = int(getattr(relation_result, "rowcount", 0) or 0)
+        mention_result = db.execute(
+            delete(GraphEntityMention).where(
+                GraphEntityMention.document_version_id == document_version_id
+            )
+        )
+        mention_count = int(getattr(mention_result, "rowcount", 0) or 0)
+        db.flush()
+        return relation_count, mention_count
 
     def create_graph_index_run(self, db: Session, data: GraphIndexRunCreate) -> GraphIndexRun:
         run = GraphIndexRun(
@@ -259,14 +424,30 @@ def _assert_chunk_belongs_to_version(
     document_chunk_id: int,
     document_version_id: int,
 ) -> None:
-    actual_version_id = db.scalar(
-        select(DocumentChunk.document_version_id).where(
-            DocumentChunk.document_chunk_id == document_chunk_id,
-        )
+    _assert_chunks_belong_to_version(
+        db,
+        document_chunk_ids={document_chunk_id},
+        document_version_id=document_version_id,
     )
-    if actual_version_id is None:
-        raise ValueError("document_chunk_id must reference an existing document chunk")
-    if int(actual_version_id) != document_version_id:
+
+
+def _assert_chunks_belong_to_version(
+    db: Session,
+    *,
+    document_chunk_ids: set[int],
+    document_version_id: int,
+) -> None:
+    if not document_chunk_ids:
+        return
+    actual_chunk_ids = set(
+        db.scalars(
+            select(DocumentChunk.document_chunk_id).where(
+                DocumentChunk.document_version_id == document_version_id,
+                DocumentChunk.document_chunk_id.in_(document_chunk_ids),
+            )
+        ).all()
+    )
+    if actual_chunk_ids != document_chunk_ids:
         raise ValueError("document_chunk_id must belong to document_version_id")
 
 
@@ -306,11 +487,42 @@ def _safe_graph_failure_code(error_code: str) -> str:
 
 
 def _safe_graph_failure_message(error_message: str | None) -> str:
-    message = "Job failed with a redacted error." if error_message else "Job failed."
+    message = redact_error_message(error_message)
     return validate_safe_graph_label(message, field_name="error_message", max_length=240)
 
 
+def _acquire_advisory_transaction_lock(
+    db: Session,
+    *,
+    namespace: str,
+    key: str,
+) -> None:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _signed_int64_hash(f"{namespace}:{key}")},
+    )
+
+
+def _signed_int64_hash(value: str) -> int:
+    raw_value = int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big")
+    if raw_value >= 2**63:
+        raw_value -= 2**64
+    return raw_value
+
+
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:
-    if run.started_at is not None and finished_at < run.started_at:
-        return run.started_at
+    if run.started_at is None:
+        return finished_at
+    started_at = run.started_at
+    comparable_started_at = started_at
+    comparable_finished_at = finished_at
+    if started_at.tzinfo is None and finished_at.tzinfo is not None:
+        comparable_finished_at = finished_at.replace(tzinfo=None)
+    elif started_at.tzinfo is not None and finished_at.tzinfo is None:
+        comparable_started_at = started_at.replace(tzinfo=None)
+    if comparable_finished_at < comparable_started_at:
+        return started_at
     return finished_at

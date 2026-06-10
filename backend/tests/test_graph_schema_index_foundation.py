@@ -48,7 +48,7 @@ from app.schemas.graph import (
     GraphRetrievalPathCreate,
 )
 from app.services.graph_index_service import GraphIndexService
-from app.workers.worker_config import WorkerConfigError, parse_enabled_job_types
+from app.workers.worker_config import parse_enabled_job_types
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -223,6 +223,7 @@ def test_graph_repository_and_service_lifecycle(
             "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
             "document_version_id": version.document_version_id,
             "graph_index_run_id": run.graph_index_run_id,
+            "reindex_policy": "replace_existing",
         }
         assert sanitize_job_payload(payload)["graph_index_run_id"] == run.graph_index_run_id
 
@@ -541,13 +542,14 @@ def test_graph_index_service_requires_ready_version(
             )
 
 
-def test_graph_job_type_is_future_skeleton_not_worker_enabled_by_default() -> None:
+def test_graph_job_type_is_worker_supported() -> None:
     assert GRAPH_INDEX_BUILD_JOB_TYPE == "graph_index_build"
-    with pytest.raises(WorkerConfigError):
-        parse_enabled_job_types(GRAPH_INDEX_BUILD_JOB_TYPE)
+    assert parse_enabled_job_types(GRAPH_INDEX_BUILD_JOB_TYPE) == frozenset(
+        {GRAPH_INDEX_BUILD_JOB_TYPE}
+    )
 
 
-def test_default_worker_does_not_acquire_future_graph_jobs(
+def test_default_worker_acquires_graph_jobs(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     job_repository = JobRepository()
@@ -565,8 +567,8 @@ def test_default_worker_does_not_acquire_future_graph_jobs(
             lease_duration=timedelta(seconds=30),
             batch_size=10,
         )
-        assert [job.job_id for job in acquired] == [supported_job.job_id]
-        assert graph_job.status == "queued"
+        assert [job.job_id for job in acquired] == [graph_job.job_id, supported_job.job_id]
+        assert graph_job.status == "running"
 
 
 def test_graph_system_settings_defaults_are_safe() -> None:

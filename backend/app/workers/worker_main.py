@@ -34,7 +34,7 @@ class WorkerRunner:
         self.config = config
         self.session_factory = session_factory
         self.repository = repository or JobRepository()
-        self.dispatcher = dispatcher or JobDispatcher()
+        self.dispatcher = dispatcher or JobDispatcher(session_factory=session_factory)
 
     def run_once(self) -> int:
         contexts = self._acquire_contexts()

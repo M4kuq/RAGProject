@@ -1,6 +1,8 @@
 # Graph Schema Draft
 
-PR-45 defined this as a draft. PR-46 implements the first Graph-RAG schema foundation as Alembic revision `0012_graph_schema_index`.
+PR-45 defined this as a draft. PR-46 implemented the first Graph-RAG schema
+foundation as Alembic revision `0012_graph_schema_index`. PR-47 connects
+entity/relation extraction and graph index worker execution to that foundation.
 
 ## Implemented In PR-46
 
@@ -19,10 +21,13 @@ Implemented backend foundation:
 - Pydantic DTOs in `backend/app/schemas/graph.py`
 - `GraphRepository`
 - `GraphIndexService` lifecycle skeleton
-- `graph_index_build` future job type constant and payload schema
+- `graph_index_build` job type constant and payload schema reserved for PR-47 worker wiring
 - disabled Graph-RAG system settings defaults
 
-PR-46 still does not implement entity/relation extraction, graph retrieval, Graph-aware Router, Graph Citation generation, Graph Debug UI, OCR, image upload, AWS/S3/OIDC, external provider integration, or online evaluation.
+PR-47 implements the first rule-based entity/relation extraction pipeline and
+`graph_index_build` worker handler. It still does not implement graph retrieval,
+Graph-aware Router, Graph Citation generation, Graph Debug UI, OCR, image
+upload, AWS/S3/OIDC, external provider integration, or online evaluation.
 
 ## Design Rules
 
@@ -77,7 +82,7 @@ Key fields:
 Constraints/indexes:
 
 - source and target entity FKs with cascade delete
-- optional source chunk FK with `ON DELETE SET NULL`
+- optional source chunk FK with `ON DELETE CASCADE`
 - source and target cannot be the same entity
 - confidence must be between 0 and 1 when present
 - `evidence_text_hash` must be lowercase sha256 hex when present
@@ -168,9 +173,12 @@ Constraints/indexes:
 - `source_chunk_ids_json` must be an array
 - index on `retrieval_run_id`
 
-## PR-47 Handoff
+## PR-47 Implementation
 
-PR-47 should connect entity/relation extraction to this foundation through `GraphIndexService`. Extraction may internally read chunk text, but persisted graph state must continue using IDs, hashes, offsets, counts, confidence, and safe metadata only.
+PR-47 connects entity/relation extraction to this foundation through
+`GraphIndexService`. Extraction internally reads chunk text, but persisted graph
+state continues using IDs, hashes, offsets, counts, confidence, and safe metadata
+only.
 
 ## PR-48 Handoff
 
@@ -178,8 +186,7 @@ PR-48 should implement graph lookup/traversal against these tables and store saf
 
 ## Known Limitations
 
-- No extractor is implemented in PR-46.
-- No graph retrieval strategy is implemented in PR-46.
-- No public Graph-RAG API is added in PR-46.
-- `graph_index_build` is a future job type skeleton and is not wired to a worker handler yet.
+- No graph retrieval strategy is implemented in PR-47.
+- No public Graph-RAG API is added in PR-47.
+- `graph_index_build` is wired to the worker, but graph jobs are not automatically enqueued by ingest.
 - The schema may evolve after PR-47/PR-48 query plans and extraction behavior are measured.

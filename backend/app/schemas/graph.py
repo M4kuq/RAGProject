@@ -297,6 +297,23 @@ class GraphIndexJobPayload(BaseModel):
     job_type: Literal["graph_index_build"] = GRAPH_INDEX_BUILD_JOB_TYPE
     document_version_id: StrictInt = Field(gt=0)
     graph_index_run_id: StrictInt | None = Field(default=None, gt=0)
+    extractor_type: str | None = Field(default=None, min_length=1, max_length=80)
+    extractor_version: str | None = Field(default=None, max_length=80)
+    reindex_policy: Literal["replace_existing"] = "replace_existing"
+
+    @field_validator("extractor_type")
+    @classmethod
+    def validate_extractor_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_graph_label(value, field_name="extractor_type", max_length=80)
+
+    @field_validator("extractor_version")
+    @classmethod
+    def validate_extractor_version(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_graph_label(value, field_name="extractor_version", max_length=80)
 
 
 class GraphIndexSummary(BaseModel):

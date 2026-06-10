@@ -40,7 +40,7 @@ A graph failure should be promoted to a tracked failure class when:
 
 ## CI Evaluation Expansion
 
-PR-46/PR-47 should add small deterministic tests. Later PRs can add optional evaluation jobs:
+PR-46/PR-47 add small deterministic tests. Later PRs can add optional evaluation jobs:
 
 - schema and repository unit tests
 - deterministic extractor fixture tests

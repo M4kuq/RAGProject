@@ -1,15 +1,26 @@
 # Graph Indexing Design
 
-PR-46 implements the graph index state foundation. It does not run entity/relation extraction.
+PR-46 implemented the graph index state foundation. PR-47 connects that
+foundation to a safe entity/relation extraction worker.
 
 ## Implemented Foundation
 
 - `graph_index_runs` table
-- `GraphIndexService` skeleton
+- `GraphIndexService` lifecycle methods
 - `GraphRepository` lifecycle methods
-- `graph_index_build` future job type constant
+- `graph_index_build` job type constant
 - `GraphIndexJobPayload` DTO
 - disabled graph settings defaults in `system_settings`
+
+## Implemented In PR-47
+
+- rule-based `EntityExtractionService`
+- rule-based `RelationExtractionService`
+- `GraphEntityNormalizer`
+- `GraphIndexBuildHandler`
+- default worker dispatcher registration for `graph_index_build`
+- idempotent document-version rebuild for mentions and relations
+- safe retry behavior for failed graph index runs
 
 ## Lifecycle
 
@@ -20,7 +31,7 @@ queued -> skipped
 queued/running -> cancelled
 ```
 
-PR-46 supports lifecycle state changes through repository/service methods:
+The lifecycle is updated through repository/service methods:
 
 - `create_index_run_for_document_version`
 - `mark_index_run_running`
@@ -29,21 +40,26 @@ PR-46 supports lifecycle state changes through repository/service methods:
 
 `record_index_summary` records counts only: entity, relation, and mention counts. It does not store extracted text.
 
-## Job Type Skeleton
+## Job Type
 
-Future job type:
+Implemented job type:
 
 ```text
 graph_index_build
 ```
 
-PR-46 only adds the constant and payload schema. The default worker dispatcher does not register a graph handler yet, and PR-46 does not automatically enqueue graph indexing jobs.
+The default worker dispatcher registers a graph handler. PR-47 does not
+automatically enqueue graph indexing jobs from document ingest; callers must
+create a `graph_index_build` job explicitly.
 
 Safe payload fields:
 
 - `document_version_id`
 - `graph_index_run_id`
+- `extractor_type`
+- `extractor_version`
 - `job_type`
+- `reindex_policy`
 
 Unsafe payload fields remain forbidden:
 
@@ -67,9 +83,9 @@ PR-46 seeds these disabled defaults:
 | `rag.graph.store_raw_evidence_text` | `false` |
 | `rag.graph.retrieval.enabled` | `false` |
 
-## PR-47 Handoff
+## Worker Flow
 
-PR-47 should add extractor implementations and a worker handler. The handler should:
+The handler:
 
 1. Acquire a `graph_index_build` job.
 2. Mark the corresponding `graph_index_runs` row `running`.
@@ -83,8 +99,6 @@ Extraction/model work must not run inside long DB transactions. The worker shoul
 
 ## Known Limitations
 
-- No extractor implementation.
 - No automatic graph job creation.
-- No graph handler registration.
 - No backfill job.
 - No graph retrieval.
