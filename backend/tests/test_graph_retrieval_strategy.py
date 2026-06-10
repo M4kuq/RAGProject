@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -36,6 +37,17 @@ from app.rag.retrieval import RetrievalFilters
 from app.repositories.graph_retrieval_repository import GraphRetrievalRepository
 
 
+@dataclass(frozen=True)
+class SeedGraph:
+    chunk_ids: set[int]
+    logical_document_id: int
+    document_version_id: int
+    user_id: int
+    fastapi_entity_id: int
+    postgresql_entity_id: int
+    qdrant_entity_id: int
+
+
 @pytest.fixture
 def graph_retrieval_session_factory() -> Iterator[sessionmaker[Session]]:
     engine = create_engine(
@@ -55,7 +67,7 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        chunk_ids = _seed_graph(db)
+        seed = _seed_graph(db)
         strategy = GraphRetrievalStrategy()
 
         result = strategy.search(
@@ -78,7 +90,7 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
         assert result.relation_count <= 6
         assert result.path_count <= 8
         assert result.source_candidate_count >= 1
-        assert result.graph_candidates[0].document_chunk_id in chunk_ids
+        assert result.graph_candidates[0].document_chunk_id in seed.chunk_ids
         assert result.graph_candidates[0].payload["retrieval_source"] == "graph"
         assert any(
             path.depth == 2
@@ -91,6 +103,7 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
         )
         assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
         assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
+        assert result.graph_candidates[0].score_breakdown_json["selected_flag"] is True
         serialized = str(result).lower()
         assert "raw chunk text" not in serialized
         assert "secret" not in serialized
@@ -125,6 +138,145 @@ def test_graph_retrieval_returns_no_context_when_disabled_or_unmatched(
         assert unmatched.reason_codes == ("no_entity_matches",)
 
 
+def test_graph_retrieval_applies_filters_to_relation_chunks(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        other_chunk_id = _seed_other_document_relation(db, seed)
+        strategy = GraphRetrievalStrategy()
+
+        result = strategy.search(
+            db,
+            query="How does FastAPI use Redis?",
+            top_k=5,
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+            settings=GraphRetrievalSettings(enabled=True, min_entity_match_score=0.2),
+        )
+
+        assert result.graph_candidates
+        assert other_chunk_id not in {
+            candidate.document_chunk_id for candidate in result.graph_candidates
+        }
+        assert all(
+            other_chunk_id not in path.source_chunk_ids
+            for candidate in result.graph_candidates
+            for path in candidate.graph_path_candidates
+        )
+
+
+def test_graph_entity_lookup_scores_aliases_without_stopword_penalty(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        repository = GraphRetrievalRepository()
+
+        results = repository.lookup_entities(
+            db,
+            query_terms=("how", "does", "pgsql", "connect"),
+            limit=5,
+            min_match_score=0.5,
+        )
+
+        assert any(
+            result.entity.graph_entity_id == seed.postgresql_entity_id for result in results
+        )
+
+
+def test_graph_relation_lookup_enforces_per_entity_cap(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        chunk_id = min(seed.chunk_ids)
+        extra_entities = [
+            GraphEntity(canonical_name=f"HubTarget{index}", entity_type="technology")
+            for index in range(3)
+        ]
+        db.add_all(extra_entities)
+        db.flush()
+        db.add_all(
+            [
+                GraphRelation(
+                    source_entity_id=seed.fastapi_entity_id,
+                    target_entity_id=entity.graph_entity_id,
+                    relation_type=f"links-{index}",
+                    confidence=Decimal("0.70000"),
+                    source_document_chunk_id=chunk_id,
+                    evidence_text_hash=f"{index + 1}" * 64,
+                    metadata_json={"rule_id": "test"},
+                )
+                for index, entity in enumerate(extra_entities)
+            ]
+        )
+        db.commit()
+        repository = GraphRetrievalRepository()
+
+        rows = repository.list_relations_for_entity_ids(
+            db,
+            entity_ids={seed.fastapi_entity_id},
+            max_relations_per_entity=1,
+            filters=RetrievalFilters(),
+        )
+
+        assert len(rows) == 1
+
+
+def test_graph_retrieval_mention_only_paths_keep_entity_chunk_mapping(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        db.execute(delete(GraphRelation))
+        db.commit()
+        strategy = GraphRetrievalStrategy()
+
+        result = strategy.search(
+            db,
+            query="FastAPI Qdrant",
+            top_k=5,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True, min_entity_match_score=0.2),
+        )
+
+        label_to_chunks = {
+            path.safe_entity_labels[0]: set(path.source_chunk_ids)
+            for candidate in result.graph_candidates
+            for path in candidate.graph_path_candidates
+        }
+        assert "mention_only_paths" in result.reason_codes
+        assert label_to_chunks["FastAPI"] == {min(seed.chunk_ids)}
+        assert label_to_chunks["Qdrant"] == {max(seed.chunk_ids)}
+
+
+def test_graph_retrieval_falls_back_when_relation_paths_lack_source_chunks(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        _seed_graph(db)
+        for relation in db.scalars(select(GraphRelation)).all():
+            relation.source_document_chunk_id = None
+        db.commit()
+        strategy = GraphRetrievalStrategy()
+
+        result = strategy.search(
+            db,
+            query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True, min_entity_match_score=0.2),
+        )
+
+        assert result.graph_candidates
+        assert "mention_only_paths" in result.reason_codes
+        assert all(
+            path.depth == 0
+            for candidate in result.graph_candidates
+            for path in candidate.graph_path_candidates
+        )
+
+
 def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -135,12 +287,13 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
         result = strategy.search(
             db,
             query="FastAPI uses PostgreSQL",
-            top_k=2,
+            top_k=1,
             filters=RetrievalFilters(),
             settings=GraphRetrievalSettings(enabled=True, min_entity_match_score=0.2),
         )
         assert result.graph_candidates
-        run = RetrievalRun(status="running", top_k=2, strategy_type="dense")
+        selected_chunk_ids = {candidate.document_chunk_id for candidate in result.graph_candidates}
+        run = RetrievalRun(status="running", top_k=1, strategy_type="dense")
         db.add(run)
         db.flush()
         for rank, candidate in enumerate(result.graph_candidates, start=1):
@@ -158,13 +311,20 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
             )
         db.flush()
 
+        path_records = strategy.path_records(
+            retrieval_run_id=run.retrieval_run_id,
+            candidates=result.graph_candidates,
+        )
+        assert path_records
+        assert {
+            chunk_id
+            for record in path_records
+            for chunk_id in record.source_chunk_ids_json
+        } <= selected_chunk_ids
         saved = repository.save_graph_retrieval_paths(
             db,
             retrieval_run_id=run.retrieval_run_id,
-            paths=strategy.path_records(
-                retrieval_run_id=run.retrieval_run_id,
-                candidates=result.graph_candidates,
-            ),
+            paths=path_records,
         )
         db.commit()
 
@@ -173,7 +333,7 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
         assert len(stored) == len(saved)
         assert stored[0].path_json["schema_version"] == GRAPH_PATH_SCHEMA_VERSION
         assert stored[0].path_json["strategy_type"] == "graph"
-        assert stored[0].source_chunk_ids_json
+        assert set(stored[0].source_chunk_ids_json) <= selected_chunk_ids
         payload_dump = str(stored[0].path_json).lower()
         assert "raw chunk" not in payload_dump
         assert "full context" not in payload_dump
@@ -185,7 +345,7 @@ def test_graph_query_signal_score_detects_relation_queries() -> None:
     assert graph_query_signal_score("simple keyword") < 0.5
 
 
-def _seed_graph(db: Session) -> set[int]:
+def _seed_graph(db: Session) -> SeedGraph:
     role = Role(role_name=f"graph-role-{uuid.uuid4().hex[:8]}", description="Graph retrieval")
     db.add(role)
     db.flush()
@@ -234,9 +394,21 @@ def _seed_graph(db: Session) -> set[int]:
     db.add_all(chunks)
     db.flush()
     entities = {
-        "FastAPI": GraphEntity(canonical_name="FastAPI", entity_type="technology", aliases_json=[]),
-        "PostgreSQL": GraphEntity(canonical_name="PostgreSQL", entity_type="technology", aliases_json=[]),
-        "RAGProject": GraphEntity(canonical_name="RAGProject", entity_type="artifact", aliases_json=[]),
+        "FastAPI": GraphEntity(
+            canonical_name="FastAPI",
+            entity_type="technology",
+            aliases_json=[],
+        ),
+        "PostgreSQL": GraphEntity(
+            canonical_name="PostgreSQL",
+            entity_type="technology",
+            aliases_json=["PGSQL"],
+        ),
+        "RAGProject": GraphEntity(
+            canonical_name="RAGProject",
+            entity_type="artifact",
+            aliases_json=[],
+        ),
         "Qdrant": GraphEntity(canonical_name="Qdrant", entity_type="technology", aliases_json=[]),
     }
     db.add_all(entities.values())
@@ -301,4 +473,56 @@ def _seed_graph(db: Session) -> set[int]:
         ]
     )
     db.commit()
-    return {chunk.document_chunk_id for chunk in chunks}
+    return SeedGraph(
+        chunk_ids={chunk.document_chunk_id for chunk in chunks},
+        logical_document_id=logical.logical_document_id,
+        document_version_id=version.document_version_id,
+        user_id=user.user_id,
+        fastapi_entity_id=entities["FastAPI"].graph_entity_id,
+        postgresql_entity_id=entities["PostgreSQL"].graph_entity_id,
+        qdrant_entity_id=entities["Qdrant"].graph_entity_id,
+    )
+
+
+def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
+    logical = LogicalDocument(owner_user_id=seed.user_id, title="Other Graph", status="active")
+    db.add(logical)
+    db.flush()
+    version = DocumentVersion(
+        logical_document_id=logical.logical_document_id,
+        version_no=1,
+        content_hash="2".zfill(64),
+        status="ready",
+        is_active=True,
+        file_name="other-graph.txt",
+        mime_type="text/plain",
+        file_size_bytes=100,
+        created_by=seed.user_id,
+    )
+    db.add(version)
+    db.flush()
+    chunk = DocumentChunk(
+        document_version_id=version.document_version_id,
+        chunk_index=0,
+        chunk_hash="2" * 64,
+        content_text="FastAPI uses Redis in a different document.",
+        char_count=43,
+        modality="text",
+    )
+    redis = GraphEntity(canonical_name="Redis", entity_type="technology", aliases_json=[])
+    db.add_all([chunk, redis])
+    db.flush()
+    db.add(
+        GraphRelation(
+            source_entity_id=seed.fastapi_entity_id,
+            target_entity_id=redis.graph_entity_id,
+            relation_type="uses",
+            relation_label="uses",
+            confidence=Decimal("0.99000"),
+            source_document_chunk_id=chunk.document_chunk_id,
+            evidence_text_hash="7" * 64,
+            metadata_json={"rule_id": "test"},
+        )
+    )
+    db.commit()
+    return chunk.document_chunk_id
