@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import String, func, or_, select
+from sqlalchemy import String, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.graph_models import (
@@ -51,27 +52,69 @@ class GraphRetrievalRepository:
         query_terms: tuple[str, ...],
         limit: int,
         min_match_score: float,
+        filters: RetrievalFilters | None = None,
     ) -> list[GraphEntityLookupResult]:
         safe_terms = _safe_terms(query_terms)
         if not safe_terms or limit < 1:
             return []
-        conditions = []
+        name_conditions = []
+        type_conditions = []
         for term in safe_terms:
             like_term = f"%{term.lower()}%"
-            conditions.append(func.lower(GraphEntity.canonical_name).like(like_term))
-            conditions.append(
-                func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term)
-            )
-            conditions.append(
+            name_conditions.append(func.lower(GraphEntity.canonical_name).like(like_term))
+            name_conditions.append(
                 func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(
                     like_term
                 )
             )
+            type_conditions.append(
+                func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term)
+            )
+        conditions = [*name_conditions, *type_conditions]
+        name_match_priority = case((or_(*name_conditions), 0), else_=1)
+        statement = select(GraphEntity).where(or_(*conditions))
+        if filters is not None:
+            scoped_entity_ids = (
+                select(GraphEntityMention.graph_entity_id)
+                .join(
+                    DocumentChunk,
+                    DocumentChunk.document_chunk_id
+                    == GraphEntityMention.document_chunk_id,
+                )
+                .join(
+                    DocumentVersion,
+                    DocumentVersion.document_version_id
+                    == DocumentChunk.document_version_id,
+                )
+                .join(
+                    LogicalDocument,
+                    LogicalDocument.logical_document_id
+                    == DocumentVersion.logical_document_id,
+                )
+                .where(
+                    DocumentChunk.modality == filters.modality,
+                    DocumentVersion.status == "ready",
+                    DocumentVersion.is_active.is_(True),
+                    LogicalDocument.status == "active",
+                )
+            )
+            if filters.logical_document_ids:
+                scoped_entity_ids = scoped_entity_ids.where(
+                    LogicalDocument.logical_document_id.in_(
+                        filters.logical_document_ids
+                    )
+                )
+            statement = statement.where(
+                GraphEntity.graph_entity_id.in_(scoped_entity_ids)
+            )
         rows = db.scalars(
-            select(GraphEntity)
-            .where(or_(*conditions))
-            .order_by(GraphEntity.updated_at.desc(), GraphEntity.graph_entity_id.asc())
-            .limit(max(limit * 8, limit))
+            statement
+            .order_by(
+                name_match_priority.asc(),
+                GraphEntity.updated_at.desc(),
+                GraphEntity.graph_entity_id.asc(),
+            )
+            .limit(max(limit * 32, 100))
         ).all()
         results: list[GraphEntityLookupResult] = []
         for entity in rows:
@@ -144,26 +187,53 @@ class GraphRetrievalRepository:
         if not safe_ids or max_relations_per_entity < 1:
             return []
         limit = min(500, max_relations_per_entity * len(safe_ids) * 2)
-        relation_rows = db.scalars(
-            select(GraphRelation)
-            .where(
-                or_(
-                    GraphRelation.source_entity_id.in_(safe_ids),
-                    GraphRelation.target_entity_id.in_(safe_ids),
+        statement = select(GraphRelation).where(
+            or_(
+                GraphRelation.source_entity_id.in_(safe_ids),
+                GraphRelation.target_entity_id.in_(safe_ids),
+            )
+        )
+        if filters is not None:
+            chunk_filter = and_(
+                DocumentChunk.modality == filters.modality,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+                LogicalDocument.status == "active",
+            )
+            if filters.logical_document_ids:
+                chunk_filter = and_(
+                    chunk_filter,
+                    LogicalDocument.logical_document_id.in_(filters.logical_document_ids),
+                )
+            statement = (
+                statement.outerjoin(
+                    DocumentChunk,
+                    DocumentChunk.document_chunk_id
+                    == GraphRelation.source_document_chunk_id,
+                )
+                .outerjoin(
+                    DocumentVersion,
+                    DocumentVersion.document_version_id
+                    == DocumentChunk.document_version_id,
+                )
+                .outerjoin(
+                    LogicalDocument,
+                    LogicalDocument.logical_document_id
+                    == DocumentVersion.logical_document_id,
+                )
+                .where(
+                    or_(
+                        GraphRelation.source_document_chunk_id.is_(None),
+                        chunk_filter,
+                    )
                 )
             )
-            .order_by(
+        relation_rows = db.scalars(
+            statement.order_by(
                 func.coalesce(GraphRelation.confidence, 0).desc(),
                 GraphRelation.graph_relation_id.asc(),
-            )
-            .limit(limit)
+            ).limit(limit)
         ).all()
-        if filters is not None:
-            relation_rows = self._relations_matching_filters(
-                db,
-                relation_rows,
-                filters=filters,
-            )
         related_entity_ids = {
             entity_id
             for relation in relation_rows
@@ -371,7 +441,7 @@ def _safe_terms(query_terms: tuple[str, ...]) -> tuple[str, ...]:
     seen: set[str] = set()
     for term in query_terms:
         normalized = " ".join(str(term).split()).strip().lower()
-        if len(normalized) < 2 or len(normalized) > 80 or normalized in seen:
+        if len(normalized) < 1 or len(normalized) > 80 or normalized in seen:
             continue
         try:
             validate_safe_graph_label(
@@ -424,7 +494,7 @@ def _exact_entity_phrase_match(entity: GraphEntity, query_text: str) -> bool:
         *(str(alias) for alias in (entity.aliases_json or [])),
     ):
         normalized = " ".join(label.split()).strip().lower()
-        if normalized and normalized in query_text:
+        if normalized and _phrase_boundary_match(query_text, normalized):
             return True
     return False
 
@@ -442,5 +512,13 @@ def _label_terms(value: str) -> tuple[str, ...]:
         for term in (
             " ".join(value.replace("_", " ").replace("-", " ").split()).lower().split()
         )
-        if len(term) >= 2
+        if len(term) >= 1
     )
+
+
+def _phrase_boundary_match(query_text: str, label: str) -> bool:
+    boundary_chars = r"A-Za-z0-9_+#"
+    pattern = re.compile(
+        rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])"
+    )
+    return pattern.search(query_text) is not None
