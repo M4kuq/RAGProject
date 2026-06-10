@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.job_utils import redact_error_message
 from app.db.graph_models import (
     GraphEntity,
     GraphEntityMention,
@@ -460,7 +461,7 @@ def _safe_graph_failure_code(error_code: str) -> str:
 
 
 def _safe_graph_failure_message(error_message: str | None) -> str:
-    message = "Job failed with a redacted error." if error_message else "Job failed."
+    message = redact_error_message(error_message)
     return validate_safe_graph_label(message, field_name="error_message", max_length=240)
 
 
