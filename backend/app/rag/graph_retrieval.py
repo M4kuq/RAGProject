@@ -59,11 +59,9 @@ class GraphRetrievalSettings:
     min_entity_match_score: float = 0.5
 
     def bounded(self) -> GraphRetrievalSettings:
-        fallback_strategy = (
-            self.fallback_strategy
-            if self.fallback_strategy in {"dense", "hybrid"}
-            else "hybrid"
-        )
+        fallback_strategy = self.fallback_strategy
+        if fallback_strategy not in {"dense", "hybrid"}:
+            fallback_strategy = "hybrid"
         return GraphRetrievalSettings(
             enabled=self.enabled,
             max_start_entities=_bounded_int(self.max_start_entities, 1, 20),
@@ -309,7 +307,7 @@ class GraphPathSearchService:
                 tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
             ] = []
             for current_id, entity_path, relation_path, entity_match_score in frontier:
-                for relation_row in adjacency.get(current_id, [])[ : settings.max_relations_per_entity]:
+                for relation_row in adjacency.get(current_id, [])[: settings.max_relations_per_entity]:
                     relation = relation_row.relation
                     next_id = (
                         relation.target_entity_id
@@ -553,9 +551,7 @@ def graph_query_signal_score(query: str) -> float:
         return 0.0
     signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
     relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
-    multi_entity_hint = (
-        1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
-    )
+    multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
     return round(
         min(
             1.0,
