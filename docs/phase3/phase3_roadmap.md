@@ -32,9 +32,23 @@ Required evidence:
 - Graph tables have FK/CHECK/index coverage.
 - ORM/DTO/repository/service skeletons exist.
 - `graph_index_runs` lifecycle works in tests.
-- `graph_index_build` is defined as a future job type but not active by default.
+- `graph_index_build` is reserved for PR-47 worker wiring and not active at the PR-46 boundary.
 - Graph settings default to disabled.
 - Docs preserve raw text and secret non-storage policy.
+
+## PR-47 Exit Shape
+
+PR-47 is complete when ready document versions can be converted into safe graph
+entities, mentions, and relations through the worker pipeline without exposing
+raw evidence text.
+
+Required evidence:
+
+- `graph_index_build` is registered in worker configuration and dispatch.
+- Entity/relation extraction stores IDs, hashes, offsets, labels, counts, and safe metadata only.
+- Rebuilding a document version is idempotent for mentions and relations.
+- Retrying a failed graph index run creates a new succeeded run.
+- Tests cover success, idempotency, worker registration, retry, and safe failure.
 
 ## Sequencing Rules
 
