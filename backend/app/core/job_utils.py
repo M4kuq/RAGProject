@@ -60,6 +60,10 @@ _SAFE_PAYLOAD_KEYS = frozenset(
         "message_id",
         "mirror_action",
         "cleanup_scope",
+        "extractor_type",
+        "extractor_version",
+        "job_type",
+        "reindex_policy",
         "result_code",
         "status",
     }
