@@ -108,8 +108,9 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
             for candidate in result.graph_candidates
             for path in candidate.graph_path_candidates
         )
-        assert result.graph_candidates[0].score_breakdown_json["schema_version"] == (
-            GRAPH_SCORE_SCHEMA_VERSION
+        assert (
+            result.graph_candidates[0].score_breakdown_json["schema_version"]
+            == GRAPH_SCORE_SCHEMA_VERSION
         )
         assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
         assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
@@ -269,12 +270,8 @@ def test_graph_entity_lookup_applies_document_scope_before_start_limit(
             ),
         )
 
-        assert [result.entity.graph_entity_id for result in results] == [
-            seed.fastapi_entity_id
-        ]
-        assert out_of_scope_entity_id not in {
-            result.entity.graph_entity_id for result in results
-        }
+        assert [result.entity.graph_entity_id for result in results] == [seed.fastapi_entity_id]
+        assert out_of_scope_entity_id not in {result.entity.graph_entity_id for result in results}
 
 
 def test_graph_query_terms_preserve_symbolic_entity_names() -> None:

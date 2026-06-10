@@ -63,9 +63,7 @@ class GraphRetrievalRepository:
             like_term = f"%{term.lower()}%"
             name_conditions.append(func.lower(GraphEntity.canonical_name).like(like_term))
             name_conditions.append(
-                func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(
-                    like_term
-                )
+                func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(like_term)
             )
             type_conditions.append(
                 func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term)
@@ -78,18 +76,15 @@ class GraphRetrievalRepository:
                 select(GraphEntityMention.graph_entity_id)
                 .join(
                     DocumentChunk,
-                    DocumentChunk.document_chunk_id
-                    == GraphEntityMention.document_chunk_id,
+                    DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id,
                 )
                 .join(
                     DocumentVersion,
-                    DocumentVersion.document_version_id
-                    == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
                 )
                 .join(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id
-                    == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
                 )
                 .where(
                     DocumentChunk.modality == filters.modality,
@@ -100,13 +95,9 @@ class GraphRetrievalRepository:
             )
             if filters.logical_document_ids:
                 scoped_entity_ids = scoped_entity_ids.where(
-                    LogicalDocument.logical_document_id.in_(
-                        filters.logical_document_ids
-                    )
+                    LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
                 )
-            statement = statement.where(
-                GraphEntity.graph_entity_id.in_(scoped_entity_ids)
-            )
+            statement = statement.where(GraphEntity.graph_entity_id.in_(scoped_entity_ids))
         rows = db.scalars(
             statement.order_by(
                 name_match_priority.asc(),
@@ -205,20 +196,17 @@ class GraphRetrievalRepository:
                     LogicalDocument.logical_document_id.in_(filters.logical_document_ids),
                 )
             statement = (
-                statement.outerjoin(
-                    DocumentChunk,
-                    DocumentChunk.document_chunk_id
-                    == GraphRelation.source_document_chunk_id,
+            statement.outerjoin(
+                DocumentChunk,
+                    DocumentChunk.document_chunk_id == GraphRelation.source_document_chunk_id,
                 )
                 .outerjoin(
                     DocumentVersion,
-                    DocumentVersion.document_version_id
-                    == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
                 )
                 .outerjoin(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id
-                    == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
                 )
                 .where(
                     or_(
@@ -508,16 +496,14 @@ def _entity_name_terms(entity: GraphEntity) -> set[str]:
 def _label_terms(value: str) -> tuple[str, ...]:
     return tuple(
         term
-        for term in " ".join(
-            value.replace("_", " ").replace("-", " ").split()
-        ).lower().split()
+        for term in " ".join(value.replace("_", " ").replace("-", " ").split())
+        .lower()
+        .split()
         if len(term) >= 1
     )
 
 
 def _phrase_boundary_match(query_text: str, label: str) -> bool:
     boundary_chars = r"A-Za-z0-9_+#"
-    pattern = re.compile(
-        rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])"
-    )
+    pattern = re.compile(rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])")
     return pattern.search(query_text) is not None
