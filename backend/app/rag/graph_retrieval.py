@@ -60,18 +60,27 @@ class GraphRetrievalSettings:
 
     def bounded(self) -> GraphRetrievalSettings:
         fallback_strategy = (
-            self.fallback_strategy if self.fallback_strategy in {"dense", "hybrid"} else "hybrid"
+            self.fallback_strategy
+            if self.fallback_strategy in {"dense", "hybrid"}
+            else "hybrid"
         )
         return GraphRetrievalSettings(
             enabled=self.enabled,
             max_start_entities=_bounded_int(self.max_start_entities, 1, 20),
             max_depth=_bounded_int(self.max_depth, 1, 4),
             max_paths=_bounded_int(self.max_paths, 1, 100),
-            max_relations_per_entity=_bounded_int(self.max_relations_per_entity, 1, 100),
+            max_relations_per_entity=_bounded_int(
+                self.max_relations_per_entity,
+                1,
+                100,
+            ),
             max_source_chunks=_bounded_int(self.max_source_chunks, 1, 100),
             timeout_ms=_bounded_int(self.timeout_ms, 100, 30_000),
             fallback_strategy=fallback_strategy,
-            min_entity_match_score=max(0.0, min(1.0, float(self.min_entity_match_score))),
+            min_entity_match_score=max(
+                0.0,
+                min(1.0, float(self.min_entity_match_score)),
+            ),
         )
 
 
@@ -195,7 +204,11 @@ class GraphScoreCalculator:
             else entity_match_score
         )
         depth_penalty = max(0.1, 1.0 - max(0, depth - 1) * 0.1)
-        path_score = entity_match_score * 0.45 + relation_score * 0.45 + depth_penalty * 0.10
+        path_score = (
+            entity_match_score * 0.45
+            + relation_score * 0.45
+            + depth_penalty * 0.10
+        )
         return round(max(0.0, min(1.0, relation_score)), 6), round(
             max(0.0, min(1.0, path_score)),
             6,
@@ -296,9 +309,7 @@ class GraphPathSearchService:
                 tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
             ] = []
             for current_id, entity_path, relation_path, entity_match_score in frontier:
-                for relation_row in adjacency.get(current_id, [])[
-                    : settings.max_relations_per_entity
-                ]:
+                for relation_row in adjacency.get(current_id, [])[ : settings.max_relations_per_entity]:
                     relation = relation_row.relation
                     next_id = (
                         relation.target_entity_id
@@ -324,7 +335,11 @@ class GraphPathSearchService:
                         next_relation_path,
                         settings.max_source_chunks,
                     )
-                    labels = _path_labels(next_entity_path, next_relation_path, lookup_by_id)
+                    labels = _path_labels(
+                        next_entity_path,
+                        next_relation_path,
+                        lookup_by_id,
+                    )
                     relation_types = tuple(
                         validate_safe_graph_label(
                             item.relation.relation_type,
@@ -354,7 +369,12 @@ class GraphPathSearchService:
                         break
                     if len(next_relation_path) < settings.max_depth:
                         next_frontier.append(
-                            (next_id, next_entity_path, next_relation_path, entity_match_score)
+                            (
+                                next_id,
+                                next_entity_path,
+                                next_relation_path,
+                                entity_match_score,
+                            )
                         )
                 if len(paths) >= settings.max_paths:
                     break
@@ -362,7 +382,10 @@ class GraphPathSearchService:
                 break
             frontier = next_frontier
 
-        paths.sort(key=lambda path: (path.path_score, -path.depth, path.path_id), reverse=True)
+        paths.sort(
+            key=lambda path: (path.path_score, -path.depth, path.path_id),
+            reverse=True,
+        )
         return paths[: settings.max_paths], relation_count, _dedupe(reason_codes)
 
 
@@ -376,7 +399,9 @@ class GraphRetrievalStrategy:
     ) -> None:
         self.repository = repository or GraphRetrievalRepository()
         self.entity_lookup = entity_lookup or GraphEntityLookupService(self.repository)
-        self.path_search = path_search or GraphPathSearchService(repository=self.repository)
+        self.path_search = path_search or GraphPathSearchService(
+            repository=self.repository,
+        )
 
     def search(
         self,
@@ -411,7 +436,11 @@ class GraphRetrievalStrategy:
                 _elapsed_ms(started_at),
             )
 
-        start_entities = self.entity_lookup.lookup(db, query=query, settings=bounded_settings)
+        start_entities = self.entity_lookup.lookup(
+            db,
+            query=query,
+            settings=bounded_settings,
+        )
         if not start_entities:
             return GraphRetrievalResult(
                 0,
@@ -485,7 +514,10 @@ class GraphRetrievalStrategy:
                 if candidate.document_chunk_id not in path.source_chunk_ids:
                     continue
                 paths_by_id.setdefault(path.path_id, path)
-                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
+                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(
+                    path.path_id,
+                    [],
+                )
                 if candidate.document_chunk_id not in selected_chunk_ids:
                     selected_chunk_ids.append(candidate.document_chunk_id)
 
@@ -521,9 +553,14 @@ def graph_query_signal_score(query: str) -> float:
         return 0.0
     signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
     relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
-    multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
+    multi_entity_hint = (
+        1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
+    )
     return round(
-        min(1.0, signal_hits * 0.45 + relation_markers * 0.15 + multi_entity_hint * 0.25),
+        min(
+            1.0,
+            signal_hits * 0.45 + relation_markers * 0.15 + multi_entity_hint * 0.25,
+        ),
         6,
     )
 
@@ -539,7 +576,11 @@ def _source_candidates(
             by_chunk_id.setdefault(chunk_id, []).append(path)
     candidates: list[GraphSourceCandidate] = []
     for chunk_id, chunk_paths in by_chunk_id.items():
-        ranked_paths = sorted(chunk_paths, key=lambda path: path.path_score, reverse=True)
+        ranked_paths = sorted(
+            chunk_paths,
+            key=lambda path: path.path_score,
+            reverse=True,
+        )
         score = round(
             sum(path.path_score for path in ranked_paths[:3]) / min(3, len(ranked_paths)),
             6,
@@ -562,7 +603,10 @@ def _source_candidates(
                 graph_path_candidates=tuple(ranked_paths[:5]),
             )
         )
-    candidates.sort(key=lambda item: (item.retrieval_score, -item.document_chunk_id), reverse=True)
+    candidates.sort(
+        key=lambda item: (item.retrieval_score, -item.document_chunk_id),
+        reverse=True,
+    )
     calculator = GraphScoreCalculator()
     ranked: list[GraphSourceCandidate] = []
     for rank, candidate in enumerate(candidates[:top_k], start=1):
@@ -608,7 +652,10 @@ def _mention_only_paths(
         lookup = lookup_by_id.get(source_row.graph_entity_id)
         if lookup is None:
             continue
-        dedupe_key = (lookup.entity.graph_entity_id, source_row.chunk.document_chunk_id)
+        dedupe_key = (
+            lookup.entity.graph_entity_id,
+            source_row.chunk.document_chunk_id,
+        )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
