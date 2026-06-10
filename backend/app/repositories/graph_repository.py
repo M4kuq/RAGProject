@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.job_utils import redact_error_message
@@ -58,6 +59,31 @@ class GraphRepository:
                 GraphEntity.entity_type == entity_type.strip(),
             )
         )
+
+    def acquire_graph_index_document_version_lock(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> None:
+        _acquire_advisory_transaction_lock(
+            db,
+            namespace="graph_index_document_version",
+            key=str(document_version_id),
+        )
+
+    def acquire_graph_entity_key_locks(
+        self,
+        db: Session,
+        *,
+        keys: set[tuple[str, str]],
+    ) -> None:
+        for canonical_name, entity_type in sorted(keys):
+            _acquire_advisory_transaction_lock(
+                db,
+                namespace="graph_entity_key",
+                key=f"{canonical_name.strip().lower()}:{entity_type.strip()}",
+            )
 
     def list_entities_by_keys(
         self,
@@ -463,6 +489,28 @@ def _safe_graph_failure_code(error_code: str) -> str:
 def _safe_graph_failure_message(error_message: str | None) -> str:
     message = redact_error_message(error_message)
     return validate_safe_graph_label(message, field_name="error_message", max_length=240)
+
+
+def _acquire_advisory_transaction_lock(
+    db: Session,
+    *,
+    namespace: str,
+    key: str,
+) -> None:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _signed_int64_hash(f"{namespace}:{key}")},
+    )
+
+
+def _signed_int64_hash(value: str) -> int:
+    raw_value = int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big")
+    if raw_value >= 2**63:
+        raw_value -= 2**64
+    return raw_value
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:
