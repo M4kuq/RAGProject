@@ -56,7 +56,12 @@ def graph_retrieval_session_factory() -> Iterator[sessionmaker[Session]]:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
     try:
         yield factory
     finally:
@@ -101,7 +106,9 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
             result.graph_candidates[0].score_breakdown_json["schema_version"]
             == GRAPH_SCORE_SCHEMA_VERSION
         )
-        assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
+        assert (
+            result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
+        )
         assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
         assert result.graph_candidates[0].score_breakdown_json["selected_flag"] is True
         serialized = str(result).lower()
@@ -180,7 +187,8 @@ def test_graph_entity_lookup_scores_aliases_without_stopword_penalty(
         )
 
         assert any(
-            result.entity.graph_entity_id == seed.postgresql_entity_id for result in results
+            result.entity.graph_entity_id == seed.postgresql_entity_id
+            for result in results
         )
 
 
@@ -292,7 +300,9 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
             settings=GraphRetrievalSettings(enabled=True, min_entity_match_score=0.2),
         )
         assert result.graph_candidates
-        selected_chunk_ids = {candidate.document_chunk_id for candidate in result.graph_candidates}
+        selected_chunk_ids = {
+            candidate.document_chunk_id for candidate in result.graph_candidates
+        }
         run = RetrievalRun(status="running", top_k=1, strategy_type="dense")
         db.add(run)
         db.flush()
@@ -346,7 +356,10 @@ def test_graph_query_signal_score_detects_relation_queries() -> None:
 
 
 def _seed_graph(db: Session) -> SeedGraph:
-    role = Role(role_name=f"graph-role-{uuid.uuid4().hex[:8]}", description="Graph retrieval")
+    role = Role(
+        role_name=f"graph-role-{uuid.uuid4().hex[:8]}",
+        description="Graph retrieval",
+    )
     db.add(role)
     db.flush()
     user = User(
@@ -357,7 +370,11 @@ def _seed_graph(db: Session) -> SeedGraph:
     )
     db.add(user)
     db.flush()
-    logical = LogicalDocument(owner_user_id=user.user_id, title="Graph Retrieval", status="active")
+    logical = LogicalDocument(
+        owner_user_id=user.user_id,
+        title="Graph Retrieval",
+        status="active",
+    )
     db.add(logical)
     db.flush()
     version = DocumentVersion(
@@ -409,7 +426,11 @@ def _seed_graph(db: Session) -> SeedGraph:
             entity_type="artifact",
             aliases_json=[],
         ),
-        "Qdrant": GraphEntity(canonical_name="Qdrant", entity_type="technology", aliases_json=[]),
+        "Qdrant": GraphEntity(
+            canonical_name="Qdrant",
+            entity_type="technology",
+            aliases_json=[],
+        ),
     }
     db.add_all(entities.values())
     db.flush()
@@ -485,7 +506,11 @@ def _seed_graph(db: Session) -> SeedGraph:
 
 
 def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
-    logical = LogicalDocument(owner_user_id=seed.user_id, title="Other Graph", status="active")
+    logical = LogicalDocument(
+        owner_user_id=seed.user_id,
+        title="Other Graph",
+        status="active",
+    )
     db.add(logical)
     db.flush()
     version = DocumentVersion(
@@ -509,7 +534,11 @@ def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
         char_count=43,
         modality="text",
     )
-    redis = GraphEntity(canonical_name="Redis", entity_type="technology", aliases_json=[])
+    redis = GraphEntity(
+        canonical_name="Redis",
+        entity_type="technology",
+        aliases_json=[],
+    )
     db.add_all([chunk, redis])
     db.flush()
     db.add(
