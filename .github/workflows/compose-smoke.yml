@@ -9,7 +9,7 @@ on:
       - "backend/Dockerfile"
       - "frontend/Dockerfile"
       - ".dockerignore"
-      - ".github/workflows/compose-smoke.yml"
+      - ".github/workflows/**"
   push:
     branches:
       - main

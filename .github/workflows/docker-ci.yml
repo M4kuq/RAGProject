@@ -11,7 +11,7 @@ on:
       - "frontend/package-lock.json"
       - "docker-compose*.yml"
       - ".dockerignore"
-      - ".github/workflows/docker-ci.yml"
+      - ".github/workflows/**"
   push:
     branches:
       - main
