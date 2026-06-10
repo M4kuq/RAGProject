@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from app.core.config import Settings, get_settings
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 
 SUPPORTED_JOB_TYPES = frozenset(
     {
@@ -16,6 +17,7 @@ SUPPORTED_JOB_TYPES = frozenset(
         "message_edit_regeneration",
         "evaluation_run",
         "temporary_chat_cleanup",
+        GRAPH_INDEX_BUILD_JOB_TYPE,
     }
 )
 
