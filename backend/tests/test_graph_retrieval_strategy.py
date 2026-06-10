@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -29,12 +30,17 @@ from app.db.models import (
 from app.rag.graph_retrieval import (
     GRAPH_PATH_SCHEMA_VERSION,
     GRAPH_SCORE_SCHEMA_VERSION,
+    GraphEntityLookupService,
+    GraphPathSearchService,
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
     graph_query_signal_score,
 )
 from app.rag.retrieval import RetrievalFilters
-from app.repositories.graph_retrieval_repository import GraphRetrievalRepository
+from app.repositories.graph_retrieval_repository import (
+    GraphEntityLookupResult,
+    GraphRetrievalRepository,
+)
 
 
 @dataclass(frozen=True)
@@ -192,6 +198,96 @@ def test_graph_entity_lookup_scores_aliases_without_stopword_penalty(
         )
 
 
+def test_graph_entity_lookup_ranks_name_matches_before_type_matches(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        db.add_all(
+            [
+                GraphEntity(
+                    canonical_name=f"GenericTechnology{index}",
+                    entity_type="technology",
+                    aliases_json=[],
+                )
+                for index in range(80)
+            ]
+        )
+        db.commit()
+        repository = GraphRetrievalRepository()
+
+        results = repository.lookup_entities(
+            db,
+            query_terms=("fastapi", "technology"),
+            limit=5,
+            min_match_score=0.2,
+        )
+
+        assert results
+        assert results[0].entity.graph_entity_id == seed.fastapi_entity_id
+
+
+def test_graph_entity_lookup_requires_phrase_boundaries_for_exact_matches(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        sql = GraphEntity(
+            canonical_name="SQL",
+            entity_type="technology",
+            aliases_json=[],
+        )
+        db.add(sql)
+        db.commit()
+        repository = GraphRetrievalRepository()
+
+        results = repository.lookup_entities(
+            db,
+            query_terms=("postgresql", "technology"),
+            limit=10,
+            min_match_score=0.5,
+        )
+
+        result_ids = {result.entity.graph_entity_id for result in results}
+        assert seed.postgresql_entity_id in result_ids
+        assert sql.graph_entity_id not in result_ids
+
+
+def test_graph_entity_lookup_applies_document_scope_before_start_limit(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        out_of_scope_entity_id = _seed_out_of_scope_fastapi_mention(db, seed)
+        entity_lookup = GraphEntityLookupService()
+
+        results = entity_lookup.lookup(
+            db,
+            query="FastAPI framework",
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                max_start_entities=1,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert [result.entity.graph_entity_id for result in results] == [
+            seed.fastapi_entity_id
+        ]
+        assert out_of_scope_entity_id not in {
+            result.entity.graph_entity_id for result in results
+        }
+
+
+def test_graph_query_terms_preserve_symbolic_entity_names() -> None:
+    terms = GraphEntityLookupService().query_terms("How does C++ depend on C# and R?")
+
+    assert "c++" in terms
+    assert "c#" in terms
+    assert "r" in terms
+
+
 def test_graph_relation_lookup_enforces_per_entity_cap(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -229,6 +325,106 @@ def test_graph_relation_lookup_enforces_per_entity_cap(
         )
 
         assert len(rows) == 1
+
+
+def test_graph_relation_lookup_filters_before_limiting(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        other_chunk_ids = {
+            _seed_other_document_relation(db, seed),
+            _seed_other_document_relation(db, seed),
+            _seed_other_document_relation(db, seed),
+        }
+        for relation in db.scalars(select(GraphRelation)).all():
+            if relation.source_document_chunk_id in other_chunk_ids:
+                relation.confidence = Decimal("0.99000")
+            else:
+                relation.confidence = Decimal("0.10000")
+        db.commit()
+        repository = GraphRetrievalRepository()
+
+        rows = repository.list_relations_for_entity_ids(
+            db,
+            entity_ids={seed.fastapi_entity_id},
+            max_relations_per_entity=1,
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+        )
+
+        assert rows
+        assert rows[0].relation.source_document_chunk_id in seed.chunk_ids
+
+
+def test_graph_path_search_expands_frontier_before_return_cap(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        db.execute(delete(GraphRelation))
+        chunk_id = min(seed.chunk_ids)
+        neighbors = [
+            GraphEntity(canonical_name=f"Neighbor{index}", entity_type="technology")
+            for index in range(3)
+        ]
+        deep_entity = GraphEntity(
+            canonical_name="DeepStore",
+            entity_type="technology",
+        )
+        db.add_all([*neighbors, deep_entity])
+        db.flush()
+        db.add_all(
+            [
+                GraphRelation(
+                    source_entity_id=seed.fastapi_entity_id,
+                    target_entity_id=entity.graph_entity_id,
+                    relation_type=f"links-{index}",
+                    confidence=Decimal("0.10000"),
+                    source_document_chunk_id=chunk_id,
+                    evidence_text_hash=f"{index + 3}" * 64,
+                    metadata_json={"rule_id": "test"},
+                )
+                for index, entity in enumerate(neighbors)
+            ]
+        )
+        db.add(
+            GraphRelation(
+                source_entity_id=neighbors[0].graph_entity_id,
+                target_entity_id=deep_entity.graph_entity_id,
+                relation_type="supports",
+                confidence=Decimal("0.99000"),
+                source_document_chunk_id=chunk_id,
+                evidence_text_hash="8" * 64,
+                metadata_json={"rule_id": "test"},
+            )
+        )
+        db.commit()
+        fastapi = db.get(GraphEntity, seed.fastapi_entity_id)
+        assert fastapi is not None
+        path_search = GraphPathSearchService()
+
+        paths, relation_count, _reason_codes = path_search.search_paths(
+            db,
+            start_entities=[
+                GraphEntityLookupResult(
+                    entity=fastapi,
+                    match_score=1.0,
+                    matched_terms=("fastapi",),
+                )
+            ],
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                max_depth=2,
+                max_paths=3,
+                max_relations_per_entity=20,
+                max_source_chunks=10,
+            ),
+            started_at=time.monotonic(),
+        )
+
+        assert relation_count >= 4
+        assert any(path.depth == 2 for path in paths)
 
 
 def test_graph_retrieval_mention_only_paths_keep_entity_chunk_mapping(
@@ -503,6 +699,55 @@ def _seed_graph(db: Session) -> SeedGraph:
         postgresql_entity_id=entities["PostgreSQL"].graph_entity_id,
         qdrant_entity_id=entities["Qdrant"].graph_entity_id,
     )
+
+
+def _seed_out_of_scope_fastapi_mention(db: Session, seed: SeedGraph) -> int:
+    logical = LogicalDocument(
+        owner_user_id=seed.user_id,
+        title="Out Of Scope Graph",
+        status="active",
+    )
+    db.add(logical)
+    db.flush()
+    version = DocumentVersion(
+        logical_document_id=logical.logical_document_id,
+        version_no=1,
+        content_hash="3".zfill(64),
+        status="ready",
+        is_active=True,
+        file_name="out-of-scope-graph.txt",
+        mime_type="text/plain",
+        file_size_bytes=100,
+        created_by=seed.user_id,
+    )
+    db.add(version)
+    db.flush()
+    chunk = DocumentChunk(
+        document_version_id=version.document_version_id,
+        chunk_index=0,
+        chunk_hash="3" * 64,
+        content_text="FastAPI is described as a framework in another document.",
+        char_count=56,
+        modality="text",
+    )
+    entity = GraphEntity(
+        canonical_name="FastAPI",
+        entity_type="framework",
+        aliases_json=[],
+    )
+    db.add_all([chunk, entity])
+    db.flush()
+    db.add(
+        GraphEntityMention(
+            graph_entity_id=entity.graph_entity_id,
+            document_chunk_id=chunk.document_chunk_id,
+            document_version_id=version.document_version_id,
+            mention_text_hash="8" * 64,
+            confidence=Decimal("0.90000"),
+        )
+    )
+    db.commit()
+    return entity.graph_entity_id
 
 
 def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
