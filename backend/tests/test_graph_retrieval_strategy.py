@@ -10,8 +10,21 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
-from app.db.graph_models import GraphEntity, GraphEntityMention, GraphRelation, GraphRetrievalPath
-from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun, RetrievalRunItem, Role, User
+from app.db.graph_models import (
+    GraphEntity,
+    GraphEntityMention,
+    GraphRelation,
+    GraphRetrievalPath,
+)
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    LogicalDocument,
+    RetrievalRun,
+    RetrievalRunItem,
+    Role,
+    User,
+)
 from app.rag.graph_retrieval import (
     GRAPH_PATH_SCHEMA_VERSION,
     GRAPH_SCORE_SCHEMA_VERSION,
@@ -54,20 +67,28 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
                 enabled=True,
                 max_start_entities=5,
                 max_depth=2,
-                max_paths=2,
-                max_relations_per_entity=1,
+                max_paths=8,
+                max_relations_per_entity=2,
                 max_source_chunks=10,
                 min_entity_match_score=0.2,
             ),
         )
 
         assert result.entity_lookup_count >= 2
-        assert result.relation_count <= 4
-        assert result.path_count <= 2
+        assert result.relation_count <= 6
+        assert result.path_count <= 8
         assert result.source_candidate_count >= 1
         assert result.graph_candidates[0].document_chunk_id in chunk_ids
         assert result.graph_candidates[0].payload["retrieval_source"] == "graph"
-        assert result.graph_candidates[0].score_breakdown_json["schema_version"] == GRAPH_SCORE_SCHEMA_VERSION
+        assert any(
+            path.depth == 2
+            for candidate in result.graph_candidates
+            for path in candidate.graph_path_candidates
+        )
+        assert (
+            result.graph_candidates[0].score_breakdown_json["schema_version"]
+            == GRAPH_SCORE_SCHEMA_VERSION
+        )
         assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
         assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
         serialized = str(result).lower()
@@ -255,6 +276,16 @@ def _seed_graph(db: Session) -> set[int]:
                 confidence=Decimal("0.85000"),
                 source_document_chunk_id=chunks[0].document_chunk_id,
                 evidence_text_hash="f" * 64,
+                metadata_json={"rule_id": "test"},
+            ),
+            GraphRelation(
+                source_entity_id=entities["PostgreSQL"].graph_entity_id,
+                target_entity_id=entities["Qdrant"].graph_entity_id,
+                relation_type="feeds",
+                relation_label="feeds",
+                confidence=Decimal("0.80000"),
+                source_document_chunk_id=chunks[1].document_chunk_id,
+                evidence_text_hash="9" * 64,
                 metadata_json={"rule_id": "test"},
             ),
             GraphRelation(

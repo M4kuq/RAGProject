@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.graph_models import GraphEntity, GraphEntityMention, GraphRelation, GraphRetrievalPath
+from app.db.graph_models import (
+    GraphEntity,
+    GraphEntityMention,
+    GraphRelation,
+    GraphRetrievalPath,
+)
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.rag.retrieval import RetrievalFilters
 from app.repositories.graph_repository import GraphRepository
@@ -77,11 +81,7 @@ class GraphRetrievalRepository:
                 )
             )
         results.sort(
-            key=lambda item: (
-                item.match_score,
-                item.entity.updated_at,
-                -item.entity.graph_entity_id,
-            ),
+            key=lambda item: (item.match_score, -item.entity.graph_entity_id),
             reverse=True,
         )
         return results[:limit]
@@ -123,16 +123,6 @@ class GraphRetrievalRepository:
         if not safe_ids or max_relations_per_entity < 1:
             return []
         limit = min(500, max_relations_per_entity * len(safe_ids) * 2)
-        statement = (
-            select(GraphRelation, GraphEntity, GraphEntity)
-            .join(GraphEntity, GraphEntity.graph_entity_id == GraphRelation.source_entity_id)
-            .join(
-                GraphEntity.__table__.alias("target_entities"),
-                GraphRelation.target_entity_id == GraphRelation.target_entity_id,
-            )
-        )
-        # SQLAlchemy ORM aliasing would make the result type noisy here; use an explicit
-        # second entity lookup after fetching bounded relation rows instead.
         relation_rows = db.scalars(
             select(GraphRelation)
             .where(
@@ -141,7 +131,10 @@ class GraphRetrievalRepository:
                     GraphRelation.target_entity_id.in_(safe_ids),
                 )
             )
-            .order_by(GraphRelation.confidence.desc().nullslast(), GraphRelation.graph_relation_id.asc())
+            .order_by(
+                func.coalesce(GraphRelation.confidence, 0).desc(),
+                GraphRelation.graph_relation_id.asc(),
+            )
             .limit(limit)
         ).all()
         related_entity_ids = {
@@ -154,7 +147,10 @@ class GraphRetrievalRepository:
         bounded: list[GraphRelationRow] = []
         for relation in relation_rows:
             touched_ids = (relation.source_entity_id, relation.target_entity_id)
-            if all(per_entity_counts[entity_id] >= max_relations_per_entity for entity_id in touched_ids):
+            if all(
+                per_entity_counts[entity_id] >= max_relations_per_entity
+                for entity_id in touched_ids
+            ):
                 continue
             source_entity = entities.get(relation.source_entity_id)
             target_entity = entities.get(relation.target_entity_id)
@@ -171,11 +167,15 @@ class GraphRetrievalRepository:
             )
         return bounded
 
-    def get_entities_by_ids(self, db: Session, *, entity_ids: set[int]) -> dict[int, GraphEntity]:
+    def get_entities_by_ids(
+        self, db: Session, *, entity_ids: set[int]
+    ) -> dict[int, GraphEntity]:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids:
             return {}
-        rows = db.scalars(select(GraphEntity).where(GraphEntity.graph_entity_id.in_(safe_ids))).all()
+        rows = db.scalars(
+            select(GraphEntity).where(GraphEntity.graph_entity_id.in_(safe_ids))
+        ).all()
         return {row.graph_entity_id: row for row in rows}
 
     def list_mentions_for_entity_ids(
