@@ -80,8 +80,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Pull BuildKit image with retry
+        run: |
+          for attempt in 1 2 3; do
+            if docker pull moby/buildkit:buildx-stable-1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "BuildKit image pull failed; retry ${attempt}/3"
+            sleep $((attempt * 10))
+          done
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1
 
       - name: Build image
         if: github.event_name == 'pull_request'
