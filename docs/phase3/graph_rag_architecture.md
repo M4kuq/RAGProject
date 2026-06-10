@@ -1,6 +1,8 @@
 # Graph-RAG Architecture
 
-PR-46 starts the implementation path by adding the graph schema and index run foundation. It keeps Phase3 aligned with the PR-45 design baseline while avoiding retrieval/extraction implementation.
+PR-46 started the implementation path by adding the graph schema and index run
+foundation. PR-47 adds the first safe extraction worker while still avoiding
+graph retrieval/router/citation implementation.
 
 ## Phase2 Relationship
 
@@ -26,7 +28,7 @@ Implemented:
 - DTOs
 - repository methods
 - index run lifecycle skeleton
-- future job type constant
+- graph job type constant reserved for PR-47 worker wiring
 - disabled settings defaults
 - tests and docs
 
@@ -40,9 +42,13 @@ Not implemented:
 - OCR/multimodal
 - production/AWS expansion
 
-## Future Integration
+## PR-47 Integration
 
-PR-47 connects extraction to `GraphIndexService`.
+PR-47 connects rule-based extraction to `GraphIndexService` through the
+`graph_index_build` worker job. It stores graph labels, refs, hashes, offsets,
+counts, and confidence only.
+
+## Future Integration
 
 PR-48 adds graph lookup/traversal and routing decisions.
 
