@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.graph_models import (
@@ -37,6 +37,7 @@ class GraphChunkRow:
     chunk: DocumentChunk
     document_version: DocumentVersion
     logical_document: LogicalDocument
+    graph_entity_id: int | None = None
 
 
 class GraphRetrievalRepository:
@@ -58,19 +59,26 @@ class GraphRetrievalRepository:
         for term in safe_terms:
             like_term = f"%{term.lower()}%"
             conditions.append(func.lower(GraphEntity.canonical_name).like(like_term))
-            conditions.append(func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term))
+            conditions.append(
+                func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term)
+            )
+            conditions.append(
+                func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(
+                    like_term
+                )
+            )
         rows = db.scalars(
             select(GraphEntity)
             .where(or_(*conditions))
             .order_by(GraphEntity.updated_at.desc(), GraphEntity.graph_entity_id.asc())
-            .limit(max(limit * 4, limit))
+            .limit(max(limit * 8, limit))
         ).all()
         results: list[GraphEntityLookupResult] = []
         for entity in rows:
             matched_terms = _matched_terms(entity, safe_terms)
             if not matched_terms:
                 continue
-            score = min(1.0, len(matched_terms) / max(1, len(safe_terms)))
+            score = _entity_match_score(entity, safe_terms=safe_terms, matched_terms=matched_terms)
             if score < min_match_score:
                 continue
             results.append(
@@ -89,7 +97,10 @@ class GraphRetrievalRepository:
     def has_active_graph_sources(self, db: Session, *, filters: RetrievalFilters) -> bool:
         statement = (
             select(GraphEntityMention.graph_entity_mention_id)
-            .join(DocumentChunk, DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id)
+            .join(
+                DocumentChunk,
+                DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id,
+            )
             .join(
                 DocumentVersion,
                 DocumentVersion.document_version_id == DocumentChunk.document_version_id,
@@ -118,6 +129,7 @@ class GraphRetrievalRepository:
         *,
         entity_ids: set[int],
         max_relations_per_entity: int,
+        filters: RetrievalFilters | None = None,
     ) -> list[GraphRelationRow]:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_relations_per_entity < 1:
@@ -137,6 +149,8 @@ class GraphRetrievalRepository:
             )
             .limit(limit)
         ).all()
+        if filters is not None:
+            relation_rows = self._relations_matching_filters(db, relation_rows, filters=filters)
         related_entity_ids = {
             entity_id
             for relation in relation_rows
@@ -147,7 +161,7 @@ class GraphRetrievalRepository:
         bounded: list[GraphRelationRow] = []
         for relation in relation_rows:
             touched_ids = (relation.source_entity_id, relation.target_entity_id)
-            if all(
+            if any(
                 per_entity_counts[entity_id] >= max_relations_per_entity
                 for entity_id in touched_ids
             ):
@@ -166,6 +180,34 @@ class GraphRetrievalRepository:
                 )
             )
         return bounded
+
+    def _relations_matching_filters(
+        self,
+        db: Session,
+        relation_rows: list[GraphRelation],
+        *,
+        filters: RetrievalFilters,
+    ) -> list[GraphRelation]:
+        chunk_ids = {
+            relation.source_document_chunk_id
+            for relation in relation_rows
+            if relation.source_document_chunk_id is not None
+        }
+        if not chunk_ids:
+            return relation_rows
+        valid_chunk_ids = set(
+            self.list_chunks_by_ids(
+                db,
+                document_chunk_ids=chunk_ids,
+                filters=filters,
+            ).keys()
+        )
+        return [
+            relation
+            for relation in relation_rows
+            if relation.source_document_chunk_id is None
+            or relation.source_document_chunk_id in valid_chunk_ids
+        ]
 
     def get_entities_by_ids(
         self, db: Session, *, entity_ids: set[int]
@@ -190,8 +232,16 @@ class GraphRetrievalRepository:
         if not safe_ids or max_source_chunks < 1:
             return []
         statement = (
-            select(DocumentChunk, DocumentVersion, LogicalDocument)
-            .join(GraphEntityMention, GraphEntityMention.document_chunk_id == DocumentChunk.document_chunk_id)
+            select(
+                DocumentChunk,
+                DocumentVersion,
+                LogicalDocument,
+                GraphEntityMention.graph_entity_id,
+            )
+            .join(
+                GraphEntityMention,
+                GraphEntityMention.document_chunk_id == DocumentChunk.document_chunk_id,
+            )
             .join(
                 DocumentVersion,
                 DocumentVersion.document_version_id == DocumentChunk.document_version_id,
@@ -207,7 +257,10 @@ class GraphRetrievalRepository:
                 DocumentVersion.is_active.is_(True),
                 LogicalDocument.status == "active",
             )
-            .order_by(DocumentChunk.document_chunk_id.asc())
+            .order_by(
+                GraphEntityMention.graph_entity_id.asc(),
+                DocumentChunk.document_chunk_id.asc(),
+            )
             .limit(max_source_chunks)
         )
         if filters.logical_document_ids:
@@ -215,13 +268,21 @@ class GraphRetrievalRepository:
                 LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
         rows = db.execute(statement).all()
-        seen: set[int] = set()
+        seen: set[tuple[int, int]] = set()
         results: list[GraphChunkRow] = []
-        for chunk, version, document in rows:
-            if chunk.document_chunk_id in seen:
+        for chunk, version, document, graph_entity_id in rows:
+            dedupe_key = (int(graph_entity_id), chunk.document_chunk_id)
+            if dedupe_key in seen:
                 continue
-            seen.add(chunk.document_chunk_id)
-            results.append(GraphChunkRow(chunk=chunk, document_version=version, logical_document=document))
+            seen.add(dedupe_key)
+            results.append(
+                GraphChunkRow(
+                    chunk=chunk,
+                    document_version=version,
+                    logical_document=document,
+                    graph_entity_id=int(graph_entity_id),
+                )
+            )
         return results
 
     def list_chunks_by_ids(
@@ -315,3 +376,48 @@ def _matched_terms(entity: GraphEntity, query_terms: tuple[str, ...]) -> tuple[s
     haystack_parts.extend(str(alias) for alias in (entity.aliases_json or []))
     haystack = " ".join(haystack_parts).lower()
     return tuple(term for term in query_terms if term in haystack)
+
+
+def _entity_match_score(
+    entity: GraphEntity,
+    *,
+    safe_terms: tuple[str, ...],
+    matched_terms: tuple[str, ...],
+) -> float:
+    query_text = " ".join(safe_terms)
+    if _exact_entity_phrase_match(entity, query_text):
+        return 1.0
+    name_terms = _entity_name_terms(entity)
+    type_terms = _label_terms(entity.entity_type or "")
+    matched_name_terms = {term for term in matched_terms if term in name_terms}
+    matched_type_terms = {term for term in matched_terms if term in type_terms}
+    if matched_name_terms:
+        return min(1.0, len(matched_name_terms) / max(1, len(name_terms)))
+    if matched_type_terms:
+        return min(0.4, 0.2 * len(matched_type_terms))
+    return 0.0
+
+
+def _exact_entity_phrase_match(entity: GraphEntity, query_text: str) -> bool:
+    for label in (entity.canonical_name, *(str(alias) for alias in (entity.aliases_json or []))):
+        normalized = " ".join(label.split()).strip().lower()
+        if normalized and normalized in query_text:
+            return True
+    return False
+
+
+def _entity_name_terms(entity: GraphEntity) -> set[str]:
+    terms = set(_label_terms(entity.canonical_name))
+    for alias in entity.aliases_json or []:
+        terms.update(_label_terms(str(alias)))
+    return terms
+
+
+def _label_terms(value: str) -> tuple[str, ...]:
+    return tuple(
+        term
+        for term in (
+            " ".join(value.replace("_", " ").replace("-", " ").split()).lower().split()
+        )
+        if len(term) >= 2
+    )
