@@ -273,9 +273,7 @@ class GraphPathSearchService:
             1000,
             max(
                 settings.max_paths,
-                settings.max_paths
-                * settings.max_depth
-                * settings.max_relations_per_entity,
+                settings.max_paths * settings.max_depth * settings.max_relations_per_entity,
             ),
         )
         frontier_limit = min(
