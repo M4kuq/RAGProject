@@ -20,9 +20,30 @@ GRAPH_PATH_SCHEMA_VERSION = "phase3.graph_path.v1"
 GRAPH_SCORE_SCHEMA_VERSION = "phase3.graph_score.v1"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{1,79}")
 _GRAPH_SIGNAL_RE = re.compile(
-    r"(?i)\b(relation|relationship|related|depends|dependency|connects|uses|"
-    r"architecture|component|stores|links|graph|path|multi[- ]?hop)\b"
+    r"(?i)\b(relation|relationship|related|depend|depends|dependency|connect|"
+    r"connects|connected|use|uses|using|architecture|component|store|stores|"
+    r"stored|link|links|linked|graph|path|multi[- ]?hop)\b"
 )
+_RELATION_MARKERS = {
+    "use",
+    "uses",
+    "using",
+    "depend",
+    "depends",
+    "dependency",
+    "connect",
+    "connects",
+    "connected",
+    "relation",
+    "relationship",
+    "architecture",
+    "store",
+    "stores",
+    "stored",
+    "link",
+    "links",
+    "linked",
+}
 
 
 @dataclass(frozen=True)
@@ -218,6 +239,7 @@ class GraphPathSearchService:
         db: Session,
         *,
         start_entities: list[GraphEntityLookupResult],
+        filters: RetrievalFilters,
         settings: GraphRetrievalSettings,
         started_at: float,
     ) -> tuple[list[GraphPathCandidate], int, list[str]]:
@@ -245,13 +267,16 @@ class GraphPathSearchService:
                 break
 
             pending_entity_ids = {
-                current_id for current_id, *_rest in frontier if current_id not in loaded_entity_ids
+                current_id
+                for current_id, *_rest in frontier
+                if current_id not in loaded_entity_ids
             }
             if pending_entity_ids:
                 relation_rows = self.repository.list_relations_for_entity_ids(
                     db,
                     entity_ids=pending_entity_ids,
                     max_relations_per_entity=settings.max_relations_per_entity,
+                    filters=filters,
                 )
                 loaded_entity_ids.update(pending_entity_ids)
                 for relation_row in relation_rows:
@@ -366,7 +391,15 @@ class GraphRetrievalStrategy:
         bounded_settings = settings.bounded()
         reason_codes: list[str] = []
         if not bounded_settings.enabled:
-            return GraphRetrievalResult(0, 0, 0, 0, (), ("graph_disabled",), _elapsed_ms(started_at))
+            return GraphRetrievalResult(
+                0,
+                0,
+                0,
+                0,
+                (),
+                ("graph_disabled",),
+                _elapsed_ms(started_at),
+            )
         if not self.repository.has_active_graph_sources(db, filters=filters):
             return GraphRetrievalResult(
                 0,
@@ -392,20 +425,27 @@ class GraphRetrievalStrategy:
         paths, relation_count, path_reasons = self.path_search.search_paths(
             db,
             start_entities=start_entities,
+            filters=filters,
             settings=bounded_settings,
             started_at=started_at,
         )
         reason_codes.extend(path_reasons)
         if not paths:
-            source_rows = self.repository.list_mentions_for_entity_ids(
-                db,
-                entity_ids={item.entity.graph_entity_id for item in start_entities},
-                filters=filters,
-                max_source_chunks=bounded_settings.max_source_chunks,
-            )
-            paths = _mention_only_paths(start_entities, source_rows, bounded_settings)
-            reason_codes.append("mention_only_paths")
+            reason_codes.append("no_relation_paths")
         graph_candidates = _source_candidates(paths, top_k=max(1, top_k))
+        if not graph_candidates:
+            mention_paths = self._mention_only_paths_for_entities(
+                db,
+                start_entities=start_entities,
+                filters=filters,
+                settings=bounded_settings,
+            )
+            if mention_paths:
+                paths = mention_paths
+                graph_candidates = _source_candidates(paths, top_k=max(1, top_k))
+                reason_codes.append("mention_only_paths")
+            else:
+                reason_codes.append("no_chunk_backed_paths")
         return GraphRetrievalResult(
             entity_lookup_count=len(start_entities),
             relation_count=relation_count,
@@ -416,35 +456,62 @@ class GraphRetrievalStrategy:
             elapsed_ms=_elapsed_ms(started_at),
         )
 
+    def _mention_only_paths_for_entities(
+        self,
+        db: Session,
+        *,
+        start_entities: list[GraphEntityLookupResult],
+        filters: RetrievalFilters,
+        settings: GraphRetrievalSettings,
+    ) -> list[GraphPathCandidate]:
+        source_rows = self.repository.list_mentions_for_entity_ids(
+            db,
+            entity_ids={item.entity.graph_entity_id for item in start_entities},
+            filters=filters,
+            max_source_chunks=settings.max_source_chunks,
+        )
+        return _mention_only_paths(start_entities, source_rows, settings)
+
     def path_records(
         self,
         *,
         retrieval_run_id: int,
         candidates: tuple[GraphSourceCandidate, ...],
     ) -> list[GraphRetrievalPathCreate]:
-        records: list[GraphRetrievalPathCreate] = []
-        seen_path_ids: set[str] = set()
+        paths_by_id: dict[str, GraphPathCandidate] = {}
+        selected_chunk_ids_by_path: dict[str, list[int]] = {}
         for candidate in candidates:
             for path in candidate.graph_path_candidates:
-                if path.path_id in seen_path_ids:
+                if candidate.document_chunk_id not in path.source_chunk_ids:
                     continue
-                seen_path_ids.add(path.path_id)
-                records.append(
-                    GraphRetrievalPathCreate(
-                        retrieval_run_id=retrieval_run_id,
-                        path_json=path.path_json(),
-                        score_breakdown_json={
-                            "schema_version": GRAPH_SCORE_SCHEMA_VERSION,
-                            "retrieval_source": "graph",
-                            "entity_match_score": path.entity_match_score,
-                            "relation_score": path.relation_score,
-                            "path_score": path.path_score,
-                            "source_chunk_ids_count": len(path.source_chunk_ids),
-                            "path_depth": path.depth,
-                        },
-                        source_chunk_ids_json=list(path.source_chunk_ids),
-                    )
+                paths_by_id.setdefault(path.path_id, path)
+                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
+                if candidate.document_chunk_id not in selected_chunk_ids:
+                    selected_chunk_ids.append(candidate.document_chunk_id)
+
+        records: list[GraphRetrievalPathCreate] = []
+        for path_id, path in paths_by_id.items():
+            selected_chunk_ids = selected_chunk_ids_by_path.get(path_id, [])
+            if not selected_chunk_ids:
+                continue
+            path_json = path.path_json()
+            path_json["source_chunk_ids"] = list(selected_chunk_ids)
+            records.append(
+                GraphRetrievalPathCreate(
+                    retrieval_run_id=retrieval_run_id,
+                    path_json=path_json,
+                    score_breakdown_json={
+                        "schema_version": GRAPH_SCORE_SCHEMA_VERSION,
+                        "retrieval_source": "graph",
+                        "entity_match_score": path.entity_match_score,
+                        "relation_score": path.relation_score,
+                        "path_score": path.path_score,
+                        "source_chunk_ids_count": len(selected_chunk_ids),
+                        "path_depth": path.depth,
+                    },
+                    source_chunk_ids_json=list(selected_chunk_ids),
                 )
+            )
         return records
 
 
@@ -453,11 +520,7 @@ def graph_query_signal_score(query: str) -> float:
     if not tokens:
         return 0.0
     signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
-    relation_markers = sum(
-        1
-        for token in tokens
-        if token in {"uses", "depends", "dependency", "relation", "relationship", "architecture"}
-    )
+    relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
     multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
     return round(
         min(1.0, signal_hits * 0.45 + relation_markers * 0.15 + multi_entity_hint * 0.25),
@@ -465,7 +528,11 @@ def graph_query_signal_score(query: str) -> float:
     )
 
 
-def _source_candidates(paths: list[GraphPathCandidate], *, top_k: int) -> list[GraphSourceCandidate]:
+def _source_candidates(
+    paths: list[GraphPathCandidate],
+    *,
+    top_k: int,
+) -> list[GraphSourceCandidate]:
     by_chunk_id: dict[int, list[GraphPathCandidate]] = {}
     for path in paths:
         for chunk_id in path.source_chunk_ids:
@@ -473,7 +540,10 @@ def _source_candidates(paths: list[GraphPathCandidate], *, top_k: int) -> list[G
     candidates: list[GraphSourceCandidate] = []
     for chunk_id, chunk_paths in by_chunk_id.items():
         ranked_paths = sorted(chunk_paths, key=lambda path: path.path_score, reverse=True)
-        score = round(sum(path.path_score for path in ranked_paths[:3]) / min(3, len(ranked_paths)), 6)
+        score = round(
+            sum(path.path_score for path in ranked_paths[:3]) / min(3, len(ranked_paths)),
+            6,
+        )
         path_refs = tuple(path.path_id for path in ranked_paths[:5])
         payload = {
             "retrieval_source": "graph",
@@ -515,7 +585,7 @@ def _source_candidates(paths: list[GraphPathCandidate], *, top_k: int) -> list[G
                     candidate=ranked_candidate,
                     path_depth=ranked_candidate.graph_path_candidates[0].depth,
                     path_rank=rank,
-                    selected_flag=False,
+                    selected_flag=True,
                 ),
                 path_refs=ranked_candidate.path_refs,
                 graph_path_candidates=ranked_candidate.graph_path_candidates,
@@ -529,8 +599,19 @@ def _mention_only_paths(
     source_rows: list[GraphChunkRow],
     settings: GraphRetrievalSettings,
 ) -> list[GraphPathCandidate]:
+    lookup_by_id = {lookup.entity.graph_entity_id: lookup for lookup in start_entities}
     paths: list[GraphPathCandidate] = []
-    for index, (lookup, source_row) in enumerate(zip(start_entities, source_rows, strict=False), start=1):
+    seen: set[tuple[int, int]] = set()
+    for source_row in source_rows:
+        if source_row.graph_entity_id is None:
+            continue
+        lookup = lookup_by_id.get(source_row.graph_entity_id)
+        if lookup is None:
+            continue
+        dedupe_key = (lookup.entity.graph_entity_id, source_row.chunk.document_chunk_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         label = validate_safe_graph_label(
             lookup.entity.canonical_name,
             field_name="canonical_name",
@@ -538,7 +619,7 @@ def _mention_only_paths(
         )
         paths.append(
             GraphPathCandidate(
-                path_id=f"gp_{index}",
+                path_id=f"gp_{len(paths) + 1}",
                 entity_ids=(lookup.entity.graph_entity_id,),
                 relation_ids=(),
                 safe_entity_labels=(label,),
@@ -560,7 +641,9 @@ def _path_labels(
     relation_path: tuple[GraphRelationRow, ...],
     lookup_by_id: dict[int, GraphEntityLookupResult],
 ) -> tuple[str, ...]:
-    entities_by_id = {lookup.entity.graph_entity_id: lookup.entity for lookup in lookup_by_id.values()}
+    entities_by_id = {
+        lookup.entity.graph_entity_id: lookup.entity for lookup in lookup_by_id.values()
+    }
     for relation in relation_path:
         entities_by_id[relation.source_entity.graph_entity_id] = relation.source_entity
         entities_by_id[relation.target_entity.graph_entity_id] = relation.target_entity
