@@ -77,17 +77,17 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
         assert {"Graph Index", "Hybrid RAG", "Qdrant", "GraphIndexService"} <= entity_names
         assert "admin@example.com" not in entity_names
 
-        for row in db.scalars(select(GraphEntity)).all():
-            assert _metadata_is_safe(row.metadata_json)
-        for row in db.scalars(select(GraphEntityMention)).all():
-            assert row.mention_text_hash is not None
-            assert row.mention_offset_start is not None
-            assert row.mention_offset_end is not None
-            assert _metadata_is_safe(row.metadata_json)
-        for row in db.scalars(select(GraphRelation)).all():
-            assert row.source_document_chunk_id is not None
-            assert row.evidence_text_hash is not None
-            assert _metadata_is_safe(row.metadata_json)
+        for entity_row in db.scalars(select(GraphEntity)).all():
+            assert _metadata_is_safe(entity_row.metadata_json)
+        for mention_row in db.scalars(select(GraphEntityMention)).all():
+            assert mention_row.mention_text_hash is not None
+            assert mention_row.mention_offset_start is not None
+            assert mention_row.mention_offset_end is not None
+            assert _metadata_is_safe(mention_row.metadata_json)
+        for relation_row in db.scalars(select(GraphRelation)).all():
+            assert relation_row.source_document_chunk_id is not None
+            assert relation_row.evidence_text_hash is not None
+            assert _metadata_is_safe(relation_row.metadata_json)
 
         second_run = service.create_index_run_for_document_version(
             db,
