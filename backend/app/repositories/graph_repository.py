@@ -465,6 +465,15 @@ def _safe_graph_failure_message(error_message: str | None) -> str:
 
 
 def _terminal_time(run: GraphIndexRun, finished_at: datetime) -> datetime:
-    if run.started_at is not None and finished_at < run.started_at:
-        return run.started_at
+    if run.started_at is None:
+        return finished_at
+    started_at = run.started_at
+    comparable_started_at = started_at
+    comparable_finished_at = finished_at
+    if started_at.tzinfo is None and finished_at.tzinfo is not None:
+        comparable_finished_at = finished_at.replace(tzinfo=None)
+    elif started_at.tzinfo is not None and finished_at.tzinfo is None:
+        comparable_started_at = started_at.replace(tzinfo=None)
+    if comparable_finished_at < comparable_started_at:
+        return started_at
     return finished_at
