@@ -108,13 +108,10 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
             for candidate in result.graph_candidates
             for path in candidate.graph_path_candidates
         )
-        assert (
-            result.graph_candidates[0].score_breakdown_json["schema_version"]
-            == GRAPH_SCORE_SCHEMA_VERSION
+        assert result.graph_candidates[0].score_breakdown_json["schema_version"] == (
+            GRAPH_SCORE_SCHEMA_VERSION
         )
-        assert (
-            result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
-        )
+        assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
         assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
         assert result.graph_candidates[0].score_breakdown_json["selected_flag"] is True
         serialized = str(result).lower()
