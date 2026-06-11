@@ -527,7 +527,7 @@ class GraphRagService:
             execution_strategy=RetrievalStrategy.GRAPH,
             plan_metadata=query_plan_build.trace_metadata,
         )
-        strategy_decision = build_router_strategy_decision(decision=decision)
+        strategy_decision = build_router_strategy_decision(decision=decision) or {}
         return query_plan_build.retrieval_query, query_plan, strategy_decision
 
     def _retrieve_graph(
