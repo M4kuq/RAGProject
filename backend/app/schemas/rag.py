@@ -217,6 +217,10 @@ class RagAskConfidence(BaseModel):
     answer_confidence: float = Field(ge=0.0, le=1.0)
     groundedness_score: float = Field(ge=0.0, le=1.0)
     confidence_label: Literal["High", "Medium", "Low"]
+    # Plain string (not an enum) so future bases (e.g. "calibrated") don't break
+    # clients. The label is a heuristic blend of retrieval signals, not a
+    # calibrated probability of answer correctness.
+    confidence_basis: str = "retrieval_signals"
 
 
 class RagAskRetrievalSummary(BaseModel):

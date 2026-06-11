@@ -58,6 +58,7 @@ export type RagAskConfidence = {
   answer_confidence: number;
   groundedness_score: number;
   confidence_label: "High" | "Medium" | "Low";
+  confidence_basis?: string;
 };
 
 export type RagAskRetrievalSummary = {

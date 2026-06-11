@@ -379,7 +379,12 @@ test("renders citation filenames for persisted assistant messages", async () => 
   renderChat("/chat/10");
 
   expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
-  expect(screen.getByText("Confidence High")).toBeInTheDocument();
+  const confidenceBadge = screen.getByText("Confidence High");
+  expect(confidenceBadge).toBeInTheDocument();
+  expect(confidenceBadge).toHaveAttribute(
+    "title",
+    expect.stringContaining("回答の正確さを保証するものではありません")
+  );
   expect(screen.getByText(/\[1\] phase1-seed\.md/)).toBeInTheDocument();
   expect(screen.getByText("Architecture")).toBeInTheDocument();
   expect(screen.getByText("Phase1 validates a local Docker Compose RAG stack.")).toBeInTheDocument();

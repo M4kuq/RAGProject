@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from app.core.config import Settings
 from app.schemas.rag import RetrievalScoreSummary
 
+# Identifies what the confidence composite is derived from. The label is a
+# heuristic blend of retrieval signals, not a calibrated probability of answer
+# correctness. Exposed in the API/UI so clients can communicate this basis;
+# kept a plain string so future bases (e.g. "calibrated") don't break clients.
+CONFIDENCE_BASIS = "retrieval_signals"
+
 
 @dataclass(frozen=True)
 class ConfidenceScores:

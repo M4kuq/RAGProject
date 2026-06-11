@@ -172,6 +172,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert 0.0 <= data["confidence"]["answer_confidence"] <= 1.0
     assert 0.0 <= data["confidence"]["groundedness_score"] <= 1.0
     assert data["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
+    assert data["confidence"]["confidence_basis"] == "retrieval_signals"
     assert data["retrieval_summary"] == {
         "retrieval_run_id": data["retrieval_run_id"],
         "strategy_type": "dense",
