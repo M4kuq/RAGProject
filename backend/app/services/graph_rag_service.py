@@ -503,7 +503,7 @@ class GraphRagService:
             execution_strategy=RetrievalStrategy.GRAPH,
             plan_metadata=query_plan_build.trace_metadata,
         )
-        strategy_decision = build_router_strategy_decision(decision=decision)
+        strategy_decision = build_router_strategy_decision(decision=decision) or {}
         return query_plan_build.retrieval_query, query_plan, strategy_decision
 
     def _retrieve_graph(
@@ -670,6 +670,9 @@ def _build_graph_query_plan(
     plan_metadata: dict[str, object] | None,
 ) -> dict[str, object]:
     metadata = plan_metadata if isinstance(plan_metadata, dict) else {}
+    sub_query_count = metadata.get("sub_query_count", 0)
+    if not isinstance(sub_query_count, int):
+        sub_query_count = 0
     return TraceRedactor.safe_dict(
         {
             "schema_version": "phase2.trace.v1",
@@ -677,7 +680,7 @@ def _build_graph_query_plan(
             "query_mode": "graph_path_search",
             "query_hash": query_hash,
             "rewrite_applied": bool(metadata.get("rewrite_applied", False)),
-            "sub_query_count": int(metadata.get("sub_query_count", 0) or 0),
+            "sub_query_count": sub_query_count,
             "metadata_filter_applied": bool(filters.logical_document_ids),
             "metadata_filter_count": len(filters.logical_document_ids or ()),
             "logical_document_filter_count": len(filters.logical_document_ids or ()),
