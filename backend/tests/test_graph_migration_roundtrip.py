@@ -67,7 +67,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0014_graph_retrieval_strategy_router"
+        assert version == "0014_graph_retrieval_strategy"
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
 
         command.downgrade(config, "0011_tool_result_compression")
@@ -79,7 +79,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0014_graph_retrieval_strategy_router"
+        assert version == "0014_graph_retrieval_strategy"
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
     finally:
         get_settings.cache_clear()
