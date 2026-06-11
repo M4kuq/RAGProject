@@ -72,19 +72,19 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: backend/pyproject.toml
+          cache-dependency-glob: backend/uv.lock
 
       - name: Ruff format check
-        run: uv run --extra dev ruff format --check .
+        run: uv run --frozen --extra dev ruff format --check .
 
       - name: Ruff lint
-        run: uv run --extra dev ruff check .
+        run: uv run --frozen --extra dev ruff check .
 
       - name: Type check
-        run: uv run --extra dev mypy .
+        run: uv run --frozen --extra dev mypy .
 
       - name: Migrate test database
-        run: uv run alembic upgrade head
+        run: uv run --frozen alembic upgrade head
 
       - name: Unit tests
-        run: uv run --extra dev pytest
+        run: uv run --frozen --extra dev pytest
