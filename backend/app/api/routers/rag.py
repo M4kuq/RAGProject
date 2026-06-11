@@ -13,7 +13,9 @@ from app.core.errors import ValidationFailed
 from app.core.sessions import SessionContext
 from app.db.models import User
 from app.db.session import get_db
+from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag import RagAskRequest, RagSearchRequest
+from app.services.graph_rag_service import GraphRagService
 from app.services.rag_service import (
     RagAskPipelineError,
     RagSearchPipelineError,
@@ -61,7 +63,8 @@ def ask(
             ]
         ) from exc
     try:
-        result = service.ask(
+        active_service = _graph_capable_service(service, ask_payload.strategy.value)
+        result = active_service.ask(
             db,
             payload=ask_payload,
             user=user,
@@ -84,7 +87,8 @@ def search(
     service: RagService = Depends(rag_search_service),
 ) -> dict[str, object]:
     try:
-        result = service.search(db, payload=payload, request_id=get_request_id(request))
+        active_service = _graph_capable_service(service, payload.strategy.value)
+        result = active_service.search(db, payload=payload, request_id=get_request_id(request))
     except RagSearchPipelineError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
     return success_response(result.model_dump(mode="json"), request)
@@ -138,3 +142,15 @@ def _chat_session_id_from_payload(payload: dict[str, Any]) -> int | None:
     if value < 1:
         return None
     return value
+
+
+def _graph_capable_service(
+    service: RagService,
+    strategy_value: str,
+) -> RagService | GraphRagService:
+    if strategy_value in {
+        RetrievalStrategy.GRAPH.value,
+        RetrievalStrategy.AGENTIC_ROUTER.value,
+    }:
+        return GraphRagService(service)
+    return service
