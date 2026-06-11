@@ -55,6 +55,36 @@ def test_marker_validation_rejects_zero_unknown_and_oversized_markers() -> None:
         )
 
 
+def test_marker_id_beyond_provided_context_count_is_rejected() -> None:
+    # Only two context items are provided (N == 2); a marker id of 3 is out of
+    # bounds and must be rejected rather than silently dropped.
+    source_map = [_source(1), _source(2)]
+
+    with pytest.raises(CitationBuildError):
+        validate_generation_citations(
+            parse_generation_output("Alpha [3]."),
+            source_map=source_map,
+        )
+
+    # The marker exactly at N is still accepted.
+    citations = validate_generation_citations(
+        parse_generation_output("Alpha [2]."),
+        source_map=source_map,
+    )
+    assert [citation.local_citation_id for citation in citations] == [2]
+
+
+def test_duplicate_markers_are_deduped_in_order() -> None:
+    source_map = [_source(1), _source(2)]
+    parsed = parse_generation_output("a [2] b [1] c [2] d [1].")
+
+    citations = validate_generation_citations(parsed, source_map=source_map)
+
+    assert [marker.local_citation_id for marker in parsed.markers] == [2, 1, 2, 1]
+    assert parsed.unique_marker_ids == [2, 1]
+    assert [citation.local_citation_id for citation in citations] == [2, 1]
+
+
 def test_confidence_scores_are_clamped_and_label_rules_are_deterministic() -> None:
     settings = Settings(app_env="test")
     high = calculate_confidence(
