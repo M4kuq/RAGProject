@@ -17,6 +17,7 @@ from app.rag.graph_retrieval import (
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
     GraphSourceCandidate,
+    graph_query_signal_score,
 )
 from app.rag.retrieval import RetrievalError, RetrievalFilters
 from app.rag.strategy import RetrievalSource, RetrievalStrategy
@@ -485,11 +486,34 @@ class GraphRagService:
     ) -> tuple[str, dict[str, object], dict[str, object]] | None:
         if not self.base.settings.graph_retrieval_enabled:
             return None
+        if not self.base.settings.graph_router_enabled:
+            return None
         query_plan_build = self.base.query_plan_builder.build(
             query,
             filters=filters,
             requested_strategy=requested_strategy,
         )
+        graph_signal_score = graph_query_signal_score(query)
+        if graph_signal_score >= self.base.settings.graph_router_min_signal_score:
+            plan_metadata = dict(query_plan_build.trace_metadata)
+            plan_metadata["graph_query_signal_score"] = graph_signal_score
+            query_plan = build_router_query_plan(
+                query_hash=_query_hash(query),
+                filters=filters,
+                execution_strategy=RetrievalStrategy.GRAPH,
+                plan_metadata=plan_metadata,
+            )
+            strategy_decision = _build_graph_strategy_decision(
+                decision_source="graph_signal_router",
+                router_enabled=True,
+                confidence=min(0.92, 0.55 + graph_signal_score / 2),
+                reason_codes=[
+                    "graph_query_signal",
+                    "graph_retrieval_enabled",
+                    "graph_router_enabled",
+                ],
+            )
+            return query_plan_build.retrieval_query, query_plan, strategy_decision
         decision = self.base.strategy_router.route(
             query_plan=query_plan_build,
             requested_strategy=requested_strategy,
@@ -503,7 +527,7 @@ class GraphRagService:
             execution_strategy=RetrievalStrategy.GRAPH,
             plan_metadata=query_plan_build.trace_metadata,
         )
-        strategy_decision = build_router_strategy_decision(decision=decision) or {}
+        strategy_decision = build_router_strategy_decision(decision=decision)
         return query_plan_build.retrieval_query, query_plan, strategy_decision
 
     def _retrieve_graph(
@@ -697,22 +721,30 @@ def _build_graph_query_plan(
     )
 
 
-def _build_graph_strategy_decision() -> dict[str, object]:
-    return TraceRedactor.safe_dict(
-        {
-            "schema_version": "phase2.trace.v1",
-            "selected_strategy": RetrievalStrategy.GRAPH.value,
-            "execution_strategy": RetrievalStrategy.GRAPH.value,
-            "fallback_used": False,
-            "router_enabled": False,
-            "decision_source": "explicit_strategy",
-            "decision_policy": "bounded_graph_path_search",
-            "reason_codes": [
-                "explicit_strategy_graph",
-                "graph_retrieval_enabled",
-            ],
-        }
-    )
+def _build_graph_strategy_decision(
+    *,
+    decision_source: str = "explicit_strategy",
+    router_enabled: bool = False,
+    confidence: float | None = None,
+    reason_codes: list[str] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "phase2.trace.v1",
+        "selected_strategy": RetrievalStrategy.GRAPH.value,
+        "execution_strategy": RetrievalStrategy.GRAPH.value,
+        "fallback_used": False,
+        "router_enabled": router_enabled,
+        "decision_source": decision_source,
+        "decision_policy": "bounded_graph_path_search",
+        "reason_codes": reason_codes
+        or [
+            "explicit_strategy_graph",
+            "graph_retrieval_enabled",
+        ],
+    }
+    if confidence is not None:
+        payload["confidence"] = confidence
+    return TraceRedactor.safe_dict(payload)
 
 
 def _graph_score_summary(
