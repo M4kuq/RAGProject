@@ -153,8 +153,7 @@ def _replace_source_constraint(source_values: tuple[str, ...]) -> None:
     op.create_check_constraint(
         "ck_retrieval_run_items_source",
         "retrieval_run_items",
-        "retrieval_source IS NULL OR "
-        f"retrieval_source IN ({_sql_literal_list(source_values)})",
+        f"retrieval_source IS NULL OR retrieval_source IN ({_sql_literal_list(source_values)})",
     )
 
 
