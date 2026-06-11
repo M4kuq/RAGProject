@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import String, and_, case, func, or_, select, union_all
@@ -180,14 +181,15 @@ class GraphRetrievalRepository:
         self,
         db: Session,
         *,
-        entity_ids: set[int],
+        entity_ids: Iterable[int],
         max_relations_per_entity: int,
         filters: RetrievalFilters | None = None,
         exclude_relation_ids: set[int] | None = None,
     ) -> list[GraphRelationRow]:
-        safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
+        safe_ids = tuple(_ordered_positive_ids(entity_ids))
         if not safe_ids or max_relations_per_entity < 1:
             return []
+        safe_id_set = set(safe_ids)
         excluded_ids = {
             relation_id for relation_id in (exclude_relation_ids or set()) if relation_id > 0
         }
@@ -195,11 +197,11 @@ class GraphRetrievalRepository:
             select(
                 GraphRelation.graph_relation_id.label("relation_id"),
                 GraphRelation.source_entity_id.label("frontier_entity_id"),
-            ).where(GraphRelation.source_entity_id.in_(safe_ids)),
+            ).where(GraphRelation.source_entity_id.in_(safe_id_set)),
             select(
                 GraphRelation.graph_relation_id.label("relation_id"),
                 GraphRelation.target_entity_id.label("frontier_entity_id"),
-            ).where(GraphRelation.target_entity_id.in_(safe_ids)),
+            ).where(GraphRelation.target_entity_id.in_(safe_id_set)),
         ).subquery()
         rank_order = [
             case(
@@ -259,13 +261,16 @@ class GraphRetrievalRepository:
                 )
             )
         ranked_relations_subquery = ranked_relations.subquery()
-        raw_relation_rows = db.scalars(
-            select(GraphRelation)
+        raw_relation_rows = db.execute(
+            select(GraphRelation, ranked_relations_subquery.c.frontier_entity_id)
             .join(
                 ranked_relations_subquery,
                 ranked_relations_subquery.c.relation_id == GraphRelation.graph_relation_id,
             )
-            .where(ranked_relations_subquery.c.frontier_rank <= max_relations_per_entity)
+            .where(
+                ranked_relations_subquery.c.frontier_rank
+                <= max_relations_per_entity + len(safe_ids)
+            )
             .order_by(
                 ranked_relations_subquery.c.frontier_entity_id.asc(),
                 case(
@@ -278,10 +283,16 @@ class GraphRetrievalRepository:
         ).all()
         relation_rows: list[GraphRelation] = []
         seen_relation_ids: set[int] = set()
-        for relation in raw_relation_rows:
+        frontier_counts = {entity_id: 0 for entity_id in safe_ids}
+        for relation, frontier_entity_id in raw_relation_rows:
             if relation.graph_relation_id in seen_relation_ids:
                 continue
+            if frontier_entity_id not in safe_id_set:
+                continue
+            if frontier_counts.get(frontier_entity_id, 0) >= max_relations_per_entity:
+                continue
             seen_relation_ids.add(relation.graph_relation_id)
+            frontier_counts[frontier_entity_id] += 1
             relation_rows.append(relation)
         related_entity_ids = {
             entity_id
@@ -345,23 +356,32 @@ class GraphRetrievalRepository:
         self,
         db: Session,
         *,
-        entity_ids: set[int],
+        entity_ids: Iterable[int],
         filters: RetrievalFilters,
         max_source_chunks: int,
     ) -> list[GraphChunkRow]:
-        safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
+        safe_ids = tuple(_ordered_positive_ids(entity_ids))
         if not safe_ids or max_source_chunks < 1:
             return []
         source_chunk_budget = max(1, int(max_source_chunks))
-        safe_ids = set(sorted(safe_ids)[:source_chunk_budget])
+        safe_ids = safe_ids[:source_chunk_budget]
+        safe_id_set = set(safe_ids)
         per_entity_chunk_limit = max(
             1,
             (source_chunk_budget + len(safe_ids) - 1) // len(safe_ids),
         )
+        entity_order = case(
+            *[
+                (GraphEntityMention.graph_entity_id == entity_id, index)
+                for index, entity_id in enumerate(safe_ids)
+            ],
+            else_=len(safe_ids),
+        ).label("entity_order")
         mention_pairs = (
             select(
                 GraphEntityMention.graph_entity_id,
                 GraphEntityMention.document_chunk_id,
+                entity_order,
             )
             .join(
                 DocumentChunk,
@@ -376,7 +396,7 @@ class GraphRetrievalRepository:
                 LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(
-                GraphEntityMention.graph_entity_id.in_(safe_ids),
+                GraphEntityMention.graph_entity_id.in_(safe_id_set),
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
@@ -384,7 +404,7 @@ class GraphRetrievalRepository:
             )
             .distinct()
             .order_by(
-                GraphEntityMention.graph_entity_id.asc(),
+                entity_order.asc(),
                 GraphEntityMention.document_chunk_id.asc(),
             )
         )
@@ -397,6 +417,7 @@ class GraphRetrievalRepository:
             select(
                 mention_pairs_subquery.c.graph_entity_id,
                 mention_pairs_subquery.c.document_chunk_id,
+                mention_pairs_subquery.c.entity_order,
                 func.row_number()
                 .over(
                     partition_by=mention_pairs_subquery.c.graph_entity_id,
@@ -430,7 +451,7 @@ class GraphRetrievalRepository:
             .where(ranked_mention_pairs_subquery.c.entity_chunk_rank <= per_entity_chunk_limit)
             .order_by(
                 ranked_mention_pairs_subquery.c.entity_chunk_rank.asc(),
-                ranked_mention_pairs_subquery.c.graph_entity_id.asc(),
+                ranked_mention_pairs_subquery.c.entity_order.asc(),
                 DocumentChunk.document_chunk_id.asc(),
             )
             .limit(source_chunk_budget)
@@ -551,6 +572,17 @@ def _like_contains_pattern(term: str) -> str:
         .replace("_", f"{_LIKE_ESCAPE}_")
     )
     return f"%{escaped}%"
+
+
+def _ordered_positive_ids(entity_ids: Iterable[int]) -> list[int]:
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for entity_id in entity_ids:
+        if entity_id <= 0 or entity_id in seen:
+            continue
+        ordered_ids.append(entity_id)
+        seen.add(entity_id)
+    return ordered_ids
 
 
 def _matched_terms(
