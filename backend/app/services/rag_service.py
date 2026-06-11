@@ -66,6 +66,10 @@ from app.rag.generation import (
     create_answer_generator,
 )
 from app.rag.hybrid import HybridRetrievalStrategy
+from app.rag.injection_detection import (
+    INJECTION_PATTERN_REASON_CODE,
+    detect_injection_patterns,
+)
 from app.rag.langchain_agentic import (
     LangChainAgenticExecutionResult,
     LangChainAgenticRetrievalOrchestrator,
@@ -743,6 +747,11 @@ class RagService:
 
             with latency_tracker.span("context_assembly_ms"):
                 context_items = evidence_pack.to_generation_context_items()
+                self._record_injection_patterns(
+                    db,
+                    retrieval_run_id=run_id,
+                    context_texts=[item.text for item in context_items],
+                )
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
@@ -1837,6 +1846,37 @@ class RagService:
                 )
             ],
             no_context=agentic_result.no_context,
+        )
+
+    def _record_injection_patterns(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        context_texts: list[str],
+    ) -> None:
+        """Observability only: flag prompt-injection patterns in selected chunks.
+
+        Records ``injection_pattern_detected`` into the retrieval run's strategy
+        decision ``reason_codes`` when any selected chunk text matches a known
+        injection pattern. Does NOT alter retrieval or generation behavior.
+        """
+        if not any(detect_injection_patterns(text) for text in context_texts):
+            return
+        run = self._require_run(db, retrieval_run_id)
+        decision = dict(run.strategy_decision_json or {})
+        existing_reason_codes = decision.get("reason_codes")
+        if isinstance(existing_reason_codes, list):
+            reason_codes = [str(code) for code in existing_reason_codes]
+        else:
+            reason_codes = []
+        if INJECTION_PATTERN_REASON_CODE not in reason_codes:
+            reason_codes.append(INJECTION_PATTERN_REASON_CODE)
+        decision["reason_codes"] = reason_codes
+        self.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            strategy_decision_json=TraceRedactor.safe_dict(decision),
         )
 
     def _update_agentic_trace(
