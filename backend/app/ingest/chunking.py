@@ -102,6 +102,12 @@ class FixedTokenChunker:
 
 
 def estimate_token_count(text: str) -> int:
+    # NOTE: This regex word-count drives chunk boundaries during ingestion and is
+    # intentionally kept separate from the budgeting estimator in app.core.tokens
+    # (estimate_tokens). The budgeting estimator is Japanese-aware (non-ASCII ~1
+    # token/char); changing the chunking estimator here would shift chunk
+    # boundaries and broadly affect fixtures/tests, so the difference is
+    # intentional for now.
     return len(_TOKEN_RE.findall(text))
 
 
