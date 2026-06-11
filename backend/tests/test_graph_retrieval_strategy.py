@@ -457,6 +457,54 @@ def test_graph_relation_lookup_fetches_each_frontier_entity_before_cap(
         )
 
 
+def test_graph_relation_lookup_does_not_double_count_shared_frontier_edge(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        db.execute(delete(GraphRelation))
+        chunk_id = min(seed.chunk_ids)
+        target = GraphEntity(
+            canonical_name="SharedFrontierTarget",
+            entity_type="technology",
+            aliases_json=[],
+        )
+        db.add(target)
+        db.flush()
+        shared_relation = GraphRelation(
+            source_entity_id=seed.fastapi_entity_id,
+            target_entity_id=seed.qdrant_entity_id,
+            relation_type="connects",
+            confidence=Decimal("0.99000"),
+            source_document_chunk_id=chunk_id,
+            evidence_text_hash="a" * 64,
+            metadata_json={"rule_id": "test"},
+        )
+        onward_relation = GraphRelation(
+            source_entity_id=seed.qdrant_entity_id,
+            target_entity_id=target.graph_entity_id,
+            relation_type="stores",
+            confidence=Decimal("0.10000"),
+            source_document_chunk_id=chunk_id,
+            evidence_text_hash="b" * 64,
+            metadata_json={"rule_id": "test"},
+        )
+        db.add_all([shared_relation, onward_relation])
+        db.commit()
+        repository = GraphRetrievalRepository()
+
+        rows = repository.list_relations_for_entity_ids(
+            db,
+            entity_ids=[seed.fastapi_entity_id, seed.qdrant_entity_id],
+            max_relations_per_entity=1,
+            filters=RetrievalFilters(),
+        )
+
+        relation_ids = {row.relation.graph_relation_id for row in rows}
+        assert shared_relation.graph_relation_id in relation_ids
+        assert onward_relation.graph_relation_id in relation_ids
+
+
 def test_graph_path_search_expands_frontier_before_return_cap(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -663,15 +711,16 @@ def test_graph_mention_lookup_allocates_fallback_budget_per_entity(
 
         capped_rows = repository.list_mentions_for_entity_ids(
             db,
-            entity_ids={
+            entity_ids=[
+                seed.qdrant_entity_id,
                 seed.fastapi_entity_id,
                 seed.postgresql_entity_id,
-                seed.qdrant_entity_id,
-            },
+            ],
             filters=RetrievalFilters(),
             max_source_chunks=1,
         )
         assert len(capped_rows) == 1
+        assert capped_rows[0].graph_entity_id == seed.qdrant_entity_id
 
 
 def test_graph_retrieval_falls_back_when_relation_paths_lack_source_chunks(
