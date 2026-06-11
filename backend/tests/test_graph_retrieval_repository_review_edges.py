@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -55,14 +55,14 @@ def test_graph_entity_lookup_escapes_like_terms_before_row_limit(
             canonical_name="foo_bar",
             entity_type="technology",
             aliases_json=[],
-            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         noisy_entities = [
             GraphEntity(
                 canonical_name=f"foo{index}bar",
                 entity_type="technology",
                 aliases_json=[],
-                updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 1, 2, tzinfo=UTC),
             )
             for index in range(120)
         ]
@@ -76,9 +76,7 @@ def test_graph_entity_lookup_escapes_like_terms_before_row_limit(
             min_match_score=0.5,
         )
 
-        assert [result.entity.graph_entity_id for result in results] == [
-            exact.graph_entity_id
-        ]
+        assert [result.entity.graph_entity_id for result in results] == [exact.graph_entity_id]
 
 
 def test_graph_relation_lookup_does_not_starve_frontier_entity_behind_hub(

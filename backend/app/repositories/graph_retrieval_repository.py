@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 
 from sqlalchemy import String, and_, case, func, or_, select, union_all
@@ -70,9 +69,7 @@ class GraphRetrievalRepository:
                 )
             )
             name_conditions.append(
-                func.lower(
-                    func.coalesce(GraphEntity.aliases_json.cast(String), "")
-                ).like(
+                func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(
                     like_term,
                     escape=_LIKE_ESCAPE,
                 )
@@ -91,18 +88,15 @@ class GraphRetrievalRepository:
                 select(GraphEntityMention.graph_entity_id)
                 .join(
                     DocumentChunk,
-                    DocumentChunk.document_chunk_id
-                    == GraphEntityMention.document_chunk_id,
+                    DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id,
                 )
                 .join(
                     DocumentVersion,
-                    DocumentVersion.document_version_id
-                    == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
                 )
                 .join(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id
-                    == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
                 )
                 .where(
                     DocumentChunk.modality == filters.modality,
@@ -113,20 +107,15 @@ class GraphRetrievalRepository:
             )
             if filters.logical_document_ids:
                 scoped_entity_ids = scoped_entity_ids.where(
-                    LogicalDocument.logical_document_id.in_(
-                        filters.logical_document_ids
-                    )
+                    LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
                 )
-            statement = statement.where(
-                GraphEntity.graph_entity_id.in_(scoped_entity_ids)
-            )
+            statement = statement.where(GraphEntity.graph_entity_id.in_(scoped_entity_ids))
         rows = db.scalars(
             statement.order_by(
                 name_match_priority.asc(),
                 GraphEntity.updated_at.desc(),
                 GraphEntity.graph_entity_id.asc(),
-            )
-            .limit(max(limit * 32, 100))
+            ).limit(max(limit * 32, 100))
         ).all()
         results: list[GraphEntityLookupResult] = []
         for entity in rows:
@@ -167,13 +156,11 @@ class GraphRetrievalRepository:
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id
-                == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id
-                == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(
                 DocumentChunk.modality == filters.modality,
@@ -196,10 +183,14 @@ class GraphRetrievalRepository:
         entity_ids: set[int],
         max_relations_per_entity: int,
         filters: RetrievalFilters | None = None,
+        exclude_relation_ids: set[int] | None = None,
     ) -> list[GraphRelationRow]:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_relations_per_entity < 1:
             return []
+        excluded_ids = {
+            relation_id for relation_id in (exclude_relation_ids or set()) if relation_id > 0
+        }
         candidate_relations = union_all(
             select(
                 GraphRelation.graph_relation_id.label("relation_id"),
@@ -218,22 +209,23 @@ class GraphRetrievalRepository:
             func.coalesce(GraphRelation.confidence, 0).desc(),
             GraphRelation.graph_relation_id.asc(),
         ]
-        ranked_relations = (
-            select(
-                candidate_relations.c.relation_id,
-                candidate_relations.c.frontier_entity_id,
-                func.row_number()
-                .over(
-                    partition_by=candidate_relations.c.frontier_entity_id,
-                    order_by=rank_order,
-                )
-                .label("frontier_rank"),
+        ranked_relations = select(
+            candidate_relations.c.relation_id,
+            candidate_relations.c.frontier_entity_id,
+            func.row_number()
+            .over(
+                partition_by=candidate_relations.c.frontier_entity_id,
+                order_by=rank_order,
             )
-            .join(
-                GraphRelation,
-                GraphRelation.graph_relation_id == candidate_relations.c.relation_id,
-            )
+            .label("frontier_rank"),
+        ).join(
+            GraphRelation,
+            GraphRelation.graph_relation_id == candidate_relations.c.relation_id,
         )
+        if excluded_ids:
+            ranked_relations = ranked_relations.where(
+                GraphRelation.graph_relation_id.notin_(excluded_ids)
+            )
         if filters is not None:
             chunk_filter = and_(
                 DocumentChunk.modality == filters.modality,
@@ -249,18 +241,15 @@ class GraphRetrievalRepository:
             ranked_relations = (
                 ranked_relations.outerjoin(
                     DocumentChunk,
-                    DocumentChunk.document_chunk_id
-                    == GraphRelation.source_document_chunk_id,
+                    DocumentChunk.document_chunk_id == GraphRelation.source_document_chunk_id,
                 )
                 .outerjoin(
                     DocumentVersion,
-                    DocumentVersion.document_version_id
-                    == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
                 )
                 .outerjoin(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id
-                    == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
                 )
                 .where(
                     or_(
@@ -274,13 +263,9 @@ class GraphRetrievalRepository:
             select(GraphRelation)
             .join(
                 ranked_relations_subquery,
-                ranked_relations_subquery.c.relation_id
-                == GraphRelation.graph_relation_id,
+                ranked_relations_subquery.c.relation_id == GraphRelation.graph_relation_id,
             )
-            .where(
-                ranked_relations_subquery.c.frontier_rank
-                <= max_relations_per_entity
-            )
+            .where(ranked_relations_subquery.c.frontier_rank <= max_relations_per_entity)
             .order_by(
                 ranked_relations_subquery.c.frontier_entity_id.asc(),
                 case(
@@ -304,21 +289,12 @@ class GraphRetrievalRepository:
             for entity_id in (relation.source_entity_id, relation.target_entity_id)
         }
         entities = self.get_entities_by_ids(db, entity_ids=related_entity_ids)
-        per_entity_counts: dict[int, int] = defaultdict(int)
         bounded: list[GraphRelationRow] = []
         for relation in relation_rows:
-            touched_ids = (relation.source_entity_id, relation.target_entity_id)
-            if any(
-                per_entity_counts[entity_id] >= max_relations_per_entity
-                for entity_id in touched_ids
-            ):
-                continue
             source_entity = entities.get(relation.source_entity_id)
             target_entity = entities.get(relation.target_entity_id)
             if source_entity is None or target_entity is None:
                 continue
-            for entity_id in touched_ids:
-                per_entity_counts[entity_id] += 1
             bounded.append(
                 GraphRelationRow(
                     relation=relation,
@@ -356,9 +332,7 @@ class GraphRetrievalRepository:
             or relation.source_document_chunk_id in valid_chunk_ids
         ]
 
-    def get_entities_by_ids(
-        self, db: Session, *, entity_ids: set[int]
-    ) -> dict[int, GraphEntity]:
+    def get_entities_by_ids(self, db: Session, *, entity_ids: set[int]) -> dict[int, GraphEntity]:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids:
             return {}
@@ -378,7 +352,12 @@ class GraphRetrievalRepository:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_source_chunks < 1:
             return []
-        per_entity_chunk_limit = max(1, max_source_chunks // len(safe_ids))
+        source_chunk_budget = max(1, int(max_source_chunks))
+        safe_ids = set(sorted(safe_ids)[:source_chunk_budget])
+        per_entity_chunk_limit = max(
+            1,
+            (source_chunk_budget + len(safe_ids) - 1) // len(safe_ids),
+        )
         mention_pairs = (
             select(
                 GraphEntityMention.graph_entity_id,
@@ -390,13 +369,11 @@ class GraphRetrievalRepository:
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id
-                == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id
-                == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(
                 GraphEntityMention.graph_entity_id.in_(safe_ids),
@@ -444,23 +421,19 @@ class GraphRetrievalRepository:
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id
-                == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id
-                == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
-            .where(
-                ranked_mention_pairs_subquery.c.entity_chunk_rank
-                <= per_entity_chunk_limit
-            )
+            .where(ranked_mention_pairs_subquery.c.entity_chunk_rank <= per_entity_chunk_limit)
             .order_by(
-                ranked_mention_pairs_subquery.c.graph_entity_id.asc(),
                 ranked_mention_pairs_subquery.c.entity_chunk_rank.asc(),
+                ranked_mention_pairs_subquery.c.graph_entity_id.asc(),
                 DocumentChunk.document_chunk_id.asc(),
             )
+            .limit(source_chunk_budget)
         )
         rows = db.execute(statement).all()
         seen: set[tuple[int, int]] = set()
@@ -494,13 +467,11 @@ class GraphRetrievalRepository:
             select(DocumentChunk, DocumentVersion, LogicalDocument)
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id
-                == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id
-                == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(
                 DocumentChunk.document_chunk_id.in_(safe_ids),
@@ -633,16 +604,12 @@ def _entity_name_terms(entity: GraphEntity) -> set[str]:
 def _label_terms(value: str) -> tuple[str, ...]:
     return tuple(
         term
-        for term in " ".join(value.replace("_", " ").replace("-", " ").split())
-        .lower()
-        .split()
+        for term in " ".join(value.replace("_", " ").replace("-", " ").split()).lower().split()
         if len(term) >= 1
     )
 
 
 def _phrase_boundary_match(query_text: str, label: str) -> bool:
     boundary_chars = r"A-Za-z0-9_+#"
-    pattern = re.compile(
-        rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])"
-    )
+    pattern = re.compile(rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])")
     return pattern.search(query_text) is not None

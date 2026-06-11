@@ -19,6 +19,7 @@ GRAPH_RETRIEVAL_SCHEMA_VERSION = "phase3.graph_retrieval.v1"
 GRAPH_PATH_SCHEMA_VERSION = "phase3.graph_path.v1"
 GRAPH_SCORE_SCHEMA_VERSION = "phase3.graph_score.v1"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:+#-]{0,79}")
+_TRAILING_TOKEN_PUNCTUATION = ".,;:!?"
 _GRAPH_SIGNAL_RE = re.compile(
     r"(?i)\b(relation|relationship|related|depend|depends|dependency|connect|"
     r"connects|connected|use|uses|using|architecture|component|store|stores|"
@@ -60,9 +61,7 @@ class GraphRetrievalSettings:
 
     def bounded(self) -> GraphRetrievalSettings:
         fallback_strategy = (
-            self.fallback_strategy
-            if self.fallback_strategy in {"dense", "hybrid"}
-            else "hybrid"
+            self.fallback_strategy if self.fallback_strategy in {"dense", "hybrid"} else "hybrid"
         )
         return GraphRetrievalSettings(
             enabled=self.enabled,
@@ -166,8 +165,8 @@ class GraphEntityLookupService:
         terms: list[str] = []
         seen: set[str] = set()
         for match in _TOKEN_RE.finditer(query):
-            term = match.group(0).strip().lower()
-            if term in seen:
+            term = _normalize_query_term(match.group(0))
+            if not term or term in seen:
                 continue
             terms.append(term)
             seen.add(term)
@@ -206,11 +205,7 @@ class GraphScoreCalculator:
             else entity_match_score
         )
         depth_penalty = max(0.1, 1.0 - max(0, depth - 1) * 0.1)
-        path_score = (
-            entity_match_score * 0.45
-            + relation_score * 0.45
-            + depth_penalty * 0.10
-        )
+        path_score = entity_match_score * 0.45 + relation_score * 0.45 + depth_penalty * 0.10
         return round(max(0.0, min(1.0, relation_score)), 6), round(
             max(0.0, min(1.0, path_score)),
             6,
@@ -283,9 +278,7 @@ class GraphPathSearchService:
                 settings.max_paths * settings.max_relations_per_entity,
             ),
         )
-        frontier: list[
-            tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
-        ] = [
+        frontier: list[tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]] = [
             (entity_id, (entity_id,), (), lookup.match_score)
             for entity_id, lookup in lookup_by_id.items()
         ]
@@ -298,9 +291,7 @@ class GraphPathSearchService:
                 break
 
             pending_entity_ids = {
-                current_id
-                for current_id, *_rest in frontier
-                if current_id not in loaded_entity_ids
+                current_id for current_id, *_rest in frontier if current_id not in loaded_entity_ids
             }
             if pending_entity_ids:
                 relation_rows = self.repository.list_relations_for_entity_ids(
@@ -308,6 +299,7 @@ class GraphPathSearchService:
                     entity_ids=pending_entity_ids,
                     max_relations_per_entity=settings.max_relations_per_entity,
                     filters=filters,
+                    exclude_relation_ids=seen_relation_ids,
                 )
                 loaded_entity_ids.update(pending_entity_ids)
                 for relation_row in relation_rows:
@@ -316,19 +308,20 @@ class GraphPathSearchService:
                         continue
                     seen_relation_ids.add(relation_id)
                     relation_count += 1
-                    adjacency.setdefault(
-                        relation_row.relation.source_entity_id, []
-                    ).append(relation_row)
-                    adjacency.setdefault(
-                        relation_row.relation.target_entity_id, []
-                    ).append(relation_row)
+                    adjacency.setdefault(relation_row.relation.source_entity_id, []).append(
+                        relation_row
+                    )
+                    adjacency.setdefault(relation_row.relation.target_entity_id, []).append(
+                        relation_row
+                    )
 
             next_frontier: list[
                 tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
             ] = []
             for current_id, entity_path, relation_path, entity_match_score in frontier:
                 relations = adjacency.get(current_id, [])
-                for relation_row in relations[:settings.max_relations_per_entity]:
+                expanded_relation_count = 0
+                for relation_row in relations:
                     relation = relation_row.relation
                     next_id = (
                         relation.target_entity_id
@@ -337,6 +330,9 @@ class GraphPathSearchService:
                     )
                     if next_id in entity_path:
                         continue
+                    if expanded_relation_count >= settings.max_relations_per_entity:
+                        break
+                    expanded_relation_count += 1
                     next_entity_path = (*entity_path, next_id)
                     next_relation_path = (*relation_path, relation_row)
                     relation_confidences = tuple(
@@ -373,8 +369,7 @@ class GraphPathSearchService:
                                 path_id=f"gp_{len(paths) + 1}",
                                 entity_ids=next_entity_path,
                                 relation_ids=tuple(
-                                    item.relation.graph_relation_id
-                                    for item in next_relation_path
+                                    item.relation.graph_relation_id for item in next_relation_path
                                 ),
                                 safe_entity_labels=labels,
                                 relation_types=relation_types,
@@ -405,7 +400,7 @@ class GraphPathSearchService:
             key=lambda path: (path.path_score, -path.depth, path.path_id),
             reverse=True,
         )
-        return paths[:settings.max_paths], relation_count, _dedupe(reason_codes)
+        return paths[: settings.max_paths], relation_count, _dedupe(reason_codes)
 
 
 class GraphRetrievalStrategy:
@@ -418,9 +413,7 @@ class GraphRetrievalStrategy:
     ) -> None:
         self.repository = repository or GraphRetrievalRepository()
         self.entity_lookup = entity_lookup or GraphEntityLookupService(self.repository)
-        self.path_search = path_search or GraphPathSearchService(
-            repository=self.repository
-        )
+        self.path_search = path_search or GraphPathSearchService(repository=self.repository)
 
     def search(
         self,
@@ -534,9 +527,7 @@ class GraphRetrievalStrategy:
                 if candidate.document_chunk_id not in path.source_chunk_ids:
                     continue
                 paths_by_id.setdefault(path.path_id, path)
-                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(
-                    path.path_id, []
-                )
+                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
                 if candidate.document_chunk_id not in selected_chunk_ids:
                     selected_chunk_ids.append(candidate.document_chunk_id)
 
@@ -572,9 +563,7 @@ def graph_query_signal_score(query: str) -> float:
         return 0.0
     signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
     relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
-    multi_entity_hint = (
-        1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
-    )
+    multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
     return round(
         min(
             1.0,
@@ -601,8 +590,7 @@ def _source_candidates(
             reverse=True,
         )
         score = round(
-            sum(path.path_score for path in ranked_paths[:3])
-            / min(3, len(ranked_paths)),
+            sum(path.path_score for path in ranked_paths[:3]) / min(3, len(ranked_paths)),
             6,
         )
         path_refs = tuple(path.path_id for path in ranked_paths[:5])
@@ -748,6 +736,10 @@ def _source_chunk_ids(
 
 def _bounded_int(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, int(value)))
+
+
+def _normalize_query_term(term: str) -> str:
+    return term.strip().lower().rstrip(_TRAILING_TOKEN_PUNCTUATION)
 
 
 def _elapsed_ms(started_at: float) -> int:
