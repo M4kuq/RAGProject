@@ -18,7 +18,7 @@ from app.rag.graph_retrieval import (
     GraphRetrievalStrategy,
     GraphSourceCandidate,
 )
-from app.rag.retrieval import RetrievalFilters, RetrievalError
+from app.rag.retrieval import RetrievalError, RetrievalFilters
 from app.rag.strategy import RetrievalSource, RetrievalStrategy
 from app.rag.trace import (
     LatencyTracker,
