@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from urllib.parse import quote
 import httpx
 
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 RAG_GENERATION_INSTRUCTIONS = (
     "/no_think\n"
@@ -32,9 +35,47 @@ class AnswerGenerationError(RuntimeError):
         self,
         error_code: str = "generation_failed",
         message: str = "Answer generation failed.",
+        *,
+        error_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        # Coarse, non-sensitive category for the underlying cause (e.g. timeout,
+        # rate_limited, auth, http_<status>, connection). Never carries response
+        # bodies or credentials.
+        self.error_category = error_category
+
+
+def _httpx_error_category(exc: httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "connection"
+    if isinstance(exc, httpx.TransportError):
+        return "connection"
+    return "http_error"
+
+
+def _status_error_category(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "auth"
+    if status_code == 429:
+        return "rate_limited"
+    return f"http_{status_code}"
+
+
+def _http_error(exc: httpx.HTTPError) -> AnswerGenerationError:
+    category = _httpx_error_category(exc)
+    # Log the coarse category only. Do not log the exception message, response
+    # body, headers, or API keys.
+    logger.warning("answer generation http error", extra={"error_category": category})
+    return AnswerGenerationError(error_category=category)
+
+
+def _status_error(status_code: int) -> AnswerGenerationError:
+    category = _status_error_category(status_code)
+    logger.warning("answer generation status error", extra={"error_category": category})
+    return AnswerGenerationError(error_category=category)
 
 
 @dataclass(frozen=True)
@@ -95,9 +136,9 @@ class OllamaAnswerGenerator:
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
-            raise AnswerGenerationError() from exc
+            raise _http_error(exc) from exc
         if response.status_code >= 400:
-            raise AnswerGenerationError()
+            raise _status_error(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -144,9 +185,9 @@ class OpenAIResponsesAnswerGenerator:
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
-            raise AnswerGenerationError() from exc
+            raise _http_error(exc) from exc
         if response.status_code >= 400:
-            raise AnswerGenerationError()
+            raise _status_error(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -202,9 +243,9 @@ class OpenAICompatibleChatAnswerGenerator:
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
-            raise AnswerGenerationError() from exc
+            raise _http_error(exc) from exc
         if response.status_code >= 400:
-            raise AnswerGenerationError()
+            raise _status_error(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -261,9 +302,9 @@ class AnthropicMessagesAnswerGenerator:
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
-            raise AnswerGenerationError() from exc
+            raise _http_error(exc) from exc
         if response.status_code >= 400:
-            raise AnswerGenerationError()
+            raise _status_error(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -320,9 +361,9 @@ class GeminiAnswerGenerator:
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
-            raise AnswerGenerationError() from exc
+            raise _http_error(exc) from exc
         if response.status_code >= 400:
-            raise AnswerGenerationError()
+            raise _status_error(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:
