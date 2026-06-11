@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_WEAK_SESSION_SECRETS = {
+    "dev-only-change-me",
+    "change-me-in-local-env",
+    "ci-only-change-me",
+}
 
 
 class Settings(BaseSettings):
@@ -512,15 +521,16 @@ class Settings(BaseSettings):
         self.qdrant_distance = {"cosine": "Cosine", "dot": "Dot", "euclid": "Euclid"}[distance]
 
         if self.app_env.lower() not in {"local", "ci", "test"}:
-            weak_values = {
-                "dev-only-change-me",
-                "change-me-in-local-env",
-                "ci-only-change-me",
-            }
-            if self.session_secret in weak_values or len(self.session_secret) < 32:
+            if self.session_secret in _WEAK_SESSION_SECRETS or len(self.session_secret) < 32:
                 raise ValueError("SESSION_SECRET must be set to a strong random value")
             if not self.session_cookie_secure:
                 raise ValueError("SESSION_COOKIE_SECURE=true is required outside local/ci/test")
+        elif self.session_secret in _WEAK_SESSION_SECRETS:
+            logger.warning(
+                "SESSION_SECRET is using a weak default value in app_env=%s; "
+                "set a strong random SESSION_SECRET before deploying.",
+                self.app_env,
+            )
         return self
 
     @property

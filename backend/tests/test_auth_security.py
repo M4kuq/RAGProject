@@ -23,7 +23,12 @@ from app.core.security import (
     verify_password,
     verify_token_hash,
 )
-from app.core.sessions import client_ip, new_session_token, now_utc
+from app.core.sessions import (
+    client_ip,
+    new_session_token,
+    now_utc,
+    truncate_user_agent,
+)
 from app.db.base import Base
 from app.db.models import AuditLog, Role, User, UserSession
 from app.db.session import get_db
@@ -447,6 +452,13 @@ def test_forwarded_for_is_used_only_for_trusted_proxy(monkeypatch) -> None:
         assert client_ip(RequestStub()) == "203.0.113.10"  # type: ignore[arg-type]
     finally:
         get_settings.cache_clear()
+
+
+def test_truncate_user_agent_normalizes_empty_to_none() -> None:
+    assert truncate_user_agent(None) is None
+    assert truncate_user_agent("") is None
+    assert truncate_user_agent("Mozilla/5.0") == "Mozilla/5.0"
+    assert truncate_user_agent("a" * 600) == "a" * 512
 
 
 def test_csrf_dependency_can_be_overridden_for_existing_foundation_tests() -> None:
