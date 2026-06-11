@@ -122,12 +122,12 @@ def _rewrite_graph_rows() -> None:
         "evaluation_results",
     ):
         op.execute(
-            f"UPDATE {table_name} SET strategy_type = 'hybrid' WHERE strategy_type = 'graph'"
+            f"UPDATE {table_name} SET strategy_type = 'hybrid' WHERE strategy_type = 'graph'",
         )
     op.execute(
         "UPDATE retrieval_run_items "
         "SET retrieval_source = 'hybrid' "
-        "WHERE retrieval_source = 'graph'"
+        "WHERE retrieval_source = 'graph'",
     )
 
 
