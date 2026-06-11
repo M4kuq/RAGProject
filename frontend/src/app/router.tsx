@@ -1,4 +1,5 @@
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "../components/common/ErrorBoundary";
 import { useCurrentUser } from "../features/auth/authHooks";
 import { ChatPage } from "../routes/ChatPage";
 import { LoginPage } from "../routes/LoginPage";
@@ -36,14 +37,23 @@ export function AppRouter() {
     <BrowserRouter>
       <div className="shell">
         <TopNav />
-        <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/chat/temp/:temporaryChatId?" element={<ChatPage mode="temporary" />} />
-          <Route path="/chat/:chatSessionId?" element={<ChatPage mode="active" />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/admin/*" element={<AdminLayout />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Navigate to="/chat" replace />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/chat/temp/:temporaryChatId?" element={<ChatPage mode="temporary" />} />
+            <Route path="/chat/:chatSessionId?" element={<ChatPage mode="active" />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route
+              path="/admin/*"
+              element={
+                <ErrorBoundary>
+                  <AdminLayout />
+                </ErrorBoundary>
+              }
+            />
+          </Routes>
+        </ErrorBoundary>
       </div>
     </BrowserRouter>
   );
