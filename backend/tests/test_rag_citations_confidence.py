@@ -124,6 +124,89 @@ def test_confidence_does_not_penalize_concise_single_source_answers() -> None:
     assert result.confidence_label == "High"
 
 
+def test_confidence_with_all_scores_present_matches_flat_formula() -> None:
+    # retrieval clamps 0.8, rerank clamps 0.6, groundedness 1.0, context strength 1.0.
+    # All optional scores present -> identical to the legacy flat weighted formula:
+    # 0.35*0.8 + 0.35*0.6 + 0.20*1.0 + 0.10*1.0 = 0.79.
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=3,
+                qdrant_candidate_count=3,
+                post_filter_candidate_count=3,
+                selected_count=3,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.8,
+                top3_avg_retrieval_score=0.7,
+                top1_rerank_score=0.6,
+            ),
+            marker_count=3,
+            unique_citation_count=3,
+            selected_count=3,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.answer_confidence == pytest.approx(0.79)
+
+
+def test_confidence_renormalizes_when_rerank_score_absent() -> None:
+    # Reranking disabled -> top1_rerank_score is None. The 0.35 rerank weight is
+    # dropped and the remaining weights (0.35 + 0.20 + 0.10 = 0.65) renormalize to
+    # 1.0. With retrieval clamps 0.8, groundedness 1.0, context strength 1.0:
+    # (0.35*0.8 + 0.20*1.0 + 0.10*1.0) / 0.65 = 0.58 / 0.65 = 0.892308...
+    # The legacy formula would have yielded only 0.58 because the missing rerank
+    # score was treated as 0.0; renormalization removes that silent penalty.
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=3,
+                qdrant_candidate_count=3,
+                post_filter_candidate_count=3,
+                selected_count=3,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.8,
+                top3_avg_retrieval_score=0.7,
+                top1_rerank_score=None,
+            ),
+            marker_count=3,
+            unique_citation_count=3,
+            selected_count=3,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.answer_confidence == pytest.approx(0.58 / 0.65)
+    assert result.answer_confidence > 0.58
+
+
+def test_confidence_renormalizes_when_retrieval_and_rerank_absent() -> None:
+    # Both retrieval signals absent -> only groundedness (0.20) and context
+    # strength (0.10) remain, renormalized over 0.30. With groundedness 1.0 and
+    # context strength clamp(2/3): (0.20*1.0 + 0.10*0.666667) / 0.30 = 0.888889.
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=3,
+                qdrant_candidate_count=3,
+                post_filter_candidate_count=3,
+                selected_count=2,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=None,
+                top3_avg_retrieval_score=None,
+                top1_rerank_score=None,
+            ),
+            marker_count=2,
+            unique_citation_count=2,
+            selected_count=2,
+        ),
+        Settings(app_env="test"),
+    )
+
+    expected = (0.20 * 1.0 + 0.10 * (2 / 3)) / 0.30
+    assert result.answer_confidence == pytest.approx(expected)
+
+
 def _source(local_citation_id: int) -> CitationSource:
     return CitationSource(
         local_citation_id=local_citation_id,
