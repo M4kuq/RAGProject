@@ -508,7 +508,7 @@ class GraphRetrievalStrategy:
     ) -> list[GraphPathCandidate]:
         source_rows = self.repository.list_mentions_for_entity_ids(
             db,
-            entity_ids={item.entity.graph_entity_id for item in start_entities},
+            entity_ids=[item.entity.graph_entity_id for item in start_entities],
             filters=filters,
             max_source_chunks=settings.max_source_chunks,
         )
