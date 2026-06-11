@@ -68,4 +68,6 @@ def run_startup_checks(
 def _needs_qdrant(enabled_job_types: frozenset[str] | None) -> bool:
     if enabled_job_types is None:
         return True
-    return bool(enabled_job_types & {"document_ingest", "qdrant_mirror_update"})
+    return bool(
+        enabled_job_types & {"document_ingest", "qdrant_mirror_update", "qdrant_consistency_sweep"}
+    )

@@ -13,6 +13,7 @@ from app.workers.handlers.document_ingest_handler import DocumentIngestHandler
 from app.workers.handlers.evaluation_run_handler import EvaluationRunHandler
 from app.workers.handlers.graph_index_build_handler import GraphIndexBuildHandler
 from app.workers.handlers.message_edit_regeneration_handler import MessageEditRegenerationHandler
+from app.workers.handlers.qdrant_consistency_sweep_handler import QdrantConsistencySweepHandler
 from app.workers.handlers.qdrant_mirror_update_handler import QdrantMirrorUpdateHandler
 from app.workers.handlers.temporary_chat_cleanup_handler import TemporaryChatCleanupHandler
 
@@ -62,6 +63,7 @@ def _default_handlers(
     return {
         "document_ingest": DocumentIngestHandler(session_factory=session_factory),
         "qdrant_mirror_update": QdrantMirrorUpdateHandler(session_factory=session_factory),
+        "qdrant_consistency_sweep": QdrantConsistencySweepHandler(session_factory=session_factory),
         "message_edit_regeneration": MessageEditRegenerationHandler(),
         "evaluation_run": EvaluationRunHandler(session_factory=session_factory),
         "temporary_chat_cleanup": TemporaryChatCleanupHandler(),

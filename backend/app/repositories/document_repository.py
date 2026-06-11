@@ -219,6 +219,43 @@ class DocumentRepository:
         ).all()
         return [int(document_chunk_id) for document_chunk_id in rows]
 
+    def existing_chunk_ids(self, db: Session, *, document_chunk_ids: Sequence[int]) -> set[int]:
+        if not document_chunk_ids:
+            return set()
+        rows = db.scalars(
+            select(DocumentChunk.document_chunk_id).where(
+                DocumentChunk.document_chunk_id.in_(list(document_chunk_ids))
+            )
+        ).all()
+        return {int(document_chunk_id) for document_chunk_id in rows}
+
+    def version_index_states(
+        self, db: Session, *, document_version_ids: Sequence[int]
+    ) -> dict[int, tuple[str, bool, str]]:
+        """Return {document_version_id: (version_status, is_active, document_status)}.
+
+        Versions absent from the result do not exist in Postgres.
+        """
+        if not document_version_ids:
+            return {}
+        rows = db.execute(
+            select(
+                DocumentVersion.document_version_id,
+                DocumentVersion.status,
+                DocumentVersion.is_active,
+                LogicalDocument.status,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .where(DocumentVersion.document_version_id.in_(list(document_version_ids)))
+        ).all()
+        return {
+            int(document_version_id): (str(version_status), bool(is_active), str(document_status))
+            for document_version_id, version_status, is_active, document_status in rows
+        }
+
     def list_chunks_for_embedding(
         self, db: Session, *, document_version_id: int
     ) -> list[DocumentChunk]:

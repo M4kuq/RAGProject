@@ -55,6 +55,18 @@ class QdrantPoint:
 
 
 @dataclass(frozen=True)
+class ScrolledPoint:
+    point_id: int
+    payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ScrollResult:
+    points: list[ScrolledPoint]
+    next_offset: int | str | None
+
+
+@dataclass(frozen=True)
 class DocumentIndexingResult:
     indexed_count: int
 
@@ -78,6 +90,21 @@ class QdrantClient(Protocol):
         document_version_id: int,
         payload: dict[str, object],
     ) -> None: ...
+
+    def set_payload_by_point_ids(
+        self,
+        collection_name: str,
+        point_ids: Sequence[int],
+        payload: dict[str, object],
+    ) -> None: ...
+
+    def scroll_points(
+        self,
+        collection_name: str,
+        *,
+        limit: int,
+        offset: int | str | None,
+    ) -> ScrollResult: ...
 
 
 class HttpQdrantClient:
@@ -177,6 +204,51 @@ class HttpQdrantClient:
             },
         )
 
+    def set_payload_by_point_ids(
+        self,
+        collection_name: str,
+        point_ids: Sequence[int],
+        payload: dict[str, object],
+    ) -> None:
+        if not point_ids:
+            return
+        self._request(
+            "POST",
+            f"/collections/{collection_name}/points/payload",
+            params={"wait": "true"},
+            json={
+                "payload": payload,
+                "points": list(point_ids),
+            },
+        )
+
+    def scroll_points(
+        self,
+        collection_name: str,
+        *,
+        limit: int,
+        offset: int | str | None,
+    ) -> ScrollResult:
+        body: dict[str, object] = {
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,
+        }
+        if offset is not None:
+            body["offset"] = offset
+        response = self._request(
+            "POST",
+            f"/collections/{collection_name}/points/scroll",
+            json=body,
+        )
+        if response is None:
+            raise QdrantStoreError("qdrant_unavailable")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise QdrantStoreError("qdrant_unavailable") from exc
+        return _extract_scroll_result(payload)
+
     def _request(
         self,
         method: str,
@@ -260,6 +332,47 @@ class InMemoryQdrantClient:
             if point.payload.get("document_version_id") == document_version_id:
                 point.payload.update(payload)
 
+    def set_payload_by_point_ids(
+        self,
+        collection_name: str,
+        point_ids: Sequence[int],
+        payload: dict[str, object],
+    ) -> None:
+        if self.fail_upsert:
+            raise QdrantStoreError("qdrant_upsert_failed")
+        stored = self.points.setdefault(collection_name, {})
+        for point_id in point_ids:
+            point = stored.get(point_id)
+            if point is not None:
+                point.payload.update(payload)
+
+    def scroll_points(
+        self,
+        collection_name: str,
+        *,
+        limit: int,
+        offset: int | str | None,
+    ) -> ScrollResult:
+        stored = self.points.setdefault(collection_name, {})
+        ordered = sorted(stored.values(), key=lambda point: point.point_id)
+        start = 0
+        if offset is not None:
+            start = next(
+                (index for index, point in enumerate(ordered) if point.point_id == int(offset)),
+                len(ordered),
+            )
+        window = ordered[start : start + limit]
+        next_offset: int | None = None
+        if start + limit < len(ordered):
+            next_offset = ordered[start + limit].point_id
+        return ScrollResult(
+            points=[
+                ScrolledPoint(point_id=point.point_id, payload=dict(point.payload))
+                for point in window
+            ],
+            next_offset=next_offset,
+        )
+
 
 class QdrantVectorStore:
     def __init__(
@@ -327,6 +440,42 @@ class QdrantVectorStore:
                 document_version_id,
                 payload,
             )
+        except QdrantStoreError as exc:
+            raise QdrantStoreError("qdrant_upsert_failed") from exc
+        except Exception as exc:
+            raise QdrantStoreError("qdrant_upsert_failed") from exc
+
+    def scroll(self, *, limit: int, offset: int | str | None) -> ScrollResult:
+        if limit < 1:
+            raise QdrantStoreError("qdrant_unavailable")
+        try:
+            return self.client.scroll_points(
+                self.config.name,
+                limit=limit,
+                offset=offset,
+            )
+        except QdrantStoreError:
+            raise
+        except Exception as exc:
+            raise QdrantStoreError("qdrant_unavailable") from exc
+
+    def delete_point_ids(self, *, point_ids: Sequence[int]) -> None:
+        if not point_ids:
+            return
+        try:
+            self.client.delete_points(self.config.name, point_ids)
+        except QdrantStoreError as exc:
+            raise QdrantStoreError("qdrant_cleanup_failed") from exc
+        except Exception as exc:
+            raise QdrantStoreError("qdrant_cleanup_failed") from exc
+
+    def set_payload_by_point_ids(
+        self, *, point_ids: Sequence[int], payload: dict[str, object]
+    ) -> None:
+        if not point_ids:
+            return
+        try:
+            self.client.set_payload_by_point_ids(self.config.name, point_ids, payload)
         except QdrantStoreError as exc:
             raise QdrantStoreError("qdrant_upsert_failed") from exc
         except Exception as exc:
@@ -402,6 +551,18 @@ class DocumentIndexingService:
                 "document_version_status": document_version_status,
                 "is_active": is_active,
             },
+        )
+
+    def scroll_points(self, *, limit: int, offset: int | str | None) -> ScrollResult:
+        return self.vector_store.scroll(limit=limit, offset=offset)
+
+    def delete_points_by_ids(self, *, point_ids: Sequence[int]) -> None:
+        self.vector_store.delete_point_ids(point_ids=point_ids)
+
+    def mark_points_inactive(self, *, point_ids: Sequence[int]) -> None:
+        self.vector_store.set_payload_by_point_ids(
+            point_ids=point_ids,
+            payload={"is_active": False},
         )
 
 
@@ -481,6 +642,35 @@ def build_qdrant_payload(
     if isinstance(created_at, datetime):
         payload["created_at"] = created_at.isoformat()
     return payload
+
+
+def _extract_scroll_result(payload: object) -> ScrollResult:
+    if not isinstance(payload, dict):
+        raise QdrantStoreError("qdrant_unavailable")
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise QdrantStoreError("qdrant_unavailable")
+    raw_points = result.get("points")
+    if not isinstance(raw_points, list):
+        raise QdrantStoreError("qdrant_unavailable")
+    points: list[ScrolledPoint] = []
+    for raw_point in raw_points:
+        if not isinstance(raw_point, dict):
+            continue
+        point_id = raw_point.get("id")
+        if not isinstance(point_id, int) or isinstance(point_id, bool):
+            continue
+        point_payload = raw_point.get("payload")
+        points.append(
+            ScrolledPoint(
+                point_id=point_id,
+                payload=point_payload if isinstance(point_payload, dict) else {},
+            )
+        )
+    next_offset = result.get("next_page_offset")
+    if not isinstance(next_offset, int | str) or isinstance(next_offset, bool):
+        next_offset = None
+    return ScrollResult(points=points, next_offset=next_offset)
 
 
 def _extract_vector_size(payload: object) -> int | None:
