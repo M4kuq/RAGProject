@@ -114,7 +114,9 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
             == GRAPH_SCORE_SCHEMA_VERSION
         )
         assert result.graph_candidates[0].score_breakdown_json["retrieval_source"] == "graph"
-        assert result.graph_candidates[0].score_breakdown_json["path_depth"] <= 2
+        path_depth = result.graph_candidates[0].score_breakdown_json["path_depth"]
+        assert isinstance(path_depth, int)
+        assert path_depth <= 2
         assert result.graph_candidates[0].score_breakdown_json["selected_flag"] is True
         serialized = str(result).lower()
         assert "raw chunk text" not in serialized
@@ -655,7 +657,7 @@ def test_graph_mention_lookup_allocates_fallback_budget_per_entity(
             max_source_chunks=2,
         )
 
-        row_entity_ids = {int(row.graph_entity_id) for row in rows}
+        row_entity_ids = {row.graph_entity_id for row in rows if row.graph_entity_id is not None}
         assert seed.fastapi_entity_id in row_entity_ids
         assert seed.qdrant_entity_id in row_entity_ids
 
