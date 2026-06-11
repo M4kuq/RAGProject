@@ -34,6 +34,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "multi_query_dense",
         "multi_query_hybrid",
         "metadata_filtered",
@@ -47,6 +48,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "rerank",
         "fallback_dense",
         "metadata_filter",
@@ -58,11 +60,13 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "agentic_router",
     )
     assert RAG_ASK_REQUEST_STRATEGY_VALUES == (
         "dense",
         "hybrid",
+        "graph",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
@@ -76,11 +80,13 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "agentic_router",
     )
     assert _field_enum_values(RagAskRequest.model_json_schema(), "strategy") == (
         "dense",
         "hybrid",
+        "graph",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
@@ -212,41 +218,21 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "0013_langchain_agentic_strategy.py"
+        / "0014_graph_retrieval_strategy_router.py"
     )
     tree = ast.parse(migration.read_text(encoding="utf-8"))
     constants: dict[str, tuple[str, ...]] = {}
-    old_strategy_values: tuple[str, ...] | None = None
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        if node.targets[0].id == "OLD_RETRIEVAL_STRATEGY_VALUES":
-            old_strategy_values = tuple(ast.literal_eval(node.value))
             continue
         if node.targets[0].id == "NEW_RETRIEVAL_STRATEGY_VALUES":
-            assert old_strategy_values is not None
-            constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(
-                (*old_strategy_values[:-1], "langchain_agentic", old_strategy_values[-1])
-            )
+            constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(ast.literal_eval(node.value))
             continue
-
-    source_migration = (
-        Path(__file__).resolve().parents[1]
-        / "alembic"
-        / "versions"
-        / "0003_phase2_strategy_trace.py"
-    )
-    tree = ast.parse(source_migration.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
+        if node.targets[0].id == "NEW_RETRIEVAL_SOURCE_VALUES":
+            constants["RETRIEVAL_SOURCE_VALUES"] = tuple(ast.literal_eval(node.value))
             continue
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        if node.targets[0].id != "RETRIEVAL_SOURCE_VALUES":
-            continue
-        constants["RETRIEVAL_SOURCE_VALUES"] = tuple(ast.literal_eval(node.value))
     return constants
 
 
