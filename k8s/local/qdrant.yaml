@@ -38,6 +38,10 @@ spec:
         app.kubernetes.io/name: ragproject
         app.kubernetes.io/component: qdrant
     spec:
+      securityContext:
+        # Recent qdrant/qdrant images run as the non-root uid 1000. fsGroup
+        # ensures the storage PVC is writable by that uid.
+        fsGroup: 1000
       containers:
         - name: qdrant
           image: qdrant/qdrant:v1.12.4
@@ -70,6 +74,10 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
           volumeMounts:
             - name: qdrant-data
               mountPath: /qdrant/storage

@@ -19,4 +19,15 @@ if ($Runtime -eq "kind") {
   minikube -p $MinikubeProfile image load ragproject-frontend:local
 }
 
+$missing = @()
+foreach ($image in @("ragproject-backend:local", "ragproject-worker:local", "ragproject-frontend:local")) {
+  if (-not (docker images -q $image)) {
+    $missing += $image
+  }
+}
+if ($missing.Count -gt 0) {
+  Write-Error "ERROR: expected local images are missing after build/load: $($missing -join ' '). Ensure 'docker build' succeeded for each ragproject-*:local target."
+  exit 1
+}
+
 Write-Host "Loaded ragproject local images into $Runtime"
