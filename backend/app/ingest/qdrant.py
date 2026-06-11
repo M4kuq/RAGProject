@@ -489,12 +489,16 @@ class DocumentIndexingService:
         embedding_service: DocumentEmbeddingService,
         vector_store: QdrantVectorStore,
         upsert_batch_size: int,
+        embedding_model: str = "",
+        embedding_dimension: int = 0,
     ) -> None:
         if upsert_batch_size < 1:
             raise ValueError("Qdrant upsert batch size must be positive")
         self.embedding_service = embedding_service
         self.vector_store = vector_store
         self.upsert_batch_size = upsert_batch_size
+        self.embedding_model = embedding_model
+        self.embedding_dimension = embedding_dimension
 
     def index_chunks(
         self,
@@ -519,6 +523,8 @@ class DocumentIndexingService:
                 chunk=chunk,
                 vector=vector,
                 document_version_status="ready",
+                embedding_model=self.embedding_model,
+                embedding_dimension=self.embedding_dimension,
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
@@ -583,6 +589,8 @@ def create_document_indexing_service(settings: Settings) -> DocumentIndexingServ
             create_collection=settings.qdrant_create_collection,
         ),
         upsert_batch_size=settings.qdrant_upsert_batch_size,
+        embedding_model=settings.embedding_model,
+        embedding_dimension=settings.effective_embedding_dimension,
     )
 
 
@@ -593,6 +601,8 @@ def build_qdrant_point(
     chunk: object,
     vector: Sequence[float],
     document_version_status: str,
+    embedding_model: str = "",
+    embedding_dimension: int = 0,
 ) -> QdrantPoint:
     chunk_obj = cast(Any, chunk)
     document_chunk_id = _positive_int(chunk_obj.document_chunk_id)
@@ -604,6 +614,8 @@ def build_qdrant_point(
             document_version=document_version,
             chunk=chunk,
             document_version_status=document_version_status,
+            embedding_model=embedding_model,
+            embedding_dimension=embedding_dimension,
         ),
     )
 
@@ -618,6 +630,8 @@ def build_qdrant_payload(
     document_version: object,
     chunk: object,
     document_version_status: str,
+    embedding_model: str = "",
+    embedding_dimension: int = 0,
 ) -> dict[str, object]:
     logical_document_obj = cast(Any, logical_document)
     document_version_obj = cast(Any, document_version)
@@ -632,6 +646,12 @@ def build_qdrant_payload(
         "logical_document_status": str(logical_document_obj.status),
         "document_version_status": document_version_status,
     }
+    # Record which embedding model/dimension produced this vector so that
+    # collection contents can be audited and re-embedded safely after a model swap.
+    if embedding_model:
+        payload["embedding_model"] = _safe_metadata_string(embedding_model)
+    if embedding_dimension > 0:
+        payload["embedding_dimension"] = int(embedding_dimension)
     _add_optional(payload, "page_from", chunk_obj.page_from)
     _add_optional(payload, "page_to", chunk_obj.page_to)
     metadata = _safe_chunk_metadata(getattr(chunk_obj, "metadata_json", None))

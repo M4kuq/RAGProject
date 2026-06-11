@@ -146,6 +146,27 @@ def test_qdrant_point_id_and_payload_are_deterministic_and_safe() -> None:
     assert "content_hash" not in payload
     assert "section_title" not in payload
     assert "raw chunk text" not in str(payload)
+    assert "embedding_model" not in payload
+    assert "embedding_dimension" not in payload
+
+
+def test_qdrant_payload_records_embedding_model_and_dimension() -> None:
+    payload = build_qdrant_payload(
+        logical_document=_LogicalDocument(logical_document_id=10, status="active"),
+        document_version=_Version(
+            document_version_id=20,
+            is_active=True,
+            file_name="guide.md",
+            content_hash="a" * 64,
+        ),
+        chunk=_Chunk(30, "raw chunk text"),
+        document_version_status="ready",
+        embedding_model="BAAI/bge-m3",
+        embedding_dimension=1024,
+    )
+
+    assert payload["embedding_model"] == "BAAI/bge-m3"
+    assert payload["embedding_dimension"] == 1024
 
 
 def test_qdrant_collection_dimension_mismatch_is_detected() -> None:
@@ -223,6 +244,8 @@ def test_document_indexing_service_upserts_points_with_fake_embedding() -> None:
             create_collection=True,
         ),
         upsert_batch_size=1,
+        embedding_model="fake-ci-embedding",
+        embedding_dimension=4,
     )
 
     result = service.index_chunks(
@@ -238,6 +261,8 @@ def test_document_indexing_service_upserts_points_with_fake_embedding() -> None:
 
     assert result.indexed_count == 2
     assert sorted(client.points["document_chunks"]) == [1, 2]
+    assert client.points["document_chunks"][1].payload["embedding_model"] == "fake-ci-embedding"
+    assert client.points["document_chunks"][1].payload["embedding_dimension"] == 4
 
 
 def test_embedding_and_qdrant_settings_validation() -> None:
