@@ -1,6 +1,6 @@
 """allow graph retrieval strategy
 
-Revision ID: 0014_graph_retrieval_strategy_router
+Revision ID: 0014_graph_retrieval_strategy
 Revises: 0013_langchain_agentic
 Create Date: 2026-06-11
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0014_graph_retrieval_strategy_router"
+revision = "0014_graph_retrieval_strategy"
 down_revision = "0013_langchain_agentic"
 branch_labels = None
 depends_on = None
@@ -122,7 +122,8 @@ def _rewrite_graph_rows() -> None:
         "evaluation_results",
     ):
         op.execute(
-            f"UPDATE {table_name} SET strategy_type = 'hybrid' WHERE strategy_type = 'graph'"
+            f"UPDATE {table_name} SET strategy_type = 'hybrid' "
+            "WHERE strategy_type = 'graph'"
         )
     op.execute(
         "UPDATE retrieval_run_items "
