@@ -9,6 +9,7 @@ class RetrievalStrategy(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    GRAPH = "graph"
     MULTI_QUERY_DENSE = "multi_query_dense"
     MULTI_QUERY_HYBRID = "multi_query_hybrid"
     METADATA_FILTERED = "metadata_filtered"
@@ -23,12 +24,14 @@ class RagSearchRequestStrategy(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    GRAPH = "graph"
     AGENTIC_ROUTER = "agentic_router"
 
 
 class RagAskRequestStrategy(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
+    GRAPH = "graph"
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
@@ -38,6 +41,7 @@ class RetrievalSource(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    GRAPH = "graph"
     RERANK = "rerank"
     FALLBACK_DENSE = "fallback_dense"
     METADATA_FILTER = "metadata_filter"
@@ -113,6 +117,50 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         2,
         "Candidate overfetch multiplier for hybrid retrieval final check.",
     ),
+    "rag.graph.retrieval.enabled": (
+        False,
+        "Enable explicit strategy=graph graph retrieval requests for PR-48.",
+    ),
+    "rag.graph.retrieval.max_start_entities": (
+        5,
+        "Maximum graph entities matched from one query for PR-48 graph retrieval.",
+    ),
+    "rag.graph.retrieval.max_depth": (
+        2,
+        "Maximum bounded graph relation traversal depth for PR-48 graph retrieval.",
+    ),
+    "rag.graph.retrieval.max_paths": (
+        20,
+        "Maximum graph paths retained in one PR-48 graph retrieval run.",
+    ),
+    "rag.graph.retrieval.max_relations_per_entity": (
+        20,
+        "Maximum graph relations loaded per entity during bounded traversal.",
+    ),
+    "rag.graph.retrieval.max_source_chunks": (
+        20,
+        "Maximum source chunks linked from graph paths for retrieval candidates.",
+    ),
+    "rag.graph.retrieval.timeout_ms": (
+        3000,
+        "Wall-clock timeout for one bounded PR-48 graph retrieval traversal.",
+    ),
+    "rag.graph.retrieval.fallback_strategy": (
+        "hybrid",
+        "Fallback strategy recorded when graph retrieval cannot produce context.",
+    ),
+    "rag.graph.retrieval.min_entity_match_score": (
+        0.5,
+        "Minimum safe entity match score for graph start-node lookup.",
+    ),
+    "rag.graph.router.enabled": (
+        False,
+        "Allow agentic_router to select graph retrieval when graph signals are strong.",
+    ),
+    "rag.graph.router.min_signal_score": (
+        0.5,
+        "Minimum graph query-signal score required for graph-aware router selection.",
+    ),
     "rag.router.enabled": (
         True,
         "Enable explicit StrategyRouter execution for Phase2 PR-28.",
@@ -143,7 +191,7 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     ),
     "rag.router.max_fallback_calls": (
         1,
-        "Maximum fallback retrieval calls within the PR-29 bounded loop.",
+        "Maximum fallback retrieval calls within the bounded loop.",
     ),
     "rag.router.sufficiency_min_candidates": (
         1,
