@@ -46,7 +46,9 @@ class QdrantConsistencySweepHandler:
     The sweep scrolls points in the configured collection and, for each point,
     compares its payload (``document_chunk_id`` / ``document_version_id`` /
     ``is_active``) against Postgres. Points whose chunk row is missing or whose
-    version no longer exists are orphans and get deleted. Points whose version
+    version no longer exists are orphans and get deleted. Points whose chunk
+    belongs to a different version than the payload claims have corrupted
+    metadata and are repaired (set inactive), not deleted. Points whose version
     is archived/inactive in Postgres but still flagged active in Qdrant are
     repaired by setting ``is_active=False``. Repairs reuse the indexing
     service's delete / set-payload helpers rather than raw client calls.
@@ -125,7 +127,7 @@ class QdrantConsistencySweepHandler:
 
         db = self.session_factory()
         try:
-            existing_chunk_ids = self.repository.existing_chunk_ids(
+            chunk_version_ids = self.repository.chunk_version_ids(
                 db, document_chunk_ids=list(chunk_ids)
             )
             version_states = self.repository.version_index_states(
@@ -141,8 +143,19 @@ class QdrantConsistencySweepHandler:
             version_id = _payload_positive_int(point.payload, "document_version_id")
             if chunk_id is None or version_id is None:
                 continue
-            if chunk_id not in existing_chunk_ids or version_id not in version_states:
+            if chunk_id not in chunk_version_ids or version_id not in version_states:
                 delete_ids.append(point.point_id)
+                continue
+            if chunk_version_ids[chunk_id] != version_id:
+                # The chunk exists but belongs to a different version than the
+                # payload claims: corrupted payload metadata. Mark it inactive
+                # (a reversible repair) rather than delete -- the underlying
+                # vector may still be valid for its real version, and deleting
+                # would permanently lose it until re-ingest.
+                if bool(point.payload.get("is_active")):
+                    repair_ids.append(point.point_id)
+                else:
+                    counts.stale_found += 1
                 continue
             version_status, is_active, document_status = version_states[version_id]
             should_be_inactive = (

@@ -67,7 +67,7 @@ def test_openai_generator_calls_responses_api_without_leaking_key(
     assert captured["json"]["model"] == "gpt-5.5"
     assert captured["json"]["store"] is False
     assert captured["json"]["max_output_tokens"] == 125
-    assert "citation markers" in captured["json"]["instructions"]
+    assert "citation marker ids exactly as shown" in captured["json"]["instructions"]
     assert "alpha policy text" in captured["json"]["input"]
     assert "test-openai-key" not in str(captured["json"])
     assert captured["timeout"] == 12.0

@@ -396,11 +396,8 @@ class GraphPathSearchService:
                         )
             frontier = next_frontier
 
-        paths.sort(
-            key=lambda path: (path.path_score, -path.depth, path.path_id),
-            reverse=True,
-        )
-        return paths[: settings.max_paths], relation_count, _dedupe(reason_codes)
+        selected = _select_paths_at_cap(paths, settings.max_paths, reason_codes)
+        return selected, relation_count, _dedupe(reason_codes)
 
 
 class GraphRetrievalStrategy:
@@ -744,6 +741,37 @@ def _normalize_query_term(term: str) -> str:
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _path_sort_key(path: GraphPathCandidate) -> tuple[float, int, str]:
+    return (path.path_score, -path.depth, path.path_id)
+
+
+def _select_paths_at_cap(
+    paths: list[GraphPathCandidate],
+    max_paths: int,
+    reason_codes: list[str],
+) -> list[GraphPathCandidate]:
+    """Select up to ``max_paths`` paths, preferring chunk-backed ones at the cap.
+
+    A path whose ``source_chunk_ids`` is empty cannot contribute source-backed
+    evidence to ``_source_candidates()``. If more than ``max_paths`` higher-scoring
+    source-less paths exist, a naive top-N slice would drop chunk-backed paths and
+    starve relation-backed evidence, forcing the mention-only fallback. Two-pass
+    selection fills the cap with chunk-backed paths first, then source-less paths,
+    both in sorted order, then re-sorts the result with the same key so downstream
+    ordering semantics are unchanged. When this preference actually displaces a
+    source-less path, the ``chunk_backed_paths_preferred`` reason code is appended.
+    """
+    ordered = sorted(paths, key=_path_sort_key, reverse=True)
+    naive_selection = ordered[:max_paths]
+    chunk_backed = [path for path in ordered if path.source_chunk_ids]
+    source_less = [path for path in ordered if not path.source_chunk_ids]
+    selected = (chunk_backed + source_less)[:max_paths]
+    if {id(path) for path in selected} != {id(path) for path in naive_selection}:
+        reason_codes.append("chunk_backed_paths_preferred")
+    selected.sort(key=_path_sort_key, reverse=True)
+    return selected
 
 
 def _dedupe(values: list[str]) -> list[str]:

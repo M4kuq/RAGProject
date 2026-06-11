@@ -32,9 +32,11 @@ from app.rag.graph_retrieval import (
     GRAPH_PATH_SCHEMA_VERSION,
     GRAPH_SCORE_SCHEMA_VERSION,
     GraphEntityLookupService,
+    GraphPathCandidate,
     GraphPathSearchService,
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
+    _select_paths_at_cap,
     graph_query_signal_score,
 )
 from app.rag.retrieval import RetrievalFilters
@@ -1065,3 +1067,53 @@ def _seed_other_document_relation(db: Session, seed: SeedGraph) -> int:
     )
     db.commit()
     return chunk.document_chunk_id
+
+
+def _make_path(
+    *, path_id: str, path_score: float, source_chunk_ids: tuple[int, ...], depth: int = 1
+) -> GraphPathCandidate:
+    return GraphPathCandidate(
+        path_id=path_id,
+        entity_ids=(1, 2),
+        relation_ids=(1,),
+        safe_entity_labels=("A", "B"),
+        relation_types=("rel",),
+        source_chunk_ids=source_chunk_ids,
+        depth=depth,
+        path_score=path_score,
+        entity_match_score=1.0,
+        relation_score=1.0,
+    )
+
+
+def test_select_paths_prefers_chunk_backed_when_cap_displaces() -> None:
+    # More than max_paths high-scoring source-less paths plus one lower-scoring
+    # chunk-backed path: the chunk-backed path must be retained.
+    source_less = [
+        _make_path(path_id=f"gp_{i}", path_score=0.9, source_chunk_ids=()) for i in range(3)
+    ]
+    chunk_backed = _make_path(path_id="gp_chunk", path_score=0.1, source_chunk_ids=(100,))
+    reason_codes: list[str] = []
+
+    selected = _select_paths_at_cap(source_less + [chunk_backed], 3, reason_codes)
+
+    assert chunk_backed in selected
+    assert len(selected) == 3
+    assert "chunk_backed_paths_preferred" in reason_codes
+
+
+def test_select_paths_no_displacement_matches_naive_order() -> None:
+    # When nothing is displaced, selection equals the naive sorted top-N and no
+    # reason code is added.
+    paths = [
+        _make_path(path_id="gp_1", path_score=0.9, source_chunk_ids=(1,)),
+        _make_path(path_id="gp_2", path_score=0.8, source_chunk_ids=(2,)),
+        _make_path(path_id="gp_3", path_score=0.7, source_chunk_ids=()),
+        _make_path(path_id="gp_4", path_score=0.6, source_chunk_ids=()),
+    ]
+    reason_codes: list[str] = []
+
+    selected = _select_paths_at_cap(paths, 3, reason_codes)
+
+    assert [path.path_id for path in selected] == ["gp_1", "gp_2", "gp_3"]
+    assert "chunk_backed_paths_preferred" not in reason_codes

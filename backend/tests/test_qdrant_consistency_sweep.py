@@ -221,6 +221,71 @@ def test_archived_document_point_is_repaired(session_factory: sessionmaker[Sessi
     assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
 
 
+def _seed_extra_version(
+    session_factory: sessionmaker[Session],
+    *,
+    document_version_id: int,
+    version_status: str = "ready",
+    is_active: bool = True,
+) -> None:
+    """Add another healthy logical document + version (no chunks)."""
+    with session_factory() as db:
+        db.add(
+            LogicalDocument(
+                logical_document_id=document_version_id,
+                owner_user_id=1,
+                title="Doc2",
+                status="active",
+                archived_at=None,
+            )
+        )
+        db.add(
+            DocumentVersion(
+                document_version_id=document_version_id,
+                logical_document_id=document_version_id,
+                version_no=1,
+                content_hash="b" * 64,
+                status=version_status,
+                is_active=is_active,
+                file_name="f.txt",
+                mime_type="text/plain",
+                file_size_bytes=3,
+                storage_key="k2",
+                created_by=1,
+            )
+        )
+        db.commit()
+
+
+def test_chunk_belongs_to_different_version_is_repaired_not_deleted(
+    session_factory: sessionmaker[Session],
+) -> None:
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    # Chunk 100 belongs to version 10, but a healthy version 11 also exists.
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    _seed_extra_version(session_factory, document_version_id=11)
+    # Payload claims version 11 while the chunk actually belongs to version 10:
+    # corrupted metadata -> repair (inactive), not delete.
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload={"document_chunk_id": 100, "document_version_id": 11, "is_active": True},
+    )
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["scanned"] == 1
+    assert result.result_json["stale_found"] == 1
+    assert result.result_json["repaired"] == 1
+    # Repaired in place (inactive), the vector is NOT deleted.
+    assert 100 in qdrant_client.points[_COLLECTION]
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
 def test_max_points_cap_is_respected(session_factory: sessionmaker[Session]) -> None:
     qdrant_client = InMemoryQdrantClient()
     qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))

@@ -219,15 +219,27 @@ class DocumentRepository:
         ).all()
         return [int(document_chunk_id) for document_chunk_id in rows]
 
-    def existing_chunk_ids(self, db: Session, *, document_chunk_ids: Sequence[int]) -> set[int]:
+    def chunk_version_ids(
+        self, db: Session, *, document_chunk_ids: Sequence[int]
+    ) -> dict[int, int]:
+        """Return {document_chunk_id: document_version_id} for existing chunks.
+
+        Chunk ids absent from the result do not exist in Postgres. The mapped
+        version id is the chunk's actual owning version, which lets callers
+        detect points whose payload version disagrees with the stored chunk.
+        """
         if not document_chunk_ids:
-            return set()
-        rows = db.scalars(
-            select(DocumentChunk.document_chunk_id).where(
-                DocumentChunk.document_chunk_id.in_(list(document_chunk_ids))
-            )
+            return {}
+        rows = db.execute(
+            select(
+                DocumentChunk.document_chunk_id,
+                DocumentChunk.document_version_id,
+            ).where(DocumentChunk.document_chunk_id.in_(list(document_chunk_ids)))
         ).all()
-        return {int(document_chunk_id) for document_chunk_id in rows}
+        return {
+            int(document_chunk_id): int(document_version_id)
+            for document_chunk_id, document_version_id in rows
+        }
 
     def version_index_states(
         self, db: Session, *, document_version_ids: Sequence[int]
