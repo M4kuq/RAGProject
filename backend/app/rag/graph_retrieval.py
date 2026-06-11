@@ -60,7 +60,9 @@ class GraphRetrievalSettings:
 
     def bounded(self) -> GraphRetrievalSettings:
         fallback_strategy = (
-            self.fallback_strategy if self.fallback_strategy in {"dense", "hybrid"} else "hybrid"
+            self.fallback_strategy
+            if self.fallback_strategy in {"dense", "hybrid"}
+            else "hybrid"
         )
         return GraphRetrievalSettings(
             enabled=self.enabled,
@@ -314,12 +316,12 @@ class GraphPathSearchService:
                         continue
                     seen_relation_ids.add(relation_id)
                     relation_count += 1
-                    adjacency.setdefault(relation_row.relation.source_entity_id, []).append(
-                        relation_row
-                    )
-                    adjacency.setdefault(relation_row.relation.target_entity_id, []).append(
-                        relation_row
-                    )
+                    adjacency.setdefault(
+                        relation_row.relation.source_entity_id, []
+                    ).append(relation_row)
+                    adjacency.setdefault(
+                        relation_row.relation.target_entity_id, []
+                    ).append(relation_row)
 
             next_frontier: list[
                 tuple[int, tuple[int, ...], tuple[GraphRelationRow, ...], float]
@@ -416,7 +418,9 @@ class GraphRetrievalStrategy:
     ) -> None:
         self.repository = repository or GraphRetrievalRepository()
         self.entity_lookup = entity_lookup or GraphEntityLookupService(self.repository)
-        self.path_search = path_search or GraphPathSearchService(repository=self.repository)
+        self.path_search = path_search or GraphPathSearchService(
+            repository=self.repository
+        )
 
     def search(
         self,
@@ -530,7 +534,9 @@ class GraphRetrievalStrategy:
                 if candidate.document_chunk_id not in path.source_chunk_ids:
                     continue
                 paths_by_id.setdefault(path.path_id, path)
-                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
+                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(
+                    path.path_id, []
+                )
                 if candidate.document_chunk_id not in selected_chunk_ids:
                     selected_chunk_ids.append(candidate.document_chunk_id)
 
@@ -566,7 +572,9 @@ def graph_query_signal_score(query: str) -> float:
         return 0.0
     signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
     relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
-    multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
+    multi_entity_hint = (
+        1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
+    )
     return round(
         min(
             1.0,
@@ -593,7 +601,8 @@ def _source_candidates(
             reverse=True,
         )
         score = round(
-            sum(path.path_score for path in ranked_paths[:3]) / min(3, len(ranked_paths)),
+            sum(path.path_score for path in ranked_paths[:3])
+            / min(3, len(ranked_paths)),
             6,
         )
         path_refs = tuple(path.path_id for path in ranked_paths[:5])

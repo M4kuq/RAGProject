@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import String, and_, case, func, or_, select
+from sqlalchemy import String, and_, case, func, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.db.graph_models import (
@@ -17,6 +17,8 @@ from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.rag.retrieval import RetrievalFilters
 from app.repositories.graph_repository import GraphRepository
 from app.schemas.graph import GraphRetrievalPathCreate, validate_safe_graph_label
+
+_LIKE_ESCAPE = "\\"
 
 
 @dataclass(frozen=True)
@@ -60,13 +62,26 @@ class GraphRetrievalRepository:
         name_conditions = []
         type_conditions = []
         for term in safe_terms:
-            like_term = f"%{term.lower()}%"
-            name_conditions.append(func.lower(GraphEntity.canonical_name).like(like_term))
+            like_term = _like_contains_pattern(term)
             name_conditions.append(
-                func.lower(func.coalesce(GraphEntity.aliases_json.cast(String), "")).like(like_term)
+                func.lower(GraphEntity.canonical_name).like(
+                    like_term,
+                    escape=_LIKE_ESCAPE,
+                )
+            )
+            name_conditions.append(
+                func.lower(
+                    func.coalesce(GraphEntity.aliases_json.cast(String), "")
+                ).like(
+                    like_term,
+                    escape=_LIKE_ESCAPE,
+                )
             )
             type_conditions.append(
-                func.lower(func.coalesce(GraphEntity.entity_type, "")).like(like_term)
+                func.lower(func.coalesce(GraphEntity.entity_type, "")).like(
+                    like_term,
+                    escape=_LIKE_ESCAPE,
+                )
             )
         conditions = [*name_conditions, *type_conditions]
         name_match_priority = case((or_(*name_conditions), 0), else_=1)
@@ -76,15 +91,18 @@ class GraphRetrievalRepository:
                 select(GraphEntityMention.graph_entity_id)
                 .join(
                     DocumentChunk,
-                    DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id,
+                    DocumentChunk.document_chunk_id
+                    == GraphEntityMention.document_chunk_id,
                 )
                 .join(
                     DocumentVersion,
-                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id
+                    == DocumentChunk.document_version_id,
                 )
                 .join(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id
+                    == DocumentVersion.logical_document_id,
                 )
                 .where(
                     DocumentChunk.modality == filters.modality,
@@ -95,9 +113,13 @@ class GraphRetrievalRepository:
             )
             if filters.logical_document_ids:
                 scoped_entity_ids = scoped_entity_ids.where(
-                    LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
+                    LogicalDocument.logical_document_id.in_(
+                        filters.logical_document_ids
+                    )
                 )
-            statement = statement.where(GraphEntity.graph_entity_id.in_(scoped_entity_ids))
+            statement = statement.where(
+                GraphEntity.graph_entity_id.in_(scoped_entity_ids)
+            )
         rows = db.scalars(
             statement.order_by(
                 name_match_priority.asc(),
@@ -145,11 +167,13 @@ class GraphRetrievalRepository:
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id
+                == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id
+                == DocumentVersion.logical_document_id,
             )
             .where(
                 DocumentChunk.modality == filters.modality,
@@ -176,11 +200,38 @@ class GraphRetrievalRepository:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_relations_per_entity < 1:
             return []
-        limit = min(500, max_relations_per_entity * len(safe_ids) * 2)
-        statement = select(GraphRelation).where(
-            or_(
-                GraphRelation.source_entity_id.in_(safe_ids),
-                GraphRelation.target_entity_id.in_(safe_ids),
+        candidate_relations = union_all(
+            select(
+                GraphRelation.graph_relation_id.label("relation_id"),
+                GraphRelation.source_entity_id.label("frontier_entity_id"),
+            ).where(GraphRelation.source_entity_id.in_(safe_ids)),
+            select(
+                GraphRelation.graph_relation_id.label("relation_id"),
+                GraphRelation.target_entity_id.label("frontier_entity_id"),
+            ).where(GraphRelation.target_entity_id.in_(safe_ids)),
+        ).subquery()
+        rank_order = [
+            case(
+                (GraphRelation.source_document_chunk_id.is_(None), 1),
+                else_=0,
+            ).asc(),
+            func.coalesce(GraphRelation.confidence, 0).desc(),
+            GraphRelation.graph_relation_id.asc(),
+        ]
+        ranked_relations = (
+            select(
+                candidate_relations.c.relation_id,
+                candidate_relations.c.frontier_entity_id,
+                func.row_number()
+                .over(
+                    partition_by=candidate_relations.c.frontier_entity_id,
+                    order_by=rank_order,
+                )
+                .label("frontier_rank"),
+            )
+            .join(
+                GraphRelation,
+                GraphRelation.graph_relation_id == candidate_relations.c.relation_id,
             )
         )
         if filters is not None:
@@ -195,19 +246,21 @@ class GraphRetrievalRepository:
                     chunk_filter,
                     LogicalDocument.logical_document_id.in_(filters.logical_document_ids),
                 )
-            statement = (
-                statement.outerjoin(
+            ranked_relations = (
+                ranked_relations.outerjoin(
                     DocumentChunk,
                     DocumentChunk.document_chunk_id
                     == GraphRelation.source_document_chunk_id,
                 )
                 .outerjoin(
                     DocumentVersion,
-                    DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                    DocumentVersion.document_version_id
+                    == DocumentChunk.document_version_id,
                 )
                 .outerjoin(
                     LogicalDocument,
-                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                    LogicalDocument.logical_document_id
+                    == DocumentVersion.logical_document_id,
                 )
                 .where(
                     or_(
@@ -216,13 +269,35 @@ class GraphRetrievalRepository:
                     )
                 )
             )
-        relation_rows = db.scalars(
-            statement.order_by(
-                case((GraphRelation.source_document_chunk_id.is_(None), 1), else_=0).asc(),
+        ranked_relations_subquery = ranked_relations.subquery()
+        raw_relation_rows = db.scalars(
+            select(GraphRelation)
+            .join(
+                ranked_relations_subquery,
+                ranked_relations_subquery.c.relation_id
+                == GraphRelation.graph_relation_id,
+            )
+            .where(
+                ranked_relations_subquery.c.frontier_rank
+                <= max_relations_per_entity
+            )
+            .order_by(
+                ranked_relations_subquery.c.frontier_entity_id.asc(),
+                case(
+                    (GraphRelation.source_document_chunk_id.is_(None), 1),
+                    else_=0,
+                ).asc(),
                 func.coalesce(GraphRelation.confidence, 0).desc(),
                 GraphRelation.graph_relation_id.asc(),
-            ).limit(limit)
+            )
         ).all()
+        relation_rows: list[GraphRelation] = []
+        seen_relation_ids: set[int] = set()
+        for relation in raw_relation_rows:
+            if relation.graph_relation_id in seen_relation_ids:
+                continue
+            seen_relation_ids.add(relation.graph_relation_id)
+            relation_rows.append(relation)
         related_entity_ids = {
             entity_id
             for relation in relation_rows
@@ -303,6 +378,7 @@ class GraphRetrievalRepository:
         safe_ids = {entity_id for entity_id in entity_ids if entity_id > 0}
         if not safe_ids or max_source_chunks < 1:
             return []
+        per_entity_chunk_limit = max(1, max_source_chunks // len(safe_ids))
         mention_pairs = (
             select(
                 GraphEntityMention.graph_entity_id,
@@ -314,11 +390,13 @@ class GraphRetrievalRepository:
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id
+                == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id
+                == DocumentVersion.logical_document_id,
             )
             .where(
                 GraphEntityMention.graph_entity_id.in_(safe_ids),
@@ -332,34 +410,55 @@ class GraphRetrievalRepository:
                 GraphEntityMention.graph_entity_id.asc(),
                 GraphEntityMention.document_chunk_id.asc(),
             )
-            .limit(max_source_chunks)
         )
         if filters.logical_document_ids:
             mention_pairs = mention_pairs.where(
                 LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
         mention_pairs_subquery = mention_pairs.subquery()
+        ranked_mention_pairs_subquery = (
+            select(
+                mention_pairs_subquery.c.graph_entity_id,
+                mention_pairs_subquery.c.document_chunk_id,
+                func.row_number()
+                .over(
+                    partition_by=mention_pairs_subquery.c.graph_entity_id,
+                    order_by=mention_pairs_subquery.c.document_chunk_id.asc(),
+                )
+                .label("entity_chunk_rank"),
+            )
+            .select_from(mention_pairs_subquery)
+            .subquery()
+        )
         statement = (
             select(
                 DocumentChunk,
                 DocumentVersion,
                 LogicalDocument,
-                mention_pairs_subquery.c.graph_entity_id,
+                ranked_mention_pairs_subquery.c.graph_entity_id,
             )
             .join(
-                mention_pairs_subquery,
-                mention_pairs_subquery.c.document_chunk_id == DocumentChunk.document_chunk_id,
+                ranked_mention_pairs_subquery,
+                ranked_mention_pairs_subquery.c.document_chunk_id
+                == DocumentChunk.document_chunk_id,
             )
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id
+                == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id
+                == DocumentVersion.logical_document_id,
+            )
+            .where(
+                ranked_mention_pairs_subquery.c.entity_chunk_rank
+                <= per_entity_chunk_limit
             )
             .order_by(
-                mention_pairs_subquery.c.graph_entity_id.asc(),
+                ranked_mention_pairs_subquery.c.graph_entity_id.asc(),
+                ranked_mention_pairs_subquery.c.entity_chunk_rank.asc(),
                 DocumentChunk.document_chunk_id.asc(),
             )
         )
@@ -395,11 +494,13 @@ class GraphRetrievalRepository:
             select(DocumentChunk, DocumentVersion, LogicalDocument)
             .join(
                 DocumentVersion,
-                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+                DocumentVersion.document_version_id
+                == DocumentChunk.document_version_id,
             )
             .join(
                 LogicalDocument,
-                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                LogicalDocument.logical_document_id
+                == DocumentVersion.logical_document_id,
             )
             .where(
                 DocumentChunk.document_chunk_id.in_(safe_ids),
@@ -471,6 +572,16 @@ def _safe_terms(query_terms: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(safe)
 
 
+def _like_contains_pattern(term: str) -> str:
+    escaped = (
+        term.lower()
+        .replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
+    return f"%{escaped}%"
+
+
 def _matched_terms(
     entity: GraphEntity,
     query_terms: tuple[str, ...],
@@ -531,5 +642,7 @@ def _label_terms(value: str) -> tuple[str, ...]:
 
 def _phrase_boundary_match(query_text: str, label: str) -> bool:
     boundary_chars = r"A-Za-z0-9_+#"
-    pattern = re.compile(rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])")
+    pattern = re.compile(
+        rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])"
+    )
     return pattern.search(query_text) is not None
