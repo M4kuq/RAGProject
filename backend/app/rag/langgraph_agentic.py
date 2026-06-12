@@ -492,17 +492,22 @@ class LangGraphAgenticRetrievalOrchestrator:
         ) or not final_candidates
         if no_context:
             reason_codes.append("no_context")
+        # Fallback metadata must reflect the EXECUTED search sequence, not just the
+        # finalize-selected attempts: a first search that returned zero candidates
+        # is excluded from selected_attempts, but the answer still depended on an
+        # alternate retrieval path, and fallback-rate metrics must count it.
+        executed_attempts = list(final_state["attempts_by_tool_call_id"].values())
         retrieval_result = AgenticRetrievalResult(
             final_candidates=final_candidates,
             retrieval_call_count=final_state["search_call_count"],
             initial_strategy=(
-                selected_attempts[0].strategy
-                if selected_attempts
+                executed_attempts[0].strategy
+                if executed_attempts
                 else RetrievalStrategy.FALLBACK_DENSE
             ),
-            fallback_strategies=[attempt.strategy for attempt in selected_attempts[1:]],
-            fallback_used=len(selected_attempts) > 1,
-            fallback_reason="langgraph_additional_search" if len(selected_attempts) > 1 else None,
+            fallback_strategies=[attempt.strategy for attempt in executed_attempts[1:]],
+            fallback_used=len(executed_attempts) > 1,
+            fallback_reason=("langgraph_additional_search" if len(executed_attempts) > 1 else None),
             sufficiency_decisions=[],
             merged_candidate_count=sum(len(attempt.candidates) for attempt in selected_attempts),
             deduped_candidate_count=len(final_candidates),
