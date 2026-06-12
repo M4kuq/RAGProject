@@ -92,7 +92,7 @@ class QdrantConsistencySweepHandler:
                 result = self.indexing_service.scroll_points(limit=limit, offset=offset)
                 if not result.points:
                     break
-                self._process_batch(result.points, counts)
+                self._process_batch(context, result.points, counts)
                 offset = result.next_offset
                 if offset is None:
                     break
@@ -112,7 +112,12 @@ class QdrantConsistencySweepHandler:
             }
         )
 
-    def _process_batch(self, points: list[ScrolledPoint], counts: _SweepCounts) -> None:
+    def _process_batch(
+        self,
+        context: JobExecutionContext,
+        points: list[ScrolledPoint],
+        counts: _SweepCounts,
+    ) -> None:
         chunk_ids: set[int] = set()
         version_ids: set[int] = set()
         for point in points:
@@ -166,6 +171,22 @@ class QdrantConsistencySweepHandler:
                 repair_ids.append(point.point_id)
 
         counts.stale_found += len(delete_ids) + len(repair_ids)
+        if delete_ids or repair_ids:
+            # Re-verify the lease before mutating Qdrant for this batch. The sweep
+            # scrolls many batches over a potentially long run; an expired lease
+            # means another worker may now own the job, so we must stop before
+            # applying this batch's repairs. ``assert_ownership`` raises
+            # LeaseLostError, which ``handle`` re-raises to the worker (matching
+            # document_ingest_handler).
+            db = self.session_factory()
+            try:
+                self.job_repository.assert_ownership(
+                    db,
+                    job_id=context.job_id,
+                    worker_instance_id=context.worker_instance_id,
+                )
+            finally:
+                db.close()
         if delete_ids:
             self.indexing_service.delete_points_by_ids(point_ids=delete_ids)
             counts.repaired += len(delete_ids)

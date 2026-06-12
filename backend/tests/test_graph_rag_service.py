@@ -33,6 +33,8 @@ from app.rag.strategy import (
 )
 from app.schemas.rag import RagAskRequest, RagSearchRequest
 from app.services.graph_rag_service import (
+    GRAPH_FALLBACK_DENSE_REASON_CODE,
+    GRAPH_FALLBACK_HYBRID_REASON_CODE,
     GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE,
     GraphRagService,
     _build_graph_strategy_decision,
@@ -390,6 +392,211 @@ def test_graph_search_router_no_evidence_falls_back_to_base(
 
         assert response.status == "succeeded"
         assert response.items
+
+
+def test_graph_no_evidence_fallback_uses_hybrid_when_configured(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 1: when graph_retrieval_fallback_strategy=hybrid, the no-evidence
+    # fallback dispatches to the base hybrid retrieval path and records it.
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_router_enabled=True,
+            router_enabled=True,
+            graph_router_min_signal_score=0.1,
+            graph_retrieval_fallback_strategy="hybrid",
+            # Keep hybrid fusion dense-only so it runs without postgres FTS.
+            hybrid_sparse_weight=0.0,
+            hybrid_dense_weight=1.0,
+        )
+        base = _service(settings, [_vector_candidate(min(seed.chunk_ids))])
+        calls: list[str] = []
+        original_hybrid = base._retrieve_hybrid
+        original_dense = base._retrieve_and_rerank
+
+        def _spy_hybrid(*args: Any, **kwargs: Any) -> Any:
+            calls.append("hybrid")
+            return original_hybrid(*args, **kwargs)
+
+        def _spy_dense(*args: Any, **kwargs: Any) -> Any:
+            calls.append("dense")
+            return original_dense(*args, **kwargs)
+
+        base._retrieve_hybrid = _spy_hybrid  # type: ignore[method-assign]
+        base._retrieve_and_rerank = _spy_dense  # type: ignore[method-assign]
+        service = GraphRagService(base)
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="hybrid-fallback-1",
+                message="How does FastAPI depend on PostgreSQL in the architecture?",
+                strategy=RagAskRequestStrategy.AGENTIC_ROUTER,
+            ),
+            user=user,
+            request_id="req-hybrid-fb",
+        )
+
+        assert calls == ["hybrid"]
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        reason_codes = run.strategy_decision_json.get("reason_codes")
+        assert isinstance(reason_codes, list)
+        assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
+        assert GRAPH_FALLBACK_HYBRID_REASON_CODE in reason_codes
+
+
+def test_graph_no_evidence_fallback_uses_dense_when_configured(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 1: with graph_retrieval_fallback_strategy=dense the fallback keeps
+    # the dense-only behavior and records the dense fallback reason code.
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_router_enabled=True,
+            router_enabled=True,
+            graph_router_min_signal_score=0.1,
+            graph_retrieval_fallback_strategy="dense",
+        )
+        base = _service(settings, [_vector_candidate(min(seed.chunk_ids))])
+        calls: list[str] = []
+        original_hybrid = base._retrieve_hybrid
+        original_dense = base._retrieve_and_rerank
+
+        def _spy_hybrid(*args: Any, **kwargs: Any) -> Any:
+            calls.append("hybrid")
+            return original_hybrid(*args, **kwargs)
+
+        def _spy_dense(*args: Any, **kwargs: Any) -> Any:
+            calls.append("dense")
+            return original_dense(*args, **kwargs)
+
+        base._retrieve_hybrid = _spy_hybrid  # type: ignore[method-assign]
+        base._retrieve_and_rerank = _spy_dense  # type: ignore[method-assign]
+        service = GraphRagService(base)
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="dense-fallback-1",
+                message="How does FastAPI depend on PostgreSQL in the architecture?",
+                strategy=RagAskRequestStrategy.AGENTIC_ROUTER,
+            ),
+            user=user,
+            request_id="req-dense-fb",
+        )
+
+        assert calls == ["dense"]
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        reason_codes = run.strategy_decision_json.get("reason_codes")
+        assert isinstance(reason_codes, list)
+        assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
+        assert GRAPH_FALLBACK_DENSE_REASON_CODE in reason_codes
+
+
+def test_graph_no_evidence_fallback_preserves_trace_suppression(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 4: when router_store_decision_trace=False the fallback must NOT
+    # resurrect a decision trace -- strategy_decision_json stays None.
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_router_enabled=True,
+            router_enabled=True,
+            router_store_decision_trace=False,
+            graph_router_min_signal_score=0.1,
+        )
+        service = GraphRagService(_service(settings, [_vector_candidate(min(seed.chunk_ids))]))
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="suppressed-fallback-1",
+                message="How does FastAPI depend on PostgreSQL in the architecture?",
+                strategy=RagAskRequestStrategy.AGENTIC_ROUTER,
+            ),
+            user=user,
+            request_id="req-suppressed-fb",
+        )
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is None
+
+
+def test_graph_no_evidence_fallback_records_codes_when_trace_enabled(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 4 boundary: with router_store_decision_trace=True the fallback
+    # persists the fallback reason codes.
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_router_enabled=True,
+            router_enabled=True,
+            router_store_decision_trace=True,
+            graph_router_min_signal_score=0.1,
+        )
+        service = GraphRagService(_service(settings, [_vector_candidate(min(seed.chunk_ids))]))
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="enabled-fallback-1",
+                message="How does FastAPI depend on PostgreSQL in the architecture?",
+                strategy=RagAskRequestStrategy.AGENTIC_ROUTER,
+            ),
+            user=user,
+            request_id="req-enabled-fb",
+        )
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.strategy_decision_json is not None
+        reason_codes = run.strategy_decision_json.get("reason_codes")
+        assert isinstance(reason_codes, list)
+        assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
 
 
 def _seed_chat_session(db: Session, user_id: int) -> int:

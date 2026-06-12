@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.job_utils import LeaseLostError
 from app.db.base import Base
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.ingest.embedding import (
@@ -50,6 +51,22 @@ def session_factory() -> Iterator[sessionmaker[Session]]:
 class _NoopJobRepository:
     def assert_ownership(self, db: Session, *, job_id: int, worker_instance_id: str) -> None:
         return None
+
+
+class _LeaseLostOnSecondBatchJobRepository:
+    """Raise LeaseLostError on the second ``assert_ownership`` call.
+
+    The sweep calls ``assert_ownership`` once per mutating batch, so the second
+    call corresponds to the second batch's pre-mutation lease recheck.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def assert_ownership(self, db: Session, *, job_id: int, worker_instance_id: str) -> None:
+        self.calls += 1
+        if self.calls >= 2:
+            raise LeaseLostError()
 
 
 def _indexing_service(qdrant_client: InMemoryQdrantClient) -> DocumentIndexingService:
@@ -306,6 +323,44 @@ def test_max_points_cap_is_respected(session_factory: sessionmaker[Session]) -> 
 
     assert result.status == "succeeded"
     assert result.result_json["scanned"] == 3
+
+
+def test_lease_lost_midway_stops_before_second_batch_repairs(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 3: a sweep whose lease is lost partway (assert_ownership raises on
+    # the second batch) must stop before applying the second batch's repairs and
+    # surface LeaseLostError the same way other handlers do (re-raised by handle).
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    # Two orphaned points (no DB rows) -> each batch has a delete to apply.
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+    )
+    _seed_point(
+        qdrant_client,
+        point_id=200,
+        payload={"document_chunk_id": 200, "document_version_id": 20, "is_active": True},
+    )
+
+    job_repository = _LeaseLostOnSecondBatchJobRepository()
+    handler = QdrantConsistencySweepHandler(
+        session_factory=session_factory,
+        job_repository=cast(JobRepository, job_repository),
+        indexing_service=_indexing_service(qdrant_client),
+    )
+
+    # batch_size=1 -> one point per batch, so the second batch's lease recheck
+    # raises before deleting the second point.
+    with pytest.raises(LeaseLostError):
+        handler.handle(_context({"batch_size": 1}))
+
+    assert job_repository.calls == 2
+    # First batch's orphan was deleted; second batch's orphan must remain.
+    assert 100 not in qdrant_client.points[_COLLECTION]
+    assert 200 in qdrant_client.points[_COLLECTION]
 
 
 def test_malformed_payload_param_is_validation_failure(

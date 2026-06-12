@@ -50,6 +50,21 @@ _RELATION_MARKERS = {
     "links",
     "linked",
 }
+# Japanese relation markers. Japanese has no word boundaries, so these are
+# matched via substring containment against the raw query rather than against
+# tokenized words (do NOT wrap them in \b). Each contributes the same weight as
+# an English relation marker. ``使っ`` covers conjugations like 使って / 使った.
+_JAPANESE_RELATION_MARKERS = (
+    "関係",
+    "関連",
+    "依存",
+    "使用",
+    "使っ",
+    "つながり",
+    "接続",
+    "連携",
+    "構成",
+)
 
 
 @dataclass(frozen=True)
@@ -571,8 +586,15 @@ def graph_query_signal_score(query: str) -> float:
     tokens = [match.group(0).lower() for match in _TOKEN_RE.finditer(query)]
     if not tokens:
         return 0.0
-    signal_hits = 1 if _GRAPH_SIGNAL_RE.search(query) else 0
+    # Japanese has no word boundaries, so match relation markers via substring
+    # containment against the raw query (English markers stay tokenized via the
+    # boundary-aware signal regex / marker set). A Japanese marker counts as both
+    # a graph signal hit and a relation marker, mirroring how English relation
+    # words appear in both ``_GRAPH_SIGNAL_RE`` and ``_RELATION_MARKERS``.
+    japanese_relation_markers = sum(1 for marker in _JAPANESE_RELATION_MARKERS if marker in query)
+    signal_hits = 1 if (_GRAPH_SIGNAL_RE.search(query) or japanese_relation_markers) else 0
     relation_markers = sum(1 for token in tokens if token in _RELATION_MARKERS)
+    relation_markers += japanese_relation_markers
     multi_entity_hint = 1 if sum(1 for token in tokens if token[:1].isalpha()) >= 3 else 0
     return round(
         min(

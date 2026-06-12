@@ -65,6 +65,8 @@ from app.services.rag_service import (
 )
 
 GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE = "graph_no_evidence_fallback"
+GRAPH_FALLBACK_HYBRID_REASON_CODE = "graph_fallback_hybrid"
+GRAPH_FALLBACK_DENSE_REASON_CODE = "graph_fallback_dense"
 
 
 class GraphRagService:
@@ -588,9 +590,26 @@ class GraphRagService:
         )
         if result.no_context and allow_base_fallback:
             # The router forced graph retrieval but it produced no candidates.
-            # Fall back to the base dense execution path (as if graph had not been
-            # selected) instead of failing with no_context_found.
-            self._record_graph_fallback_reason(db, retrieval_run_id=retrieval_run_id)
+            # Fall back to the base execution path (as if graph had not been
+            # selected) instead of failing with no_context_found. Honor the
+            # configured fallback strategy: "hybrid" reuses the base hybrid
+            # retrieval path, "dense" keeps the dense-only path.
+            fallback_strategy = self._graph_fallback_strategy()
+            self._record_graph_fallback_reason(
+                db,
+                retrieval_run_id=retrieval_run_id,
+                fallback_strategy=fallback_strategy,
+            )
+            if fallback_strategy == "hybrid":
+                return self.base._retrieve_hybrid(
+                    db,
+                    query=query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=retrieval_run_id,
+                    latency_tracker=latency_tracker,
+                )
             return self.base._retrieve_and_rerank(
                 db,
                 query=query,
@@ -602,16 +621,39 @@ class GraphRagService:
             )
         return result
 
-    def _record_graph_fallback_reason(self, db: Session, *, retrieval_run_id: int) -> None:
+    def _graph_fallback_strategy(self) -> str:
+        strategy = str(
+            getattr(self.base.settings, "graph_retrieval_fallback_strategy", "hybrid")
+        ).lower()
+        return "hybrid" if strategy == "hybrid" else "dense"
+
+    def _record_graph_fallback_reason(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        fallback_strategy: str,
+    ) -> None:
         run = self.base._require_run(db, retrieval_run_id)
+        # Preserve trace suppression: when decision-trace storage is disabled the
+        # decision builder stored None. Do not resurrect a trace here -- keep it
+        # None instead of converting None -> {} and persisting reason codes.
+        if not self.base.settings.router_store_decision_trace:
+            return
         decision = dict(run.strategy_decision_json or {})
         existing_reason_codes = decision.get("reason_codes")
         if isinstance(existing_reason_codes, list):
             reason_codes = [str(code) for code in existing_reason_codes]
         else:
             reason_codes = []
-        if GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE not in reason_codes:
-            reason_codes.append(GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE)
+        fallback_reason_code = (
+            GRAPH_FALLBACK_HYBRID_REASON_CODE
+            if fallback_strategy == "hybrid"
+            else GRAPH_FALLBACK_DENSE_REASON_CODE
+        )
+        for code in (GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE, fallback_reason_code):
+            if code not in reason_codes:
+                reason_codes.append(code)
         decision["reason_codes"] = reason_codes
         self.base.repository.update_retrieval_run_trace(
             db,

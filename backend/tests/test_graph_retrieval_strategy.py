@@ -829,6 +829,16 @@ def test_graph_query_signal_score_detects_relation_queries() -> None:
     assert graph_query_signal_score("simple keyword") < 0.5
 
 
+def test_graph_query_signal_score_detects_japanese_relation_queries() -> None:
+    # Finding 2: Japanese relation markers are matched via substring containment
+    # so Japanese relation queries reach the routing threshold.
+    threshold = 0.5
+    assert graph_query_signal_score("FastAPI と PostgreSQL の関係は?") >= threshold
+    assert graph_query_signal_score("FastAPI は PostgreSQL に依存していますか") >= threshold
+    # An unrelated Japanese question stays below the threshold.
+    assert graph_query_signal_score("今日の天気は?") < threshold
+
+
 def _seed_graph(db: Session) -> SeedGraph:
     role = Role(
         role_name=f"graph-role-{uuid.uuid4().hex[:8]}",
