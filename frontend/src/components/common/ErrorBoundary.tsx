@@ -1,7 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
+  resetKey?: string;
 };
 
 type ErrorBoundaryState = {
@@ -17,6 +19,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("ErrorBoundary caught an error", error, info);
+  }
+
+  componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false });
+    }
   }
 
   handleReload = (): void => {
@@ -38,4 +46,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     return this.props.children;
   }
+}
+
+/**
+ * ErrorBoundary that resets its error state whenever the route changes, so a
+ * transient render error on one route does not keep the fallback visible after
+ * the user navigates elsewhere. Must be rendered inside a Router context.
+ */
+export function RouteErrorBoundary({ children }: { children: ReactNode }): ReactNode {
+  const location = useLocation();
+  return <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>;
 }

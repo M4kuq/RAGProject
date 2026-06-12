@@ -24,6 +24,27 @@ test("renders the fallback UI when a child throws", () => {
   expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
 });
 
+test("clears the fallback and renders a healthy child when the reset key changes", () => {
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+  const { rerender } = render(
+    <ErrorBoundary resetKey="/chat">
+      <Boom />
+    </ErrorBoundary>
+  );
+
+  expect(screen.getByRole("alert")).toBeInTheDocument();
+
+  rerender(
+    <ErrorBoundary resetKey="/settings">
+      <p>Healthy content</p>
+    </ErrorBoundary>
+  );
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByText("Healthy content")).toBeInTheDocument();
+});
+
 test("renders children when no error is thrown", () => {
   render(
     <ErrorBoundary>
