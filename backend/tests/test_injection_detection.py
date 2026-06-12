@@ -166,12 +166,11 @@ def test_record_injection_patterns_honors_trace_suppression(
         assert refreshed.strategy_decision_json is None
 
 
-def test_record_injection_patterns_records_when_trace_enabled_and_none(
+def test_record_injection_patterns_updates_existing_trace_when_router_trace_disabled(
     session_factory: sessionmaker[Session],
 ) -> None:
-    """With trace storage enabled and a None decision (non-router path), the
-    reason code is recorded as before."""
-    service = _service(router_store_decision_trace=True)
+    """Existing explicit-strategy traces still receive the injection reason code."""
+    service = _service(router_store_decision_trace=False)
     repository = RetrievalRepository()
     with session_factory() as db:
         run = repository.create_standalone_run(
@@ -180,7 +179,7 @@ def test_record_injection_patterns_records_when_trace_enabled_and_none(
             query_hash="hash",
             request_id=None,
             started_at=datetime.now(UTC),
-            strategy_decision_json=None,
+            strategy_decision_json={"reason_codes": ["existing_code"]},
         )
         db.commit()
         run_id = run.retrieval_run_id
@@ -198,6 +197,7 @@ def test_record_injection_patterns_records_when_trace_enabled_and_none(
         reason_codes = (refreshed.strategy_decision_json or {}).get("reason_codes")
         assert isinstance(reason_codes, list)
         assert INJECTION_PATTERN_REASON_CODE in reason_codes
+        assert "existing_code" in reason_codes
 
 
 def _service(*, router_store_decision_trace: bool = True) -> RagService:
