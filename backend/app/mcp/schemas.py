@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -101,7 +101,9 @@ class McpCompareStrategiesInput(McpInputModel):
     strategies: list[McpCompareStrategy] = Field(
         default_factory=_default_compare_strategies,
         min_length=1,
-        max_length=6,
+        # Keep in lockstep with the McpCompareStrategy enum so the Pydantic limit
+        # never rejects a strategy list the MCP tool schema itself advertises.
+        max_length=len(get_args(McpCompareStrategy)),
     )
     mode: Literal["latest_results"] = "latest_results"
 

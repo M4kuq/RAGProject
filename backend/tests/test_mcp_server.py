@@ -1229,3 +1229,13 @@ def _seed_data(db: Session) -> None:
             },
         ),
     )
+
+
+def test_compare_strategies_accepts_all_advertised_strategies() -> None:
+    from typing import get_args
+
+    from app.mcp.schemas import McpCompareStrategiesInput, McpCompareStrategy
+
+    all_strategies = list(get_args(McpCompareStrategy))
+    parsed = McpCompareStrategiesInput(strategies=all_strategies)
+    assert parsed.strategies == all_strategies
