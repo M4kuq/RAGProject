@@ -23,8 +23,8 @@ from app.db.models import (
     Role,
     User,
 )
-from app.ingest.embedding import FakeEmbeddingAdapter
-from app.rag.rerank import FakeRerankerClient
+from app.ingest.embedding import EmbeddingAdapterError, FakeEmbeddingAdapter
+from app.rag.rerank import FakeRerankerClient, RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import (
     RagAskRequestStrategy,
@@ -332,6 +332,62 @@ def test_router_graph_no_evidence_falls_back_to_base(
         reason_codes = run.strategy_decision_json.get("reason_codes")
         assert isinstance(reason_codes, list)
         assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_error_code"),
+    [
+        (lambda: EmbeddingAdapterError("embedding_failed"), "retrieval_failed"),
+        (lambda: RerankError(), "rerank_failed"),
+    ],
+)
+def test_graph_fallback_maps_base_retrieval_failures_to_error_contract(
+    graph_session_factory: sessionmaker[Session],
+    exc_factory: Any,
+    expected_error_code: str,
+) -> None:
+    # Finding 2: when the no-evidence base fallback (dense path) raises
+    # EmbeddingAdapterError / RerankError, the graph wrapper must map them to the
+    # same retrieval_failed / rerank_failed (503) contract the base service
+    # produces -- not surface them as an unclassified internal_error 500.
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_router_enabled=True,
+            router_enabled=True,
+            graph_router_min_signal_score=0.1,
+            graph_retrieval_fallback_strategy="dense",
+        )
+        base = _service(settings, [_vector_candidate(min(seed.chunk_ids))])
+
+        def _failing_dense(*args: Any, **kwargs: Any) -> Any:
+            raise exc_factory()
+
+        base._retrieve_and_rerank = _failing_dense  # type: ignore[method-assign]
+        service = GraphRagService(base)
+
+        with pytest.raises(RagAskPipelineError) as exc_info:
+            service.ask(
+                db,
+                payload=RagAskRequest(
+                    chat_session_id=chat_session_id,
+                    client_message_id="fallback-failure-1",
+                    message="How does FastAPI depend on PostgreSQL in the architecture?",
+                    strategy=RagAskRequestStrategy.AGENTIC_ROUTER,
+                ),
+                user=user,
+                request_id="req-fb-fail",
+            )
+
+        assert exc_info.value.error_code == expected_error_code
+        assert exc_info.value.status_code == 503
 
 
 def test_explicit_graph_no_evidence_does_not_fall_back(

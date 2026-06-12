@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.models import User
+from app.ingest.embedding import EmbeddingAdapterError
 from app.rag.citations import CitationBuildError
 from app.rag.confidence import ConfidenceInputs, calculate_confidence
 from app.rag.context_budget import estimate_tokens
@@ -20,6 +21,7 @@ from app.rag.graph_retrieval import (
     GraphSourceCandidate,
     graph_query_signal_score,
 )
+from app.rag.rerank import RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters
 from app.rag.strategy import RetrievalSource, RetrievalStrategy
 from app.rag.trace import (
@@ -172,7 +174,11 @@ class GraphRagService:
                 retrieval_score_summary=result.summary,
                 items=result.items,
             )
-        except RetrievalError:
+        except (EmbeddingAdapterError, RetrievalError):
+            # The base fallback retrieval paths (dense/hybrid) can raise
+            # EmbeddingAdapterError when embedding the query fails; map it to the
+            # same retrieval_failed (503) contract the base service produces so
+            # graph fallback does not surface it as an unclassified 500.
             self.base._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -180,6 +186,14 @@ class GraphRagService:
                 latency_tracker=latency_tracker,
             )
             raise RagSearchPipelineError("retrieval_failed", 503) from None
+        except RerankError:
+            self.base._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+                latency_tracker=latency_tracker,
+            )
+            raise RagSearchPipelineError("rerank_failed", 503) from None
         except Exception:
             self.base._mark_failed_safely(
                 db,
@@ -471,7 +485,11 @@ class GraphRagService:
             raise RagAskPipelineError("citation_build_failed", 500) from None
         except RagAskPipelineError:
             raise
-        except RetrievalError:
+        except (EmbeddingAdapterError, RetrievalError):
+            # The base fallback retrieval paths (dense/hybrid) can raise
+            # EmbeddingAdapterError when embedding the query fails; map it to the
+            # same retrieval_failed (503) contract the base service produces so
+            # graph fallback does not surface it as an unclassified 500.
             self.base._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -479,6 +497,14 @@ class GraphRagService:
                 latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("retrieval_failed", 503) from None
+        except RerankError:
+            self.base._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code="rerank_failed",
+                latency_tracker=latency_tracker,
+            )
+            raise RagAskPipelineError("rerank_failed", 503) from None
         except AnswerGenerationError:
             self.base._mark_failed_safely(
                 db,

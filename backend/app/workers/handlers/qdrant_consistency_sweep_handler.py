@@ -13,6 +13,7 @@ from app.ingest.qdrant import (
     QdrantStoreError,
     ScrolledPoint,
     create_document_indexing_service,
+    point_id_for_chunk_id,
 )
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
@@ -147,6 +148,17 @@ class QdrantConsistencySweepHandler:
             chunk_id = _payload_positive_int(point.payload, "document_chunk_id")
             version_id = _payload_positive_int(point.payload, "document_version_id")
             if chunk_id is None or version_id is None:
+                continue
+            if point.point_id != point_id_for_chunk_id(chunk_id):
+                # Point ids are deterministic: the legitimate vector for a chunk
+                # always lives at point_id_for_chunk_id(chunk_id). A point stored
+                # under a different id while carrying this chunk's payload is a
+                # rogue/impersonating point -- retrieval prefers the payload chunk
+                # id, so it could shadow the legitimate vector. Unlike the
+                # version-mismatch case below (a recoverable payload corruption we
+                # repair to inactive), the wrong-id point is never the legitimate
+                # vector for its claimed chunk, so deleting it loses nothing valid.
+                delete_ids.append(point.point_id)
                 continue
             if chunk_id not in chunk_version_ids or version_id not in version_states:
                 delete_ids.append(point.point_id)

@@ -23,6 +23,7 @@ from app.ingest.qdrant import (
     QdrantCollectionConfig,
     QdrantPoint,
     QdrantVectorStore,
+    point_id_for_chunk_id,
 )
 from app.repositories.job_repository import JobRepository
 from app.workers.handlers.base import JobExecutionContext
@@ -301,6 +302,41 @@ def test_chunk_belongs_to_different_version_is_repaired_not_deleted(
     # Repaired in place (inactive), the vector is NOT deleted.
     assert 100 in qdrant_client.points[_COLLECTION]
     assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
+def test_wrong_point_id_with_healthy_payload_is_deleted(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 3: point ids are deterministic. A point stored under the wrong id
+    # but carrying a healthy chunk/version payload is a rogue/impersonating point
+    # and must be DELETED, while the legitimate point at the deterministic id with
+    # the same payload stays untouched.
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    healthy_payload: dict[str, object] = {
+        "document_chunk_id": 100,
+        "document_version_id": 10,
+        "is_active": True,
+    }
+    legit_point_id = point_id_for_chunk_id(100)
+    rogue_point_id = legit_point_id + 999
+    # Legitimate vector at the deterministic id.
+    _seed_point(qdrant_client, point_id=legit_point_id, payload=dict(healthy_payload))
+    # Rogue vector with identical healthy payload at the wrong id.
+    _seed_point(qdrant_client, point_id=rogue_point_id, payload=dict(healthy_payload))
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["scanned"] == 2
+    assert result.result_json["stale_found"] == 1
+    assert result.result_json["repaired"] == 1
+    # The rogue point at the wrong id is deleted; the legitimate point survives.
+    assert rogue_point_id not in qdrant_client.points[_COLLECTION]
+    assert legit_point_id in qdrant_client.points[_COLLECTION]
 
 
 def test_max_points_cap_is_respected(session_factory: sessionmaker[Session]) -> None:
