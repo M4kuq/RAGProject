@@ -194,7 +194,6 @@ function ChatSidebar({
   currentRole,
   deletingSessionId,
   isAdmin,
-  mode,
   onDeleteChat,
   onEditChat,
   onToggle,
@@ -206,7 +205,6 @@ function ChatSidebar({
   currentRole: string | null;
   deletingSessionId: number | null;
   isAdmin: boolean;
-  mode: "active" | "temporary";
   onDeleteChat: (session: ChatSession) => void;
   onEditChat: (session: ChatSession) => void;
   onToggle: () => void;
@@ -709,7 +707,6 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         currentRole={currentRole}
         deletingSessionId={deletingSessionId}
         isAdmin={isAdmin}
-        mode={mode}
         onDeleteChat={requestDeleteChat}
         onEditChat={requestEditChat}
         onNewChat={startNewChat}

@@ -65,7 +65,6 @@ const LATENCY_KEYS = [
   "confidence_ms"
 ];
 
-const SCORE_KEYS = ["dense_score", "sparse_score", "fused_score", "fusion_score", "rerank_score"];
 const EVALUATION_METRICS = [
   "recall_at_k",
   "mrr",

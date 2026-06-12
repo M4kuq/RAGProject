@@ -775,7 +775,7 @@ test("renders replayed ask as a normal assistant answer with replay badge", asyn
   vi.stubGlobal("crypto", { randomUUID: () => "fixed" });
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
       if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
