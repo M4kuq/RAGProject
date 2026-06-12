@@ -511,6 +511,14 @@ def test_graph_no_evidence_fallback_uses_hybrid_when_configured(
         assert isinstance(reason_codes, list)
         assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
         assert GRAPH_FALLBACK_HYBRID_REASON_CODE in reason_codes
+        # Finding 3: the persisted decision marks the fallback so fallback-rate
+        # metrics see it -- fallback_used True and fallback_strategy=the actual one.
+        assert run.strategy_decision_json.get("fallback_used") is True
+        assert run.strategy_decision_json.get("fallback_strategy") == "hybrid"
+        assert (
+            run.strategy_decision_json.get("fallback_reason")
+            == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
+        )
 
 
 def test_graph_no_evidence_fallback_uses_dense_when_configured(
@@ -571,6 +579,13 @@ def test_graph_no_evidence_fallback_uses_dense_when_configured(
         assert isinstance(reason_codes, list)
         assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in reason_codes
         assert GRAPH_FALLBACK_DENSE_REASON_CODE in reason_codes
+        # Finding 3: the persisted decision marks the dense fallback.
+        assert run.strategy_decision_json.get("fallback_used") is True
+        assert run.strategy_decision_json.get("fallback_strategy") == "dense"
+        assert (
+            run.strategy_decision_json.get("fallback_reason")
+            == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
+        )
 
 
 def test_graph_no_evidence_fallback_preserves_trace_suppression(

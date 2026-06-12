@@ -494,19 +494,85 @@ def test_malformed_payload_param_is_validation_failure(
     assert result.error_code == "validation_error"
 
 
-def test_malformed_point_payload_is_skipped(session_factory: sessionmaker[Session]) -> None:
+def test_malformed_payload_orphan_point_is_deleted(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 1: a malformed-payload point (missing identity fields) whose derived
+    # chunk id (the point id) has no backing chunk row is an orphan and is deleted,
+    # not silently skipped. Retrieval would otherwise serve chunk 100 via the
+    # point-id fallback.
     qdrant_client = InMemoryQdrantClient()
     qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"is_active": True},  # missing identity fields
+        payload={"is_active": True},  # missing identity fields, no DB rows seeded
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
     assert result.result_json["scanned_count"] == 1
-    assert result.result_json["skipped_count"] == 1
-    assert result.result_json["repaired_count"] == 0
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
+    assert result.result_json["skipped_count"] == 0
+    assert 100 not in qdrant_client.points[_COLLECTION]
+
+
+def test_malformed_payload_active_point_for_existing_chunk_is_repaired(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 1: an active point with a missing document_chunk_id but whose point
+    # id (== chunk id, identity mapping) backs an existing chunk has corrupted
+    # payload. Validate via the derived id and repair to inactive (reversible) so
+    # retrieval no longer serves it -- it must NOT be skipped and left active.
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    # point id 100 == chunk id 100, but the payload is missing identity fields.
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload={"is_active": True},
+    )
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
+    assert result.result_json["skipped_count"] == 0
     assert 100 in qdrant_client.points[_COLLECTION]
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
+def test_malformed_payload_already_inactive_point_is_counted_stale_not_skipped(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Finding 1 (documented choice): a malformed point that is ALREADY inactive but
+    # backs an existing chunk needs no mutation. It is counted as stale_found (the
+    # same accounting as other already-inactive corrupted-metadata points) rather
+    # than skipped, and is left in place.
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload={"is_active": False},  # malformed but already inactive
+    )
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 0
+    assert result.result_json["skipped_count"] == 0
+    assert 100 in qdrant_client.points[_COLLECTION]
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False

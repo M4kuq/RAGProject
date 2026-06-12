@@ -681,6 +681,14 @@ class GraphRagService:
             if code not in reason_codes:
                 reason_codes.append(code)
         decision["reason_codes"] = reason_codes
+        # Mark the fallback in the persisted decision so retrieval debug and
+        # evaluation metrics (which compute fallback rate from these fields) see it.
+        # Mirror the base StrategyRouter decision key names: ``fallback_used`` and
+        # ``fallback_strategy`` (here the actual graph fallback used -- dense or
+        # hybrid), plus ``fallback_reason`` for the no-evidence trigger.
+        decision["fallback_used"] = True
+        decision["fallback_strategy"] = fallback_strategy
+        decision["fallback_reason"] = GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
         self.base.repository.update_retrieval_run_trace(
             db,
             run=run,

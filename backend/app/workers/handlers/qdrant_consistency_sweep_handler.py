@@ -15,7 +15,7 @@ from app.ingest.qdrant import (
     create_document_indexing_service,
     point_id_for_chunk_id,
 )
-from app.repositories.document_repository import DocumentRepository
+from app.repositories.document_repository import ChunkIndexPayloadRef, DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
 
@@ -54,6 +54,16 @@ class QdrantConsistencySweepHandler:
     active in Qdrant are repaired by setting ``is_active=False``. Repairs reuse
     the indexing service's delete / set-payload helpers rather than raw client
     calls.
+
+    Points whose payload ``document_chunk_id`` / ``document_version_id`` is
+    missing or non-integer are NOT left active: because ``point_id_for_chunk_id``
+    is the identity mapping (cleanly reversible) and retrieval falls back to the
+    point id when the payload chunk id is absent, the expected chunk id is derived
+    from the point id and validated like a normal point. A missing chunk row means
+    the point is an orphan (deleted); an existing chunk means the payload is
+    corrupted and the point is repaired to inactive (reversible). The
+    ``skipped_count`` result key is retained for schema stability but is no longer
+    incremented for malformed active points.
 
     This job is **manually enqueued** (by ops scripts or an operator) in
     Phase 1. It is intentionally NOT scheduled automatically.
@@ -124,13 +134,18 @@ class QdrantConsistencySweepHandler:
         version_ids: set[int] = set()
         for point in points:
             counts.scanned += 1
-            chunk_id = _payload_positive_int(point.payload, "document_chunk_id")
+            # The point id IS the chunk id: point_id_for_chunk_id is the identity
+            # mapping, so it is cleanly reversible. Retrieval also falls back to the
+            # point id when the payload document_chunk_id is missing, so a
+            # malformed-payload point can still serve the chunk at its point id. We
+            # therefore derive the expected chunk id from the point id and validate
+            # malformed points like normal ones instead of leaving them active.
+            chunk_id = _effective_chunk_id(point)
+            if chunk_id is not None:
+                chunk_ids.add(chunk_id)
             version_id = _payload_positive_int(point.payload, "document_version_id")
-            if chunk_id is None or version_id is None:
-                counts.skipped += 1
-                continue
-            chunk_ids.add(chunk_id)
-            version_ids.add(version_id)
+            if version_id is not None:
+                version_ids.add(version_id)
 
         db = self.session_factory()
         try:
@@ -150,6 +165,19 @@ class QdrantConsistencySweepHandler:
             chunk_id = _payload_positive_int(point.payload, "document_chunk_id")
             version_id = _payload_positive_int(point.payload, "document_version_id")
             if chunk_id is None or version_id is None:
+                # Malformed payload: the identity fields are missing/non-integer.
+                # Derive the chunk id from the point id (reversible mapping) and
+                # validate against Postgres -- an orphan (no chunk row) is deleted,
+                # an existing chunk means the payload is corrupted/incomplete and is
+                # repaired to inactive (reversible), matching the corrupted-metadata
+                # cases below. Malformed active points must not pass silently.
+                self._handle_malformed_point(
+                    point,
+                    chunk_refs=chunk_refs,
+                    delete_ids=delete_ids,
+                    repair_ids=repair_ids,
+                    counts=counts,
+                )
                 continue
             if point.point_id != point_id_for_chunk_id(chunk_id):
                 # Point ids are deterministic: the legitimate vector for a chunk
@@ -215,6 +243,26 @@ class QdrantConsistencySweepHandler:
             self.indexing_service.mark_points_inactive(point_ids=repair_ids)
             counts.repaired += len(repair_ids)
 
+    def _handle_malformed_point(
+        self,
+        point: ScrolledPoint,
+        *,
+        chunk_refs: dict[int, ChunkIndexPayloadRef],
+        delete_ids: list[int],
+        repair_ids: list[int],
+        counts: _SweepCounts,
+    ) -> None:
+        derived_chunk_id = point_id_for_chunk_id_or_none(point.point_id)
+        if derived_chunk_id is None or chunk_refs.get(derived_chunk_id) is None:
+            # No chunk row backs this point (either the point id is not a valid
+            # chunk id or the chunk is missing) -> orphan, delete it.
+            delete_ids.append(point.point_id)
+            return
+        # The chunk exists but the payload is corrupted/incomplete. Repair to
+        # inactive (reversible) so retrieval -- which would otherwise serve this
+        # chunk via the point-id fallback -- no longer returns it.
+        _repair_or_count_inactive_stale(point, repair_ids, counts)
+
     def _validate_payload(self, context: JobExecutionContext) -> tuple[int, int] | JobHandlerResult:
         if context.job_type != "qdrant_consistency_sweep":
             return _failed("validation_error")
@@ -245,6 +293,32 @@ def _failed(error_code: str) -> JobHandlerResult:
         error_code=error_code,
         error_message=_SAFE_MESSAGES.get(error_code, _SAFE_MESSAGES["internal_error"]),
     )
+
+
+def point_id_for_chunk_id_or_none(point_id: int) -> int | None:
+    """Reverse ``point_id_for_chunk_id`` (the identity mapping) for a point id.
+
+    ``point_id_for_chunk_id`` maps a chunk id to its deterministic point id and is
+    the identity function, so the inverse is the point id itself when it is a valid
+    (positive, non-bool) chunk id. Returns None when the point id cannot be a chunk
+    id, so the caller treats the point as an orphan.
+    """
+    if isinstance(point_id, bool) or not isinstance(point_id, int) or point_id < 1:
+        return None
+    return point_id
+
+
+def _effective_chunk_id(point: ScrolledPoint) -> int | None:
+    """Chunk id retrieval would attribute to ``point``.
+
+    Prefer the payload ``document_chunk_id``; fall back to the point id (the
+    reversible identity mapping) when the payload value is missing/non-integer,
+    mirroring the retrieval pipeline's point-id fallback.
+    """
+    payload_chunk_id = _payload_positive_int(point.payload, "document_chunk_id")
+    if payload_chunk_id is not None:
+        return payload_chunk_id
+    return point_id_for_chunk_id_or_none(point.point_id)
 
 
 def _payload_positive_int(payload: dict[str, object], key: str) -> int | None:

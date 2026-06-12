@@ -30,7 +30,11 @@ from app.observability.trace_export import TraceExportService
 from app.rag.generation import FakeAnswerGenerator
 from app.rag.rerank import create_reranker
 from app.rag.retrieval import HttpQdrantSearchClient
-from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
+from app.rag.strategy import (
+    DEFAULT_RETRIEVAL_STRATEGY,
+    RagSearchRequestStrategy,
+    RetrievalStrategy,
+)
 from app.schemas.evaluations import (
     DEFAULT_EVALUATION_METRICS,
     EvaluationMetricName,
@@ -484,6 +488,22 @@ class SmokeEvaluationRagQuestionService(EvaluationRagQuestionService):
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
+        # ``evaluate_strategy`` exercises the retrieval-only search path, which
+        # builds a ``RagSearchRequestStrategy`` -- but ask-only strategies (e.g.
+        # langgraph_agentic / langchain_agentic / llm_tool_orchestrator) are not
+        # valid search strategies and would raise when constructing that enum.
+        # Route ask-only strategies through the base ``evaluate_question`` path
+        # (which dispatches to the dedicated ask executors) and keep the
+        # search-only override for genuine search strategies.
+        if not _is_search_strategy(strategy_type):
+            return super().evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
         return self.evaluate_strategy(
             db,
             question=question,
@@ -492,6 +512,20 @@ class SmokeEvaluationRagQuestionService(EvaluationRagQuestionService):
             top_k=top_k,
             rerank_top_n=rerank_top_n,
         )
+
+
+def _is_search_strategy(strategy_type: RetrievalStrategy) -> bool:
+    """Whether ``strategy_type`` is a valid standalone search strategy.
+
+    Ask-only strategies (langgraph_agentic / langchain_agentic /
+    llm_tool_orchestrator) are absent from ``RagSearchRequestStrategy``; attempting
+    to construct that enum from their value raises ``ValueError``.
+    """
+    try:
+        RagSearchRequestStrategy(strategy_type.value)
+    except ValueError:
+        return False
+    return True
 
 
 def _create_smoke_rag_service(

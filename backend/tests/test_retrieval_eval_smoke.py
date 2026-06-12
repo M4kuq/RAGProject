@@ -203,6 +203,105 @@ def test_actual_smoke_uses_search_only_http_qdrant_retrieval_client() -> None:
     assert isinstance(service.service.vector_client, HttpQdrantSearchClient)
 
 
+def test_smoke_langgraph_agentic_uses_ask_path_without_raising() -> None:
+    # Finding 2: langgraph_agentic is ask-only and is absent from
+    # RagSearchRequestStrategy, so the search-only evaluate_strategy override would
+    # raise when constructing that enum. The smoke override must route ask-only
+    # strategies through the base evaluate_question ask path and produce a result.
+    from app.evaluation.rag_service import RagEvaluationResult
+    from app.rag.strategy import RetrievalStrategy
+
+    sentinel = RagEvaluationResult(
+        retrieval_run_id=7,
+        status="succeeded",
+        answer_text="ask-path answer",
+        citations=[],
+        confidence=None,
+        retrieval_score_summary=None,
+        retrieved_items=[],
+        context_sources_for_safety=[],
+    )
+
+    class _AskPathService(smoke_module.SmokeEvaluationRagQuestionService):
+        def __init__(self) -> None:  # noqa: D401 - test stub, skip base __init__
+            self.ask_calls: list[str] = []
+
+        def _answer_question_with_langgraph_agentic(
+            self,
+            db: object,
+            *,
+            question: str,
+            request_id: str | None,
+            top_k: int | None,
+            rerank_top_n: int | None,
+        ) -> RagEvaluationResult:
+            del db, request_id, top_k, rerank_top_n
+            self.ask_calls.append(question)
+            return sentinel
+
+        def evaluate_strategy(self, *args: object, **kwargs: object) -> RagEvaluationResult:
+            raise AssertionError("ask-only strategies must not use the search path")
+
+    service = _AskPathService()
+
+    result = service.evaluate_question(
+        cast(Session, object()),
+        question="who reports to whom in the org graph",
+        request_id="ci-smoke:1:abc",
+        strategy_type=RetrievalStrategy.LANGGRAPH_AGENTIC,
+    )
+
+    assert result is sentinel
+    assert service.ask_calls == ["who reports to whom in the org graph"]
+
+
+def test_smoke_search_strategy_still_uses_search_override() -> None:
+    # A genuine search strategy keeps the search-only evaluate_strategy override.
+    from app.evaluation.rag_service import RagEvaluationResult
+    from app.rag.strategy import RetrievalStrategy
+
+    sentinel = RagEvaluationResult(
+        retrieval_run_id=3,
+        status="succeeded",
+        answer_text="",
+        citations=[],
+        confidence=None,
+        retrieval_score_summary=None,
+        retrieved_items=[],
+        context_sources_for_safety=[],
+    )
+
+    class _SearchPathService(smoke_module.SmokeEvaluationRagQuestionService):
+        def __init__(self) -> None:
+            self.search_calls: list[str] = []
+
+        def evaluate_strategy(
+            self,
+            db: object,
+            *,
+            question: str,
+            request_id: str | None,
+            strategy_type: RetrievalStrategy,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+        ) -> RagEvaluationResult:
+            del db, request_id, top_k, rerank_top_n
+            self.search_calls.append(strategy_type.value)
+            return sentinel
+
+    service = _SearchPathService()
+
+    result = service.evaluate_question(
+        cast(Session, object()),
+        question="what is qdrant",
+        request_id="ci-smoke:1:def",
+        strategy_type=RetrievalStrategy.HYBRID,
+    )
+
+    assert result is sentinel
+    assert service.search_calls == ["hybrid"]
+
+
 def test_timeout_wrapper_raises_before_blocking_call_returns() -> None:
     if not smoke_module._can_use_signal_timeout():
         pytest.skip("signal-based timeout is unavailable on this platform")
