@@ -1863,15 +1863,14 @@ class RagService:
         """
         if not any(detect_injection_patterns(text) for text in context_texts):
             return
-        # Preserve trace suppression: when decision-trace storage is disabled the
-        # decision builder stored None for every path (router and explicit
-        # strategy alike). Do not resurrect a trace here by converting
-        # None -> {} and persisting reason codes -- keep it None. Mirrors
-        # _record_graph_fallback_reason in graph_rag_service.py.
-        if not self.settings.router_store_decision_trace:
-            return
         run = self._require_run(db, retrieval_run_id)
-        decision = dict(run.strategy_decision_json or {})
+        # Preserve trace suppression per run: router paths with
+        # router_store_decision_trace=False persist None. Do not resurrect those
+        # traces, but do update explicit dense/hybrid/LLM traces that already
+        # exist even when the router trace flag is disabled.
+        if run.strategy_decision_json is None:
+            return
+        decision = dict(run.strategy_decision_json)
         existing_reason_codes = decision.get("reason_codes")
         if isinstance(existing_reason_codes, list):
             reason_codes = [str(code) for code in existing_reason_codes]
