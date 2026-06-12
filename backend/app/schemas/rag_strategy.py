@@ -177,6 +177,7 @@ class LatencyBreakdown(SafeTraceModel):
     query_embedding_ms: int | None = Field(default=None, ge=0)
     qdrant_search_ms: int | None = Field(default=None, ge=0)
     sparse_search_ms: int | None = Field(default=None, ge=0)
+    graph_search_ms: int | None = Field(default=None, ge=0)
     fusion_ms: int | None = Field(default=None, ge=0)
     rdb_final_check_ms: int | None = Field(default=None, ge=0)
     rerank_ms: int | None = Field(default=None, ge=0)

@@ -40,6 +40,7 @@ _RETRIEVAL_LATENCY_KEYS = (
     "query_embedding_ms",
     "qdrant_search_ms",
     "sparse_search_ms",
+    "graph_search_ms",
     "fusion_ms",
     "rdb_final_check_ms",
     "rerank_ms",

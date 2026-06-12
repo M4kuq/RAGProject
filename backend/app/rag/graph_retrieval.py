@@ -18,7 +18,12 @@ from app.schemas.graph import GraphRetrievalPathCreate, validate_safe_graph_labe
 GRAPH_RETRIEVAL_SCHEMA_VERSION = "phase3.graph_retrieval.v1"
 GRAPH_PATH_SCHEMA_VERSION = "phase3.graph_path.v1"
 GRAPH_SCORE_SCHEMA_VERSION = "phase3.graph_score.v1"
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:+#-]{0,79}")
+# Match ASCII symbolic identifiers (e.g. C++, node.js) first so their punctuation
+# is preserved, then fall back to runs of non-ASCII word characters (e.g. Japanese
+# or other scripts) so non-ASCII queries still yield lookup terms.
+_TOKEN_RE = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_.:+#-]{0,79}|[^\W\dA-Za-z_][^\W_]{0,79}",
+)
 _TRAILING_TOKEN_PUNCTUATION = ".,;:!?"
 _GRAPH_SIGNAL_RE = re.compile(
     r"(?i)\b(relation|relationship|related|depend|depends|dependency|connect|"
@@ -471,7 +476,11 @@ class GraphRetrievalStrategy:
         reason_codes.extend(path_reasons)
         if not paths:
             reason_codes.append("no_relation_paths")
-        graph_candidates = _source_candidates(paths, top_k=max(1, top_k))
+        graph_candidates = _source_candidates(
+            paths,
+            top_k=max(1, top_k),
+            max_source_chunks=bounded_settings.max_source_chunks,
+        )
         if not graph_candidates:
             mention_paths = self._mention_only_paths_for_entities(
                 db,
@@ -481,7 +490,11 @@ class GraphRetrievalStrategy:
             )
             if mention_paths:
                 paths = mention_paths
-                graph_candidates = _source_candidates(paths, top_k=max(1, top_k))
+                graph_candidates = _source_candidates(
+                    paths,
+                    top_k=max(1, top_k),
+                    max_source_chunks=bounded_settings.max_source_chunks,
+                )
                 reason_codes.append("mention_only_paths")
             else:
                 reason_codes.append("no_chunk_backed_paths")
@@ -574,6 +587,7 @@ def _source_candidates(
     paths: list[GraphPathCandidate],
     *,
     top_k: int,
+    max_source_chunks: int,
 ) -> list[GraphSourceCandidate]:
     by_chunk_id: dict[int, list[GraphPathCandidate]] = {}
     for path in paths:
@@ -612,9 +626,14 @@ def _source_candidates(
         key=lambda item: (item.retrieval_score, -item.document_chunk_id),
         reverse=True,
     )
+    # Honor the configured graph source budget as a global cap across all paths:
+    # relation-backed paths can surface up to ``top_k`` distinct chunks, but the
+    # configured ``max_source_chunks`` must bound the aggregated source set too.
+    # Candidates are already sorted best-first, so slicing preserves ordering.
+    distinct_chunk_cap = max(1, min(top_k, max_source_chunks))
     calculator = GraphScoreCalculator()
     ranked: list[GraphSourceCandidate] = []
-    for rank, candidate in enumerate(candidates[:top_k], start=1):
+    for rank, candidate in enumerate(candidates[:distinct_chunk_cap], start=1):
         ranked_candidate = GraphSourceCandidate(
             document_chunk_id=candidate.document_chunk_id,
             retrieval_score=candidate.retrieval_score,

@@ -6,6 +6,7 @@ from typing import Literal
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.models import User
 from app.rag.citations import CitationBuildError
@@ -63,6 +64,8 @@ from app.services.rag_service import (
     _validated_generation_or_fallback,
 )
 
+GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE = "graph_no_evidence_fallback"
+
 
 class GraphRagService:
     def __init__(
@@ -114,9 +117,10 @@ class GraphRagService:
         else:
             return self.base.search(db, payload=payload, request_id=request_id)
 
+        allow_base_fallback = requested_strategy == RetrievalStrategy.AGENTIC_ROUTER
         query_hash = _query_hash(payload.query)
         latency_tracker = LatencyTracker()
-        retrieval_settings = _retrieval_settings_snapshot(
+        retrieval_settings = _graph_settings_snapshot(
             settings=self.base.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
@@ -139,7 +143,7 @@ class GraphRagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_graph(
+            result = self._retrieve_graph_or_base_fallback(
                 db,
                 query=retrieval_query,
                 top_k=top_k,
@@ -147,6 +151,7 @@ class GraphRagService:
                 filters=filters,
                 retrieval_run_id=run_id,
                 latency_tracker=latency_tracker,
+                allow_base_fallback=allow_base_fallback,
             )
             run = self.base._require_run(db, run_id)
             self.base.repository.mark_succeeded(
@@ -201,7 +206,27 @@ class GraphRagService:
             if routed is None:
                 return self.base.ask(db, payload=payload, user=user, request_id=request_id)
             retrieval_query, query_plan, strategy_decision = routed
-        elif requested_strategy == RetrievalStrategy.GRAPH:
+        elif requested_strategy != RetrievalStrategy.GRAPH:
+            return self.base.ask(db, payload=payload, user=user, request_id=request_id)
+
+        # Resolve the duplicate-message replay BEFORE gating new graph executions on
+        # the feature flag, so a completed strategy=graph ask can still be replayed
+        # by client_message_id after graph_retrieval_enabled has been turned off.
+        session = self.base.chat_service.ensure_session_can_append_messages(
+            db,
+            user=user,
+            chat_session_id=payload.chat_session_id,
+        )
+        existing = self.base.chat_repository.get_user_message_by_client_message_id(
+            db,
+            chat_session_id=payload.chat_session_id,
+            client_message_id=payload.client_message_id,
+            for_update=True,
+        )
+        if existing is not None:
+            return self.base._classify_duplicate(db, payload=payload, existing=existing)
+
+        if requested_strategy == RetrievalStrategy.GRAPH:
             self._ensure_graph_enabled_for_ask()
             filters = _retrieval_filters(payload)
             query_plan_build = self.base.query_plan_builder.build(
@@ -216,22 +241,10 @@ class GraphRagService:
                 plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = _build_graph_strategy_decision()
-        else:
-            return self.base.ask(db, payload=payload, user=user, request_id=request_id)
-
-        session = self.base.chat_service.ensure_session_can_append_messages(
-            db,
-            user=user,
-            chat_session_id=payload.chat_session_id,
-        )
-        existing = self.base.chat_repository.get_user_message_by_client_message_id(
-            db,
-            chat_session_id=payload.chat_session_id,
-            client_message_id=payload.client_message_id,
-            for_update=True,
-        )
-        if existing is not None:
-            return self.base._classify_duplicate(db, payload=payload, existing=existing)
+        # Only the router-selected graph path may silently fall back to the base
+        # dense/hybrid execution when the graph yields no evidence; an explicit
+        # strategy=graph request keeps the no_context_found contract.
+        allow_base_fallback = requested_strategy == RetrievalStrategy.AGENTIC_ROUTER
         answer_generator = self.base._answer_generator_for_request(payload)
 
         top_k = self.base._effective_ask_top_k(payload.top_k)
@@ -239,7 +252,7 @@ class GraphRagService:
         filters = _retrieval_filters(payload)
         query_hash = _query_hash(payload.message)
         latency_tracker = LatencyTracker()
-        retrieval_settings = _retrieval_settings_snapshot(
+        retrieval_settings = _graph_settings_snapshot(
             settings=self.base.settings,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
@@ -290,7 +303,7 @@ class GraphRagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_graph(
+            result = self._retrieve_graph_or_base_fallback(
                 db,
                 query=retrieval_query,
                 top_k=top_k,
@@ -298,6 +311,7 @@ class GraphRagService:
                 filters=filters,
                 retrieval_run_id=run_id,
                 latency_tracker=latency_tracker,
+                allow_base_fallback=allow_base_fallback,
             )
             context_budget_decision = self.base._apply_context_budget(
                 db,
@@ -333,6 +347,11 @@ class GraphRagService:
 
             with latency_tracker.span("context_assembly_ms"):
                 context_items = evidence_pack.to_generation_context_items()
+                self.base._record_injection_patterns(
+                    db,
+                    retrieval_run_id=run_id,
+                    context_texts=[item.text for item in context_items],
+                )
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
@@ -483,10 +502,15 @@ class GraphRagService:
         filters: RetrievalFilters,
         requested_strategy: RetrievalStrategy,
         request_kind: Literal["search", "ask"],
-    ) -> tuple[str, dict[str, object], dict[str, object]] | None:
+    ) -> tuple[str, dict[str, object], dict[str, object] | None] | None:
         if not self.base.settings.graph_retrieval_enabled:
             return None
         if not self.base.settings.graph_router_enabled:
+            return None
+        if not self._router_gates_allow_agentic(request_kind):
+            # The agentic router is gated off (router_enabled / agentic_search /
+            # agentic_ask). Mirror StrategyRouter and do not take the graph
+            # shortcut; delegate to the base service unchanged.
             return None
         query_plan_build = self.base.query_plan_builder.build(
             query,
@@ -512,6 +536,7 @@ class GraphRagService:
                     "graph_retrieval_enabled",
                     "graph_router_enabled",
                 ],
+                store_decision_trace=self.base.settings.router_store_decision_trace,
             )
             return query_plan_build.retrieval_query, query_plan, strategy_decision
         decision = self.base.strategy_router.route(
@@ -527,8 +552,72 @@ class GraphRagService:
             execution_strategy=RetrievalStrategy.GRAPH,
             plan_metadata=query_plan_build.trace_metadata,
         )
-        strategy_decision = build_router_strategy_decision(decision=decision) or {}
-        return query_plan_build.retrieval_query, query_plan, strategy_decision
+        router_strategy_decision = build_router_strategy_decision(decision=decision)
+        return query_plan_build.retrieval_query, query_plan, router_strategy_decision
+
+    def _router_gates_allow_agentic(self, request_kind: Literal["search", "ask"]) -> bool:
+        settings = self.base.settings
+        if not settings.router_enabled:
+            return False
+        if request_kind == "search" and not settings.router_allow_agentic_search:
+            return False
+        if request_kind == "ask" and not settings.router_allow_agentic_ask:
+            return False
+        return True
+
+    def _retrieve_graph_or_base_fallback(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        latency_tracker: LatencyTracker,
+        allow_base_fallback: bool,
+    ) -> RetrievalPipelineResult:
+        result = self._retrieve_graph(
+            db,
+            query=query,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            filters=filters,
+            retrieval_run_id=retrieval_run_id,
+            latency_tracker=latency_tracker,
+        )
+        if result.no_context and allow_base_fallback:
+            # The router forced graph retrieval but it produced no candidates.
+            # Fall back to the base dense execution path (as if graph had not been
+            # selected) instead of failing with no_context_found.
+            self._record_graph_fallback_reason(db, retrieval_run_id=retrieval_run_id)
+            return self.base._retrieve_and_rerank(
+                db,
+                query=query,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                filters=filters,
+                retrieval_run_id=retrieval_run_id,
+                latency_tracker=latency_tracker,
+            )
+        return result
+
+    def _record_graph_fallback_reason(self, db: Session, *, retrieval_run_id: int) -> None:
+        run = self.base._require_run(db, retrieval_run_id)
+        decision = dict(run.strategy_decision_json or {})
+        existing_reason_codes = decision.get("reason_codes")
+        if isinstance(existing_reason_codes, list):
+            reason_codes = [str(code) for code in existing_reason_codes]
+        else:
+            reason_codes = []
+        if GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE not in reason_codes:
+            reason_codes.append(GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE)
+        decision["reason_codes"] = reason_codes
+        self.base.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            strategy_decision_json=TraceRedactor.safe_dict(decision),
+        )
 
     def _retrieve_graph(
         self,
@@ -687,6 +776,41 @@ def _graph_retrieval_settings(settings: object) -> GraphRetrievalSettings:
     )
 
 
+def _graph_settings_snapshot(
+    *,
+    settings: Settings,
+    top_k: int,
+    rerank_top_n: int,
+    filters: RetrievalFilters,
+    strategy_type: RetrievalStrategy,
+) -> dict[str, object]:
+    snapshot = _retrieval_settings_snapshot(
+        settings=settings,
+        top_k=top_k,
+        rerank_top_n=rerank_top_n,
+        filters=filters,
+        strategy_type=strategy_type,
+    )
+    graph_settings = _graph_retrieval_settings(settings).bounded()
+    snapshot.update(
+        TraceRedactor.safe_dict(
+            {
+                "graph_retrieval_enabled": bool(settings.graph_retrieval_enabled),
+                "graph_retrieval_max_depth": graph_settings.max_depth,
+                "graph_retrieval_max_paths": graph_settings.max_paths,
+                "graph_retrieval_max_relations_per_entity": (
+                    graph_settings.max_relations_per_entity
+                ),
+                "graph_retrieval_max_source_chunks": graph_settings.max_source_chunks,
+                "graph_retrieval_max_start_entities": graph_settings.max_start_entities,
+                "graph_retrieval_timeout_ms": graph_settings.timeout_ms,
+                "graph_retrieval_min_entity_match_score": graph_settings.min_entity_match_score,
+            }
+        )
+    )
+    return snapshot
+
+
 def _build_graph_query_plan(
     *,
     query_hash: str,
@@ -727,7 +851,12 @@ def _build_graph_strategy_decision(
     router_enabled: bool = False,
     confidence: float | None = None,
     reason_codes: list[str] | None = None,
-) -> dict[str, object]:
+    store_decision_trace: bool = True,
+) -> dict[str, object] | None:
+    # Mirror build_router_strategy_decision: when decision-trace storage is
+    # disabled, persist None instead of a decision payload.
+    if not store_decision_trace:
+        return None
     payload: dict[str, object] = {
         "schema_version": "phase2.trace.v1",
         "selected_strategy": RetrievalStrategy.GRAPH.value,

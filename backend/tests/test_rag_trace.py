@@ -44,6 +44,18 @@ def test_latency_tracker_records_non_negative_durations() -> None:
     assert all(value >= 0 for value in snapshot.values() if isinstance(value, int))
 
 
+def test_latency_tracker_includes_graph_search_in_retrieval_total() -> None:
+    clock = _Clock([0.0, 0.01, 0.04, 0.05])
+    tracker = LatencyTracker(clock=clock)
+
+    with tracker.span("graph_search_ms"):
+        pass
+
+    snapshot = tracker.snapshot()
+    assert snapshot["graph_search_ms"] == 30
+    assert snapshot["retrieval_ms"] == 30
+
+
 def test_latency_tracker_excludes_nested_agentic_parent_spans_from_retrieval_total() -> None:
     clock = _Clock([0.0, 0.1])
     tracker = LatencyTracker(clock=clock)

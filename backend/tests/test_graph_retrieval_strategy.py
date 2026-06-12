@@ -37,6 +37,7 @@ from app.rag.graph_retrieval import (
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
     _select_paths_at_cap,
+    _source_candidates,
     graph_query_signal_score,
 )
 from app.rag.retrieval import RetrievalFilters
@@ -326,6 +327,16 @@ def test_graph_query_terms_strip_terminal_punctuation() -> None:
     assert "c#" in terms
     assert "fastapi." not in terms
     assert "c#." not in terms
+
+
+def test_graph_query_terms_extract_non_ascii_terms() -> None:
+    terms = GraphEntityLookupService().query_terms("データベースとAPIの関係")
+
+    assert any("データベース" in term for term in terms)
+    # ASCII symbolic handling still extracts the embedded ASCII token separately.
+    mixed = GraphEntityLookupService().query_terms("FastAPIとPostgreSQL")
+    assert mixed
+    assert any(any(ord(ch) > 127 for ch in term) for term in mixed)
 
 
 def test_graph_relation_lookup_enforces_per_entity_cap(
@@ -1117,3 +1128,39 @@ def test_select_paths_no_displacement_matches_naive_order() -> None:
 
     assert [path.path_id for path in selected] == ["gp_1", "gp_2", "gp_3"]
     assert "chunk_backed_paths_preferred" not in reason_codes
+
+
+def test_source_candidates_apply_global_max_source_chunks_cap() -> None:
+    # Five relation-backed paths, each surfacing a distinct source chunk. With a
+    # generous top_k but max_source_chunks=2, only the two best-scoring distinct
+    # source chunks may be returned.
+    paths = [
+        _make_path(
+            path_id=f"gp_{index}",
+            path_score=0.9 - index * 0.1,
+            source_chunk_ids=(100 + index,),
+        )
+        for index in range(5)
+    ]
+
+    candidates = _source_candidates(paths, top_k=10, max_source_chunks=2)
+
+    assert len(candidates) == 2
+    # Best-paths-first ordering preserved: highest path_score chunks retained.
+    assert [candidate.document_chunk_id for candidate in candidates] == [100, 101]
+
+
+def test_source_candidates_cap_respects_top_k_when_smaller() -> None:
+    paths = [
+        _make_path(
+            path_id=f"gp_{index}",
+            path_score=0.9 - index * 0.1,
+            source_chunk_ids=(200 + index,),
+        )
+        for index in range(5)
+    ]
+
+    candidates = _source_candidates(paths, top_k=1, max_source_chunks=10)
+
+    assert len(candidates) == 1
+    assert candidates[0].document_chunk_id == 200
