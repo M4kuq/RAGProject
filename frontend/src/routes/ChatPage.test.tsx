@@ -694,10 +694,13 @@ test("sends the selected RAG strategy with chat asks", async () => {
   expect(screen.getByRole("option", { name: "Hybrid RAG" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Agentic Router" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "LangChain Agentic" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "LangGraph Agentic" })).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "hybrid" } });
   expect(screen.getByText(/Dense vector retrieval plus sparse keyword retrieval with score fusion/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "langchain_agentic" } });
   expect(screen.getByText(/the same retrieval tools are orchestrated through LangChain runnables/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("rag strategy"), { target: { value: "langgraph_agentic" } });
+  expect(screen.getByText(/orchestrated through a LangGraph StateGraph/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("message"), { target: { value: "What changed?" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -708,7 +711,7 @@ test("sends the selected RAG strategy with chat asks", async () => {
   });
   expect(JSON.parse(String(askCall[1].body))).toMatchObject({
     message: "What changed?",
-    strategy: "langchain_agentic"
+    strategy: "langgraph_agentic"
   });
 });
 

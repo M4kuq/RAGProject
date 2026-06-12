@@ -74,6 +74,10 @@ from app.rag.langchain_agentic import (
     LangChainAgenticExecutionResult,
     LangChainAgenticRetrievalOrchestrator,
 )
+from app.rag.langgraph_agentic import (
+    LangGraphAgenticExecutionResult,
+    LangGraphAgenticRetrievalOrchestrator,
+)
 from app.rag.llm_orchestrator import (
     LLMToolCallingRetrievalOrchestrator,
     LLMToolOrchestratorExecutionResult,
@@ -217,6 +221,7 @@ class RagService:
         agentic_executor: AgenticRetrievalExecutor | None = None,
         llm_tool_orchestrator: LLMToolCallingRetrievalOrchestrator | None = None,
         langchain_agentic_orchestrator: LangChainAgenticRetrievalOrchestrator | None = None,
+        langgraph_agentic_orchestrator: LangGraphAgenticRetrievalOrchestrator | None = None,
         context_budget_manager: ContextBudgetManager | None = None,
         evidence_pack_builder: EvidencePackBuilder | None = None,
         trace_export_service: TraceExportService | None = None,
@@ -241,6 +246,9 @@ class RagService:
         )
         self.langchain_agentic_orchestrator = (
             langchain_agentic_orchestrator or LangChainAgenticRetrievalOrchestrator(settings)
+        )
+        self.langgraph_agentic_orchestrator = (
+            langgraph_agentic_orchestrator or LangGraphAgenticRetrievalOrchestrator(settings)
         )
         self.context_budget_manager = context_budget_manager or ContextBudgetManager()
         self.evidence_pack_builder = evidence_pack_builder or EvidencePackBuilder()
@@ -510,6 +518,7 @@ class RagService:
             RetrievalStrategy.AGENTIC_ROUTER,
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
             RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
         }:
             raise RagAskPipelineError("strategy_not_enabled", 409)
         if requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
@@ -517,6 +526,9 @@ class RagService:
                 raise RagAskPipelineError("strategy_not_enabled", 409)
         elif requested_strategy == RetrievalStrategy.LANGCHAIN_AGENTIC:
             if not self.settings.langchain_agentic_enabled:
+                raise RagAskPipelineError("strategy_not_enabled", 409)
+        elif requested_strategy == RetrievalStrategy.LANGGRAPH_AGENTIC:
+            if not self.settings.langgraph_agentic_enabled:
                 raise RagAskPipelineError("strategy_not_enabled", 409)
         elif requested_strategy != RetrievalStrategy.AGENTIC_ROUTER:
             try:
@@ -592,6 +604,13 @@ class RagService:
                 plan_metadata=query_plan_build.trace_metadata,
             )
             strategy_decision = build_langchain_agentic_strategy_decision()
+        elif requested_strategy == RetrievalStrategy.LANGGRAPH_AGENTIC:
+            query_plan = build_langgraph_agentic_query_plan(
+                query_hash=query_hash,
+                filters=filters,
+                plan_metadata=query_plan_build.trace_metadata,
+            )
+            strategy_decision = build_langgraph_agentic_strategy_decision()
         else:
             query_plan = build_default_dense_query_plan(
                 query_hash=query_hash,
@@ -656,6 +675,16 @@ class RagService:
                 )
             elif requested_strategy == RetrievalStrategy.LANGCHAIN_AGENTIC:
                 result = self._retrieve_langchain_agentic(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                )
+            elif requested_strategy == RetrievalStrategy.LANGGRAPH_AGENTIC:
+                result = self._retrieve_langgraph_agentic(
                     db,
                     query=retrieval_query,
                     top_k=top_k,
@@ -1480,6 +1509,62 @@ class RagService:
             no_context=pipeline_result.no_context,
         )
 
+    def _retrieve_langgraph_agentic(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        latency_tracker: LatencyTracker,
+    ) -> RetrievalPipelineResult:
+        langgraph_result = self.langgraph_agentic_orchestrator.execute(
+            query=query,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            retrieve=lambda strategy, role, tool_query: self._execute_agentic_attempt(
+                db,
+                query=tool_query,
+                top_k=top_k,
+                filters=filters,
+                strategy=strategy,
+                role=role,
+                latency_tracker=latency_tracker,
+            ),
+            latency_tracker=latency_tracker,
+        )
+        pipeline_result = self._persist_agentic_result(
+            db,
+            query=query,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            retrieval_run_id=retrieval_run_id,
+            agentic_result=langgraph_result.retrieval_result,
+            latency_tracker=latency_tracker,
+            trace_strategy=RetrievalStrategy.LANGGRAPH_AGENTIC,
+        )
+        self._update_langgraph_agentic_trace(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            langgraph_result=langgraph_result,
+            tool_result_compression_json=_tool_result_compression_json_with_run_items(
+                langgraph_result.tool_result_compression_trace,
+                pipeline_result.context_candidates,
+            ),
+        )
+        summary_payload = pipeline_result.summary.model_dump(mode="json")
+        summary_payload.update(langgraph_result.summary_fields())
+        return RetrievalPipelineResult(
+            summary=RetrievalScoreSummary(**summary_payload),
+            items=pipeline_result.items,
+            selected_candidates=pipeline_result.selected_candidates,
+            citation_sources=pipeline_result.citation_sources,
+            context_candidates=pipeline_result.context_candidates,
+            no_context=pipeline_result.no_context,
+        )
+
     def _execute_agentic_attempt(
         self,
         db: Session,
@@ -1973,6 +2058,54 @@ class RagService:
             if code not in reason_codes:
                 reason_codes.append(code)
         decision.update(langchain_fields)
+        decision["reason_codes"] = reason_codes
+        update_payload: dict[str, object] | None = None
+        if (
+            self.settings.tool_result_compression_store_debug_trace
+            and tool_result_compression_json is not None
+        ):
+            update_payload = tool_result_compression_json
+        self.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            strategy_decision_json=TraceRedactor.safe_dict(decision),
+            tool_result_compression_json=update_payload,
+        )
+        if tool_result_compression_json is not None:
+            _log_tool_result_compression(
+                run=run,
+                trace=tool_result_compression_json,
+                event=(
+                    "rag.tool_result_compression.skipped"
+                    if not tool_result_compression_json.get("enabled")
+                    else (
+                        "rag.tool_result_compression.rejected"
+                        if _tool_result_oversized_rejected(tool_result_compression_json)
+                        else "rag.tool_result_compression.applied"
+                    )
+                ),
+            )
+
+    def _update_langgraph_agentic_trace(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        langgraph_result: LangGraphAgenticExecutionResult,
+        tool_result_compression_json: dict[str, object] | None,
+    ) -> None:
+        run = self._require_run(db, retrieval_run_id)
+        decision = dict(run.strategy_decision_json or {})
+        langgraph_fields = langgraph_result.decision_trace_fields()
+        existing_reason_codes = decision.get("reason_codes")
+        if isinstance(existing_reason_codes, list):
+            reason_codes = [str(code) for code in existing_reason_codes]
+        else:
+            reason_codes = []
+        for code in langgraph_result.reason_codes:
+            if code not in reason_codes:
+                reason_codes.append(code)
+        decision.update(langgraph_fields)
         decision["reason_codes"] = reason_codes
         update_payload: dict[str, object] | None = None
         if (
@@ -2764,6 +2897,38 @@ def _retrieval_settings_snapshot(
                 }
             )
         )
+    if strategy_type == RetrievalStrategy.LANGGRAPH_AGENTIC:
+        snapshot.update(
+            TraceRedactor.safe_dict(
+                {
+                    "orchestrator_provider": "langgraph",
+                    "langgraph_agentic_enabled": settings.langgraph_agentic_enabled,
+                    "max_tool_calls": settings.langgraph_agentic_max_tool_calls,
+                    "max_search_calls": settings.langgraph_agentic_max_search_calls,
+                    "timeout_seconds": settings.langgraph_agentic_timeout_seconds,
+                    "max_query_chars": settings.langgraph_agentic_max_query_chars,
+                    "max_tool_result_items": settings.langgraph_agentic_max_tool_result_items,
+                    "max_snippet_chars": settings.langgraph_agentic_max_snippet_chars,
+                    "allow_admin_tools": False,
+                    "tool_result_compression_enabled": settings.tool_result_compression_enabled,
+                    "tool_result_max_items_per_tool": (
+                        settings.tool_result_compression_max_items_per_tool
+                    ),
+                    "tool_result_max_total_items_per_turn": (
+                        settings.tool_result_compression_max_total_items_per_turn
+                    ),
+                    "tool_result_max_snippet_chars": (
+                        settings.tool_result_compression_max_snippet_chars
+                    ),
+                    "tool_result_max_tokens_per_tool": (
+                        settings.tool_result_compression_max_tokens_per_tool
+                    ),
+                    "tool_result_max_total_tokens": (
+                        settings.tool_result_compression_max_total_tool_result_tokens
+                    ),
+                }
+            )
+        )
     return snapshot
 
 
@@ -2863,6 +3028,62 @@ def build_langchain_agentic_strategy_decision() -> dict[str, object]:
             "reason_codes": [
                 "explicit_strategy_langchain_agentic",
                 "langchain_runnable_planner",
+                "langchain_structured_tools",
+                "retrieval_only_tools",
+            ],
+        }
+    )
+
+
+def build_langgraph_agentic_query_plan(
+    *,
+    query_hash: str,
+    filters: RetrievalFilters,
+    plan_metadata: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    base = build_default_dense_query_plan(
+        query_hash=query_hash,
+        filters=filters,
+        plan_metadata=_llm_orchestrator_plan_metadata(plan_metadata),
+    )
+    base.update(
+        {
+            "strategy_type": RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+            "query_mode": "langgraph_agentic_retrieval",
+            "reason_codes": [
+                "phase2_5_langgraph_agentic",
+                "langgraph_state_graph",
+                "langgraph_plan_execute_nodes",
+                "langchain_structured_tools",
+                "retrieval_only_tools",
+                "bounded_loop",
+            ],
+            "candidate_strategies": [
+                RetrievalStrategy.DENSE.value,
+                RetrievalStrategy.SPARSE.value,
+                RetrievalStrategy.HYBRID.value,
+            ],
+            "recommended_strategy": RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+        }
+    )
+    return TraceRedactor.safe_dict(base)
+
+
+def build_langgraph_agentic_strategy_decision() -> dict[str, object]:
+    return TraceRedactor.safe_dict(
+        {
+            "schema_version": "phase2.trace.v1",
+            "selected_strategy": RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+            "execution_strategy": RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+            "fallback_used": False,
+            "router_enabled": False,
+            "decision_source": "langgraph_agentic",
+            "decision_policy": "langgraph_bounded_retrieval_only_graph",
+            "orchestrator_provider": "langgraph",
+            "reason_codes": [
+                "explicit_strategy_langgraph_agentic",
+                "langgraph_state_graph",
+                "langgraph_plan_execute_nodes",
                 "langchain_structured_tools",
                 "retrieval_only_tools",
             ],

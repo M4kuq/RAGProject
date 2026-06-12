@@ -66,6 +66,7 @@ class EvaluationRunRequestStrategy(StrEnum):
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
+    LANGGRAPH_AGENTIC = "langgraph_agentic"
 
 
 class EvaluationMetricName(StrEnum):
@@ -360,7 +361,7 @@ class EvaluationRunCreateRequest(BaseModel):
     case_limit: int | None = Field(default=10, ge=1, le=50)
     strategy_type: EvaluationRunRequestStrategy = DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY
     strategies: list[EvaluationRunRequestStrategy] | None = Field(
-        default=None, min_length=1, max_length=6
+        default=None, min_length=1, max_length=7
     )
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),

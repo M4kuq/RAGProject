@@ -98,7 +98,8 @@ export function EvaluationListPage() {
                 "hybrid",
                 "agentic_router",
                 "llm_tool_orchestrator",
-                "langchain_agentic"
+                "langchain_agentic",
+                "langgraph_agentic"
               ] as EvaluationRunnableStrategy[]
             ).map((strategy) => (
               <label key={strategy}>

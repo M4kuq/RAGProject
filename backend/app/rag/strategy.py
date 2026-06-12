@@ -17,6 +17,7 @@ class RetrievalStrategy(StrEnum):
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
+    LANGGRAPH_AGENTIC = "langgraph_agentic"
     FALLBACK_DENSE = "fallback_dense"
 
 
@@ -35,6 +36,7 @@ class RagAskRequestStrategy(StrEnum):
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
+    LANGGRAPH_AGENTIC = "langgraph_agentic"
 
 
 class RetrievalSource(StrEnum):
@@ -264,6 +266,38 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     "rag.langchain_agentic.allow_admin_tools": (
         False,
         "Keep admin/write tools unavailable to the LangChain agentic RAG loop.",
+    ),
+    "rag.langgraph_agentic.enabled": (
+        True,
+        "Enable explicit /rag/ask strategy=langgraph_agentic requests.",
+    ),
+    "rag.langgraph_agentic.max_tool_calls": (
+        5,
+        "Maximum bounded retrieval-only tool calls for the LangGraph agentic RAG graph.",
+    ),
+    "rag.langgraph_agentic.max_search_calls": (
+        3,
+        "Maximum dense/sparse/hybrid search tool calls for the LangGraph agentic RAG graph.",
+    ),
+    "rag.langgraph_agentic.timeout_seconds": (
+        30,
+        "Wall-clock timeout for the LangGraph agentic RAG graph.",
+    ),
+    "rag.langgraph_agentic.max_query_chars": (
+        500,
+        "Maximum executable query characters passed to LangGraph retrieval tools.",
+    ),
+    "rag.langgraph_agentic.max_tool_result_items": (
+        10,
+        "Maximum legacy tool result items retained when compression is disabled.",
+    ),
+    "rag.langgraph_agentic.max_snippet_chars": (
+        500,
+        "Maximum legacy snippet characters retained when compression is disabled.",
+    ),
+    "rag.langgraph_agentic.allow_admin_tools": (
+        False,
+        "Keep admin/write tools unavailable to the LangGraph agentic RAG graph.",
     ),
     "rag.tool_result_compression.enabled": (
         True,

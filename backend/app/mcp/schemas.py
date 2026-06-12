@@ -12,6 +12,7 @@ McpCompareStrategy = Literal[
     "agentic_router",
     "llm_tool_orchestrator",
     "langchain_agentic",
+    "langgraph_agentic",
 ]
 
 
@@ -47,6 +48,7 @@ class McpRagAskInput(McpInputModel):
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     ] = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)

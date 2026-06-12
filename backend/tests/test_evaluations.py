@@ -1714,7 +1714,7 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
         engine.dispose()
 
 
-def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> None:
+def test_evaluation_runner_compares_tool_langchain_and_langgraph_agentic_strategies() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -1744,7 +1744,11 @@ def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> No
                 db,
                 payload=EvaluationRunCreateRequest(
                     evaluation_dataset_id=dataset.evaluation_dataset_id,
-                    strategies=["llm_tool_orchestrator", "langchain_agentic"],
+                    strategies=[
+                        "llm_tool_orchestrator",
+                        "langchain_agentic",
+                        "langgraph_agentic",
+                    ],
                     case_limit=1,
                 ),
                 user=user,
@@ -1767,31 +1771,36 @@ def test_evaluation_runner_compares_llm_and_langchain_agentic_strategies() -> No
             run = db.get(EvaluationRun, created.evaluation_run_id)
             assert run is not None
             assert run.strategy_metrics_summary_json is not None
-            assert run.strategy_metrics_summary_json["case_count"] == 2
+            assert run.strategy_metrics_summary_json["case_count"] == 3
             strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
             assert set(strategy_metrics) >= {
                 "llm_tool_orchestrator",
                 "langchain_agentic",
+                "langgraph_agentic",
             }
             assert (
                 strategy_metrics["llm_tool_orchestrator"]["metric_summary"]["fallback_rate"] == 0.0
             )
             assert strategy_metrics["langchain_agentic"]["metric_summary"]["fallback_rate"] == 0.0
+            assert strategy_metrics["langgraph_agentic"]["metric_summary"]["fallback_rate"] == 0.0
             items = db.scalars(
                 select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
             ).all()
             assert [item.strategy_type for item in items] == [
                 "llm_tool_orchestrator",
                 "langchain_agentic",
+                "langgraph_agentic",
             ]
             detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
             assert detail.strategies == [
                 RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
                 RetrievalStrategy.LANGCHAIN_AGENTIC,
+                RetrievalStrategy.LANGGRAPH_AGENTIC,
             ]
             assert {metric.strategy_type for metric in detail.strategy_comparison} >= {
                 RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
                 RetrievalStrategy.LANGCHAIN_AGENTIC,
+                RetrievalStrategy.LANGGRAPH_AGENTIC,
             }
     finally:
         engine.dispose()
@@ -1979,6 +1988,7 @@ def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense(
                         "agentic_router",
                         "llm_tool_orchestrator",
                         "langchain_agentic",
+                        "langgraph_agentic",
                     ],
                 ),
                 user=user,
@@ -1994,6 +2004,7 @@ def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense(
                 "agentic_router",
                 "llm_tool_orchestrator",
                 "langchain_agentic",
+                "langgraph_agentic",
             ]
     finally:
         engine.dispose()
@@ -2011,7 +2022,12 @@ def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_str
         json={
             "dataset_name": "phase1_smoke",
             "case_limit": 1,
-            "strategies": ["dense", "llm_tool_orchestrator", "langchain_agentic"],
+            "strategies": [
+                "dense",
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+                "langgraph_agentic",
+            ],
         },
         headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
     )
@@ -2020,6 +2036,7 @@ def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_str
         "dense",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     ]
 
     for payload in (
@@ -2564,6 +2581,7 @@ class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
         if strategy_type not in {
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
             RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
         }:
             return super().evaluate_question(
                 db,
@@ -2583,7 +2601,11 @@ class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
                 "selected_strategy": strategy_type.value,
                 "execution_strategy": strategy_type.value,
                 "orchestrator_provider": (
-                    "langchain" if strategy_type == RetrievalStrategy.LANGCHAIN_AGENTIC else "llm"
+                    "langchain"
+                    if strategy_type == RetrievalStrategy.LANGCHAIN_AGENTIC
+                    else "langgraph"
+                    if strategy_type == RetrievalStrategy.LANGGRAPH_AGENTIC
+                    else "llm"
                 ),
                 "fallback_used": False,
                 "budget_exhausted": False,
@@ -2650,6 +2672,7 @@ class _ToolAgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
         if strategy_type in {
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
             RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
         }:
             raise AssertionError("ask-only evaluation strategies must use evaluate_question")
         return self.evaluate_question(

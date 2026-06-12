@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.job_utils import LeaseLostError
+from app.core.job_utils import LeaseLostError, sanitize_result_json
 from app.db.base import Base
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.ingest.embedding import (
@@ -159,6 +159,23 @@ def _seed_point(
     )
 
 
+def _healthy_payload(
+    *,
+    document_chunk_id: int = 100,
+    document_version_id: int = 10,
+    logical_document_id: int = 1,
+    modality: str = "text",
+    is_active: bool = True,
+) -> dict[str, object]:
+    return {
+        "document_chunk_id": document_chunk_id,
+        "document_version_id": document_version_id,
+        "logical_document_id": logical_document_id,
+        "modality": modality,
+        "is_active": is_active,
+    }
+
+
 def test_all_consistent_repairs_nothing(session_factory: sessionmaker[Session]) -> None:
     qdrant_client = InMemoryQdrantClient()
     qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
@@ -168,16 +185,17 @@ def test_all_consistent_repairs_nothing(session_factory: sessionmaker[Session]) 
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+        payload=_healthy_payload(),
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 1
-    assert result.result_json["stale_found"] == 0
-    assert result.result_json["repaired"] == 0
-    assert result.result_json["skipped"] == 0
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["stale_found_count"] == 0
+    assert result.result_json["repaired_count"] == 0
+    assert result.result_json["skipped_count"] == 0
+    assert sanitize_result_json(result.result_json) == result.result_json
     assert 100 in qdrant_client.points[_COLLECTION]
 
 
@@ -188,15 +206,15 @@ def test_orphaned_point_is_deleted(session_factory: sessionmaker[Session]) -> No
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+        payload=_healthy_payload(),
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 1
-    assert result.result_json["stale_found"] == 1
-    assert result.result_json["repaired"] == 1
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
     assert 100 not in qdrant_client.points[_COLLECTION]
 
 
@@ -209,14 +227,14 @@ def test_inactive_db_point_is_repaired(session_factory: sessionmaker[Session]) -
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+        payload=_healthy_payload(),
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["stale_found"] == 1
-    assert result.result_json["repaired"] == 1
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
     assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
 
 
@@ -229,13 +247,13 @@ def test_archived_document_point_is_repaired(session_factory: sessionmaker[Sessi
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+        payload=_healthy_payload(),
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["repaired"] == 1
+    assert result.result_json["repaired_count"] == 1
     assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
 
 
@@ -290,18 +308,81 @@ def test_chunk_belongs_to_different_version_is_repaired_not_deleted(
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 11, "is_active": True},
+        payload=_healthy_payload(document_version_id=11, logical_document_id=11),
     )
 
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 1
-    assert result.result_json["stale_found"] == 1
-    assert result.result_json["repaired"] == 1
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
     # Repaired in place (inactive), the vector is NOT deleted.
     assert 100 in qdrant_client.points[_COLLECTION]
     assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
+def test_stale_payload_version_for_existing_chunk_is_repaired_not_deleted(
+    session_factory: sessionmaker[Session],
+) -> None:
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload=_healthy_payload(document_version_id=999),
+    )
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
+    assert 100 in qdrant_client.points[_COLLECTION]
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
+def test_filter_payload_mismatch_is_repaired_not_treated_as_healthy(
+    session_factory: sessionmaker[Session],
+) -> None:
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    with session_factory() as db:
+        db.add(
+            DocumentChunk(
+                document_chunk_id=101,
+                document_version_id=10,
+                chunk_index=1,
+                chunk_hash="d" * 64,
+                content_text="chunk 2",
+            )
+        )
+        db.commit()
+    _seed_point(
+        qdrant_client,
+        point_id=100,
+        payload=_healthy_payload(logical_document_id=999),
+    )
+    _seed_point(
+        qdrant_client,
+        point_id=101,
+        payload=_healthy_payload(document_chunk_id=101, modality="image"),
+    )
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["scanned_count"] == 2
+    assert result.result_json["stale_found_count"] == 2
+    assert result.result_json["repaired_count"] == 2
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+    assert qdrant_client.points[_COLLECTION][101].payload["is_active"] is False
 
 
 def test_wrong_point_id_with_healthy_payload_is_deleted(
@@ -319,6 +400,8 @@ def test_wrong_point_id_with_healthy_payload_is_deleted(
     healthy_payload: dict[str, object] = {
         "document_chunk_id": 100,
         "document_version_id": 10,
+        "logical_document_id": 1,
+        "modality": "text",
         "is_active": True,
     }
     legit_point_id = point_id_for_chunk_id(100)
@@ -331,9 +414,9 @@ def test_wrong_point_id_with_healthy_payload_is_deleted(
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 2
-    assert result.result_json["stale_found"] == 1
-    assert result.result_json["repaired"] == 1
+    assert result.result_json["scanned_count"] == 2
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
     # The rogue point at the wrong id is deleted; the legitimate point survives.
     assert rogue_point_id not in qdrant_client.points[_COLLECTION]
     assert legit_point_id in qdrant_client.points[_COLLECTION]
@@ -358,7 +441,7 @@ def test_max_points_cap_is_respected(session_factory: sessionmaker[Session]) -> 
     )
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 3
+    assert result.result_json["scanned_count"] == 3
 
 
 def test_lease_lost_midway_stops_before_second_batch_repairs(
@@ -373,12 +456,12 @@ def test_lease_lost_midway_stops_before_second_batch_repairs(
     _seed_point(
         qdrant_client,
         point_id=100,
-        payload={"document_chunk_id": 100, "document_version_id": 10, "is_active": True},
+        payload=_healthy_payload(),
     )
     _seed_point(
         qdrant_client,
         point_id=200,
-        payload={"document_chunk_id": 200, "document_version_id": 20, "is_active": True},
+        payload=_healthy_payload(document_chunk_id=200, document_version_id=20),
     )
 
     job_repository = _LeaseLostOnSecondBatchJobRepository()
@@ -423,7 +506,7 @@ def test_malformed_point_payload_is_skipped(session_factory: sessionmaker[Sessio
     result = _handler(session_factory, qdrant_client).handle(_context())
 
     assert result.status == "succeeded"
-    assert result.result_json["scanned"] == 1
-    assert result.result_json["skipped"] == 1
-    assert result.result_json["repaired"] == 0
+    assert result.result_json["scanned_count"] == 1
+    assert result.result_json["skipped_count"] == 1
+    assert result.result_json["repaired_count"] == 0
     assert 100 in qdrant_client.points[_COLLECTION]

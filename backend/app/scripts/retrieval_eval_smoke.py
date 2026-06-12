@@ -57,6 +57,7 @@ ALLOWED_STRATEGIES = {
     RetrievalStrategy.AGENTIC_ROUTER.value,
     RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
     RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+    RetrievalStrategy.LANGGRAPH_AGENTIC.value,
 }
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_VALUE_RE = re.compile(
@@ -854,21 +855,25 @@ def _can_use_signal_timeout() -> bool:
 
 
 def _run_with_signal_timeout(timeout_seconds: float, func: Callable[[], T]) -> T:
-    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal_attrs = vars(signal)
+    sigalrm = cast(int, signal_attrs["SIGALRM"])
+    itimer_real = cast(int, signal_attrs["ITIMER_REAL"])
+    setitimer = cast(Callable[[int, float], object], signal_attrs["setitimer"])
+    previous_handler = signal.getsignal(sigalrm)
 
     def _handle_timeout(signum: int, frame: FrameType | None) -> None:
         del signum, frame
         raise _SmokeTimeout()
 
-    signal.signal(signal.SIGALRM, _handle_timeout)
-    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+    signal.signal(sigalrm, _handle_timeout)
+    setitimer(itimer_real, float(timeout_seconds))
     try:
         return func()
     except _SmokeTimeout as exc:
         raise SmokeError("timeout_exceeded") from exc
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0.0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        setitimer(itimer_real, 0.0)
+        signal.signal(sigalrm, previous_handler)
 
 
 def _requires_vector_retrieval(config: SmokeConfig, settings: Settings) -> bool:
@@ -878,6 +883,7 @@ def _requires_vector_retrieval(config: SmokeConfig, settings: Settings) -> bool:
         or RetrievalStrategy.AGENTIC_ROUTER.value in strategies
         or RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value in strategies
         or RetrievalStrategy.LANGCHAIN_AGENTIC.value in strategies
+        or RetrievalStrategy.LANGGRAPH_AGENTIC.value in strategies
         or (RetrievalStrategy.HYBRID.value in strategies and settings.hybrid_dense_weight > 0)
     )
 
@@ -887,6 +893,7 @@ def _requires_sparse_retrieval(config: SmokeConfig, settings: Settings) -> bool:
     tool_agentic_requested = (
         RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value in strategies
         or RetrievalStrategy.LANGCHAIN_AGENTIC.value in strategies
+        or RetrievalStrategy.LANGGRAPH_AGENTIC.value in strategies
     )
     return (
         RetrievalStrategy.SPARSE.value in strategies
@@ -904,6 +911,7 @@ def _requires_rerank(config: SmokeConfig) -> bool:
             RetrievalStrategy.AGENTIC_ROUTER.value,
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
             RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+            RetrievalStrategy.LANGGRAPH_AGENTIC.value,
         }
     )
 

@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import NamedTuple
 
 from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.schemas.common import PaginationParams
+
+
+class ChunkIndexPayloadRef(NamedTuple):
+    document_version_id: int
+    logical_document_id: int
+    modality: str
 
 
 class DocumentRepository:
@@ -239,6 +246,34 @@ class DocumentRepository:
         return {
             int(document_chunk_id): int(document_version_id)
             for document_chunk_id, document_version_id in rows
+        }
+
+    def chunk_index_payload_refs(
+        self, db: Session, *, document_chunk_ids: Sequence[int]
+    ) -> dict[int, ChunkIndexPayloadRef]:
+        """Return source-of-truth Qdrant filter payload refs for existing chunks."""
+        if not document_chunk_ids:
+            return {}
+        rows = db.execute(
+            select(
+                DocumentChunk.document_chunk_id,
+                DocumentChunk.document_version_id,
+                DocumentVersion.logical_document_id,
+                DocumentChunk.modality,
+            )
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .where(DocumentChunk.document_chunk_id.in_(list(document_chunk_ids)))
+        ).all()
+        return {
+            int(document_chunk_id): ChunkIndexPayloadRef(
+                document_version_id=int(document_version_id),
+                logical_document_id=int(logical_document_id),
+                modality=str(modality),
+            )
+            for document_chunk_id, document_version_id, logical_document_id, modality in rows
         }
 
     def version_index_states(

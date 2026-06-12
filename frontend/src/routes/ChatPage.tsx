@@ -43,6 +43,11 @@ const RAG_STRATEGY_OPTIONS = [
     description: "LangChain Agentic RAG: the same retrieval tools are orchestrated through LangChain runnables."
   },
   {
+    value: "langgraph_agentic" as const,
+    label: "LangGraph Agentic",
+    description: "LangGraph Agentic RAG: the same retrieval tools are orchestrated through a LangGraph StateGraph."
+  },
+  {
     value: "dense" as const,
     label: "Normal RAG",
     description: "Dense vector retrieval followed by answer generation."

@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     langchain_agentic_max_tool_result_items: int = Field(default=10, ge=1, le=20)
     langchain_agentic_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     langchain_agentic_allow_admin_tools: bool = False
+    langgraph_agentic_enabled: bool = True
+    langgraph_agentic_max_tool_calls: int = Field(default=8, ge=1, le=10)
+    langgraph_agentic_max_search_calls: int = Field(default=8, ge=1, le=10)
+    langgraph_agentic_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
+    langgraph_agentic_max_query_chars: int = Field(default=500, ge=1, le=1000)
+    langgraph_agentic_max_tool_result_items: int = Field(default=10, ge=1, le=20)
+    langgraph_agentic_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
+    langgraph_agentic_allow_admin_tools: bool = False
     tool_result_compression_enabled: bool = True
     tool_result_compression_max_items_per_tool: int = Field(default=8, ge=1, le=100)
     tool_result_compression_max_total_items_per_turn: int = Field(default=20, ge=1, le=200)
@@ -282,6 +290,7 @@ class Settings(BaseSettings):
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
+            "langgraph_agentic",
         ]
     )
     mcp_include_trace_summary_default: bool = False
@@ -374,6 +383,12 @@ class Settings(BaseSettings):
             )
         if self.langchain_agentic_allow_admin_tools:
             raise ValueError("LANGCHAIN_AGENTIC_ALLOW_ADMIN_TOOLS must be false")
+        if self.langgraph_agentic_max_search_calls > self.langgraph_agentic_max_tool_calls:
+            raise ValueError(
+                "LANGGRAPH_AGENTIC_MAX_SEARCH_CALLS must be <= LANGGRAPH_AGENTIC_MAX_TOOL_CALLS"
+            )
+        if self.langgraph_agentic_allow_admin_tools:
+            raise ValueError("LANGGRAPH_AGENTIC_ALLOW_ADMIN_TOOLS must be false")
         if (
             self.tool_result_compression_max_items_per_tool
             > self.tool_result_compression_max_total_items_per_turn
@@ -505,13 +520,15 @@ class Settings(BaseSettings):
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
+            "langgraph_agentic",
         }
         if not self.mcp_allowed_strategies or any(
             item not in allowed_mcp_strategies for item in self.mcp_allowed_strategies
         ):
             raise ValueError(
                 "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, "
-                "agentic_router, llm_tool_orchestrator, langchain_agentic"
+                "agentic_router, llm_tool_orchestrator, langchain_agentic, "
+                "langgraph_agentic"
             )
         if self.mcp_allow_evaluation_run_create:
             raise ValueError("MCP_ALLOW_EVALUATION_RUN_CREATE must be false in PR-38")

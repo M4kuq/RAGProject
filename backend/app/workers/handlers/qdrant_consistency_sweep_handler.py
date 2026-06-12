@@ -46,13 +46,14 @@ class QdrantConsistencySweepHandler:
 
     The sweep scrolls points in the configured collection and, for each point,
     compares its payload (``document_chunk_id`` / ``document_version_id`` /
-    ``is_active``) against Postgres. Points whose chunk row is missing or whose
-    version no longer exists are orphans and get deleted. Points whose chunk
-    belongs to a different version than the payload claims have corrupted
-    metadata and are repaired (set inactive), not deleted. Points whose version
-    is archived/inactive in Postgres but still flagged active in Qdrant are
-    repaired by setting ``is_active=False``. Repairs reuse the indexing
-    service's delete / set-payload helpers rather than raw client calls.
+    ``logical_document_id`` / ``modality`` / ``is_active``) against Postgres.
+    Points whose chunk row is missing are orphans and get deleted. Points whose
+    chunk exists but whose payload version/filter fields disagree with the
+    source-of-truth chunk metadata are repaired (set inactive), not deleted.
+    Points whose version is archived/inactive in Postgres but still flagged
+    active in Qdrant are repaired by setting ``is_active=False``. Repairs reuse
+    the indexing service's delete / set-payload helpers rather than raw client
+    calls.
 
     This job is **manually enqueued** (by ops scripts or an operator) in
     Phase 1. It is intentionally NOT scheduled automatically.
@@ -106,10 +107,10 @@ class QdrantConsistencySweepHandler:
 
         return JobHandlerResult.succeeded(
             {
-                "scanned": counts.scanned,
-                "stale_found": counts.stale_found,
-                "repaired": counts.repaired,
-                "skipped": counts.skipped,
+                "scanned_count": counts.scanned,
+                "stale_found_count": counts.stale_found,
+                "repaired_count": counts.repaired,
+                "skipped_count": counts.skipped,
             }
         )
 
@@ -133,9 +134,10 @@ class QdrantConsistencySweepHandler:
 
         db = self.session_factory()
         try:
-            chunk_version_ids = self.repository.chunk_version_ids(
+            chunk_refs = self.repository.chunk_index_payload_refs(
                 db, document_chunk_ids=list(chunk_ids)
             )
+            version_ids.update(ref.document_version_id for ref in chunk_refs.values())
             version_states = self.repository.version_index_states(
                 db, document_version_ids=list(version_ids)
             )
@@ -160,21 +162,28 @@ class QdrantConsistencySweepHandler:
                 # vector for its claimed chunk, so deleting it loses nothing valid.
                 delete_ids.append(point.point_id)
                 continue
-            if chunk_id not in chunk_version_ids or version_id not in version_states:
+            chunk_ref = chunk_refs.get(chunk_id)
+            if chunk_ref is None:
                 delete_ids.append(point.point_id)
                 continue
-            if chunk_version_ids[chunk_id] != version_id:
-                # The chunk exists but belongs to a different version than the
-                # payload claims: corrupted payload metadata. Mark it inactive
-                # (a reversible repair) rather than delete -- the underlying
-                # vector may still be valid for its real version, and deleting
-                # would permanently lose it until re-ingest.
-                if bool(point.payload.get("is_active")):
-                    repair_ids.append(point.point_id)
-                else:
-                    counts.stale_found += 1
+            if _payload_disagrees_with_chunk_ref(
+                point.payload,
+                payload_version_id=version_id,
+                chunk_version_id=chunk_ref.document_version_id,
+                logical_document_id=chunk_ref.logical_document_id,
+                modality=chunk_ref.modality,
+            ):
+                # The chunk exists, but one or more Qdrant filter payload fields
+                # are stale/corrupted. Mark it inactive (a reversible repair)
+                # rather than delete -- the vector may still be the only valid
+                # vector for the chunk's real version until re-ingest.
+                _repair_or_count_inactive_stale(point, repair_ids, counts)
                 continue
-            version_status, is_active, document_status = version_states[version_id]
+            version_state = version_states.get(chunk_ref.document_version_id)
+            if version_state is None:
+                delete_ids.append(point.point_id)
+                continue
+            version_status, is_active, document_status = version_state
             should_be_inactive = (
                 document_status == "archived" or version_status == "archived" or not is_active
             )
@@ -243,3 +252,31 @@ def _payload_positive_int(payload: dict[str, object], key: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         return None
     return cast(int, value)
+
+
+def _payload_disagrees_with_chunk_ref(
+    payload: dict[str, object],
+    *,
+    payload_version_id: int,
+    chunk_version_id: int,
+    logical_document_id: int,
+    modality: str,
+) -> bool:
+    payload_logical_document_id = _payload_positive_int(payload, "logical_document_id")
+    payload_modality = payload.get("modality")
+    return (
+        payload_version_id != chunk_version_id
+        or payload_logical_document_id != logical_document_id
+        or payload_modality != modality
+    )
+
+
+def _repair_or_count_inactive_stale(
+    point: ScrolledPoint,
+    repair_ids: list[int],
+    counts: _SweepCounts,
+) -> None:
+    if bool(point.payload.get("is_active")):
+        repair_ids.append(point.point_id)
+    else:
+        counts.stale_found += 1

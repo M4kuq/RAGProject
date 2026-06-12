@@ -42,6 +42,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
         "fallback_dense",
     )
     assert RETRIEVAL_SOURCE_VALUES == (
@@ -70,6 +71,7 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert "fallback_dense" not in RAG_SEARCH_REQUEST_STRATEGY_VALUES
     assert "fallback_dense" not in RAG_ASK_REQUEST_STRATEGY_VALUES
@@ -90,6 +92,7 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert _field_enum_values(EvaluationRunCreateRequest.model_json_schema(), "strategy_type") == (
         "dense",
@@ -98,6 +101,7 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert "fallback_dense" not in _field_enum_values(
         EvaluationRunCreateRequest.model_json_schema(), "strategy_type"
@@ -137,6 +141,27 @@ def test_langchain_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
     assert "_rewrite_langchain_strategy_json()" in source
     assert "WHERE strategy_type = 'langchain_agentic'" in source
     assert "SET strategy_type = 'llm_tool_orchestrator'" in source
+    assert "evaluation_runs" in source
+    assert "metrics_config" in source
+    assert "jobs" in source
+    assert "payload_json" in source
+    assert "job_type = 'evaluation_run'" in source
+    assert "jsonb_array_elements_text" in source
+
+
+def test_langgraph_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0015_langgraph_agentic_strategy.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert "_rewrite_langgraph_strategy_rows()" in source
+    assert "_rewrite_langgraph_strategy_json()" in source
+    assert "WHERE strategy_type = 'langgraph_agentic'" in source
+    assert "SET strategy_type = 'langchain_agentic'" in source
     assert "evaluation_runs" in source
     assert "metrics_config" in source
     assert "jobs" in source
@@ -218,7 +243,7 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "0014_graph_retrieval_strategy_router.py"
+        / "0015_langgraph_agentic_strategy.py"
     )
     tree = ast.parse(migration.read_text(encoding="utf-8"))
     constants: dict[str, tuple[str, ...]] = {}

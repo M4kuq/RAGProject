@@ -27,15 +27,19 @@ from app.scripts.retrieval_eval_smoke import (
 
 
 def test_parse_strategies_dedupes_and_rejects_unsupported() -> None:
-    assert parse_strategies("dense, hybrid, dense, agentic_router, langchain_agentic") == [
+    assert parse_strategies(
+        "dense, hybrid, dense, agentic_router, langchain_agentic, langgraph_agentic"
+    ) == [
         "dense",
         "hybrid",
         "agentic_router",
         "langchain_agentic",
+        "langgraph_agentic",
     ]
-    assert parse_strategies("llm_tool_orchestrator,langchain_agentic") == [
+    assert parse_strategies("llm_tool_orchestrator,langchain_agentic,langgraph_agentic") == [
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     ]
 
     with pytest.raises(SmokeError, match="invalid_strategy:fallback_dense"):

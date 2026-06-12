@@ -46,6 +46,9 @@ const LATENCY_KEYS = [
   "langchain_agentic_ms",
   "langchain_planning_ms",
   "langchain_tool_execution_ms",
+  "langgraph_agentic_ms",
+  "langgraph_planning_ms",
+  "langgraph_tool_execution_ms",
   "initial_retrieval_ms",
   "fallback_retrieval_ms",
   "sufficiency_check_ms",
@@ -92,13 +95,13 @@ export function RetrievalDebugPage() {
   const latestRunId = selectedRunId ?? history.data?.items[0]?.retrieval_run_id ?? null;
   const detail = useRetrievalRunDebugDetail(latestRunId);
   const evaluations = useEvaluationRuns({ page: 1, page_size: 5 });
-  const searchItems =
-    latestRunId !== null && latestRunId === search.data?.retrieval_run_id ? search.data.items : [];
-
-  const displayItems = useMemo(
-    () => buildDisplayItems(searchItems, detail.data?.items ?? []),
-    [searchItems, detail.data?.items]
-  );
+  const displayItems = useMemo(() => {
+    const searchItems =
+      latestRunId !== null && latestRunId === search.data?.retrieval_run_id
+        ? search.data.items
+        : [];
+    return buildDisplayItems(searchItems, detail.data?.items ?? []);
+  }, [detail.data?.items, latestRunId, search.data?.items, search.data?.retrieval_run_id]);
 
   useEffect(() => {
     if (selectedRunId === null && history.data?.items.length) {
@@ -255,7 +258,9 @@ function SearchResultSummary({
   const summary = safeRecord(run?.retrieval_score_summary ?? searchData?.retrieval_score_summary);
   const decision = safeRecord(run?.strategy_decision_json);
   const preferSummaryTrace =
-    run?.strategy_type === "llm_tool_orchestrator" || run?.strategy_type === "langchain_agentic";
+    run?.strategy_type === "llm_tool_orchestrator" ||
+    run?.strategy_type === "langchain_agentic" ||
+    run?.strategy_type === "langgraph_agentic";
   const isToolOrchestrator = preferSummaryTrace;
   return (
     <section className="admin-section">
@@ -393,7 +398,9 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
   const latency = safeRecord(run.latency_breakdown_json);
   const summary = safeRecord(run.retrieval_score_summary);
   const preferSummaryTrace =
-    run.strategy_type === "llm_tool_orchestrator" || run.strategy_type === "langchain_agentic";
+    run.strategy_type === "llm_tool_orchestrator" ||
+    run.strategy_type === "langchain_agentic" ||
+    run.strategy_type === "langgraph_agentic";
   const isToolOrchestrator = preferSummaryTrace;
 
   return (
