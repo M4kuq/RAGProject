@@ -227,16 +227,16 @@ PR-27 does not execute StrategyRouter, Agentic Retrieval Loop, context sufficien
 
 PR-28 adds:
 
-- deterministic rule-based `StrategyRouter`
+- `StrategyRouter` with `rule_based` mode and optional bounded LLM planner mode
 - `RouterDecisionTrace` persisted in `retrieval_runs.strategy_decision_json`
 - `/api/v1/rag/search` `strategy=agentic_router`
 - `/api/v1/rag/ask` explicit `strategy=agentic_router`
 - one selected execution strategy per request: `dense`, `sparse`, `hybrid`, or `fallback_dense`
 - safe fallback to dense when router is disabled, fails, or selects an unavailable strategy
 - `strategy_router_ms` latency span
-- Retrieval Debug UI display for requested strategy, selected strategy, execution strategy, fallback, confidence, reason codes, disabled candidates, and safety flags
+- Retrieval Debug UI display for requested strategy, selected strategy, execution strategy, fallback, confidence, reason codes, disabled candidates, planner metadata, and safety flags
 
-PR-28 stores `retrieval_runs.strategy_type = agentic_router` for router-triggered runs and stores the actual execution strategy in `strategy_decision_json.execution_strategy`. It does not implement Agentic Retrieval Loop, context sufficiency checks, additional retrieval calls, multi-query execution, metadata-filtered execution, version-aware execution, LLM router execution, LangSmith export, Graph-RAG, OCR, or external operation agents.
+PR-28 stores `retrieval_runs.strategy_type = agentic_router` for router-triggered runs and stores the actual execution strategy in `strategy_decision_json.execution_strategy`. It does not implement unbounded agent loops, multi-query execution, metadata-filtered execution, version-aware execution, LangSmith export, Graph-RAG, OCR, or external operation agents.
 
 ## PR-29 Agentic Retrieval Loop / Context Sufficiency Check
 
@@ -245,7 +245,7 @@ PR-29 adds:
 - bounded `AgenticRetrievalExecutor`
 - deterministic `ContextSufficiencyChecker`
 - retrieval budget settings with default `max_retrieval_calls = 2`
-- fallback retrieval when the first router-selected result is insufficient
+- fallback retrieval when the first router-selected result is insufficient, using the bounded LLM planner first when `ROUTER_MODE=llm`
 - merge and dedupe by `document_chunk_id`
 - rerank after merged candidates
 - safe sufficiency, fallback, retrieval-call-count, budget, and latency trace fields

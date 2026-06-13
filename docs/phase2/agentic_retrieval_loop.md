@@ -2,7 +2,7 @@
 
 ## Purpose
 
-PR-29 adds a bounded `AgenticRetrievalExecutor` on top of PR-28 `StrategyRouter`. The router still chooses the initial execution strategy, but `agentic_router` requests can now check whether the first retrieval result is sufficient and, when budget allows, run one deterministic fallback retrieval before final persistence.
+PR-29 adds a bounded `AgenticRetrievalExecutor` on top of PR-28 `StrategyRouter`. The router still chooses the initial execution strategy, but `agentic_router` requests can now check whether the first retrieval result is sufficient and, when budget allows, run one fallback retrieval before final persistence. When `ROUTER_MODE=llm`, the fallback strategy can be selected by the same bounded LLM planner; invalid planner output falls back to the deterministic order below.
 
 This PR does not implement Graph-RAG, OCR, multi-agent orchestration, unbounded self-reflection, external operation agents, LangSmith export, or SentenceTransformers experiments.
 
@@ -15,7 +15,7 @@ This PR does not implement Graph-RAG, OCR, multi-agent orchestration, unbounded 
 3. Execute the initial retrieval without persisting items.
 4. Run `ContextSufficiencyChecker` on counts, scores, source diversity, and safe query intent.
 5. If sufficient, merge/dedupe the initial result and rerank once before saving final items.
-6. If insufficient and budget remains, run one fallback strategy, merge/dedupe by `document_chunk_id`, rerank the merged candidates, and check sufficiency again.
+6. If insufficient and budget remains, ask the LLM planner for the next strategy when `ROUTER_MODE=llm`; otherwise use the deterministic fallback order. Merge/dedupe by `document_chunk_id`, rerank the merged candidates, and check sufficiency again.
 7. If still insufficient, search returns best-effort debug results while ask returns `422 no_context_found` without creating an assistant message.
 
 ## Budget
@@ -46,7 +46,15 @@ Reason codes include `no_candidates`, `too_few_candidates`, `too_few_selected_ca
 
 ## Fallback
 
-Fallback is deterministic:
+Fallback is planner-first in `ROUTER_MODE=llm`:
+
+- the planner sees only the query, safe query intent, available fallback strategies, attempt counts/scores, and sufficiency summaries
+- the planner may return `action=retrieve` with one of `dense`, `sparse`, `hybrid`, or `fallback_dense`
+- the planner may return `action=finalize` to stop additional retrieval
+- already executed strategy families and unavailable strategies are rejected
+- invalid JSON, empty response, HTTP errors, timeouts, and rejected strategies fall back to the deterministic order
+
+The deterministic fallback order is:
 
 - initial `dense` or `fallback_dense` tries `hybrid` first when enabled, then dense fallback.
 - initial `sparse` tries `hybrid`, then dense fallback.
@@ -76,6 +84,14 @@ The final merged candidates are reranked once before persistence. `retrieval_run
 - `sufficiency_decisions`
 - candidate counts and final selected count
 - `no_context`
+- `llm_planner_used`
+- `planner_provider`
+- `planner_model`
+- `planner_action`
+- `planner_selected_strategy`
+- `planner_reason_codes`
+- `planner_fallback_reason`
+- `planner_events`
 
 `latency_breakdown_json` can include:
 

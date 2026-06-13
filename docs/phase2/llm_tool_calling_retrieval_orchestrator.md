@@ -1,7 +1,8 @@
 # LLM Tool-Calling Retrieval Orchestrator
 
 PR-39 adds an opt-in RAG mode named `llm_tool_orchestrator`. It is separate from
-the existing rule-based `agentic_router`.
+the existing `agentic_router`, which can run in rule-based or bounded LLM planner
+mode.
 
 ## Modes
 
@@ -9,7 +10,7 @@ the existing rule-based `agentic_router`.
 |---|---|---|
 | Normal RAG | `dense` | Dense vector retrieval, rerank, answer generation |
 | Hybrid RAG | `hybrid` | Dense + sparse retrieval with fusion, then answer generation |
-| Agentic Router | `agentic_router` | Rule-based query plan and bounded fallback retrieval |
+| Agentic Router | `agentic_router` | Query plan plus rule-based or bounded LLM planner strategy routing |
 | LLM Agentic RAG | `llm_tool_orchestrator` | LLM chooses retrieval-only tools in a bounded loop |
 
 ## Retrieval-Only Tools

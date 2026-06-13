@@ -13,8 +13,9 @@ limitations are intentional Phase2 boundaries or known areas for Phase3.
   experiments.
 - Query Analyzer and Query Planner are deterministic rule-based components.
   They do not use a full LLM planner.
-- Strategy Router is rule-based and bounded. It selects implemented strategies
-  only and falls back to dense when needed.
+- Strategy Router is bounded. It can use a small LLM planner for strategy
+  selection, but it still selects implemented retrieval strategies only and
+  falls back to the deterministic rule-based policy when needed.
 - Agentic Retrieval Loop is intentionally small. Additional retrieval calls are
   bounded by settings, normally one initial call plus at most one fallback.
 - LLM Agentic RAG is a bounded retrieval-only tool orchestrator. It can choose

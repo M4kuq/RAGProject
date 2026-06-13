@@ -579,6 +579,10 @@ def _max_output_tokens_for_chars(max_output_chars: int) -> int:
 def _lmstudio_model_name(value: str) -> str:
     normalized = value.strip()
     lower = normalized.lower()
+    if lower.startswith("https://huggingface.co/lmstudio-community/qwen3.5-4b-gguf"):
+        return "qwen3.5-4b"
+    if lower.startswith("lmstudio-community/qwen3.5-4b-gguf"):
+        return "qwen3.5-4b"
     if lower.startswith("https://huggingface.co/lmstudio-community/qwen3.5-9b-gguf"):
         return "qwen3.5-9b"
     if lower.startswith("lmstudio-community/qwen3.5-9b-gguf"):
