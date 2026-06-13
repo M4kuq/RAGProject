@@ -237,6 +237,34 @@ def test_agentic_planner_falls_back_on_http_error_and_timeout(
     assert timeout_result.fallback_reason == "planner_http_error"
 
 
+def test_agentic_planner_falls_back_on_non_object_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> list[dict[str, Any]]:
+            return [{"choices": [{"message": {"content": "{}"}}]}]
+
+    monkeypatch.setattr(
+        "app.rag.agentic_planner.httpx.post",
+        lambda *args, **kwargs: Response(),
+    )
+    planner = OpenAICompatibleAgenticStrategyPlanner(
+        provider="lmstudio",
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen3.5-4b",
+        timeout_seconds=10,
+        max_output_tokens=256,
+    )
+
+    result = planner.plan(_planning_request())
+
+    assert result.plan is None
+    assert result.fallback_reason == "planner_invalid_response"
+
+
 def test_agentic_planner_is_not_created_for_rule_based_or_fake_provider() -> None:
     assert create_agentic_strategy_planner(Settings(app_env="test")) is None
     assert (

@@ -178,6 +178,12 @@ class OpenAICompatibleAgenticStrategyPlanner:
                 provider=self.provider,
                 model=self.model_name,
             )
+        if not isinstance(data, dict):
+            return AgenticPlannerResult(
+                fallback_reason="planner_invalid_response",
+                provider=self.provider,
+                model=self.model_name,
+            )
         content = _extract_chat_content(data)
         if not content:
             return AgenticPlannerResult(
