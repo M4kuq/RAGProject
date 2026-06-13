@@ -34,6 +34,7 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "multi_query_dense",
         "multi_query_hybrid",
         "metadata_filtered",
@@ -41,12 +42,14 @@ def test_retrieval_strategy_enum_values_are_phase2_baseline() -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
         "fallback_dense",
     )
     assert RETRIEVAL_SOURCE_VALUES == (
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "rerank",
         "fallback_dense",
         "metadata_filter",
@@ -58,14 +61,17 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "agentic_router",
     )
     assert RAG_ASK_REQUEST_STRATEGY_VALUES == (
         "dense",
         "hybrid",
+        "graph",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert "fallback_dense" not in RAG_SEARCH_REQUEST_STRATEGY_VALUES
     assert "fallback_dense" not in RAG_ASK_REQUEST_STRATEGY_VALUES
@@ -76,14 +82,17 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "dense",
         "sparse",
         "hybrid",
+        "graph",
         "agentic_router",
     )
     assert _field_enum_values(RagAskRequest.model_json_schema(), "strategy") == (
         "dense",
         "hybrid",
+        "graph",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert _field_enum_values(EvaluationRunCreateRequest.model_json_schema(), "strategy_type") == (
         "dense",
@@ -92,6 +101,7 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     )
     assert "fallback_dense" not in _field_enum_values(
         EvaluationRunCreateRequest.model_json_schema(), "strategy_type"
@@ -131,6 +141,27 @@ def test_langchain_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
     assert "_rewrite_langchain_strategy_json()" in source
     assert "WHERE strategy_type = 'langchain_agentic'" in source
     assert "SET strategy_type = 'llm_tool_orchestrator'" in source
+    assert "evaluation_runs" in source
+    assert "metrics_config" in source
+    assert "jobs" in source
+    assert "payload_json" in source
+    assert "job_type = 'evaluation_run'" in source
+    assert "jsonb_array_elements_text" in source
+
+
+def test_langgraph_agentic_strategy_migration_downgrade_rewrites_rows() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0015_langgraph_agentic_strategy.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert "_rewrite_langgraph_strategy_rows()" in source
+    assert "_rewrite_langgraph_strategy_json()" in source
+    assert "WHERE strategy_type = 'langgraph_agentic'" in source
+    assert "SET strategy_type = 'langchain_agentic'" in source
     assert "evaluation_runs" in source
     assert "metrics_config" in source
     assert "jobs" in source
@@ -212,41 +243,21 @@ def _migration_constants() -> dict[str, tuple[str, ...]]:
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "0013_langchain_agentic_strategy.py"
+        / "0015_langgraph_agentic_strategy.py"
     )
     tree = ast.parse(migration.read_text(encoding="utf-8"))
     constants: dict[str, tuple[str, ...]] = {}
-    old_strategy_values: tuple[str, ...] | None = None
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        if node.targets[0].id == "OLD_RETRIEVAL_STRATEGY_VALUES":
-            old_strategy_values = tuple(ast.literal_eval(node.value))
             continue
         if node.targets[0].id == "NEW_RETRIEVAL_STRATEGY_VALUES":
-            assert old_strategy_values is not None
-            constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(
-                (*old_strategy_values[:-1], "langchain_agentic", old_strategy_values[-1])
-            )
+            constants["RETRIEVAL_STRATEGY_VALUES"] = tuple(ast.literal_eval(node.value))
             continue
-
-    source_migration = (
-        Path(__file__).resolve().parents[1]
-        / "alembic"
-        / "versions"
-        / "0003_phase2_strategy_trace.py"
-    )
-    tree = ast.parse(source_migration.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
+        if node.targets[0].id == "NEW_RETRIEVAL_SOURCE_VALUES":
+            constants["RETRIEVAL_SOURCE_VALUES"] = tuple(ast.literal_eval(node.value))
             continue
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        if node.targets[0].id != "RETRIEVAL_SOURCE_VALUES":
-            continue
-        constants["RETRIEVAL_SOURCE_VALUES"] = tuple(ast.literal_eval(node.value))
     return constants
 
 

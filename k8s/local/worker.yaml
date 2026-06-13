@@ -17,6 +17,8 @@ spec:
         app.kubernetes.io/name: ragproject
         app.kubernetes.io/component: worker
     spec:
+      securityContext:
+        fsGroup: 10001
       initContainers:
         - name: wait-migration
           image: ragproject-worker:local
@@ -30,6 +32,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -49,6 +55,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -93,6 +103,8 @@ spec:
               cpu: "1"
               memory: 1Gi
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
             allowPrivilegeEscalation: false
           volumeMounts:
             - name: upload-storage

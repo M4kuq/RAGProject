@@ -110,6 +110,7 @@ jobs:
           provenance: false
           tags: ragproject-${{ matrix.image.name }}:ci
           cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,scope=${{ matrix.image.name }},mode=max
 
       - name: Build image with cache update
         if: github.event_name != 'pull_request'

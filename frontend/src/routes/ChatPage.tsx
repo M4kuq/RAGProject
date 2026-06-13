@@ -43,6 +43,11 @@ const RAG_STRATEGY_OPTIONS = [
     description: "LangChain Agentic RAG: the same retrieval tools are orchestrated through LangChain runnables."
   },
   {
+    value: "langgraph_agentic" as const,
+    label: "LangGraph Agentic",
+    description: "LangGraph Agentic RAG: the same retrieval tools are orchestrated through a LangGraph StateGraph."
+  },
+  {
     value: "dense" as const,
     label: "Normal RAG",
     description: "Dense vector retrieval followed by answer generation."
@@ -194,7 +199,6 @@ function ChatSidebar({
   currentRole,
   deletingSessionId,
   isAdmin,
-  mode,
   onDeleteChat,
   onEditChat,
   onToggle,
@@ -206,7 +210,6 @@ function ChatSidebar({
   currentRole: string | null;
   deletingSessionId: number | null;
   isAdmin: boolean;
-  mode: "active" | "temporary";
   onDeleteChat: (session: ChatSession) => void;
   onEditChat: (session: ChatSession) => void;
   onToggle: () => void;
@@ -709,7 +712,6 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         currentRole={currentRole}
         deletingSessionId={deletingSessionId}
         isAdmin={isAdmin}
-        mode={mode}
         onDeleteChat={requestDeleteChat}
         onEditChat={requestEditChat}
         onNewChat={startNewChat}

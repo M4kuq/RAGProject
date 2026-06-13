@@ -594,6 +594,11 @@ def test_document_ingest_handler_retry_cleans_existing_chunks_and_reinserts(
     assert result.status == "succeeded"
     assert result.result_json["status"] == "ready"
     assert result.result_json["indexed_count"] == result.result_json["chunk_count"]
+    result_json = cast(dict[str, int], result.result_json)
+    assert result_json["chunk_min_char_count"] >= 0
+    assert result_json["chunk_max_char_count"] >= result_json["chunk_min_char_count"]
+    assert result_json["chunk_min_char_count"] <= result_json["chunk_median_char_count"]
+    assert result_json["chunk_median_char_count"] <= result_json["chunk_max_char_count"]
     with session_factory() as db:
         version = db.get(DocumentVersion, version_id)
         chunks = db.scalars(
@@ -661,13 +666,18 @@ def test_worker_single_iteration_processes_document_ingest_success_and_failure(
     with session_factory() as db:
         jobs = {job.job_id: job for job in db.scalars(select(Job)).all()}
         assert jobs[1].status == "succeeded"
-        assert jobs[1].result_json == {
+        result_json = dict(cast(dict[str, object], jobs[1].result_json))
+        min_char_count = cast(int, result_json.pop("chunk_min_char_count"))
+        max_char_count = cast(int, result_json.pop("chunk_max_char_count"))
+        median_char_count = cast(int, result_json.pop("chunk_median_char_count"))
+        assert result_json == {
             "document_version_id": success_version_id,
             "logical_document_id": 1,
             "chunk_count": 2,
             "indexed_count": 2,
             "status": "ready",
         }
+        assert 0 <= min_char_count <= median_char_count <= max_char_count
         assert jobs[2].status == "failed"
         assert jobs[2].error_code == "storage_file_missing"
         assert db.query(DocumentChunk).filter_by(document_version_id=success_version_id).count() > 0

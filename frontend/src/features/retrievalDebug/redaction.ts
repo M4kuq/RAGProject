@@ -27,6 +27,11 @@ const SECRET_ASSIGNMENT_PATTERN =
 const URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\//i;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PHONE_PATTERN = /\b(?:\+?\d[\d ._-]{7,}\d)\b/;
+// The control characters are intentional here: this pattern exists specifically to
+// strip ASCII control chars (NUL..US and DEL) from redacted values so they cannot
+// corrupt terminal/log output. no-control-regex guards against *accidental* control
+// chars in patterns, which does not apply to this deliberate sanitization pattern.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001f\u007f]/g;
 
 export function isSensitiveKey(key: string): boolean {

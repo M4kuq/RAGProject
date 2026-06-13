@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_WEAK_SESSION_SECRETS = {
+    "dev-only-change-me",
+    "change-me-in-local-env",
+    "ci-only-change-me",
+}
 
 
 class Settings(BaseSettings):
@@ -115,6 +124,17 @@ class Settings(BaseSettings):
     hybrid_dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     hybrid_sparse_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=2, ge=1, le=5)
+    graph_retrieval_enabled: bool = False
+    graph_retrieval_max_start_entities: int = Field(default=5, ge=1, le=20)
+    graph_retrieval_max_depth: int = Field(default=2, ge=1, le=4)
+    graph_retrieval_max_paths: int = Field(default=20, ge=1, le=100)
+    graph_retrieval_max_relations_per_entity: int = Field(default=20, ge=1, le=100)
+    graph_retrieval_max_source_chunks: int = Field(default=20, ge=1, le=100)
+    graph_retrieval_timeout_ms: int = Field(default=3000, ge=100, le=30000)
+    graph_retrieval_fallback_strategy: str = "hybrid"
+    graph_retrieval_min_entity_match_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    graph_router_enabled: bool = False
+    graph_router_min_signal_score: float = Field(default=0.5, ge=0.0, le=1.0)
     sparse_enabled: bool = True
     sparse_provider: str = "postgres_fts"
     sparse_language: str = "simple"
@@ -161,6 +181,14 @@ class Settings(BaseSettings):
     langchain_agentic_max_tool_result_items: int = Field(default=10, ge=1, le=20)
     langchain_agentic_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     langchain_agentic_allow_admin_tools: bool = False
+    langgraph_agentic_enabled: bool = True
+    langgraph_agentic_max_tool_calls: int = Field(default=8, ge=1, le=10)
+    langgraph_agentic_max_search_calls: int = Field(default=8, ge=1, le=10)
+    langgraph_agentic_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
+    langgraph_agentic_max_query_chars: int = Field(default=500, ge=1, le=1000)
+    langgraph_agentic_max_tool_result_items: int = Field(default=10, ge=1, le=20)
+    langgraph_agentic_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
+    langgraph_agentic_allow_admin_tools: bool = False
     tool_result_compression_enabled: bool = True
     tool_result_compression_max_items_per_tool: int = Field(default=8, ge=1, le=100)
     tool_result_compression_max_total_items_per_turn: int = Field(default=20, ge=1, le=200)
@@ -262,6 +290,7 @@ class Settings(BaseSettings):
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
+            "langgraph_agentic",
         ]
     )
     mcp_include_trace_summary_default: bool = False
@@ -316,6 +345,9 @@ class Settings(BaseSettings):
             raise ValueError("HYBRID_FUSION_METHOD must be rrf or weighted")
         if self.hybrid_dense_weight + self.hybrid_sparse_weight <= 0:
             raise ValueError("At least one hybrid fusion weight must be positive")
+        self.graph_retrieval_fallback_strategy = self.graph_retrieval_fallback_strategy.lower()
+        if self.graph_retrieval_fallback_strategy not in {"dense", "hybrid"}:
+            raise ValueError("GRAPH_RETRIEVAL_FALLBACK_STRATEGY must be dense or hybrid")
         self.sparse_provider = self.sparse_provider.lower()
         if self.sparse_provider != "postgres_fts":
             raise ValueError("SPARSE_PROVIDER must be postgres_fts")
@@ -351,6 +383,12 @@ class Settings(BaseSettings):
             )
         if self.langchain_agentic_allow_admin_tools:
             raise ValueError("LANGCHAIN_AGENTIC_ALLOW_ADMIN_TOOLS must be false")
+        if self.langgraph_agentic_max_search_calls > self.langgraph_agentic_max_tool_calls:
+            raise ValueError(
+                "LANGGRAPH_AGENTIC_MAX_SEARCH_CALLS must be <= LANGGRAPH_AGENTIC_MAX_TOOL_CALLS"
+            )
+        if self.langgraph_agentic_allow_admin_tools:
+            raise ValueError("LANGGRAPH_AGENTIC_ALLOW_ADMIN_TOOLS must be false")
         if (
             self.tool_result_compression_max_items_per_tool
             > self.tool_result_compression_max_total_items_per_turn
@@ -482,13 +520,15 @@ class Settings(BaseSettings):
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
+            "langgraph_agentic",
         }
         if not self.mcp_allowed_strategies or any(
             item not in allowed_mcp_strategies for item in self.mcp_allowed_strategies
         ):
             raise ValueError(
                 "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, "
-                "agentic_router, llm_tool_orchestrator, langchain_agentic"
+                "agentic_router, llm_tool_orchestrator, langchain_agentic, "
+                "langgraph_agentic"
             )
         if self.mcp_allow_evaluation_run_create:
             raise ValueError("MCP_ALLOW_EVALUATION_RUN_CREATE must be false in PR-38")
@@ -498,15 +538,16 @@ class Settings(BaseSettings):
         self.qdrant_distance = {"cosine": "Cosine", "dot": "Dot", "euclid": "Euclid"}[distance]
 
         if self.app_env.lower() not in {"local", "ci", "test"}:
-            weak_values = {
-                "dev-only-change-me",
-                "change-me-in-local-env",
-                "ci-only-change-me",
-            }
-            if self.session_secret in weak_values or len(self.session_secret) < 32:
+            if self.session_secret in _WEAK_SESSION_SECRETS or len(self.session_secret) < 32:
                 raise ValueError("SESSION_SECRET must be set to a strong random value")
             if not self.session_cookie_secure:
                 raise ValueError("SESSION_COOKIE_SECURE=true is required outside local/ci/test")
+        elif self.session_secret in _WEAK_SESSION_SECRETS:
+            logger.warning(
+                "SESSION_SECRET is using a weak default value in app_env=%s; "
+                "set a strong random SESSION_SECRET before deploying.",
+                self.app_env,
+            )
         return self
 
     @property

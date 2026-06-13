@@ -89,6 +89,14 @@ class LocalRerankerClient:
         self.model_name = model_name
         self.score_min = score_min
         self.score_max = score_max
+        # Instance-level lazy cache of the loaded CrossEncoder: the heavy model is
+        # loaded at most once per LocalRerankerClient instance, not per rerank call.
+        # The cache lifetime therefore matches the owning RagService instance. In the
+        # API path RagService is built per request (rag_search_service dependency ->
+        # create_rag_service -> create_reranker), so for the local reranker to load
+        # the model only once the RagService (and thus this client) is expected to be
+        # constructed as a process-singleton rather than per request; deployments that
+        # use the "local" reranker should wire RagService that way.
         self._model: object | None = None
 
     def rerank(

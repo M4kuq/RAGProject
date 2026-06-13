@@ -14,5 +14,7 @@ EXPOSE 5173
 CMD ["npm", "run", "dev"]
 
 FROM deps AS build
+RUN chown -R node:node /app
 RUN npm run build
+USER node
 CMD ["sh", "-c", "test -f dist/index.html"]

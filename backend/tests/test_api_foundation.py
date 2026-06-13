@@ -112,6 +112,30 @@ def test_pagination_dependency_returns_validation_error() -> None:
     assert invalid.json()["meta"]["request_id"] == "page-2"
 
 
+def test_pagination_dependency_rejects_absurd_page_number() -> None:
+    app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
+    register_error_handlers(app)
+
+    @app.get("/items")
+    def items(
+        request: Request,
+        pagination: Annotated[PaginationParams, Depends(pagination_params)],
+    ) -> dict[str, object]:
+        page, meta = paginate([1, 2, 3], pagination)
+        return success_response(page, request, pagination=meta)
+
+    client = TestClient(app)
+
+    ok = client.get("/items?page=100000", headers={"X-Request-ID": "page-3"})
+    invalid = client.get("/items?page=100001", headers={"X-Request-ID": "page-4"})
+
+    assert ok.status_code == 200
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "validation_error"
+    assert invalid.json()["meta"]["request_id"] == "page-4"
+
+
 def test_admin_jobs_pagination_is_not_pre_limited_to_first_50_rows() -> None:
     engine = create_engine(
         "sqlite://",

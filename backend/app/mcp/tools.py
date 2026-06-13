@@ -102,6 +102,7 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                             "agentic_router",
                             "llm_tool_orchestrator",
                             "langchain_agentic",
+                            "langgraph_agentic",
                         ],
                         "default": "dense",
                     },
@@ -202,6 +203,28 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             handler=adapter.rag_ask_langchain_agentic,
         ),
         McpTool(
+            name="rag_ask_langgraph_agentic",
+            description=(
+                "LangGraph Agentic RAG ask wrapper for rag_ask(strategy=langgraph_agentic)."
+            ),
+            input_schema=_object_schema(
+                {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "rerank_top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "include_citations": {"type": "boolean", "default": True},
+                    "include_confidence": {"type": "boolean", "default": True},
+                    "include_trace_summary": {"type": "boolean"},
+                },
+                required=["question"],
+            ),
+            handler=adapter.rag_ask_langgraph_agentic,
+        ),
+        McpTool(
             name="rag_get_retrieval_trace",
             description="Get a safe retrieval trace summary by retrieval_run_id.",
             input_schema=_object_schema(
@@ -230,10 +253,11 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
                                 "agentic_router",
                                 "llm_tool_orchestrator",
                                 "langchain_agentic",
+                                "langgraph_agentic",
                             ],
                         },
                         "minItems": 1,
-                        "maxItems": 6,
+                        "maxItems": 7,
                     },
                     "mode": {"type": "string", "enum": ["latest_results"]},
                 },
@@ -368,6 +392,7 @@ def call_tool(
             "rag_ask_auto",
             "rag_ask_hybrid",
             "rag_ask_langchain_agentic",
+            "rag_ask_langgraph_agentic",
         }
         and structured.get("status") == "failed"
     )

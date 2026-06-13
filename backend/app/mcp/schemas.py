@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -12,6 +12,7 @@ McpCompareStrategy = Literal[
     "agentic_router",
     "llm_tool_orchestrator",
     "langchain_agentic",
+    "langgraph_agentic",
 ]
 
 
@@ -47,6 +48,7 @@ class McpRagAskInput(McpInputModel):
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     ] = "dense"
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
@@ -99,7 +101,9 @@ class McpCompareStrategiesInput(McpInputModel):
     strategies: list[McpCompareStrategy] = Field(
         default_factory=_default_compare_strategies,
         min_length=1,
-        max_length=6,
+        # Keep in lockstep with the McpCompareStrategy enum so the Pydantic limit
+        # never rejects a strategy list the MCP tool schema itself advertises.
+        max_length=len(get_args(McpCompareStrategy)),
     )
     mode: Literal["latest_results"] = "latest_results"
 

@@ -44,6 +44,18 @@ def test_latency_tracker_records_non_negative_durations() -> None:
     assert all(value >= 0 for value in snapshot.values() if isinstance(value, int))
 
 
+def test_latency_tracker_includes_graph_search_in_retrieval_total() -> None:
+    clock = _Clock([0.0, 0.01, 0.04, 0.05])
+    tracker = LatencyTracker(clock=clock)
+
+    with tracker.span("graph_search_ms"):
+        pass
+
+    snapshot = tracker.snapshot()
+    assert snapshot["graph_search_ms"] == 30
+    assert snapshot["retrieval_ms"] == 30
+
+
 def test_latency_tracker_excludes_nested_agentic_parent_spans_from_retrieval_total() -> None:
     clock = _Clock([0.0, 0.1])
     tracker = LatencyTracker(clock=clock)
@@ -101,6 +113,27 @@ def test_latency_tracker_excludes_nested_langchain_agentic_spans_from_retrieval_
     assert snapshot["langchain_agentic_ms"] == 100
     assert snapshot["langchain_planning_ms"] == 25
     assert snapshot["langchain_tool_execution_ms"] == 70
+    assert snapshot["retrieval_ms"] == 107
+    assert isinstance(snapshot["total_ms"], int)
+    assert 107 <= snapshot["total_ms"]
+
+
+def test_latency_tracker_excludes_nested_langgraph_agentic_spans_from_retrieval_total() -> None:
+    clock = _Clock([0.0, 0.2])
+    tracker = LatencyTracker(clock=clock)
+    tracker.record_ms("langgraph_agentic_ms", 100)
+    tracker.record_ms("langgraph_planning_ms", 25)
+    tracker.record_ms("langgraph_tool_execution_ms", 70)
+    tracker.record_ms("query_embedding_ms", 10)
+    tracker.record_ms("qdrant_search_ms", 20)
+    tracker.record_ms("rdb_final_check_ms", 5)
+    tracker.record_ms("retrieval_items_persist_ms", 7)
+
+    snapshot = tracker.snapshot()
+
+    assert snapshot["langgraph_agentic_ms"] == 100
+    assert snapshot["langgraph_planning_ms"] == 25
+    assert snapshot["langgraph_tool_execution_ms"] == 70
     assert snapshot["retrieval_ms"] == 107
     assert isinstance(snapshot["total_ms"], int)
     assert 107 <= snapshot["total_ms"]

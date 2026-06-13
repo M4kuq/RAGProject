@@ -479,6 +479,7 @@ CREATE TABLE retrieval_runs (
                 'agentic_router',
                 'llm_tool_orchestrator',
                 'langchain_agentic',
+                'langgraph_agentic',
                 'fallback_dense'
             )
         ),
@@ -672,6 +673,7 @@ CREATE TABLE evaluation_runs (
             'agentic_router',
             'llm_tool_orchestrator',
             'langchain_agentic',
+            'langgraph_agentic',
             'fallback_dense'
         )),
     CONSTRAINT ck_evaluation_runs_trigger_type
@@ -722,6 +724,7 @@ CREATE TABLE evaluation_run_items (
             'agentic_router',
             'llm_tool_orchestrator',
             'langchain_agentic',
+            'langgraph_agentic',
             'fallback_dense'
         ))
 );
@@ -756,6 +759,7 @@ CREATE TABLE evaluation_results (
             'agentic_router',
             'llm_tool_orchestrator',
             'langchain_agentic',
+            'langgraph_agentic',
             'fallback_dense'
         ))
 );

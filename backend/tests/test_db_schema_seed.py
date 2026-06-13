@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0013_langchain_agentic"
+    assert version == "0015_langgraph_agentic"
 
     expected_tables = {
         "roles",
@@ -311,6 +311,56 @@ def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> No
             assert item.retrieval_source == "dense"
             assert item.score_breakdown_json == {"dense_score": 0.9}
 
+            graph_chunk_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO document_chunks (
+                        document_version_id, chunk_index, chunk_hash, content_text, modality
+                    )
+                    VALUES (:document_version_id, 1, :chunk_hash, 'graph chunk', 'text')
+                    RETURNING document_chunk_id
+                    """
+                ),
+                {
+                    "document_version_id": version_id,
+                    "chunk_hash": suffix[:32].ljust(64, "c"),
+                },
+            ).scalar_one()
+            graph_item = conn.execute(
+                text(
+                    """
+                    INSERT INTO retrieval_run_items (
+                        retrieval_run_id, document_chunk_id, retrieval_score, rank_order,
+                        retrieval_source
+                    )
+                    VALUES (:retrieval_run_id, :document_chunk_id, 0.9, 2, 'graph')
+                    RETURNING retrieval_source
+                    """
+                ),
+                {
+                    "retrieval_run_id": default_strategy.retrieval_run_id,
+                    "document_chunk_id": graph_chunk_id,
+                },
+            ).one()
+            assert graph_item.retrieval_source == "graph"
+
+            invalid_source_chunk_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO document_chunks (
+                        document_version_id, chunk_index, chunk_hash, content_text, modality
+                    )
+                    VALUES (
+                        :document_version_id, 2, :chunk_hash, 'invalid source chunk', 'text'
+                    )
+                    RETURNING document_chunk_id
+                    """
+                ),
+                {
+                    "document_version_id": version_id,
+                    "chunk_hash": suffix[:32].ljust(64, "d"),
+                },
+            ).scalar_one()
             savepoint = conn.begin_nested()
             try:
                 with pytest.raises(IntegrityError):
@@ -321,12 +371,12 @@ def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> No
                                 retrieval_run_id, document_chunk_id, retrieval_score, rank_order,
                                 retrieval_source
                             )
-                            VALUES (:retrieval_run_id, :document_chunk_id, 0.9, 2, 'graph')
+                            VALUES (:retrieval_run_id, :document_chunk_id, 0.9, 3, 'graph_rag')
                             """
                         ),
                         {
                             "retrieval_run_id": default_strategy.retrieval_run_id,
-                            "document_chunk_id": chunk_id,
+                            "document_chunk_id": invalid_source_chunk_id,
                         },
                     )
             finally:

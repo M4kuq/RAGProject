@@ -7,7 +7,8 @@ export type RagStrategy =
   | "hybrid"
   | "agentic_router"
   | "llm_tool_orchestrator"
-  | "langchain_agentic";
+  | "langchain_agentic"
+  | "langgraph_agentic";
 
 export type ChatSession = {
   chat_session_id: number;
@@ -58,6 +59,7 @@ export type RagAskConfidence = {
   answer_confidence: number;
   groundedness_score: number;
   confidence_label: "High" | "Medium" | "Low";
+  confidence_basis?: string;
 };
 
 export type RagAskRetrievalSummary = {

@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import NamedTuple
 
 from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.schemas.common import PaginationParams
+
+
+class ChunkIndexPayloadRef(NamedTuple):
+    document_version_id: int
+    logical_document_id: int
+    modality: str
 
 
 class DocumentRepository:
@@ -218,6 +225,83 @@ class DocumentRepository:
             .order_by(DocumentChunk.chunk_index.asc(), DocumentChunk.document_chunk_id.asc())
         ).all()
         return [int(document_chunk_id) for document_chunk_id in rows]
+
+    def chunk_version_ids(
+        self, db: Session, *, document_chunk_ids: Sequence[int]
+    ) -> dict[int, int]:
+        """Return {document_chunk_id: document_version_id} for existing chunks.
+
+        Chunk ids absent from the result do not exist in Postgres. The mapped
+        version id is the chunk's actual owning version, which lets callers
+        detect points whose payload version disagrees with the stored chunk.
+        """
+        if not document_chunk_ids:
+            return {}
+        rows = db.execute(
+            select(
+                DocumentChunk.document_chunk_id,
+                DocumentChunk.document_version_id,
+            ).where(DocumentChunk.document_chunk_id.in_(list(document_chunk_ids)))
+        ).all()
+        return {
+            int(document_chunk_id): int(document_version_id)
+            for document_chunk_id, document_version_id in rows
+        }
+
+    def chunk_index_payload_refs(
+        self, db: Session, *, document_chunk_ids: Sequence[int]
+    ) -> dict[int, ChunkIndexPayloadRef]:
+        """Return source-of-truth Qdrant filter payload refs for existing chunks."""
+        if not document_chunk_ids:
+            return {}
+        rows = db.execute(
+            select(
+                DocumentChunk.document_chunk_id,
+                DocumentChunk.document_version_id,
+                DocumentVersion.logical_document_id,
+                DocumentChunk.modality,
+            )
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .where(DocumentChunk.document_chunk_id.in_(list(document_chunk_ids)))
+        ).all()
+        return {
+            int(document_chunk_id): ChunkIndexPayloadRef(
+                document_version_id=int(document_version_id),
+                logical_document_id=int(logical_document_id),
+                modality=str(modality),
+            )
+            for document_chunk_id, document_version_id, logical_document_id, modality in rows
+        }
+
+    def version_index_states(
+        self, db: Session, *, document_version_ids: Sequence[int]
+    ) -> dict[int, tuple[str, bool, str]]:
+        """Return {document_version_id: (version_status, is_active, document_status)}.
+
+        Versions absent from the result do not exist in Postgres.
+        """
+        if not document_version_ids:
+            return {}
+        rows = db.execute(
+            select(
+                DocumentVersion.document_version_id,
+                DocumentVersion.status,
+                DocumentVersion.is_active,
+                LogicalDocument.status,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .where(DocumentVersion.document_version_id.in_(list(document_version_ids)))
+        ).all()
+        return {
+            int(document_version_id): (str(version_status), bool(is_active), str(document_status))
+            for document_version_id, version_status, is_active, document_status in rows
+        }
 
     def list_chunks_for_embedding(
         self, db: Session, *, document_version_id: int

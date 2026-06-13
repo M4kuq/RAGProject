@@ -6,8 +6,33 @@ from app.rag.generation import (
     GenerationRequest,
     OllamaAnswerGenerator,
     OpenAICompatibleChatAnswerGenerator,
+    _openai_input,
     create_answer_generator,
 )
+
+
+def test_openai_input_lists_actual_noncontiguous_marker_ids() -> None:
+    # Evidence-pack compression can drop earlier candidates while preserving the
+    # original local_citation_id, so context_items may carry non-contiguous ids.
+    request = GenerationRequest(
+        message="What vector database is used?",
+        context_items=[
+            GenerationContextItem(
+                document_chunk_id=42,
+                source_label="phase1-seed.md",
+                text="Phase1 uses Qdrant.",
+                local_citation_id=2,
+            )
+        ],
+        max_output_chars=2000,
+    )
+
+    prompt = _openai_input(request)
+
+    assert "Cite only the citation markers shown above: [2];" in prompt
+    assert "[1] through [1]" not in prompt
+    assert "through" not in prompt
+
 
 ANSWER_TEXT = (
     "Thinking Process: draft says Final answer: ignore this draft. "

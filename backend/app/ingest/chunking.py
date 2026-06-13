@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from statistics import median
 from typing import Any
 
 from app.ingest.extractors.base import ExtractedDocument, ExtractedPage
@@ -101,7 +103,49 @@ class FixedTokenChunker:
         return chunks
 
 
+@dataclass(frozen=True)
+class ChunkStatistics:
+    chunk_count: int
+    min_char_count: int
+    max_char_count: int
+    median_char_count: int
+
+    def to_payload(self) -> dict[str, int]:
+        # Flat ``*_count`` int keys so the values survive the worker result
+        # sanitizer (sanitize_result_json keeps int-valued ``_count`` keys and
+        # drops nested dicts).
+        return {
+            "chunk_min_char_count": self.min_char_count,
+            "chunk_max_char_count": self.max_char_count,
+            "chunk_median_char_count": self.median_char_count,
+        }
+
+
+def chunk_statistics(char_counts: Sequence[int]) -> ChunkStatistics:
+    """Per-document chunk character-length telemetry for the ingest job result."""
+    counts = [int(value) for value in char_counts]
+    if not counts:
+        return ChunkStatistics(
+            chunk_count=0,
+            min_char_count=0,
+            max_char_count=0,
+            median_char_count=0,
+        )
+    return ChunkStatistics(
+        chunk_count=len(counts),
+        min_char_count=min(counts),
+        max_char_count=max(counts),
+        median_char_count=int(median(counts)),
+    )
+
+
 def estimate_token_count(text: str) -> int:
+    # NOTE: This regex word-count drives chunk boundaries during ingestion and is
+    # intentionally kept separate from the budgeting estimator in app.core.tokens
+    # (estimate_tokens). The budgeting estimator is Japanese-aware (non-ASCII ~1
+    # token/char); changing the chunking estimator here would shift chunk
+    # boundaries and broadly affect fixtures/tests, so the difference is
+    # intentional for now.
     return len(_TOKEN_RE.findall(text))
 
 

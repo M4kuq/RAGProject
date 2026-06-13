@@ -13,6 +13,7 @@ export type RetrievalStrategy =
   | "agentic_router"
   | "llm_tool_orchestrator"
   | "langchain_agentic"
+  | "langgraph_agentic"
   | "fallback_dense";
 export type EvaluationRunnableStrategy =
   | "dense"
@@ -20,7 +21,8 @@ export type EvaluationRunnableStrategy =
   | "hybrid"
   | "agentic_router"
   | "llm_tool_orchestrator"
-  | "langchain_agentic";
+  | "langchain_agentic"
+  | "langgraph_agentic";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
 
 export type EvaluationRunCreateRequest = {

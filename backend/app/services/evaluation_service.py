@@ -74,6 +74,7 @@ ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
     {
         RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
         RetrievalStrategy.LANGCHAIN_AGENTIC,
+        RetrievalStrategy.LANGGRAPH_AGENTIC,
     }
 )
 
@@ -1280,6 +1281,7 @@ class EvaluationService:
             RetrievalStrategy.AGENTIC_ROUTER,
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
             RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
         }:
             return []
         retrieval_run = (
@@ -1828,6 +1830,7 @@ def _strategy_values(config: dict[str, object]) -> list[str]:
         RetrievalStrategy.AGENTIC_ROUTER.value,
         RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
         RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+        RetrievalStrategy.LANGGRAPH_AGENTIC.value,
     }
     filtered = [strategy for strategy in values if strategy in enabled]
     return filtered or [DEFAULT_RETRIEVAL_STRATEGY.value]

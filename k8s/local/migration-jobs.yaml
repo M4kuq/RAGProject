@@ -26,6 +26,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -47,6 +51,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 100m
@@ -84,6 +92,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -103,6 +115,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -123,6 +139,10 @@ spec:
                 name: ragproject-config
             - secretRef:
                 name: ragproject-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 100m

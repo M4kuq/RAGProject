@@ -1,17 +1,37 @@
 # Graph Retrieval Strategy
 
-PR-45 defines candidate graph retrieval behavior. It does not implement retrieval.
+PR-45 defines candidate graph retrieval behavior. PR-48 starts implementing the first Graph-RAG retrieval layer on top of the PR-46 graph schema and PR-47 entity/relation index.
 
 ## Strategy Names
 
-Candidate future strategy values:
+Candidate and implemented strategy values:
 
 - `graph`
 - `graph_hybrid`
 - `fallback_hybrid`
 - `fallback_dense`
 
-`graph` returns graph-supported chunk evidence. `graph_hybrid` combines graph paths with vector/hybrid retrieval.
+`graph` returns graph-supported chunk evidence. `graph_hybrid` combines graph paths with vector/hybrid retrieval and remains a future extension.
+
+## PR-48 Scope
+
+Implemented in PR-48:
+
+- `GraphEntityLookupService` for safe entity lookup from query terms.
+- `GraphPathSearchService` for bounded relation traversal.
+- `GraphScoreCalculator` for graph score breakdowns.
+- `GraphRetrievalStrategy` for graph source chunk candidates.
+- `GraphRetrievalRepository` for graph lookup, bounded relation loading, active chunk filtering, and safe `graph_retrieval_paths` persistence.
+
+Not implemented in PR-48:
+
+- Public `/rag/search strategy=graph` and `/rag/ask strategy=graph` API dispatch.
+- Graph Citation Builder.
+- Graph Path Validation UI.
+- Graph Debug UI.
+- Graph Evaluation.
+- Graph + Vector Hybrid Fusion.
+- OCR, image upload, AWS/S3/OIDC, or external provider integration.
 
 ## Retrieval Flow
 
@@ -20,11 +40,11 @@ query
  -> QueryAnalyzer / QueryPlanner
  -> graph_entity_lookup
  -> relation traversal / multi-hop path search
- -> graph neighborhood expansion
  -> graph_score_breakdown
  -> source chunk mapping
- -> optional vector support retrieval
- -> merge/dedupe/rerank
+ -> RDB final check
+ -> retrieval_run_items
+ -> graph_retrieval_paths
  -> Context Budget
  -> Evidence Pack
  -> citations
@@ -55,24 +75,51 @@ Traversal should support:
 
 ## Multi-Hop Path Search
 
-Multi-hop path search should be bounded by:
+Multi-hop path search is bounded by:
 
-- max hops
-- max start entities
-- max paths per query
-- max neighbors per entity
-- max source chunks per path
-- time budget
+- `max_depth`
+- `max_start_entities`
+- `max_paths`
+- `max_relations_per_entity`
+- `max_source_chunks`
+- `timeout_ms`
 
-Paths should be scored and summarized as IDs, labels, relation types, scores, hashes, and source chunk refs only.
+Paths are scored and summarized as IDs, safe labels, relation types, scores, and source chunk refs only.
 
 ## Graph Neighborhood Expansion
 
 Neighborhood expansion can add related entities and chunks when direct lookup is weak. It should never grow unbounded; it must record why expansion occurred.
 
+## Safe Path Trace
+
+`graph_retrieval_paths.path_json` stores only safe references:
+
+- graph path id
+- entity ids
+- relation ids
+- safe entity labels
+- relation types
+- source chunk ids
+- path score
+- depth
+
+It must not store raw document text, raw chunk text, full context, raw prompt, PII, tokens, secrets, or raw evidence text.
+
 ## Score Breakdown
 
-Candidate `graph_score_breakdown` fields:
+Graph candidates use `phase3.graph_score.v1` score breakdowns with:
+
+- `retrieval_source = graph`
+- `entity_match_score`
+- `relation_score`
+- `path_score`
+- `source_chunk_score`
+- `path_depth`
+- `path_rank`
+- `source_chunk_ids_count`
+- `selected_flag`
+
+Future `graph_score_breakdown` fields may include:
 
 - entity_match_score
 - relation_confidence_score
@@ -110,7 +157,7 @@ For `/rag/search`, zero graph results can return `items=[]` with safe summary. F
 
 ## Retrieval Run Integration
 
-Graph retrieval should write standard `retrieval_runs` and `retrieval_run_items`. Graph-specific path summaries go to `graph_retrieval_paths` or safe trace JSON. Final citations still derive from selected retrieval run items.
+Graph retrieval writes standard `retrieval_runs` and `retrieval_run_items`. Graph-specific path summaries go to `graph_retrieval_paths`. Final citations still derive from selected retrieval run items.
 
 ## Relation To Rerank
 
@@ -119,3 +166,9 @@ Rerank may run after graph/vector merge. Rerank must not see raw graph payload d
 ## Context Budget / Evidence Pack
 
 Graph path candidates consume context budget through their source chunk-backed evidence. Evidence Pack groups may include graph path refs and source chunk refs while preserving citation mapping.
+
+## API Handoff
+
+PR-48 introduces the graph retrieval strategy object and safe graph path persistence, but it does not expose `strategy=graph` through `/rag/search` or `/rag/ask` yet. The request enums and service dispatch must be extended in a follow-up API integration PR before callers can use graph retrieval directly.
+
+The implemented strategy already resolves each path back to `document_chunk_id`, so that follow-up can connect the existing Context Budget, Evidence Pack, citation, and confidence layers to the same chunk-backed candidate shape without exposing raw graph evidence.

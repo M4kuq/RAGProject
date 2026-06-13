@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -66,7 +67,7 @@ def test_openai_generator_calls_responses_api_without_leaking_key(
     assert captured["json"]["model"] == "gpt-5.5"
     assert captured["json"]["store"] is False
     assert captured["json"]["max_output_tokens"] == 125
-    assert "citation markers" in captured["json"]["instructions"]
+    assert "citation marker ids exactly as shown" in captured["json"]["instructions"]
     assert "alpha policy text" in captured["json"]["input"]
     assert "test-openai-key" not in str(captured["json"])
     assert captured["timeout"] == 12.0
@@ -123,8 +124,74 @@ def test_openai_generator_maps_api_error_to_generation_error(
         timeout_seconds=12.0,
     )
 
-    with pytest.raises(AnswerGenerationError):
+    with pytest.raises(AnswerGenerationError) as exc_info:
         generator.generate(_request())
+    assert exc_info.value.error_category == "auth"
+    assert "not exposed" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_category"),
+    [
+        (401, "auth"),
+        (403, "auth"),
+        (429, "rate_limited"),
+        (500, "http_500"),
+    ],
+)
+def test_openai_generator_categorizes_status_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    expected_category: str,
+) -> None:
+    class Response:
+        def __init__(self) -> None:
+            self.status_code = status_code
+
+        def json(self) -> dict[str, Any]:
+            return {"error": {"message": "secret server detail"}}
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", lambda *args, **kwargs: Response())
+    generator = OpenAIResponsesAnswerGenerator(
+        api_key="test-openai-key",
+        base_url="https://api.openai.com/v1",
+        model_name="gpt-5.5",
+        timeout_seconds=12.0,
+    )
+
+    with pytest.raises(AnswerGenerationError) as exc_info:
+        generator.generate(_request())
+    assert exc_info.value.error_category == expected_category
+    assert "secret server detail" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_category"),
+    [
+        (httpx.ConnectTimeout("slow"), "timeout"),
+        (httpx.ReadTimeout("slow"), "timeout"),
+        (httpx.ConnectError("down"), "connection"),
+    ],
+)
+def test_openai_generator_categorizes_transport_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    exc: httpx.HTTPError,
+    expected_category: str,
+) -> None:
+    def fake_post(*args: Any, **kwargs: Any) -> Any:
+        raise exc
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAIResponsesAnswerGenerator(
+        api_key="test-openai-key",
+        base_url="https://api.openai.com/v1",
+        model_name="gpt-5.5",
+        timeout_seconds=12.0,
+    )
+
+    with pytest.raises(AnswerGenerationError) as exc_info:
+        generator.generate(_request())
+    assert exc_info.value.error_category == expected_category
 
 
 def test_factory_supports_cloud_provider_overrides() -> None:

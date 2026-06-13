@@ -59,6 +59,7 @@ def validate_mcp_settings(settings: McpSettings) -> None:
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
+        "langgraph_agentic",
     }
     if not settings.allowed_strategies or any(
         strategy not in allowed for strategy in settings.allowed_strategies

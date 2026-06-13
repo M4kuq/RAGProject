@@ -51,9 +51,14 @@ class LLMToolResult:
     tool_name: str
     status: str
     item_count: int = 0
+    dropped_item_count: int = 0
     items: list[ToolResultItem] = field(default_factory=list)
     error_code: str | None = None
     trace_summary: dict[str, object] | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.dropped_item_count > 0
 
     def to_planner_payload(self) -> dict[str, object]:
         return TraceRedactor.safe_dict(
@@ -62,6 +67,10 @@ class LLMToolResult:
                 "tool_name": self.tool_name,
                 "status": self.status,
                 "item_count": self.item_count,
+                # Surface compression drops so the planner knows the returned items
+                # are a truncated subset of what the tool actually retrieved.
+                "dropped_item_count": self.dropped_item_count,
+                "truncated": self.truncated,
                 "items": [item.to_planner_payload() for item in self.items],
                 "error_code": self.error_code,
                 "trace_summary": self.trace_summary,
@@ -75,6 +84,7 @@ class LLMToolResult:
                 "tool_name": self.tool_name,
                 "status": self.status,
                 "item_count": self.item_count,
+                "dropped_item_count": self.dropped_item_count,
                 "error_code": self.error_code,
             }
         )
@@ -282,6 +292,10 @@ class LLMToolCallingRetrievalOrchestrator:
         self.planner = planner or create_llm_tool_call_planner(settings)
         self.clock = clock
 
+    def _remaining_seconds(self, deadline: float) -> float:
+        """Seconds left before the wall-clock deadline (monotonic clock)."""
+        return deadline - self.clock()
+
     def execute(
         self,
         *,
@@ -343,10 +357,15 @@ class LLMToolCallingRetrievalOrchestrator:
             )
             tool_results.append(_llm_tool_result_from_compressed(compressed))
 
+        # Explicit wall-clock deadline computed once up front. The orchestrator must
+        # not start any expensive call (planner call or tool execution) once the
+        # monotonic clock has passed this deadline; _remaining_seconds makes the
+        # invariant explicit instead of relying on per-call elapsed-time arithmetic.
+        deadline = started_at + timeout_seconds
+
         with latency_tracker.span("llm_orchestrator_ms"):
             while tool_call_count < max_tool_calls:
-                elapsed_seconds = self.clock() - started_at
-                remaining_timeout = timeout_seconds - elapsed_seconds
+                remaining_timeout = self._remaining_seconds(deadline)
                 if remaining_timeout <= 0:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
@@ -364,7 +383,7 @@ class LLMToolCallingRetrievalOrchestrator:
                             tool_results=tool_results,
                         )
                     )
-                if self.clock() - started_at > timeout_seconds:
+                if self._remaining_seconds(deadline) <= 0:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
                     break
@@ -494,6 +513,17 @@ class LLMToolCallingRetrievalOrchestrator:
                         )
                         reason_codes.append(disabled_error)
                         continue
+                    if self._remaining_seconds(deadline) <= 0:
+                        # Wall-clock deadline reached before this tool execution; do
+                        # not start another expensive retrieval call.
+                        timeout_exceeded = True
+                        append_error_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            error_code="timeout_exceeded",
+                        )
+                        reason_codes.append("timeout_exceeded")
+                        break
                     with latency_tracker.span("llm_tool_execution_ms"):
                         attempt = retrieve(
                             strategy,
@@ -529,19 +559,23 @@ class LLMToolCallingRetrievalOrchestrator:
                             reason_codes.append(compressed.error_code or "tool_result_failed")
                     else:
                         attempts_by_tool_call_id[tool_call_id] = attempt
+                        legacy_items = _legacy_tool_result_items(
+                            attempt.candidates,
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            max_item_count=legacy_result_item_limit,
+                            max_snippet_chars=legacy_snippet_chars,
+                        )
                         tool_results.append(
                             LLMToolResult(
                                 tool_call_id=tool_call_id,
                                 tool_name=tool_name,
                                 status="succeeded",
                                 item_count=len(attempt.candidates),
-                                items=_legacy_tool_result_items(
-                                    attempt.candidates,
-                                    tool_call_id=tool_call_id,
-                                    tool_name=tool_name,
-                                    max_item_count=legacy_result_item_limit,
-                                    max_snippet_chars=legacy_snippet_chars,
+                                dropped_item_count=max(
+                                    0, len(attempt.candidates) - len(legacy_items)
                                 ),
+                                items=legacy_items,
                             )
                         )
                         reason_codes.append("tool_result_compression_skipped")
@@ -895,6 +929,7 @@ def _llm_tool_result_from_compressed(result: CompressedToolResult) -> LLMToolRes
         tool_name=result.tool_name,
         status=result.status,
         item_count=result.output_item_count,
+        dropped_item_count=result.dropped_item_count,
         items=result.items,
         error_code=result.error_code,
     )
@@ -934,6 +969,15 @@ def _payload_float(candidate: CheckedRetrievalCandidate, key: str) -> float | No
 
 
 def _normalized_query(query: str) -> str:
+    # Dedup-detection normalization for the orchestrator's repeated-search guard.
+    # This intentionally differs from sparse/FTS normalization
+    # (app.rag.sparse.normalize_sparse_query), which tokenizes on [A-Za-z0-9_]+,
+    # strips underscores, dedupes terms, and caps term count for full-text search.
+    # Here we must preserve the whole query string (only lowercasing + collapsing
+    # whitespace) so that two searches that would hit the FTS index identically but
+    # carry different surrounding text are still treated as distinct calls. Forcing
+    # the two to share one helper would either weaken dedup detection or change FTS
+    # tokenization, so the difference is deliberate.
     return " ".join(query.lower().split())[:500]
 
 

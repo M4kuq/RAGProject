@@ -437,6 +437,61 @@ def test_terminal_updates_raise_lease_lost_for_wrong_worker(
         assert job.finished_at is None
 
 
+def test_renew_lease_by_different_worker_reports_lease_lost(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repository = JobRepository()
+    now = datetime(2026, 5, 9, 1, 0, tzinfo=UTC)
+    with session_factory() as db:
+        db.add(
+            Job(
+                job_id=1,
+                job_type="document_ingest",
+                status="running",
+                payload_json={},
+                locked_by="worker-1",
+                locked_at=now,
+                lease_expires_at=now + timedelta(minutes=5),
+                started_at=now,
+            )
+        )
+        db.commit()
+
+        # A worker that does not hold the lease cannot renew it: the conditional
+        # UPDATE affects zero rows, which must surface as a lost lease.
+        with pytest.raises(LeaseLostError):
+            repository.renew_lease(
+                db,
+                job_id=1,
+                worker_instance_id="worker-2",
+                lease_duration=timedelta(minutes=10),
+                now=now + timedelta(minutes=1),
+            )
+        db.rollback()
+
+    with session_factory() as db:
+        job = db.get(Job, 1)
+        assert job is not None
+        # The original lease holder's lease window is unchanged.
+        assert job.locked_by == "worker-1"
+        assert job.lease_expires_at == (now + timedelta(minutes=5)).replace(tzinfo=None)
+
+        # The legitimate owner can still renew its own lease.
+        repository.renew_lease(
+            db,
+            job_id=1,
+            worker_instance_id="worker-1",
+            lease_duration=timedelta(minutes=10),
+            now=now + timedelta(minutes=1),
+        )
+        db.commit()
+
+    with session_factory() as db:
+        job = db.get(Job, 1)
+        assert job is not None
+        assert job.lease_expires_at == (now + timedelta(minutes=11)).replace(tzinfo=None)
+
+
 def test_lease_lost_errors_do_not_mark_failed(session_factory: sessionmaker[Session]) -> None:
     config = _worker_config()
     with session_factory() as db:

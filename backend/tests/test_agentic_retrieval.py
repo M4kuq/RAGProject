@@ -217,3 +217,42 @@ def _candidate(
         rank_order=1,
         payload={},
     )
+
+
+def test_langgraph_empty_first_search_counts_as_fallback() -> None:
+    from app.rag.langgraph_agentic import LangGraphAgenticRetrievalOrchestrator
+
+    settings = Settings(app_env="test")
+    orchestrator = LangGraphAgenticRetrievalOrchestrator(settings)
+    attempts = {
+        RetrievalStrategy.HYBRID: RetrievalAttemptResult(
+            strategy=RetrievalStrategy.HYBRID,
+            candidates=[],
+            qdrant_candidate_count=0,
+            role="initial",
+        ),
+        RetrievalStrategy.DENSE: RetrievalAttemptResult(
+            strategy=RetrievalStrategy.DENSE,
+            candidates=[_candidate(100, 0.9)],
+            qdrant_candidate_count=1,
+            role="fallback",
+        ),
+    }
+
+    result = orchestrator.execute(
+        query="how does ingestion work",
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=lambda strategy, query, tool_name: attempts[strategy],
+        latency_tracker=LatencyTracker(),
+    )
+
+    retrieval_result = result.retrieval_result
+    # The empty first search is a real executed retrieval attempt: the answer
+    # depended on an alternate path, so fallback metadata must reflect it.
+    assert retrieval_result.retrieval_call_count == 2
+    assert retrieval_result.initial_strategy == RetrievalStrategy.HYBRID
+    assert retrieval_result.fallback_used is True
+    assert retrieval_result.fallback_strategies == [RetrievalStrategy.DENSE]
+    assert retrieval_result.fallback_reason == "langgraph_additional_search"
+    assert [c.chunk.document_chunk_id for c in retrieval_result.final_candidates] == [100]

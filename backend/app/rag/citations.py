@@ -85,6 +85,13 @@ def validate_generation_citations(
     if not source_by_local_id:
         raise CitationBuildError("citation_build_failed")
 
+    # Reject markers whose id exceeds the number of provided context items. Valid
+    # markers must fall within [1, N] where N == len(source_map). A marker id greater
+    # than max_local_id can only be a hallucinated/out-of-bounds citation.
+    max_local_id = max(source_by_local_id)
+    if any(local_id > max_local_id for local_id in parsed.unique_marker_ids):
+        raise CitationBuildError("citation_build_failed")
+
     unknown = [
         local_id for local_id in parsed.unique_marker_ids if local_id not in source_by_local_id
     ]

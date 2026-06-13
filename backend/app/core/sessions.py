@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -9,6 +10,8 @@ from fastapi import Request
 from app.core.config import get_settings
 from app.core.security import hash_token, new_token
 from app.db.models import User, UserSession
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,11 @@ def client_ip(request: Request) -> str | None:
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for and peer_ip in get_settings().trusted_proxy_ips:
         return forwarded_for.split(",", 1)[0].strip()[:45] or None
+    if forwarded_for:
+        logger.debug(
+            "Ignoring X-Forwarded-For header from untrusted peer ip %s",
+            peer_ip,
+        )
     return peer_ip
 
 
@@ -79,7 +87,8 @@ def user_agent(request: Request) -> str | None:
 def truncate_user_agent(value: str | None) -> str | None:
     if value is None:
         return None
-    return value[:512]
+    normalized = value[:512]
+    return normalized or None
 
 
 def session_id_value(session: UserSession) -> UUID:

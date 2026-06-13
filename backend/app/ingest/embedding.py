@@ -135,6 +135,13 @@ class LocalEmbeddingAdapter:
             raise ValueError("local embedding dimension must be positive")
         self.model_name = model_name
         self._dimension = dimension
+        # Instance-level lazy cache of the loaded SentenceTransformer: the heavy model
+        # is loaded at most once per LocalEmbeddingAdapter instance, not per
+        # embed_texts call. In the ingest worker this adapter is built once via
+        # create_document_indexing_service -> DocumentIngestHandler.__init__, which is
+        # constructed a single time when JobDispatcher._default_handlers runs at worker
+        # startup. The handler is therefore a process-singleton, so the model loads at
+        # most once per worker process across all ingest jobs.
         self._model: object | None = None
 
     @property

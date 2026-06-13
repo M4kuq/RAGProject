@@ -13,7 +13,13 @@ from app.core.config import Settings, get_settings
 from app.core.job_utils import LeaseLostError
 from app.db.models import DocumentChunk
 from app.db.session import SessionLocal
-from app.ingest.chunking import Chunk, ChunkingConfig, ChunkingError, FixedTokenChunker
+from app.ingest.chunking import (
+    Chunk,
+    ChunkingConfig,
+    ChunkingError,
+    FixedTokenChunker,
+    chunk_statistics,
+)
 from app.ingest.embedding import EmbeddingAdapterError
 from app.ingest.extractors.base import ExtractedDocument, ExtractionError, ExtractionInputMetadata
 from app.ingest.extractors.dispatcher import ExtractorDispatcher
@@ -491,6 +497,9 @@ class DocumentIngestHandler:
                 delete_chunks=cleanup_succeeded,
             )
 
+        chunk_stats = chunk_statistics(
+            [chunk.char_count for chunk in chunks if chunk.char_count is not None]
+        )
         return JobHandlerResult.succeeded(
             {
                 "document_version_id": snapshot.document_version_id,
@@ -498,6 +507,7 @@ class DocumentIngestHandler:
                 "chunk_count": len(chunks),
                 "indexed_count": indexed.indexed_count,
                 "page_count": metadata.page_count,
+                **chunk_stats.to_payload(),
                 "status": "ready",
             }
         )

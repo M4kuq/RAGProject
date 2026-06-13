@@ -24,4 +24,16 @@ case "$runtime" in
     ;;
 esac
 
+missing=""
+for image in ragproject-backend:local ragproject-worker:local ragproject-frontend:local; do
+  if [ -z "$(docker images -q "$image" 2>/dev/null)" ]; then
+    missing="$missing $image"
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "ERROR: expected local images are missing after build/load:$missing" >&2
+  echo "Ensure 'docker build' succeeded for each ragproject-*:local target." >&2
+  exit 1
+fi
+
 echo "Loaded ragproject local images into $runtime"

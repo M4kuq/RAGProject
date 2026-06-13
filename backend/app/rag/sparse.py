@@ -68,6 +68,13 @@ class SparseRetrievalStrategy:
 
 
 def normalize_sparse_query(query: str, *, max_terms: int) -> NormalizedSparseQuery:
+    # FTS-specific tokenization for sparse (full-text) retrieval. This is
+    # intentionally NOT shared with the orchestrator's dedup normalization
+    # (app.rag.llm_orchestrator._normalized_query, which only lowercases and
+    # collapses whitespace over the whole string). Here we extract [A-Za-z0-9_]+
+    # tokens, strip underscores, dedupe, and cap term count because these terms are
+    # handed to the full-text index; unifying the two would change query semantics
+    # for one of the call sites, so the difference is deliberate.
     terms: list[str] = []
     seen: set[str] = set()
     for match in TERM_RE.finditer(query.lower()):

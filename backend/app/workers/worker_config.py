@@ -14,6 +14,7 @@ SUPPORTED_JOB_TYPES = frozenset(
     {
         "document_ingest",
         "qdrant_mirror_update",
+        "qdrant_consistency_sweep",
         "message_edit_regeneration",
         "evaluation_run",
         "temporary_chat_cleanup",

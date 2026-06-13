@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.tokens import estimate_tokens
 from app.rag.trace import TraceRedactor
 
 CONTEXT_BUDGET_SCHEMA_VERSION: Literal["phase2.context_budget.v1"] = "phase2.context_budget.v1"
@@ -392,10 +393,9 @@ class ContextBudgetManager:
         return decided, budget_exhausted
 
 
-def estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return int(math.ceil(len(text) / 4))
+# ``estimate_tokens`` is re-exported from ``app.core.tokens`` (imported above) so
+# existing callers that import it from this module keep working. The shared
+# estimator is Japanese-aware (non-ASCII counted at ~1 token/char).
 
 
 def _effective_context_token_limit(policy: ContextBudgetPolicy) -> int:

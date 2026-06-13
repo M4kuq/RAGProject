@@ -589,6 +589,7 @@ def test_chat_messages_include_persisted_rag_citations_and_confidence(
     assistant = body["data"][1]
     assert "linked_retrieval_run_id" not in assistant
     assert assistant["confidence"]["confidence_label"] == "High"
+    assert assistant["confidence"]["confidence_basis"] == "retrieval_signals"
     assert assistant["citations"][0]["source_label"] == "phase1-seed.md"
     assert assistant["citations"][0]["section_title"] == "Architecture"
     assert assistant["citations"][0]["old_version_flag"] is False

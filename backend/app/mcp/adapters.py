@@ -194,6 +194,13 @@ class McpServiceAdapter:
                 selected_strategy=RetrievalStrategy.LANGCHAIN_AGENTIC.value,
                 orchestrator_provider="langchain",
             )
+        if payload.strategy == RetrievalStrategy.LANGGRAPH_AGENTIC.value:
+            data["langgraph_strategy_summary"] = _safe_auto_strategy_summary(
+                data.get("retrieval_score_summary"),
+                trace_summary=trace_summary,
+                selected_strategy=RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+                orchestrator_provider="langgraph",
+            )
         if not payload.include_citations:
             data["citations"] = []
         if not payload.include_confidence:
@@ -220,6 +227,9 @@ class McpServiceAdapter:
 
     def rag_ask_langchain_agentic(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.LANGCHAIN_AGENTIC.value})
+
+    def rag_ask_langgraph_agentic(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.rag_ask({**arguments, "strategy": RetrievalStrategy.LANGGRAPH_AGENTIC.value})
 
     def rag_ask_hybrid(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.rag_ask({**arguments, "strategy": RetrievalStrategy.HYBRID.value})
@@ -335,6 +345,15 @@ class McpServiceAdapter:
                     in self.mcp_settings.allowed_strategies
                 ),
                 "mcp_tools": ["rag_ask_langchain_agentic"],
+            },
+            {
+                "strategy": RetrievalStrategy.LANGGRAPH_AGENTIC.value,
+                "description": "LangGraph StateGraph retrieval orchestrator for ask.",
+                "available": (
+                    RetrievalStrategy.LANGGRAPH_AGENTIC.value
+                    in self.mcp_settings.allowed_strategies
+                ),
+                "mcp_tools": ["rag_ask_langgraph_agentic"],
             },
         ]
         return _safe_output(
@@ -458,10 +477,11 @@ class McpServiceAdapter:
             RetrievalStrategy.AGENTIC_ROUTER.value,
             RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
             RetrievalStrategy.LANGCHAIN_AGENTIC.value,
+            RetrievalStrategy.LANGGRAPH_AGENTIC.value,
         }:
             raise McpInvalidRequest(
                 "rag_ask supports dense, hybrid, agentic_router, "
-                "llm_tool_orchestrator, or langchain_agentic only"
+                "llm_tool_orchestrator, langchain_agentic, or langgraph_agentic only"
             )
 
     def _latest_evaluation_run(
