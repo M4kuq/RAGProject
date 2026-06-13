@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from app.core.config import Settings
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
@@ -294,6 +295,169 @@ def test_agentic_executor_rejects_unavailable_llm_strategy_and_uses_rule_fallbac
     assert trace["planner_fallback_reason"] == "planner_strategy_unavailable"
 
 
+def test_langchain_agentic_uses_llm_planner_for_initial_tool() -> None:
+    from app.rag.langchain_agentic import LangChainAgenticRetrievalOrchestrator
+
+    planner = _SequencedFakePlanner(
+        _planner_result(
+            action="retrieve",
+            strategy=RetrievalStrategy.SPARSE,
+            reason_codes=("planner_sparse",),
+        ),
+        _planner_result(action="finalize", strategy=None, reason_codes=("planner_finalize",)),
+    )
+    orchestrator = LangChainAgenticRetrievalOrchestrator(
+        Settings(app_env="test", router_mode="llm"),
+        planner=planner,
+    )
+    calls: list[RetrievalStrategy] = []
+
+    def retrieve(
+        strategy: RetrievalStrategy,
+        role: str,
+        tool_query: str,
+    ) -> RetrievalAttemptResult:
+        calls.append(strategy)
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=[_candidate(201, 0.9)],
+            sparse_candidate_count=1 if strategy == RetrievalStrategy.SPARSE else None,
+            role=role,
+        )
+
+    result = orchestrator.execute(
+        query="alpha beta exact keyword",
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=retrieve,
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert calls == [RetrievalStrategy.SPARSE]
+    assert planner.requests[0].phase == "initial"
+    assert RetrievalStrategy.SPARSE in planner.requests[0].available_strategies
+    query_analysis = planner.requests[0].query_analysis
+    assert query_analysis is not None
+    assert query_analysis["orchestrator_provider"] == "langchain"
+    assert result.retrieval_result.initial_strategy == RetrievalStrategy.SPARSE
+    trace = result.decision_trace_fields()
+    assert trace["llm_planner_used"] is True
+    assert trace["planner_model"] == "qwen3.5-4b"
+    planner_events = trace["planner_events"]
+    assert isinstance(planner_events, list)
+    first_event = planner_events[0]
+    assert isinstance(first_event, dict)
+    assert first_event["planner_selected_strategy"] == "sparse"
+    assert "content_text" not in str(trace)
+
+
+def test_langchain_agentic_rejects_llm_finalize_without_useful_results() -> None:
+    from app.rag.langchain_agentic import LangChainAgenticRetrievalOrchestrator
+
+    planner = _SequencedFakePlanner(
+        _planner_result(
+            action="retrieve",
+            strategy=RetrievalStrategy.HYBRID,
+            reason_codes=("planner_hybrid",),
+        ),
+        _planner_result(action="finalize", strategy=None, reason_codes=("planner_finalize",)),
+        _planner_result(action="finalize", strategy=None, reason_codes=("planner_finalize",)),
+    )
+    orchestrator = LangChainAgenticRetrievalOrchestrator(
+        Settings(app_env="test", router_mode="llm"),
+        planner=planner,
+    )
+    calls: list[RetrievalStrategy] = []
+
+    def retrieve(
+        strategy: RetrievalStrategy,
+        role: str,
+        tool_query: str,
+    ) -> RetrievalAttemptResult:
+        calls.append(strategy)
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=[] if strategy == RetrievalStrategy.HYBRID else [_candidate(203, 0.9)],
+            sparse_candidate_count=1 if strategy == RetrievalStrategy.SPARSE else None,
+            hybrid_candidate_count=0 if strategy == RetrievalStrategy.HYBRID else None,
+            role=role,
+        )
+
+    result = orchestrator.execute(
+        query="alpha beta gamma delta epsilon zeta keyword",
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=retrieve,
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert calls == [RetrievalStrategy.HYBRID, RetrievalStrategy.SPARSE]
+    assert result.retrieval_result.fallback_used is True
+    trace = result.decision_trace_fields()
+    planner_events = trace["planner_events"]
+    assert isinstance(planner_events, list)
+    rejected_event = planner_events[1]
+    assert isinstance(rejected_event, dict)
+    assert rejected_event["planner_fallback_reason"] == "planner_finalize_without_results"
+    assert "content_text" not in str(trace)
+
+
+def test_langgraph_agentic_uses_llm_planner_for_initial_tool() -> None:
+    from app.rag.langgraph_agentic import LangGraphAgenticRetrievalOrchestrator
+
+    planner = _SequencedFakePlanner(
+        _planner_result(
+            action="retrieve",
+            strategy=RetrievalStrategy.SPARSE,
+            reason_codes=("planner_sparse",),
+        ),
+        _planner_result(action="finalize", strategy=None, reason_codes=("planner_finalize",)),
+    )
+    orchestrator = LangGraphAgenticRetrievalOrchestrator(
+        Settings(app_env="test", router_mode="llm"),
+        planner=planner,
+    )
+    calls: list[RetrievalStrategy] = []
+
+    def retrieve(
+        strategy: RetrievalStrategy,
+        role: str,
+        tool_query: str,
+    ) -> RetrievalAttemptResult:
+        calls.append(strategy)
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=[_candidate(202, 0.9)],
+            sparse_candidate_count=1 if strategy == RetrievalStrategy.SPARSE else None,
+            role=role,
+        )
+
+    result = orchestrator.execute(
+        query="alpha beta exact keyword",
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=retrieve,
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert calls == [RetrievalStrategy.SPARSE]
+    assert planner.requests[0].phase == "initial"
+    assert RetrievalStrategy.SPARSE in planner.requests[0].available_strategies
+    query_analysis = planner.requests[0].query_analysis
+    assert query_analysis is not None
+    assert query_analysis["orchestrator_provider"] == "langgraph"
+    assert result.retrieval_result.initial_strategy == RetrievalStrategy.SPARSE
+    trace = result.decision_trace_fields()
+    assert trace["llm_planner_used"] is True
+    assert trace["planner_model"] == "qwen3.5-4b"
+    planner_events = trace["planner_events"]
+    assert isinstance(planner_events, list)
+    first_event = planner_events[0]
+    assert isinstance(first_event, dict)
+    assert first_event["planner_selected_strategy"] == "sparse"
+    assert "content_text" not in str(trace)
+
+
 def _candidate(
     document_chunk_id: int,
     retrieval_score: float,
@@ -349,6 +513,38 @@ class _FakePlanner:
     def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
         self.requests.append(request)
         return self.result
+
+
+class _SequencedFakePlanner:
+    def __init__(self, *results: AgenticPlannerResult) -> None:
+        self.results = list(results)
+        self.requests: list[AgenticStrategyPlanningRequest] = []
+
+    def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
+        self.requests.append(request)
+        if len(self.requests) <= len(self.results):
+            return self.results[len(self.requests) - 1]
+        return self.results[-1]
+
+
+def _planner_result(
+    *,
+    action: Literal["retrieve", "finalize"],
+    strategy: RetrievalStrategy | None,
+    reason_codes: tuple[str, ...],
+) -> AgenticPlannerResult:
+    return AgenticPlannerResult(
+        plan=AgenticStrategyPlan(
+            action=action,
+            strategy=strategy,
+            confidence=0.8,
+            reason_codes=reason_codes,
+            provider="lmstudio",
+            model="qwen3.5-4b",
+        ),
+        provider="lmstudio",
+        model="qwen3.5-4b",
+    )
 
 
 def test_langgraph_empty_first_search_counts_as_fallback() -> None:

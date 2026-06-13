@@ -248,10 +248,18 @@ class RagService:
             settings
         )
         self.langchain_agentic_orchestrator = (
-            langchain_agentic_orchestrator or LangChainAgenticRetrievalOrchestrator(settings)
+            langchain_agentic_orchestrator
+            or LangChainAgenticRetrievalOrchestrator(
+                settings,
+                planner=agentic_strategy_planner,
+            )
         )
         self.langgraph_agentic_orchestrator = (
-            langgraph_agentic_orchestrator or LangGraphAgenticRetrievalOrchestrator(settings)
+            langgraph_agentic_orchestrator
+            or LangGraphAgenticRetrievalOrchestrator(
+                settings,
+                planner=agentic_strategy_planner,
+            )
         )
         self.context_budget_manager = context_budget_manager or ContextBudgetManager()
         self.evidence_pack_builder = evidence_pack_builder or EvidencePackBuilder()

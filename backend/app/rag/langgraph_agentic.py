@@ -13,7 +13,10 @@ from app.rag.agentic import (
     RetrievalAttemptResult,
     merge_dedupe_candidates,
 )
+from app.rag.agentic_planner import AgenticStrategyPlanner
 from app.rag.langchain_agentic import (
+    LangChainPlanningState,
+    LangChainToolCall,
     LangChainToolResult,
     _attempt_with_candidates,
     _available_tool_names,
@@ -23,6 +26,7 @@ from app.rag.langchain_agentic import (
     _legacy_tool_result_items,
     _looks_keyword_heavy,
     _normalized_query,
+    _plan_next_calls_with_llm,
     _search_tools,
     _sum_optional,
     _tool_query,
@@ -89,6 +93,7 @@ class LangGraphAgenticExecutionResult:
     reason_codes: list[str]
     graph_node_count: int
     graph_transition_count: int
+    planner_events: list[dict[str, object]] = field(default_factory=list)
     tool_result_compression_trace: ToolResultCompressionTrace | None = None
 
     def decision_trace_fields(self) -> dict[str, object]:
@@ -98,43 +103,58 @@ class LangGraphAgenticExecutionResult:
             if retrieval_result.fallback_strategies
             else None
         )
-        return TraceRedactor.safe_dict(
-            {
-                "langgraph_agentic_schema_version": LANGGRAPH_AGENTIC_SCHEMA_VERSION,
-                "orchestrator_provider": "langgraph",
-                "tool_call_count": self.tool_call_count,
-                "search_call_count": self.search_call_count,
-                "tools_used": self.tools_used,
-                "retrieval_call_count": retrieval_result.retrieval_call_count,
-                "fallback_used": retrieval_result.fallback_used,
-                "fallback_strategy": fallback_strategy,
-                "fallback_reason": retrieval_result.fallback_reason,
-                "budget_exhausted": self.budget_exhausted,
-                "timeout_exceeded": self.timeout_exceeded,
-                "repeated_query_detected": self.repeated_query_detected,
-                "finalize_called": self.finalize_called,
-                "best_effort_finalize_used": self.best_effort_finalize_used,
-                "no_context": self.no_context,
-                "sufficiency_score": None,
-                "sufficiency_reason_codes": [],
-                "tool_result_compression_enabled": (
-                    self.tool_result_compression_trace.enabled
-                    if self.tool_result_compression_trace is not None
-                    else None
-                ),
-                "graph_node_count": self.graph_node_count,
-                "graph_transition_count": self.graph_transition_count,
-                "merged_candidate_count": retrieval_result.merged_candidate_count,
-                "deduped_candidate_count": retrieval_result.deduped_candidate_count,
-                "final_selected_count": retrieval_result.final_selected_count,
-                "qdrant_candidate_count": retrieval_result.qdrant_candidate_count,
-                "sparse_candidate_count": retrieval_result.sparse_candidate_count,
-                "hybrid_candidate_count": retrieval_result.hybrid_candidate_count,
-                "excluded_by_rdb_check_count": retrieval_result.excluded_by_rdb_check_count,
-                "reason_codes": self.reason_codes,
-                "tool_results": [result.to_trace() for result in self.tool_results],
-            }
-        )
+        payload: dict[str, object] = {
+            "langgraph_agentic_schema_version": LANGGRAPH_AGENTIC_SCHEMA_VERSION,
+            "orchestrator_provider": "langgraph",
+            "tool_call_count": self.tool_call_count,
+            "search_call_count": self.search_call_count,
+            "tools_used": self.tools_used,
+            "retrieval_call_count": retrieval_result.retrieval_call_count,
+            "fallback_used": retrieval_result.fallback_used,
+            "fallback_strategy": fallback_strategy,
+            "fallback_reason": retrieval_result.fallback_reason,
+            "budget_exhausted": self.budget_exhausted,
+            "timeout_exceeded": self.timeout_exceeded,
+            "repeated_query_detected": self.repeated_query_detected,
+            "finalize_called": self.finalize_called,
+            "best_effort_finalize_used": self.best_effort_finalize_used,
+            "no_context": self.no_context,
+            "sufficiency_score": None,
+            "sufficiency_reason_codes": [],
+            "tool_result_compression_enabled": (
+                self.tool_result_compression_trace.enabled
+                if self.tool_result_compression_trace is not None
+                else None
+            ),
+            "graph_node_count": self.graph_node_count,
+            "graph_transition_count": self.graph_transition_count,
+            "merged_candidate_count": retrieval_result.merged_candidate_count,
+            "deduped_candidate_count": retrieval_result.deduped_candidate_count,
+            "final_selected_count": retrieval_result.final_selected_count,
+            "qdrant_candidate_count": retrieval_result.qdrant_candidate_count,
+            "sparse_candidate_count": retrieval_result.sparse_candidate_count,
+            "hybrid_candidate_count": retrieval_result.hybrid_candidate_count,
+            "excluded_by_rdb_check_count": retrieval_result.excluded_by_rdb_check_count,
+            "reason_codes": self.reason_codes,
+            "tool_results": [result.to_trace() for result in self.tool_results],
+        }
+        if self.planner_events:
+            last_event = self.planner_events[-1]
+            payload.update(
+                {
+                    "llm_planner_used": any(
+                        bool(event.get("llm_planner_used")) for event in self.planner_events
+                    ),
+                    "planner_provider": last_event.get("planner_provider"),
+                    "planner_model": last_event.get("planner_model"),
+                    "planner_action": last_event.get("planner_action"),
+                    "planner_selected_strategy": last_event.get("planner_selected_strategy"),
+                    "planner_reason_codes": last_event.get("planner_reason_codes"),
+                    "planner_fallback_reason": last_event.get("planner_fallback_reason"),
+                    "planner_events": self.planner_events,
+                }
+            )
+        return TraceRedactor.safe_dict(payload)
 
     def summary_fields(self) -> dict[str, object]:
         return TraceRedactor.safe_dict(
@@ -152,6 +172,9 @@ class LangGraphAgenticExecutionResult:
                 "no_context": self.no_context,
                 "graph_node_count": self.graph_node_count,
                 "graph_transition_count": self.graph_transition_count,
+                "llm_planner_used": any(
+                    bool(event.get("llm_planner_used")) for event in self.planner_events
+                ),
                 "tool_result_compression": (
                     self.tool_result_compression_trace.summary.model_dump(
                         mode="json",
@@ -169,8 +192,10 @@ class LangGraphAgenticRetrievalOrchestrator:
         self,
         settings: Settings,
         clock: Callable[[], float] = time.monotonic,
+        planner: AgenticStrategyPlanner | None = None,
     ) -> None:
         self.settings = settings
+        self.planner = planner if settings.router_mode == "llm" else None
         self.clock = clock
 
     def execute(
@@ -207,6 +232,7 @@ class LangGraphAgenticRetrievalOrchestrator:
         tools_by_name = _search_tools(available_tools=available_tools, retrieve=retrieve)
         graph_node_count = 0
         graph_transition_count = 0
+        planner_events: list[dict[str, object]] = []
 
         def plan_next_tool(state: LangGraphAgenticState) -> dict[str, object]:
             nonlocal graph_node_count
@@ -221,7 +247,29 @@ class LangGraphAgenticRetrievalOrchestrator:
                     "next_call": None,
                 }
             with latency_tracker.span("langgraph_planning_ms"):
-                planned_call = _plan_next_call(state)
+                planned_calls, planner_event = _plan_next_calls_with_llm(
+                    LangChainPlanningState(
+                        user_query=state["user_query"],
+                        max_query_chars=state["max_query_chars"],
+                        remaining_tool_calls=state["max_tool_calls"] - state["tool_call_count"],
+                        remaining_search_calls=state["max_search_calls"]
+                        - state["search_call_count"],
+                        available_tools=state["available_tools"],
+                        tool_results=state["tool_results"],
+                    ),
+                    planner=self.planner,
+                    orchestrator_provider="langgraph",
+                    rule_based_planner=lambda _planning_state: _graph_rule_based_calls(state),
+                )
+                if planner_event is not None:
+                    planner_events.append(planner_event)
+                    if planner_event.get("llm_planner_used"):
+                        reason_codes.append("llm_planner_used")
+                    else:
+                        reason_codes.append("llm_planner_fallback")
+                planned_call = (
+                    _langgraph_call_from_langchain(planned_calls[0]) if planned_calls else None
+                )
             if planned_call is None:
                 planned_call = LangGraphToolCall(
                     tool_name="finalize_answer",
@@ -542,6 +590,7 @@ class LangGraphAgenticRetrievalOrchestrator:
             reason_codes=_deduped_reason_codes(reason_codes),
             graph_node_count=graph_node_count,
             graph_transition_count=graph_transition_count,
+            planner_events=planner_events,
             tool_result_compression_trace=budget_manager.trace(),
         )
 
@@ -574,6 +623,17 @@ def _plan_next_call(state: LangGraphAgenticState) -> LangGraphToolCall | None:
             continue
         return LangGraphToolCall(tool_name=tool_name, arguments={"query": query})
     return None
+
+
+def _graph_rule_based_calls(state: LangGraphAgenticState) -> list[LangChainToolCall]:
+    call = _plan_next_call(state)
+    if call is None:
+        return []
+    return [LangChainToolCall(tool_name=call.tool_name, arguments=call.arguments)]
+
+
+def _langgraph_call_from_langchain(call: LangChainToolCall) -> LangGraphToolCall:
+    return LangGraphToolCall(tool_name=call.tool_name, arguments=call.arguments)
 
 
 def _empty_search_keys(
