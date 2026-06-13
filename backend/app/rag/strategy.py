@@ -168,8 +168,8 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         "Enable explicit StrategyRouter execution for Phase2 PR-28.",
     ),
     "rag.router.mode": (
-        "llm",
-        "StrategyRouter mode. llm uses a bounded planner and falls back to rule_based.",
+        "rule_based",
+        "StrategyRouter mode. ROUTER_MODE=llm enables planner fallback.",
     ),
     "rag.router.llm_planner_model_name": (
         None,
