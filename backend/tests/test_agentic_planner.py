@@ -67,7 +67,7 @@ def test_lmstudio_agentic_planner_uses_override_model_and_redacts_payload(
     assert isinstance(planner, OpenAICompatibleAgenticStrategyPlanner)
     result = planner.plan(
         AgenticStrategyPlanningRequest(
-            query="Find policy api_key=super-secret-token",
+            query="Find policy api_key=super-secret-token phone +1 415 555 1234",
             phase="fallback",
             available_strategies=(RetrievalStrategy.HYBRID,),
             candidate_strategies=(RetrievalStrategy.HYBRID,),
@@ -106,6 +106,8 @@ def test_lmstudio_agentic_planner_uses_override_model_and_redacts_payload(
     assert captured["json"]["response_format"]["type"] == "json_schema"
     assert captured["timeout"] == 15
     assert "super-secret-token" not in user_payload
+    assert "415 555 1234" not in user_payload
+    assert "redacted" in user_payload
     assert "raw_chunk" not in user_payload
     assert "content_text" not in user_payload
     assert "raw_prompt" not in user_payload
@@ -169,6 +171,22 @@ def test_agentic_planner_uses_generation_model_when_override_is_unset(
         ("", "planner_empty_response"),
         ("not json", "planner_invalid_json"),
         ('{"action":"retrieve","strategy":"sparse"}', "planner_invalid_json"),
+        (
+            '{"action":"finalize","confidence":0.5,"reason_codes":[]}',
+            "planner_invalid_json",
+        ),
+        (
+            '{"action":"retrieve","strategy":"dense","confidence":"high","reason_codes":[]}',
+            "planner_invalid_json",
+        ),
+        (
+            '{"action":"retrieve","strategy":"dense","confidence":0.5,"reason_codes":"ok"}',
+            "planner_invalid_json",
+        ),
+        (
+            '{"action":"retrieve","strategy":"dense","confidence":0.5,"reason_codes":[1]}',
+            "planner_invalid_json",
+        ),
     ],
 )
 def test_agentic_planner_falls_back_on_invalid_response(

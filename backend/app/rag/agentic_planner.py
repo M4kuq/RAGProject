@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, cast
@@ -9,6 +10,7 @@ import httpx
 
 from app.core.config import Settings
 from app.rag.generation import _lmstudio_model_name
+from app.rag.query_planner import redact_query_preview
 from app.rag.strategy import QueryIntent, RetrievalStrategy
 from app.rag.trace import TraceRedactor
 
@@ -303,10 +305,11 @@ def query_analysis_payload(analysis: object | None) -> dict[str, object] | None:
 def _planner_input_payload(request: AgenticStrategyPlanningRequest) -> dict[str, object]:
     strategies = _strategy_values(request.available_strategies)
     candidates = _strategy_values(request.candidate_strategies)
+    safe_query = redact_query_preview(request.query, max_chars=500) or ""
     payload = {
         "schema_version": AGENTIC_PLANNER_SCHEMA_VERSION,
         "phase": request.phase,
-        "query": TraceRedactor.safe_string(request.query, max_length=500),
+        "query": safe_query,
         "query_analysis": request.query_analysis,
         "available_strategies": strategies,
         "candidate_strategies": candidates or strategies,
@@ -382,8 +385,14 @@ def _parse_plan(
     action = payload.get("action")
     if not isinstance(action, str) or action not in PLANNER_ACTIONS:
         return None
+    if "strategy" not in payload or "confidence" not in payload or "reason_codes" not in payload:
+        return None
+    confidence = _required_confidence(payload["confidence"])
+    reason_codes = _required_reason_codes(payload["reason_codes"])
+    if confidence is None or reason_codes is None:
+        return None
     parsed_action = cast(Literal["retrieve", "finalize"], action)
-    strategy_value = payload.get("strategy")
+    strategy_value = payload["strategy"]
     strategy: RetrievalStrategy | None = None
     if parsed_action == "retrieve":
         if not isinstance(strategy_value, str):
@@ -400,8 +409,8 @@ def _parse_plan(
     return AgenticStrategyPlan(
         action=parsed_action,
         strategy=strategy,
-        confidence=_bounded_confidence(payload.get("confidence", 0.0)),
-        reason_codes=tuple(_safe_reason_codes(payload.get("reason_codes", []))),
+        confidence=confidence,
+        reason_codes=reason_codes,
         provider=provider,
         model=model,
     )
@@ -454,6 +463,25 @@ def _rounded_float(value: object) -> float | None:
     if value is None or isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return round(float(value), 6)
+
+
+def _required_confidence(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    score = float(value)
+    if not math.isfinite(score) or score < 0.0 or score > 1.0:
+        return None
+    return round(score, 6)
+
+
+def _required_reason_codes(values: object) -> tuple[str, ...] | None:
+    if not isinstance(values, Sequence) or isinstance(values, str | bytes | bytearray):
+        return None
+    if len(values) > 10:
+        return None
+    if any(not isinstance(value, str) for value in values):
+        return None
+    return tuple(_safe_reason_codes(values))
 
 
 def _safe_reason_codes(values: object) -> list[str]:

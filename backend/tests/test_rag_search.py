@@ -30,6 +30,7 @@ from app.db.session import get_db
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.ingest.qdrant import InMemoryQdrantClient, QdrantCollectionConfig, QdrantPoint
 from app.main import create_app
+from app.rag.agentic import AgenticRetrievalResult, ContextSufficiencyDecision
 from app.rag.fusion import fuse_candidates
 from app.rag.generation import (
     AnswerGenerationError,
@@ -54,7 +55,7 @@ from app.rag.retrieval import (
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query, normalize_sparse_scores
 from app.rag.strategy import FusionMethod, RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, _agentic_strategy_decision
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -1358,6 +1359,63 @@ def test_rag_search_agentic_router_uses_llm_planner_for_initial_strategy(
         assert decision["planner_reason_codes"] == ["planner_keyword"]
 
 
+def test_agentic_strategy_decision_preserves_router_planner_usage_after_fallback() -> None:
+    base_decision = {
+        "selected_strategy": "dense",
+        "execution_strategy": "dense",
+        "decision_source": "llm_planner",
+        "fallback_used": False,
+        "llm_planner_used": True,
+        "planner_events": [
+            {
+                "phase": "initial",
+                "llm_planner_used": True,
+                "planner_provider": "lmstudio",
+                "planner_model": "qwen3.5-4b",
+                "planner_action": "retrieve",
+                "planner_selected_strategy": "dense",
+                "planner_reason_codes": ["planner_initial"],
+            }
+        ],
+        "reason_codes": ["planner_initial"],
+    }
+    agentic_result = AgenticRetrievalResult(
+        final_candidates=[],
+        retrieval_call_count=2,
+        initial_strategy=RetrievalStrategy.DENSE,
+        fallback_strategies=[RetrievalStrategy.HYBRID],
+        fallback_used=True,
+        fallback_reason="low_top_score",
+        sufficiency_decisions=[
+            _sufficiency_decision(reason_codes=["low_top_score"], sufficient=False),
+            _sufficiency_decision(reason_codes=["sufficient_context"], sufficient=True),
+        ],
+        planner_events=[
+            {
+                "phase": "fallback",
+                "llm_planner_used": False,
+                "planner_provider": "lmstudio",
+                "planner_model": "qwen3.5-4b",
+                "planner_action": None,
+                "planner_selected_strategy": None,
+                "planner_reason_codes": [],
+                "planner_fallback_reason": "planner_invalid_json",
+            }
+        ],
+    )
+
+    decision = _agentic_strategy_decision(base_decision, agentic_result=agentic_result)
+
+    assert decision is not None
+    assert decision["llm_planner_used"] is True
+    planner_events = decision["planner_events"]
+    assert isinstance(planner_events, list)
+    assert [event["phase"] for event in planner_events if isinstance(event, dict)] == [
+        "initial",
+        "fallback",
+    ]
+
+
 def test_rag_search_agentic_router_disabled_falls_back_to_dense(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -2526,6 +2584,23 @@ def _candidate(
         retrieval_score=retrieval_score,
         qdrant_order=qdrant_order,
         payload={},
+    )
+
+
+def _sufficiency_decision(
+    *, reason_codes: list[str], sufficient: bool
+) -> ContextSufficiencyDecision:
+    return ContextSufficiencyDecision(
+        sufficient=sufficient,
+        score=0.8 if sufficient else 0.2,
+        reason_codes=reason_codes,
+        candidate_count=1,
+        selected_count=1,
+        top_score=0.8 if sufficient else 0.1,
+        min_required_candidates=1,
+        min_required_selected=1,
+        fallback_recommended=not sufficient,
+        source_diversity=1,
     )
 
 

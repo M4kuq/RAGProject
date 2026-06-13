@@ -601,9 +601,7 @@ def _sub_queries(
     return sub_queries
 
 
-def _preview(value: str, *, max_chars: int, enabled: bool) -> str | None:
-    if not enabled:
-        return None
+def redact_query_preview(value: str, *, max_chars: int) -> str | None:
     normalized = normalize_query(value)
     if not normalized:
         return None
@@ -613,6 +611,12 @@ def _preview(value: str, *, max_chars: int, enabled: bool) -> str | None:
     if len(safe) <= max_chars:
         return safe
     return f"{safe[: max_chars - 3]}..."
+
+
+def _preview(value: str, *, max_chars: int, enabled: bool) -> str | None:
+    if not enabled:
+        return None
+    return redact_query_preview(value, max_chars=max_chars)
 
 
 def _tokens(query: str) -> list[str]:

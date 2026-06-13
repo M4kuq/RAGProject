@@ -3391,6 +3391,12 @@ def _agentic_strategy_decision(
         decision["fallback_used"] = router_fallback_used
     if agentic_planner_events:
         decision["planner_events"] = [*existing_planner_events, *agentic_planner_events]
+    planner_events = decision.get("planner_events")
+    if isinstance(planner_events, list) and planner_events:
+        decision["llm_planner_used"] = any(
+            isinstance(event, dict) and bool(event.get("llm_planner_used"))
+            for event in planner_events
+        )
     reason_codes = decision.get("reason_codes")
     if isinstance(reason_codes, list):
         merged_reason_codes = [str(code) for code in reason_codes]
