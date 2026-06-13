@@ -101,6 +101,9 @@ def test_lmstudio_agentic_planner_uses_override_model_and_redacts_payload(
     assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
     assert captured["json"]["model"] == "qwen3.5-4b"
     assert captured["json"]["max_tokens"] == 256
+    assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["json"]["enable_thinking"] is False
+    assert captured["json"]["response_format"]["type"] == "json_schema"
     assert captured["timeout"] == 15
     assert "super-secret-token" not in user_payload
     assert "raw_chunk" not in user_payload

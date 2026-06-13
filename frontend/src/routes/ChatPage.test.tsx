@@ -405,22 +405,22 @@ test("opens a bounded citation source preview with admin deep link", async () =>
   renderChat("/chat/10");
 
   expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "View source" }));
+  fireEvent.click(screen.getByRole("button", { name: "出典を表示" }));
 
   expect(await screen.findByText("Safe bounded source preview")).toBeInTheDocument();
   expect(screen.getByText("v3")).toBeInTheDocument();
   expect(screen.getByText("#301")).toBeInTheDocument();
-  expect(screen.getByText("External URL")).toBeInTheDocument();
-  expect(screen.getByText("Preview truncated.")).toBeInTheDocument();
+  expect(screen.getByText("外部URL")).toBeInTheDocument();
+  expect(screen.getByText("プレビューは一部のみ表示しています。")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "https://example.com/redacted/guide" })).toHaveAttribute(
     "rel",
     "noopener noreferrer"
   );
-  expect(screen.getByRole("link", { name: "Open document #77" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "文書 #77 を開く" })).toHaveAttribute(
     "href",
     "/admin/documents/77"
   );
-  expect(screen.getByRole("link", { name: "Open version compare" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "版比較を開く" })).toHaveAttribute(
     "href",
     "/admin/documents/77#version-compare"
   );
@@ -455,17 +455,17 @@ test("keeps the active citation source loading when a stale request fails", asyn
   renderChat("/chat/10");
 
   expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
-  fireEvent.click(screen.getAllByRole("button", { name: "View source" })[0]);
-  expect(await screen.findByText("Loading source...")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "View source" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "出典を表示" })[0]);
+  expect(await screen.findByText("出典を読み込み中...")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "出典を表示" }));
 
   await act(async () => {
     rejectFirstSource?.(new Error("stale source failed"));
     await Promise.resolve();
   });
 
-  expect(screen.getByText("Loading source...")).toBeInTheDocument();
-  expect(screen.queryByText("Unable to load source preview.")).not.toBeInTheDocument();
+  expect(screen.getByText("出典を読み込み中...")).toBeInTheDocument();
+  expect(screen.queryByText("出典プレビューを読み込めませんでした。")).not.toBeInTheDocument();
 
   await act(async () => {
     resolveSecondSource?.(
@@ -484,7 +484,7 @@ test("keeps the active citation source loading when a stale request fails", asyn
   });
 
   expect(await screen.findByText("Second source preview")).toBeInTheDocument();
-  expect(screen.queryByText("Unable to load source preview.")).not.toBeInTheDocument();
+  expect(screen.queryByText("出典プレビューを読み込めませんでした。")).not.toBeInTheDocument();
 });
 
 test("can delete a saved chat from the sidebar", async () => {
@@ -663,7 +663,7 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
   expect(await screen.findByText("RAG answers with grounded citations [1].")).toBeInTheDocument();
   expect(screen.getByText("Auto: dense + hybrid")).toBeInTheDocument();
   expect(screen.getByText("Confidence High")).toBeInTheDocument();
-  expect(screen.getByText("old version")).toBeInTheDocument();
+  expect(screen.getByText("旧版")).toBeInTheDocument();
   expect(screen.getByText(/handbook\.pdf/)).toBeInTheDocument();
   expect(screen.getByText("Grounded citation preview")).toBeInTheDocument();
   expect(screen.queryByText("999")).not.toBeInTheDocument();
@@ -829,7 +829,7 @@ test("renders fallback confidence and sparse citation fields without crashing", 
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
   expect(await screen.findByText("Confidence Unknown")).toBeInTheDocument();
-  expect(screen.getByText(/\[1\] source/)).toBeInTheDocument();
+  expect(screen.getByText(/\[1\] 出典/)).toBeInTheDocument();
 });
 
 test("no_context keeps the user message, removes loading, and shows safe error", async () => {

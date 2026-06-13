@@ -134,6 +134,20 @@ class OpenAICompatibleAgenticStrategyPlanner:
 
     def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
         payload = _planner_input_payload(request)
+        request_body: dict[str, object] = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": _planner_system_instruction()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            "temperature": 0.0,
+            "max_tokens": max(64, min(self.max_output_tokens, 256)),
+            "stream": False,
+            "response_format": _planner_response_format_schema(),
+        }
+        if self.provider == "lmstudio":
+            request_body["chat_template_kwargs"] = {"enable_thinking": False}
+            request_body["enable_thinking"] = False
         try:
             response = httpx.post(
                 f"{self.base_url}/chat/completions",
@@ -141,16 +155,7 @@ class OpenAICompatibleAgenticStrategyPlanner:
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model_name,
-                    "messages": [
-                        {"role": "system", "content": _planner_system_instruction()},
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": max(64, min(self.max_output_tokens, 256)),
-                    "stream": False,
-                },
+                json=request_body,
                 timeout=max(0.1, self.timeout_seconds),
             )
         except httpx.HTTPError:
@@ -326,6 +331,38 @@ def _planner_system_instruction() -> str:
         '"reason_codes":["keyword_heavy"]}. '
         "When action is finalize, strategy must be null."
     )
+
+
+def _planner_response_format_schema() -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "agentic_strategy_plan",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["retrieve", "finalize"]},
+                    "strategy": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": ["dense", "sparse", "hybrid", "fallback_dense"],
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "reason_codes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 10,
+                    },
+                },
+                "required": ["action", "strategy", "confidence", "reason_codes"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 def _parse_plan(
