@@ -9,6 +9,11 @@ from app.rag.agentic import (
     ContextSufficiencyChecker,
     RetrievalAttemptResult,
 )
+from app.rag.agentic_planner import (
+    AgenticPlannerResult,
+    AgenticStrategyPlan,
+    AgenticStrategyPlanningRequest,
+)
 from app.rag.strategy import QueryIntent, RetrievalStrategy
 from app.rag.trace import LatencyTracker
 from app.repositories.retrieval_repository import CheckedRetrievalCandidate
@@ -82,6 +87,7 @@ def test_agentic_executor_fallback_merges_and_dedupes_candidates() -> None:
     }
 
     result = executor.execute(
+        query="alpha policy",
         initial_strategy=RetrievalStrategy.DENSE,
         intent=QueryIntent.FACTUAL_LOOKUP,
         top_k=5,
@@ -116,6 +122,7 @@ def test_agentic_executor_respects_retrieval_budget() -> None:
     executor = AgenticRetrievalExecutor(settings)
 
     result = executor.execute(
+        query="alpha policy",
         initial_strategy=RetrievalStrategy.DENSE,
         intent=QueryIntent.FACTUAL_LOOKUP,
         top_k=5,
@@ -157,6 +164,7 @@ def test_agentic_executor_skips_dense_equivalent_fallback_after_dense_attempt() 
         )
 
     result = executor.execute(
+        query="alpha policy",
         initial_strategy=RetrievalStrategy.DENSE,
         intent=QueryIntent.FACTUAL_LOOKUP,
         top_k=5,
@@ -170,6 +178,120 @@ def test_agentic_executor_skips_dense_equivalent_fallback_after_dense_attempt() 
     assert result.fallback_used is False
     assert result.budget_exhausted is True
     assert result.no_context is True
+
+
+def test_agentic_executor_uses_llm_planner_for_fallback_strategy() -> None:
+    settings = Settings(
+        app_env="test",
+        router_mode="llm",
+        router_sufficiency_top_score_threshold=0.8,
+        router_max_retrieval_calls=2,
+        router_max_fallback_calls=1,
+    )
+    planner = _FakePlanner(
+        AgenticPlannerResult(
+            plan=AgenticStrategyPlan(
+                action="retrieve",
+                strategy=RetrievalStrategy.HYBRID,
+                confidence=0.77,
+                reason_codes=("planner_keyword_heavy",),
+                provider="lmstudio",
+                model="qwen3.5-4b",
+            ),
+            provider="lmstudio",
+            model="qwen3.5-4b",
+        )
+    )
+    executor = AgenticRetrievalExecutor(settings, planner=planner)
+    attempts = {
+        RetrievalStrategy.DENSE: RetrievalAttemptResult(
+            strategy=RetrievalStrategy.DENSE,
+            candidates=[_candidate(100, 0.2)],
+            qdrant_candidate_count=1,
+            role="initial",
+        ),
+        RetrievalStrategy.HYBRID: RetrievalAttemptResult(
+            strategy=RetrievalStrategy.HYBRID,
+            candidates=[_candidate(101, 0.9, logical_document_id=11)],
+            qdrant_candidate_count=1,
+            sparse_candidate_count=1,
+            hybrid_candidate_count=1,
+            role="fallback",
+        ),
+    }
+
+    result = executor.execute(
+        query="HTTP 500 API_ERROR",
+        initial_strategy=RetrievalStrategy.DENSE,
+        intent=QueryIntent.TROUBLESHOOTING,
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=lambda strategy, role: attempts[strategy],
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert planner.requests[0].phase == "fallback"
+    assert planner.requests[0].available_strategies == (RetrievalStrategy.HYBRID,)
+    assert result.fallback_strategies == [RetrievalStrategy.HYBRID]
+    trace = result.decision_trace_fields()
+    assert trace["llm_planner_used"] is True
+    assert trace["planner_provider"] == "lmstudio"
+    assert trace["planner_model"] == "qwen3.5-4b"
+    assert trace["planner_selected_strategy"] == "hybrid"
+    assert trace["planner_reason_codes"] == ["planner_keyword_heavy"]
+    assert "content_text" not in str(trace)
+
+
+def test_agentic_executor_rejects_unavailable_llm_strategy_and_uses_rule_fallback() -> None:
+    settings = Settings(
+        app_env="test",
+        router_mode="llm",
+        router_sufficiency_top_score_threshold=0.8,
+        router_max_retrieval_calls=2,
+        router_max_fallback_calls=1,
+    )
+    planner = _FakePlanner(
+        AgenticPlannerResult(
+            plan=AgenticStrategyPlan(
+                action="retrieve",
+                strategy=RetrievalStrategy.SPARSE,
+                confidence=0.9,
+                reason_codes=("planner_sparse",),
+                provider="lmstudio",
+                model="qwen3.5-4b",
+            ),
+            provider="lmstudio",
+            model="qwen3.5-4b",
+        )
+    )
+    executor = AgenticRetrievalExecutor(settings, planner=planner)
+    calls: list[RetrievalStrategy] = []
+
+    def retrieve(strategy: RetrievalStrategy, role: str) -> RetrievalAttemptResult:
+        calls.append(strategy)
+        score = 0.1 if strategy == RetrievalStrategy.DENSE else 0.9
+        return RetrievalAttemptResult(
+            strategy=strategy,
+            candidates=[_candidate(100 if strategy == RetrievalStrategy.DENSE else 101, score)],
+            qdrant_candidate_count=1,
+            role=role,
+        )
+
+    result = executor.execute(
+        query="alpha policy",
+        initial_strategy=RetrievalStrategy.DENSE,
+        intent=QueryIntent.FACTUAL_LOOKUP,
+        top_k=5,
+        rerank_top_n=1,
+        retrieve=retrieve,
+        latency_tracker=LatencyTracker(),
+    )
+
+    assert calls == [RetrievalStrategy.DENSE, RetrievalStrategy.HYBRID]
+    assert result.fallback_strategies == [RetrievalStrategy.HYBRID]
+    trace = result.decision_trace_fields()
+    assert trace["llm_planner_used"] is False
+    assert trace["planner_fallback_reason"] == "planner_strategy_unavailable"
 
 
 def _candidate(
@@ -217,6 +339,16 @@ def _candidate(
         rank_order=1,
         payload={},
     )
+
+
+class _FakePlanner:
+    def __init__(self, result: AgenticPlannerResult) -> None:
+        self.result = result
+        self.requests: list[AgenticStrategyPlanningRequest] = []
+
+    def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
+        self.requests.append(request)
+        return self.result
 
 
 def test_langgraph_empty_first_search_counts_as_fallback() -> None:

@@ -104,6 +104,9 @@ The Strategy Decision panel displays:
 - `fallback_used`, `fallback_strategy`, and `fallback_reason`
 - `budget_exhausted`
 - `sufficiency_score` and `sufficiency_reason_codes`
+- `llm_planner_used`, `planner_provider`, `planner_model`,
+  `planner_action`, `planner_selected_strategy`, `planner_reason_codes`,
+  `planner_fallback_reason`, and `planner_events`
 - initial, merged, deduped, and final selected candidate counts
 - `agentic_total_ms`, `initial_retrieval_ms`, `fallback_retrieval_ms`,
   `sufficiency_check_ms`, `merge_dedupe_ms`, and `rerank_after_merge_ms`

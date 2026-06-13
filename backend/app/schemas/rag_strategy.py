@@ -155,6 +155,14 @@ class RouterDecisionTrace(SafeTraceModel):
     reason_codes: list[str] = Field(default_factory=list)
     disabled_candidates: list[RetrievalStrategy] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
+    llm_planner_used: bool | None = None
+    planner_provider: str | None = Field(default=None, max_length=100)
+    planner_model: str | None = Field(default=None, max_length=255)
+    planner_action: str | None = Field(default=None, max_length=30)
+    planner_selected_strategy: RetrievalStrategy | None = None
+    planner_reason_codes: list[str] = Field(default_factory=list)
+    planner_fallback_reason: str | None = Field(default=None, max_length=100)
+    planner_events: list[dict[str, object]] = Field(default_factory=list)
     store_decision_trace: bool = Field(default=True, exclude=True)
 
 

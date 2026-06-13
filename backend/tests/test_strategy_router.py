@@ -4,6 +4,11 @@ import json
 from typing import cast
 
 from app.core.config import Settings
+from app.rag.agentic_planner import (
+    AgenticPlannerResult,
+    AgenticStrategyPlan,
+    AgenticStrategyPlanningRequest,
+)
 from app.rag.query_planner import QueryPlanBuilder, QueryPlanBuildResult
 from app.rag.retrieval import RetrievalFilters
 from app.rag.router import StrategyRouter
@@ -69,6 +74,101 @@ def test_strategy_router_normal_query_chooses_dense() -> None:
         "planner_candidate:dense",
         "execution_strategy:dense",
     ]
+
+
+def test_strategy_router_llm_planner_selects_initial_strategy() -> None:
+    for strategy in (
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.SPARSE,
+        RetrievalStrategy.DENSE,
+    ):
+        planner = _FakePlanner(
+            AgenticPlannerResult(
+                plan=AgenticStrategyPlan(
+                    action="retrieve",
+                    strategy=strategy,
+                    confidence=0.82,
+                    reason_codes=(f"planner_{strategy.value}",),
+                    provider="lmstudio",
+                    model="qwen3.5-4b",
+                ),
+                provider="lmstudio",
+                model="qwen3.5-4b",
+            )
+        )
+        decision = _route(
+            "HTTP 500 API_ERROR",
+            settings=Settings(app_env="test", router_mode="llm"),
+            planner=planner,
+        )
+
+        assert decision.selected_strategy == strategy
+        assert decision.execution_strategy == strategy
+        assert decision.decision_source == "llm_planner"
+        assert decision.llm_planner_used is True
+        assert decision.planner_provider == "lmstudio"
+        assert decision.planner_model == "qwen3.5-4b"
+        assert decision.planner_action == "retrieve"
+        assert decision.planner_selected_strategy == strategy
+        assert decision.planner_reason_codes == [f"planner_{strategy.value}"]
+        assert planner.requests[0].phase == "initial"
+
+
+def test_strategy_router_llm_planner_failure_falls_back_to_rule_based() -> None:
+    planner = _FakePlanner(
+        AgenticPlannerResult(
+            fallback_reason="planner_invalid_json",
+            provider="lmstudio",
+            model="qwen3.5-4b",
+        )
+    )
+
+    decision = _route(
+        "alpha policy overview",
+        settings=Settings(app_env="test", router_mode="llm"),
+        planner=planner,
+    )
+
+    assert decision.selected_strategy == RetrievalStrategy.DENSE
+    assert decision.execution_strategy == RetrievalStrategy.DENSE
+    assert decision.decision_source == "rule_based"
+    assert decision.llm_planner_used is False
+    assert decision.planner_fallback_reason == "planner_invalid_json"
+    assert "llm_planner_fallback" in decision.reason_codes
+
+
+def test_strategy_router_rejects_unavailable_llm_planner_strategy() -> None:
+    planner = _FakePlanner(
+        AgenticPlannerResult(
+            plan=AgenticStrategyPlan(
+                action="retrieve",
+                strategy=RetrievalStrategy.SPARSE,
+                confidence=0.91,
+                reason_codes=("planner_sparse",),
+                provider="lmstudio",
+                model="qwen3.5-4b",
+            ),
+            provider="lmstudio",
+            model="qwen3.5-4b",
+        )
+    )
+
+    decision = _route(
+        "alpha policy overview",
+        settings=Settings(
+            app_env="test",
+            router_mode="llm",
+            sparse_enabled=False,
+            hybrid_enabled=False,
+        ),
+        planner=planner,
+    )
+
+    assert decision.selected_strategy == RetrievalStrategy.DENSE
+    assert decision.execution_strategy == RetrievalStrategy.DENSE
+    assert decision.decision_source == "rule_based"
+    assert decision.llm_planner_used is False
+    assert decision.planner_fallback_reason == "planner_strategy_unavailable"
 
 
 def test_strategy_router_planner_fallback_candidate_uses_configured_dense() -> None:
@@ -140,6 +240,7 @@ def _route(
     query: str,
     *,
     settings: Settings | None = None,
+    planner: _FakePlanner | None = None,
 ) -> RouterDecisionTrace:
     settings = settings or Settings(app_env="test")
     built = QueryPlanBuilder(settings).build(
@@ -147,8 +248,18 @@ def _route(
         filters=RetrievalFilters(),
         requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
     )
-    return StrategyRouter(settings).route(
+    return StrategyRouter(settings, planner).route(
         query_plan=built,
         requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
         request_kind="search",
     )
+
+
+class _FakePlanner:
+    def __init__(self, result: AgenticPlannerResult) -> None:
+        self.result = result
+        self.requests: list[AgenticStrategyPlanningRequest] = []
+
+    def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
+        self.requests.append(request)
+        return self.result

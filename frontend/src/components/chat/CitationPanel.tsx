@@ -54,21 +54,21 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
       const source = await fetchCitationSource(citationId);
       setSourceByCitationId((current) => ({ ...current, [citationId]: source }));
     } catch {
-      setSourceErrorByCitationId((current) => ({ ...current, [citationId]: "Unable to load source preview." }));
+      setSourceErrorByCitationId((current) => ({ ...current, [citationId]: "出典プレビューを読み込めませんでした。" }));
     } finally {
       setLoadingCitationId((current) => (current === citationId ? null : current));
     }
   }
 
   return (
-    <aside className="citation-panel" aria-label="citations">
-      <h3>Citations</h3>
+    <aside className="citation-panel" aria-label="引用">
+      <h3>引用</h3>
       <ol>
         {citations.map((citation) => (
           <li key={citation.local_citation_id} className="citation-item">
             <div className="citation-title">
               <span>
-                [{citation.local_citation_id}] {truncate(citation.source_label, 80, "source")}
+                [{citation.local_citation_id}] {truncate(citation.source_label, 80, "出典")}
               </span>
               {citation.old_version_flag ? <OldSourceBadge /> : null}
             </div>
@@ -78,7 +78,7 @@ export function CitationPanel({ citations }: { citations?: RagAskCitation[] }) {
             </div>
             <p>{truncate(citation.snippet, 240)}</p>
             <button className="inline-text-button" type="button" onClick={() => void openSource(citation)}>
-              {openCitationId === citation.citation_id ? "Hide source" : "View source"}
+              {openCitationId === citation.citation_id ? "出典を非表示" : "出典を表示"}
             </button>
             {openCitationId === citation.citation_id ? (
               <SourcePreview
@@ -110,7 +110,7 @@ function SourcePreview({
   source?: Awaited<ReturnType<typeof fetchCitationSource>>;
 }) {
   if (isLoading) {
-    return <div className="source-preview muted">Loading source...</div>;
+    return <div className="source-preview muted">出典を読み込み中...</div>;
   }
   if (error) {
     return <div className="source-preview source-preview-error">{error}</div>;
@@ -119,31 +119,31 @@ function SourcePreview({
     return null;
   }
   const locatorParts = [
-    source.sheet_name ? `Sheet: ${source.sheet_name}` : null,
-    source.row_from !== null && source.row_to !== null ? `Rows ${source.row_from}-${source.row_to}` : null,
-    source.slide_number !== null ? `Slide ${source.slide_number}` : null,
+    source.sheet_name ? `シート: ${source.sheet_name}` : null,
+    source.row_from !== null && source.row_to !== null ? `行 ${source.row_from}-${source.row_to}` : null,
+    source.slide_number !== null ? `スライド ${source.slide_number}` : null,
     source.html_heading_path,
     source.xml_path,
     pageLabel(source)
   ].filter(Boolean);
   return (
-    <div className="source-preview" aria-label={`source preview ${citationId}`}>
+    <div className="source-preview" aria-label={`出典プレビュー ${citationId}`}>
       <div className="source-preview-header">
-        <strong>{truncate(source.display_label || source.source_label, 100, "source")}</strong>
+        <strong>{truncate(source.display_label || source.source_label, 100, "出典")}</strong>
         {source.old_version_flag ? <OldSourceBadge /> : null}
       </div>
       <dl className="source-preview-facts">
         <div>
-          <dt>Version</dt>
+          <dt>版</dt>
           <dd>v{source.version_no}</dd>
         </div>
         <div>
-          <dt>Chunk</dt>
+          <dt>チャンク</dt>
           <dd>#{source.document_chunk_id}</dd>
         </div>
         <div>
-          <dt>Source</dt>
-          <dd>{source.source_type === "external_url" ? "External URL" : "Upload"}</dd>
+          <dt>出典</dt>
+          <dd>{source.source_type === "external_url" ? "外部URL" : "アップロード"}</dd>
         </div>
       </dl>
       {locatorParts.length ? <p className="citation-meta">{locatorParts.join(" / ")}</p> : null}
@@ -153,13 +153,13 @@ function SourcePreview({
         </a>
       ) : null}
       <p>{truncate(source.preview, 500)}</p>
-      {source.preview_truncated ? <p className="muted">Preview truncated.</p> : null}
+      {source.preview_truncated ? <p className="muted">プレビューは一部のみ表示しています。</p> : null}
       {isAdmin ? (
         <div className="source-preview-actions">
           <Link to={`/admin/documents/${source.logical_document_id}`}>
-            Open document #{source.logical_document_id}
+            文書 #{source.logical_document_id} を開く
           </Link>
-          <Link to={`/admin/documents/${source.logical_document_id}#version-compare`}>Open version compare</Link>
+          <Link to={`/admin/documents/${source.logical_document_id}#version-compare`}>版比較を開く</Link>
         </div>
       ) : null}
     </div>

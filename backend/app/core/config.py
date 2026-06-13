@@ -150,6 +150,9 @@ class Settings(BaseSettings):
     query_planner_redact_pii: bool = True
     router_enabled: bool = True
     router_mode: str = "rule_based"
+    router_llm_planner_model_name: str | None = None
+    router_llm_planner_timeout_seconds: float = Field(default=30.0, gt=0.0, le=600.0)
+    router_llm_planner_max_output_tokens: int = Field(default=256, ge=64, le=1024)
     router_allow_agentic_search: bool = True
     router_allow_agentic_ask: bool = True
     router_keyword_heavy_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
@@ -360,8 +363,13 @@ class Settings(BaseSettings):
         if self.sparse_score_normalization != "max":
             raise ValueError("SPARSE_SCORE_NORMALIZATION must be max")
         self.router_mode = self.router_mode.lower()
-        if self.router_mode != "rule_based":
-            raise ValueError("ROUTER_MODE must be rule_based")
+        if self.router_mode not in {"rule_based", "llm"}:
+            raise ValueError("ROUTER_MODE must be rule_based or llm")
+        self.router_llm_planner_model_name = (
+            self.router_llm_planner_model_name.strip()
+            if self.router_llm_planner_model_name
+            else None
+        )
         self.router_fallback_strategy = self.router_fallback_strategy.lower()
         if self.router_fallback_strategy not in {"dense", "fallback_dense"}:
             raise ValueError("ROUTER_FALLBACK_STRATEGY must be dense or fallback_dense")
