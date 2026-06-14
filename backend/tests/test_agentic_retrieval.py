@@ -392,7 +392,9 @@ def test_langchain_agentic_rejects_llm_finalize_without_useful_results() -> None
     )
 
     assert calls == [RetrievalStrategy.HYBRID, RetrievalStrategy.SPARSE]
-    assert result.retrieval_result.fallback_used is True
+    assert result.retrieval_result.fallback_used is False
+    assert result.retrieval_result.initial_strategy == RetrievalStrategy.SPARSE
+    assert result.retrieval_result.final_candidates
     trace = result.decision_trace_fields()
     planner_events = trace["planner_events"]
     assert isinstance(planner_events, list)
