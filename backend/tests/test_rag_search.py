@@ -30,6 +30,7 @@ from app.db.session import get_db
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.ingest.qdrant import InMemoryQdrantClient, QdrantCollectionConfig, QdrantPoint
 from app.main import create_app
+from app.rag.agentic import AgenticRetrievalResult, ContextSufficiencyDecision
 from app.rag.fusion import fuse_candidates
 from app.rag.generation import (
     AnswerGenerationError,
@@ -54,7 +55,7 @@ from app.rag.retrieval import (
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query, normalize_sparse_scores
 from app.rag.strategy import FusionMethod, RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, _agentic_strategy_decision
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -295,6 +296,7 @@ def test_sparse_settings_validation() -> None:
         query_planner_max_sub_queries=2,
         query_planner_max_preview_chars=120,
         router_mode="rule_based",
+        router_llm_planner_model_name="qwen3.5-4b",
         router_keyword_heavy_threshold=0.7,
         router_ambiguity_threshold=0.8,
         router_fallback_strategy="fallback_dense",
@@ -306,9 +308,11 @@ def test_sparse_settings_validation() -> None:
     assert settings.query_planner_max_sub_queries == 2
     assert settings.query_planner_max_preview_chars == 120
     assert settings.router_mode == "rule_based"
+    assert settings.router_llm_planner_model_name == "qwen3.5-4b"
     assert settings.router_keyword_heavy_threshold == 0.7
     assert settings.router_ambiguity_threshold == 0.8
     assert settings.router_fallback_strategy == "fallback_dense"
+    assert Settings(router_mode="llm").router_mode == "llm"
 
     with pytest.raises(ValueError):
         Settings(hybrid_fusion_method="invalid")
@@ -325,7 +329,7 @@ def test_sparse_settings_validation() -> None:
     with pytest.raises(ValueError):
         Settings(sparse_score_normalization="none")
     with pytest.raises(ValueError):
-        Settings(router_mode="llm")
+        Settings(router_mode="ml")
     with pytest.raises(ValueError):
         Settings(router_fallback_strategy="hybrid")
 
@@ -1272,6 +1276,144 @@ def test_rag_search_agentic_router_selects_hybrid_and_persists_decision(
         assert "raw_prompt" not in dumped
         assert "raw_chunk" not in dumped
         assert "content_text" not in dumped
+
+
+def test_rag_search_agentic_router_uses_llm_planner_for_initial_strategy(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"action":"retrieve","strategy":"hybrid",'
+                                '"confidence":0.83,"reason_codes":["planner_keyword"]}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.agentic_planner.httpx.post", fake_post)
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="fake",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+        router_mode="llm",
+        generation_provider="lmstudio",
+        generation_model_name="qwen3.5-9b",
+        router_llm_planner_model_name="qwen3.5-4b",
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={"query": "alpha policy overview", "strategy": "agentic_router", "top_k": 5},
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.strategy_decision_json is not None
+        decision = run.strategy_decision_json
+        assert captured["json"]["model"] == "qwen3.5-4b"
+        assert decision["selected_strategy"] == "hybrid"
+        assert decision["execution_strategy"] == "hybrid"
+        assert decision["decision_source"] == "llm_planner"
+        assert decision["llm_planner_used"] is True
+        assert decision["planner_selected_strategy"] == "hybrid"
+        assert decision["planner_reason_codes"] == ["planner_keyword"]
+
+
+def test_agentic_strategy_decision_preserves_router_planner_usage_after_fallback() -> None:
+    base_decision = {
+        "selected_strategy": "dense",
+        "execution_strategy": "dense",
+        "decision_source": "llm_planner",
+        "fallback_used": False,
+        "llm_planner_used": True,
+        "planner_events": [
+            {
+                "phase": "initial",
+                "llm_planner_used": True,
+                "planner_provider": "lmstudio",
+                "planner_model": "qwen3.5-4b",
+                "planner_action": "retrieve",
+                "planner_selected_strategy": "dense",
+                "planner_reason_codes": ["planner_initial"],
+            }
+        ],
+        "reason_codes": ["planner_initial"],
+    }
+    agentic_result = AgenticRetrievalResult(
+        final_candidates=[],
+        retrieval_call_count=2,
+        initial_strategy=RetrievalStrategy.DENSE,
+        fallback_strategies=[RetrievalStrategy.HYBRID],
+        fallback_used=True,
+        fallback_reason="low_top_score",
+        sufficiency_decisions=[
+            _sufficiency_decision(reason_codes=["low_top_score"], sufficient=False),
+            _sufficiency_decision(reason_codes=["sufficient_context"], sufficient=True),
+        ],
+        planner_events=[
+            {
+                "phase": "fallback",
+                "llm_planner_used": False,
+                "planner_provider": "lmstudio",
+                "planner_model": "qwen3.5-4b",
+                "planner_action": None,
+                "planner_selected_strategy": None,
+                "planner_reason_codes": [],
+                "planner_fallback_reason": "planner_invalid_json",
+            }
+        ],
+    )
+
+    decision = _agentic_strategy_decision(base_decision, agentic_result=agentic_result)
+
+    assert decision is not None
+    assert decision["llm_planner_used"] is True
+    planner_events = decision["planner_events"]
+    assert isinstance(planner_events, list)
+    assert [event["phase"] for event in planner_events if isinstance(event, dict)] == [
+        "initial",
+        "fallback",
+    ]
 
 
 def test_rag_search_agentic_router_disabled_falls_back_to_dense(
@@ -2442,6 +2584,23 @@ def _candidate(
         retrieval_score=retrieval_score,
         qdrant_order=qdrant_order,
         payload={},
+    )
+
+
+def _sufficiency_decision(
+    *, reason_codes: list[str], sufficient: bool
+) -> ContextSufficiencyDecision:
+    return ContextSufficiencyDecision(
+        sufficient=sufficient,
+        score=0.8 if sufficient else 0.2,
+        reason_codes=reason_codes,
+        candidate_count=1,
+        selected_count=1,
+        top_score=0.8 if sufficient else 0.1,
+        min_required_candidates=1,
+        min_required_selected=1,
+        fallback_recommended=not sufficient,
+        source_diversity=1,
     )
 
 

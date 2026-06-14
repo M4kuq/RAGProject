@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Literal
 
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool, StructuredTool
@@ -12,6 +13,12 @@ from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
     merge_dedupe_candidates,
+)
+from app.rag.agentic_planner import (
+    AgenticPlannerAttemptSummary,
+    AgenticStrategyPlanner,
+    AgenticStrategyPlanningRequest,
+    planner_trace_event,
 )
 from app.rag.strategy import RetrievalStrategy
 from app.rag.tool_result_compression import (
@@ -87,6 +94,7 @@ class LangChainAgenticExecutionResult:
     best_effort_finalize_used: bool
     no_context: bool
     reason_codes: list[str]
+    planner_events: list[dict[str, object]] = field(default_factory=list)
     tool_result_compression_trace: ToolResultCompressionTrace | None = None
 
     def decision_trace_fields(self) -> dict[str, object]:
@@ -96,41 +104,56 @@ class LangChainAgenticExecutionResult:
             if retrieval_result.fallback_strategies
             else None
         )
-        return TraceRedactor.safe_dict(
-            {
-                "langchain_agentic_schema_version": LANGCHAIN_AGENTIC_SCHEMA_VERSION,
-                "orchestrator_provider": "langchain",
-                "tool_call_count": self.tool_call_count,
-                "search_call_count": self.search_call_count,
-                "tools_used": self.tools_used,
-                "retrieval_call_count": retrieval_result.retrieval_call_count,
-                "fallback_used": retrieval_result.fallback_used,
-                "fallback_strategy": fallback_strategy,
-                "fallback_reason": retrieval_result.fallback_reason,
-                "budget_exhausted": self.budget_exhausted,
-                "timeout_exceeded": self.timeout_exceeded,
-                "repeated_query_detected": self.repeated_query_detected,
-                "finalize_called": self.finalize_called,
-                "best_effort_finalize_used": self.best_effort_finalize_used,
-                "no_context": self.no_context,
-                "sufficiency_score": None,
-                "sufficiency_reason_codes": [],
-                "tool_result_compression_enabled": (
-                    self.tool_result_compression_trace.enabled
-                    if self.tool_result_compression_trace is not None
-                    else None
-                ),
-                "merged_candidate_count": retrieval_result.merged_candidate_count,
-                "deduped_candidate_count": retrieval_result.deduped_candidate_count,
-                "final_selected_count": retrieval_result.final_selected_count,
-                "qdrant_candidate_count": retrieval_result.qdrant_candidate_count,
-                "sparse_candidate_count": retrieval_result.sparse_candidate_count,
-                "hybrid_candidate_count": retrieval_result.hybrid_candidate_count,
-                "excluded_by_rdb_check_count": retrieval_result.excluded_by_rdb_check_count,
-                "reason_codes": self.reason_codes,
-                "tool_results": [result.to_trace() for result in self.tool_results],
-            }
-        )
+        payload: dict[str, object] = {
+            "langchain_agentic_schema_version": LANGCHAIN_AGENTIC_SCHEMA_VERSION,
+            "orchestrator_provider": "langchain",
+            "tool_call_count": self.tool_call_count,
+            "search_call_count": self.search_call_count,
+            "tools_used": self.tools_used,
+            "retrieval_call_count": retrieval_result.retrieval_call_count,
+            "fallback_used": retrieval_result.fallback_used,
+            "fallback_strategy": fallback_strategy,
+            "fallback_reason": retrieval_result.fallback_reason,
+            "budget_exhausted": self.budget_exhausted,
+            "timeout_exceeded": self.timeout_exceeded,
+            "repeated_query_detected": self.repeated_query_detected,
+            "finalize_called": self.finalize_called,
+            "best_effort_finalize_used": self.best_effort_finalize_used,
+            "no_context": self.no_context,
+            "sufficiency_score": None,
+            "sufficiency_reason_codes": [],
+            "tool_result_compression_enabled": (
+                self.tool_result_compression_trace.enabled
+                if self.tool_result_compression_trace is not None
+                else None
+            ),
+            "merged_candidate_count": retrieval_result.merged_candidate_count,
+            "deduped_candidate_count": retrieval_result.deduped_candidate_count,
+            "final_selected_count": retrieval_result.final_selected_count,
+            "qdrant_candidate_count": retrieval_result.qdrant_candidate_count,
+            "sparse_candidate_count": retrieval_result.sparse_candidate_count,
+            "hybrid_candidate_count": retrieval_result.hybrid_candidate_count,
+            "excluded_by_rdb_check_count": retrieval_result.excluded_by_rdb_check_count,
+            "reason_codes": self.reason_codes,
+            "tool_results": [result.to_trace() for result in self.tool_results],
+        }
+        if self.planner_events:
+            last_event = self.planner_events[-1]
+            payload.update(
+                {
+                    "llm_planner_used": any(
+                        bool(event.get("llm_planner_used")) for event in self.planner_events
+                    ),
+                    "planner_provider": last_event.get("planner_provider"),
+                    "planner_model": last_event.get("planner_model"),
+                    "planner_action": last_event.get("planner_action"),
+                    "planner_selected_strategy": last_event.get("planner_selected_strategy"),
+                    "planner_reason_codes": last_event.get("planner_reason_codes"),
+                    "planner_fallback_reason": last_event.get("planner_fallback_reason"),
+                    "planner_events": self.planner_events,
+                }
+            )
+        return TraceRedactor.safe_dict(payload)
 
     def summary_fields(self) -> dict[str, object]:
         return TraceRedactor.safe_dict(
@@ -146,6 +169,9 @@ class LangChainAgenticExecutionResult:
                 "finalize_called": self.finalize_called,
                 "best_effort_finalize_used": self.best_effort_finalize_used,
                 "no_context": self.no_context,
+                "llm_planner_used": any(
+                    bool(event.get("llm_planner_used")) for event in self.planner_events
+                ),
                 "tool_result_compression": (
                     self.tool_result_compression_trace.summary.model_dump(
                         mode="json",
@@ -163,8 +189,10 @@ class LangChainAgenticRetrievalOrchestrator:
         self,
         settings: Settings,
         clock: Callable[[], float] = time.monotonic,
+        planner: AgenticStrategyPlanner | None = None,
     ) -> None:
         self.settings = settings
+        self.planner = planner if settings.router_mode == "llm" else None
         self.clock = clock
         self.planning_chain = RunnableLambda(_plan_next_calls)
 
@@ -213,6 +241,7 @@ class LangChainAgenticRetrievalOrchestrator:
         repeated_query_detected = False
         finalize_called = False
         timeout_exceeded = False
+        planner_events: list[dict[str, object]] = []
         reason_codes: list[str] = [
             "langchain_agentic_started",
             "langchain_runnable_planner",
@@ -243,16 +272,25 @@ class LangChainAgenticRetrievalOrchestrator:
                     reason_codes.append("timeout_exceeded")
                     break
                 with latency_tracker.span("langchain_planning_ms"):
-                    planned_calls = self.planning_chain.invoke(
-                        LangChainPlanningState(
-                            user_query=query[:max_query_chars],
-                            max_query_chars=max_query_chars,
-                            remaining_tool_calls=max_tool_calls - tool_call_count,
-                            remaining_search_calls=max_search_calls - search_call_count,
-                            available_tools=available_tools,
-                            tool_results=tool_results,
-                        )
+                    planning_state = LangChainPlanningState(
+                        user_query=query[:max_query_chars],
+                        max_query_chars=max_query_chars,
+                        remaining_tool_calls=max_tool_calls - tool_call_count,
+                        remaining_search_calls=max_search_calls - search_call_count,
+                        available_tools=available_tools,
+                        tool_results=tool_results,
                     )
+                    planned_calls, planner_event = _plan_next_calls_with_llm(
+                        planning_state,
+                        planner=self.planner,
+                        rule_based_planner=lambda state: self.planning_chain.invoke(state),
+                    )
+                    if planner_event is not None:
+                        planner_events.append(planner_event)
+                        if planner_event.get("llm_planner_used"):
+                            reason_codes.append("llm_planner_used")
+                        else:
+                            reason_codes.append("llm_planner_fallback")
                 if self.clock() - started_at > timeout_seconds:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
@@ -463,8 +501,113 @@ class LangChainAgenticRetrievalOrchestrator:
             best_effort_finalize_used=best_effort_finalize_used,
             no_context=no_context,
             reason_codes=_deduped_reason_codes(reason_codes),
+            planner_events=planner_events,
             tool_result_compression_trace=budget_manager.trace(),
         )
+
+
+def _plan_next_calls_with_llm(
+    state: LangChainPlanningState,
+    *,
+    planner: AgenticStrategyPlanner | None,
+    orchestrator_provider: str = "langchain",
+    rule_based_planner: Callable[[LangChainPlanningState], list[LangChainToolCall]] | None = None,
+) -> tuple[list[LangChainToolCall], dict[str, object] | None]:
+    rule_based_calls = (rule_based_planner or _plan_next_calls)(state)
+    if planner is None:
+        return rule_based_calls, None
+    if state.remaining_tool_calls <= 0:
+        return rule_based_calls, None
+
+    candidate_strategies = _planner_candidate_strategies(
+        available_tools=state.available_tools,
+        tool_results=state.tool_results,
+        query=state.user_query[: state.max_query_chars],
+        remaining_search_calls=state.remaining_search_calls,
+    )
+    search_results = _search_tool_results(state.tool_results)
+    successful_results = _successful_search_results(state.tool_results)
+    if not candidate_strategies and not search_results:
+        return rule_based_calls, None
+
+    phase: Literal["initial", "fallback"] = "fallback" if search_results else "initial"
+    result = planner.plan(
+        AgenticStrategyPlanningRequest(
+            query=state.user_query[: state.max_query_chars],
+            phase=phase,
+            available_strategies=tuple(candidate_strategies),
+            candidate_strategies=tuple(candidate_strategies),
+            attempted_strategies=tuple(
+                _tool_strategy(result.tool_name) for result in search_results
+            ),
+            query_analysis=TraceRedactor.safe_dict(
+                {
+                    "orchestrator_provider": orchestrator_provider,
+                    "keyword_heavy": _looks_keyword_heavy(state.user_query),
+                    "successful_search_count": len(successful_results),
+                    "empty_search_count": len(_empty_search_keys(state.tool_results)),
+                }
+            ),
+            attempt_summaries=tuple(_planner_attempt_summaries(search_results)),
+            remaining_retrieval_calls=max(0, state.remaining_search_calls),
+            remaining_fallback_calls=max(0, state.remaining_search_calls),
+        )
+    )
+    plan = result.plan
+    if plan is None:
+        return rule_based_calls, planner_trace_event(
+            phase=phase,
+            result=result,
+            used=False,
+            fallback_reason=result.fallback_reason or "planner_failed",
+        )
+    if plan.action == "finalize":
+        if not successful_results:
+            return rule_based_calls, planner_trace_event(
+                phase=phase,
+                result=result,
+                used=False,
+                action="finalize",
+                fallback_reason="planner_finalize_without_results",
+            )
+        return [_langchain_finalize_call(successful_results)], planner_trace_event(
+            phase=phase,
+            result=result,
+            used=True,
+            action="finalize",
+        )
+    if plan.strategy is None:
+        return rule_based_calls, planner_trace_event(
+            phase=phase,
+            result=result,
+            used=False,
+            fallback_reason="planner_missing_strategy",
+        )
+    if plan.strategy not in candidate_strategies:
+        return rule_based_calls, planner_trace_event(
+            phase=phase,
+            result=result,
+            used=False,
+            selected_strategy=plan.strategy,
+            fallback_reason="planner_strategy_unavailable",
+        )
+    tool_name = _strategy_tool_name(plan.strategy)
+    if tool_name is None or tool_name not in state.available_tools:
+        return rule_based_calls, planner_trace_event(
+            phase=phase,
+            result=result,
+            used=False,
+            selected_strategy=plan.strategy,
+            fallback_reason="planner_tool_unavailable",
+        )
+    return [
+        LangChainToolCall(tool_name=tool_name, arguments={"query": state.user_query})
+    ], planner_trace_event(
+        phase=phase,
+        result=result,
+        used=True,
+        selected_strategy=plan.strategy,
+    )
 
 
 def _plan_next_calls(state: LangChainPlanningState) -> list[LangChainToolCall]:
@@ -497,6 +640,108 @@ def _plan_next_calls(state: LangChainPlanningState) -> list[LangChainToolCall]:
             continue
         return [LangChainToolCall(tool_name=tool_name, arguments={"query": query})]
     return []
+
+
+def _search_tool_results(
+    tool_results: Sequence[LangChainToolResult],
+) -> list[LangChainToolResult]:
+    return [
+        result
+        for result in tool_results
+        if result.tool_name in LANGCHAIN_SEARCH_TOOL_NAMES and result.status == "succeeded"
+    ]
+
+
+def _successful_search_results(
+    tool_results: Sequence[LangChainToolResult],
+) -> list[LangChainToolResult]:
+    return [result for result in _search_tool_results(tool_results) if result.item_count > 0]
+
+
+def _langchain_finalize_call(results: Sequence[LangChainToolResult]) -> LangChainToolCall:
+    return LangChainToolCall(
+        tool_name="finalize_answer",
+        arguments={
+            "selected_tool_call_ids": [result.tool_call_id for result in results],
+            "answer_intent": "final_answer",
+        },
+    )
+
+
+def _planner_candidate_strategies(
+    *,
+    available_tools: Sequence[str],
+    tool_results: Sequence[LangChainToolResult],
+    query: str,
+    remaining_search_calls: int,
+) -> list[RetrievalStrategy]:
+    if remaining_search_calls <= 0:
+        return []
+    available_tool_set = set(available_tools)
+    used_tools = {result.tool_name for result in _search_tool_results(tool_results)}
+    empty_search_keys = _empty_search_keys(tool_results)
+    normalized_query = _normalized_query(query)
+    strategies: list[RetrievalStrategy] = []
+    for strategy in (RetrievalStrategy.HYBRID, RetrievalStrategy.SPARSE, RetrievalStrategy.DENSE):
+        tool_name = _strategy_tool_name(strategy)
+        if tool_name is None or tool_name not in available_tool_set:
+            continue
+        if tool_name in used_tools:
+            continue
+        if (tool_name, normalized_query) in empty_search_keys:
+            continue
+        strategies.append(strategy)
+    return strategies
+
+
+def _planner_attempt_summaries(
+    results: Sequence[LangChainToolResult],
+) -> list[AgenticPlannerAttemptSummary]:
+    summaries: list[AgenticPlannerAttemptSummary] = []
+    for index, result in enumerate(results):
+        strategy = _tool_strategy(result.tool_name)
+        summaries.append(
+            AgenticPlannerAttemptSummary(
+                strategy=strategy,
+                role="initial" if index == 0 else "fallback",
+                candidate_count=result.item_count,
+                qdrant_candidate_count=(
+                    result.item_count
+                    if strategy in {RetrievalStrategy.DENSE, RetrievalStrategy.HYBRID}
+                    else 0
+                ),
+                sparse_candidate_count=(
+                    result.item_count
+                    if strategy in {RetrievalStrategy.SPARSE, RetrievalStrategy.HYBRID}
+                    else None
+                ),
+                hybrid_candidate_count=(
+                    result.item_count if strategy == RetrievalStrategy.HYBRID else None
+                ),
+                top_score=_tool_result_top_score(result),
+            )
+        )
+    return summaries
+
+
+def _tool_result_top_score(result: LangChainToolResult) -> float | None:
+    scores = [
+        score
+        for item in result.items
+        for score in (item.retrieval_score, item.fusion_score)
+        if isinstance(score, int | float)
+    ]
+    return max(scores) if scores else None
+
+
+def _strategy_tool_name(strategy: RetrievalStrategy) -> str | None:
+    if strategy == RetrievalStrategy.DENSE:
+        return "dense_search"
+    if strategy == RetrievalStrategy.SPARSE:
+        return "sparse_search"
+    if strategy == RetrievalStrategy.HYBRID:
+        return "hybrid_search"
+    return None
 
 
 def _empty_search_keys(

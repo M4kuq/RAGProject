@@ -21,6 +21,20 @@ Both modes keep the same safety boundary:
 - no raw prompt, raw chunk text, or full context in trace output
 - final answer generation still goes through the existing citation-aware RAG path
 
+## LLM Planner Mode
+
+When `ROUTER_MODE=llm`, both framework-based modes reuse the same bounded JSON
+planner as `agentic_router` to choose the next retrieval tool. The planner sees
+only the user query, safe query/tool summaries, available strategies, attempted
+strategies, and remaining search budget. It does not receive raw chunks, full
+tool output text, prompts, or secret-like values.
+
+If the planner is unavailable, times out, returns invalid JSON, selects an
+unavailable/already-attempted strategy, or asks to finalize before any useful
+tool result exists, the orchestrator falls back to the existing deterministic
+tool order. In LM Studio deployments, the answer model can remain larger while
+the planner uses the lighter `ROUTER_LLM_PLANNER_MODEL_NAME` override.
+
 ## Runtime Surface
 
 Explicit ask request:
@@ -70,6 +84,13 @@ Safe trace and summary fields include:
 - `finalize_called`
 - `budget_exhausted`
 - `timeout_exceeded`
+- `llm_planner_used`
+- `planner_provider`
+- `planner_model`
+- `planner_action`
+- `planner_selected_strategy`
+- `planner_fallback_reason`
+- `planner_events`
 - `langchain_agentic_ms`
 - `langchain_planning_ms`
 - `langchain_tool_execution_ms`

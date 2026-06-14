@@ -5,6 +5,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.core.config import Settings
+from app.rag.agentic_planner import (
+    AgenticPlannerResult,
+    AgenticStrategyPlanner,
+    AgenticStrategyPlanningRequest,
+    planner_trace_event,
+    query_analysis_payload,
+)
 from app.rag.query_planner import QueryPlanBuildResult
 from app.rag.strategy import QueryIntent, RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
@@ -21,6 +28,7 @@ UNIMPLEMENTED_ROUTER_STRATEGIES = {
 @dataclass(frozen=True)
 class StrategyRouter:
     settings: Settings
+    planner: AgenticStrategyPlanner | None = None
 
     def route(
         self,
@@ -114,23 +122,107 @@ class StrategyRouter:
         if not candidates and analysis is not None:
             candidates = list(analysis.recommended_candidate_strategies)
 
-        selected, reason_codes, confidence = _select_strategy(
-            analysis=query_plan.analysis,
-            candidate_strategies=candidates,
-            settings=self.settings,
-            available_strategies=available,
-        )
+        selected: RetrievalStrategy
+        reason_codes: list[str]
+        confidence: float
+        decision_source = "rule_based"
+        llm_planner_used: bool | None = None
+        planner_result: AgenticPlannerResult | None = None
+        planner_fallback_reason: str | None = None
+        planner_event: dict[str, object] | None = None
+
+        if self.settings.router_mode == "llm":
+            if self.planner is None:
+                planner_fallback_reason = "planner_unavailable"
+                planner_event = planner_trace_event(
+                    phase="initial",
+                    result=None,
+                    used=False,
+                    fallback_reason=planner_fallback_reason,
+                )
+            else:
+                planner_result = self.planner.plan(
+                    AgenticStrategyPlanningRequest(
+                        query=query_plan.retrieval_query,
+                        phase="initial",
+                        available_strategies=tuple(available),
+                        candidate_strategies=tuple(candidates),
+                        query_analysis=query_analysis_payload(analysis),
+                        remaining_retrieval_calls=self.settings.router_max_retrieval_calls,
+                        remaining_fallback_calls=self.settings.router_max_fallback_calls,
+                    )
+                )
+                plan = planner_result.plan
+                if (
+                    plan is not None
+                    and plan.action == "retrieve"
+                    and plan.strategy is not None
+                    and _planner_strategy_allowed(plan.strategy, available)
+                ):
+                    selected = plan.strategy
+                    reason_codes = [
+                        "llm_planner_selected",
+                        *plan.reason_codes,
+                    ]
+                    confidence = plan.confidence
+                    decision_source = "llm_planner"
+                    llm_planner_used = True
+                    planner_event = planner_trace_event(
+                        phase="initial",
+                        result=planner_result,
+                        used=True,
+                        selected_strategy=selected,
+                    )
+                else:
+                    planner_fallback_reason = (
+                        "planner_finalize_not_allowed_initial"
+                        if plan is not None and plan.action == "finalize"
+                        else "planner_strategy_unavailable"
+                        if plan is not None
+                        and plan.strategy is not None
+                        and plan.strategy not in available
+                        else "planner_strategy_not_allowed"
+                        if plan is not None and plan.strategy is not None
+                        else planner_result.fallback_reason or "planner_failed"
+                    )
+                    planner_event = planner_trace_event(
+                        phase="initial",
+                        result=planner_result,
+                        used=False,
+                        fallback_reason=planner_fallback_reason,
+                    )
+
+        if llm_planner_used is not True:
+            selected, reason_codes, confidence = _select_strategy(
+                analysis=query_plan.analysis,
+                candidate_strategies=candidates,
+                settings=self.settings,
+                available_strategies=available,
+            )
+            if planner_fallback_reason:
+                reason_codes = [
+                    *reason_codes,
+                    "llm_planner_fallback",
+                    f"planner_fallback:{planner_fallback_reason}",
+                ]
+                llm_planner_used = False
         disabled_candidates = _disabled_candidates(candidates, available)
         execution, fallback_used, fallback_reason, resolution_reasons = _resolve_execution_strategy(
             selected,
             available_strategies=available,
             fallback_strategy=_configured_fallback_strategy(self.settings),
         )
+        planner_selected_strategy = selected if llm_planner_used else None
+        planner_reason_codes = (
+            list(planner_result.plan.reason_codes)
+            if planner_result is not None and planner_result.plan is not None
+            else []
+        )
         return RouterDecisionTrace(
             requested_strategy=requested_strategy,
             selected_strategy=selected,
             execution_strategy=execution,
-            decision_source="rule_based",
+            decision_source=decision_source,
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
             router_enabled=True,
@@ -138,6 +230,18 @@ class StrategyRouter:
             reason_codes=reason_codes + resolution_reasons,
             disabled_candidates=disabled_candidates,
             safety_flags=["single_retrieval_call", "no_agentic_loop", "no_external_action"],
+            llm_planner_used=llm_planner_used,
+            planner_provider=planner_result.provider if planner_result is not None else None,
+            planner_model=planner_result.model if planner_result is not None else None,
+            planner_action=(
+                planner_result.plan.action
+                if planner_result is not None and planner_result.plan is not None
+                else None
+            ),
+            planner_selected_strategy=planner_selected_strategy,
+            planner_reason_codes=planner_reason_codes,
+            planner_fallback_reason=planner_fallback_reason,
+            planner_events=[planner_event] if planner_event is not None else [],
             store_decision_trace=self.settings.router_store_decision_trace,
         )
 
@@ -266,6 +370,13 @@ def _resolve_execution_strategy(
         "selected_strategy_unavailable",
         ["selected_strategy_unavailable", f"fallback_strategy:{fallback_strategy.value}"],
     )
+
+
+def _planner_strategy_allowed(
+    strategy: RetrievalStrategy,
+    available_strategies: set[RetrievalStrategy],
+) -> bool:
+    return strategy not in UNIMPLEMENTED_ROUTER_STRATEGIES and strategy in available_strategies
 
 
 def _disabled_candidates(

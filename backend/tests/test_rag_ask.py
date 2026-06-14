@@ -631,6 +631,123 @@ def test_rag_ask_agentic_router_opt_in_persists_router_decision(
         assert "content_text" not in dumped
 
 
+def test_rag_ask_agentic_router_uses_llm_planner_after_insufficient_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            '{"action":"retrieve","strategy":"dense","confidence":0.7,'
+            '"reason_codes":["planner_initial_dense"]}',
+            '{"action":"retrieve","strategy":"hybrid","confidence":0.8,'
+            '"reason_codes":["planner_after_low_score"]}',
+        ]
+    )
+    captured_models: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": self.content}}]}
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        captured_models.append(str(json["model"]))
+        return Response(next(responses))
+
+    class StepVectorClient(_StaticVectorClient):
+        def __init__(self) -> None:
+            super().__init__([_candidate(100, 0.91, 1), _candidate(101, 0.82, 2)])
+            self.search_calls = 0
+
+        def search(
+            self,
+            *,
+            collection_name: str,
+            query_vector: Sequence[float],
+            limit: int,
+            filters: RetrievalFilters,
+        ) -> list[VectorSearchCandidate]:
+            self.search_calls += 1
+            if self.search_calls == 1:
+                self.query_vectors.append([float(value) for value in query_vector])
+                return []
+            return super().search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                filters=filters,
+            )
+
+    monkeypatch.setattr("app.rag.agentic_planner.httpx.post", fake_post)
+    client, session_factory, _ = rag_ask_client
+    vector_client = StepVectorClient()
+    settings = _settings(
+        router_mode="llm",
+        generation_provider="lmstudio",
+        generation_model_name="qwen3.5-9b",
+        router_llm_planner_model_name="qwen3.5-4b",
+        router_sufficiency_top_score_threshold=0.2,
+        router_max_retrieval_calls=2,
+        router_max_fallback_calls=1,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="agentic llm ask")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "agentic-llm-fallback-msg-1",
+            "message": "alpha policy",
+            "strategy": "agentic_router",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert captured_models == ["qwen3.5-4b", "qwen3.5-4b"]
+    assert vector_client.search_calls >= 2
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        decision = run.strategy_decision_json
+        assert decision["selected_strategy"] == "dense"
+        assert decision["execution_strategy"] == "dense"
+        assert decision["decision_source"] == "llm_planner"
+        assert decision["retrieval_call_count"] == 2
+        assert decision["fallback_used"] is True
+        assert decision["fallback_strategy"] == "hybrid"
+        assert decision["llm_planner_used"] is True
+        assert decision["planner_selected_strategy"] == "hybrid"
+        assert decision["planner_reason_codes"] == ["planner_after_low_score"]
+        assert [event["phase"] for event in decision["planner_events"]] == [
+            "initial",
+            "fallback",
+        ]
+
+
 def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

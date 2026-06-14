@@ -169,7 +169,19 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
     ),
     "rag.router.mode": (
         "rule_based",
-        "StrategyRouter mode. PR-28 supports deterministic rule_based routing only.",
+        "StrategyRouter mode. ROUTER_MODE=llm enables planner fallback.",
+    ),
+    "rag.router.llm_planner_model_name": (
+        None,
+        "Optional lightweight model override for the agentic_router LLM planner.",
+    ),
+    "rag.router.llm_planner_timeout_seconds": (
+        30,
+        "Timeout for one agentic_router LLM planner call.",
+    ),
+    "rag.router.llm_planner_max_output_tokens": (
+        256,
+        "Maximum output tokens for one agentic_router LLM planner call.",
     ),
     "rag.router.allow_agentic_search": (
         True,

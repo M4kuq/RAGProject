@@ -33,6 +33,7 @@ from app.rag.agentic import (
     ContextSufficiencyChecker,
     RetrievalAttemptResult,
 )
+from app.rag.agentic_planner import create_agentic_strategy_planner
 from app.rag.citations import (
     CitationBuildError,
     CitationSource,
@@ -236,19 +237,29 @@ class RagService:
         self.sparse_strategy = sparse_strategy or SparseRetrievalStrategy()
         self.hybrid_strategy = hybrid_strategy or HybridRetrievalStrategy()
         self.query_plan_builder = query_plan_builder or QueryPlanBuilder(settings)
-        self.strategy_router = strategy_router or StrategyRouter(settings)
+        agentic_strategy_planner = create_agentic_strategy_planner(settings)
+        self.strategy_router = strategy_router or StrategyRouter(settings, agentic_strategy_planner)
         self.agentic_executor = agentic_executor or AgenticRetrievalExecutor(
             settings,
             ContextSufficiencyChecker(settings),
+            agentic_strategy_planner,
         )
         self.llm_tool_orchestrator = llm_tool_orchestrator or LLMToolCallingRetrievalOrchestrator(
             settings
         )
         self.langchain_agentic_orchestrator = (
-            langchain_agentic_orchestrator or LangChainAgenticRetrievalOrchestrator(settings)
+            langchain_agentic_orchestrator
+            or LangChainAgenticRetrievalOrchestrator(
+                settings,
+                planner=agentic_strategy_planner,
+            )
         )
         self.langgraph_agentic_orchestrator = (
-            langgraph_agentic_orchestrator or LangGraphAgenticRetrievalOrchestrator(settings)
+            langgraph_agentic_orchestrator
+            or LangGraphAgenticRetrievalOrchestrator(
+                settings,
+                planner=agentic_strategy_planner,
+            )
         )
         self.context_budget_manager = context_budget_manager or ContextBudgetManager()
         self.evidence_pack_builder = evidence_pack_builder or EvidencePackBuilder()
@@ -1361,6 +1372,7 @@ class RagService:
     ) -> RetrievalPipelineResult:
         with latency_tracker.span("agentic_total_ms"):
             agentic_result = self.agentic_executor.execute(
+                query=query,
                 initial_strategy=initial_strategy,
                 intent=query_intent,
                 top_k=top_k,
@@ -3362,6 +3374,12 @@ def _agentic_strategy_decision(
         return None
     decision: dict[str, object] = dict(base_decision)
     agentic_fields = agentic_result.decision_trace_fields()
+    existing_planner_events = decision.get("planner_events")
+    if not isinstance(existing_planner_events, list):
+        existing_planner_events = []
+    agentic_planner_events = agentic_fields.get("planner_events")
+    if not isinstance(agentic_planner_events, list):
+        agentic_planner_events = []
     router_fallback_used = bool(decision.get("fallback_used"))
     if agentic_result.fallback_used:
         decision.update(agentic_fields)
@@ -3371,6 +3389,14 @@ def _agentic_strategy_decision(
                 continue
             decision[key] = value
         decision["fallback_used"] = router_fallback_used
+    if agentic_planner_events:
+        decision["planner_events"] = [*existing_planner_events, *agentic_planner_events]
+    planner_events = decision.get("planner_events")
+    if isinstance(planner_events, list) and planner_events:
+        decision["llm_planner_used"] = any(
+            isinstance(event, dict) and bool(event.get("llm_planner_used"))
+            for event in planner_events
+        )
     reason_codes = decision.get("reason_codes")
     if isinstance(reason_codes, list):
         merged_reason_codes = [str(code) for code in reason_codes]

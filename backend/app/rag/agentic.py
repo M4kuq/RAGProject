@@ -5,6 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import Settings
+from app.rag.agentic_planner import (
+    AgenticPlannerAttemptSummary,
+    AgenticPlannerSufficiencySummary,
+    AgenticStrategyPlanner,
+    AgenticStrategyPlanningRequest,
+    planner_trace_event,
+)
 from app.rag.strategy import QueryIntent, RetrievalStrategy
 from app.rag.trace import LatencyTracker, TraceRedactor
 from app.repositories.retrieval_repository import CheckedRetrievalCandidate
@@ -80,6 +87,7 @@ class AgenticRetrievalResult:
     sparse_candidate_count: int | None = None
     hybrid_candidate_count: int | None = None
     excluded_by_rdb_check_count: int = 0
+    planner_events: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def final_decision(self) -> ContextSufficiencyDecision | None:
@@ -87,38 +95,51 @@ class AgenticRetrievalResult:
 
     def decision_trace_fields(self) -> dict[str, object]:
         final_decision = self.final_decision
-        return TraceRedactor.safe_dict(
-            {
-                "agentic_schema_version": AGENTIC_LOOP_SCHEMA_VERSION,
-                "agentic_fallback_used": self.fallback_used,
-                "fallback_used": self.fallback_used,
-                "fallback_strategy": (
-                    self.fallback_strategies[-1].value if self.fallback_strategies else None
-                ),
-                "fallback_strategies": [strategy.value for strategy in self.fallback_strategies],
-                "fallback_reason": self.fallback_reason,
-                "retrieval_call_count": self.retrieval_call_count,
-                "budget_exhausted": self.budget_exhausted,
-                "sufficiency_score": (
-                    round(final_decision.score, 6) if final_decision is not None else None
-                ),
-                "sufficiency_reason_codes": (
-                    list(final_decision.reason_codes) if final_decision is not None else []
-                ),
-                "sufficiency_decisions": [
-                    decision.to_trace() for decision in self.sufficiency_decisions
-                ],
-                "initial_candidate_count": (
-                    self.sufficiency_decisions[0].candidate_count
-                    if self.sufficiency_decisions
-                    else 0
-                ),
-                "merged_candidate_count": self.merged_candidate_count,
-                "deduped_candidate_count": self.deduped_candidate_count,
-                "final_selected_count": self.final_selected_count,
-                "no_context": self.no_context,
-            }
-        )
+        payload: dict[str, object] = {
+            "agentic_schema_version": AGENTIC_LOOP_SCHEMA_VERSION,
+            "agentic_fallback_used": self.fallback_used,
+            "fallback_used": self.fallback_used,
+            "fallback_strategy": (
+                self.fallback_strategies[-1].value if self.fallback_strategies else None
+            ),
+            "fallback_strategies": [strategy.value for strategy in self.fallback_strategies],
+            "fallback_reason": self.fallback_reason,
+            "retrieval_call_count": self.retrieval_call_count,
+            "budget_exhausted": self.budget_exhausted,
+            "sufficiency_score": (
+                round(final_decision.score, 6) if final_decision is not None else None
+            ),
+            "sufficiency_reason_codes": (
+                list(final_decision.reason_codes) if final_decision is not None else []
+            ),
+            "sufficiency_decisions": [
+                decision.to_trace() for decision in self.sufficiency_decisions
+            ],
+            "initial_candidate_count": (
+                self.sufficiency_decisions[0].candidate_count if self.sufficiency_decisions else 0
+            ),
+            "merged_candidate_count": self.merged_candidate_count,
+            "deduped_candidate_count": self.deduped_candidate_count,
+            "final_selected_count": self.final_selected_count,
+            "no_context": self.no_context,
+        }
+        if self.planner_events:
+            last_event = self.planner_events[-1]
+            payload.update(
+                {
+                    "llm_planner_used": any(
+                        bool(event.get("llm_planner_used")) for event in self.planner_events
+                    ),
+                    "planner_provider": last_event.get("planner_provider"),
+                    "planner_model": last_event.get("planner_model"),
+                    "planner_action": last_event.get("planner_action"),
+                    "planner_selected_strategy": last_event.get("planner_selected_strategy"),
+                    "planner_reason_codes": last_event.get("planner_reason_codes"),
+                    "planner_fallback_reason": last_event.get("planner_fallback_reason"),
+                    "planner_events": self.planner_events,
+                }
+            )
+        return TraceRedactor.safe_dict(payload)
 
     def summary_fields(self) -> dict[str, object]:
         final_decision = self.final_decision
@@ -220,13 +241,16 @@ class AgenticRetrievalExecutor:
         self,
         settings: Settings,
         checker: ContextSufficiencyChecker | None = None,
+        planner: AgenticStrategyPlanner | None = None,
     ) -> None:
         self.settings = settings
         self.checker = checker or ContextSufficiencyChecker(settings)
+        self.planner = planner
 
     def execute(
         self,
         *,
+        query: str,
         initial_strategy: RetrievalStrategy,
         intent: QueryIntent | None,
         top_k: int,
@@ -251,6 +275,7 @@ class AgenticRetrievalExecutor:
                 intent=intent,
             )
         decisions = [initial_decision]
+        planner_events: list[dict[str, object]] = []
 
         if initial_decision.sufficient or max_calls <= 1 or max_fallback_calls <= 0:
             budget_exhausted = not initial_decision.sufficient and (
@@ -263,14 +288,45 @@ class AgenticRetrievalExecutor:
                 rerank_top_n=rerank_top_n,
                 fallback_reason=None,
                 budget_exhausted=budget_exhausted,
+                planner_events=planner_events,
             )
 
         fallback_reason = "insufficient_context"
         fallback_calls = 0
-        for fallback_strategy in self._fallback_strategies(initial_strategy):
+        while fallback_calls < max_fallback_calls and len(attempts) < max_calls:
+            fallback_strategy, planner_finalize = self._planned_fallback_strategy(
+                query=query,
+                intent=intent,
+                initial_strategy=initial_strategy,
+                attempts=attempts,
+                decisions=decisions,
+                max_calls=max_calls,
+                max_fallback_calls=max_fallback_calls,
+                fallback_calls=fallback_calls,
+                planner_events=planner_events,
+            )
+            if planner_finalize:
+                return self._result_from_attempts(
+                    attempts,
+                    decisions=decisions,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    fallback_reason=None,
+                    budget_exhausted=False,
+                    planner_events=planner_events,
+                )
+            if fallback_strategy is None:
+                fallback_strategy = self._next_rule_based_fallback(
+                    initial_strategy,
+                    attempts=attempts,
+                )
+            if fallback_strategy is None:
+                break
             if fallback_calls >= max_fallback_calls or len(attempts) >= max_calls:
                 break
-            if fallback_strategy == initial_strategy:
+            if _execution_family(fallback_strategy) in {
+                _execution_family(attempt.strategy) for attempt in attempts
+            }:
                 continue
             with latency_tracker.span("fallback_retrieval_ms"):
                 fallback_attempt = retrieve(fallback_strategy, "fallback")
@@ -293,6 +349,7 @@ class AgenticRetrievalExecutor:
                     rerank_top_n=rerank_top_n,
                     fallback_reason=fallback_reason,
                     budget_exhausted=False,
+                    planner_events=planner_events,
                 )
 
         return self._result_from_attempts(
@@ -302,7 +359,139 @@ class AgenticRetrievalExecutor:
             rerank_top_n=rerank_top_n,
             fallback_reason=fallback_reason,
             budget_exhausted=True,
+            planner_events=planner_events,
         )
+
+    def _planned_fallback_strategy(
+        self,
+        *,
+        query: str,
+        intent: QueryIntent | None,
+        initial_strategy: RetrievalStrategy,
+        attempts: list[RetrievalAttemptResult],
+        decisions: list[ContextSufficiencyDecision],
+        max_calls: int,
+        max_fallback_calls: int,
+        fallback_calls: int,
+        planner_events: list[dict[str, object]],
+    ) -> tuple[RetrievalStrategy | None, bool]:
+        if self.settings.router_mode != "llm":
+            return None, False
+        available = self._available_fallback_strategies(initial_strategy, attempts=attempts)
+        if not available:
+            return None, False
+        if self.planner is None:
+            planner_events.append(
+                planner_trace_event(
+                    phase="fallback",
+                    result=None,
+                    used=False,
+                    fallback_reason="planner_unavailable",
+                )
+            )
+            return None, False
+
+        result = self.planner.plan(
+            AgenticStrategyPlanningRequest(
+                query=query,
+                phase="fallback",
+                available_strategies=tuple(available),
+                candidate_strategies=tuple(available),
+                attempted_strategies=tuple(attempt.strategy for attempt in attempts),
+                query_analysis=TraceRedactor.safe_dict(
+                    {
+                        "intent": intent.value if isinstance(intent, QueryIntent) else None,
+                    }
+                ),
+                attempt_summaries=tuple(_attempt_summary(attempt) for attempt in attempts),
+                sufficiency_summaries=tuple(
+                    _sufficiency_summary(decision) for decision in decisions
+                ),
+                remaining_retrieval_calls=max(0, max_calls - len(attempts)),
+                remaining_fallback_calls=max(0, max_fallback_calls - fallback_calls),
+            )
+        )
+        plan = result.plan
+        if plan is None:
+            planner_events.append(
+                planner_trace_event(
+                    phase="fallback",
+                    result=result,
+                    used=False,
+                    fallback_reason=result.fallback_reason or "planner_failed",
+                )
+            )
+            return None, False
+        if plan.action == "finalize":
+            planner_events.append(
+                planner_trace_event(
+                    phase="fallback",
+                    result=result,
+                    used=True,
+                    action="finalize",
+                )
+            )
+            return None, True
+        if plan.strategy is None:
+            planner_events.append(
+                planner_trace_event(
+                    phase="fallback",
+                    result=result,
+                    used=False,
+                    fallback_reason="planner_missing_strategy",
+                )
+            )
+            return None, False
+        rejection = _planner_strategy_rejection(
+            plan.strategy,
+            available=available,
+            attempts=attempts,
+        )
+        if rejection is not None:
+            planner_events.append(
+                planner_trace_event(
+                    phase="fallback",
+                    result=result,
+                    used=False,
+                    selected_strategy=plan.strategy,
+                    fallback_reason=rejection,
+                )
+            )
+            return None, False
+        planner_events.append(
+            planner_trace_event(
+                phase="fallback",
+                result=result,
+                used=True,
+                selected_strategy=plan.strategy,
+            )
+        )
+        return plan.strategy, False
+
+    def _available_fallback_strategies(
+        self,
+        initial_strategy: RetrievalStrategy,
+        *,
+        attempts: list[RetrievalAttemptResult],
+    ) -> list[RetrievalStrategy]:
+        attempted_families = {_execution_family(attempt.strategy) for attempt in attempts}
+        attempted_strategies = {attempt.strategy for attempt in attempts}
+        return [
+            strategy
+            for strategy in self._fallback_strategies(initial_strategy)
+            if strategy not in attempted_strategies
+            and _execution_family(strategy) not in attempted_families
+        ]
+
+    def _next_rule_based_fallback(
+        self,
+        initial_strategy: RetrievalStrategy,
+        *,
+        attempts: list[RetrievalAttemptResult],
+    ) -> RetrievalStrategy | None:
+        for strategy in self._available_fallback_strategies(initial_strategy, attempts=attempts):
+            return strategy
+        return None
 
     def _fallback_strategies(self, initial_strategy: RetrievalStrategy) -> list[RetrievalStrategy]:
         fallback_dense = _configured_fallback_strategy(self.settings)
@@ -329,6 +518,7 @@ class AgenticRetrievalExecutor:
         rerank_top_n: int,
         fallback_reason: str | None,
         budget_exhausted: bool,
+        planner_events: list[dict[str, object]] | None = None,
     ) -> AgenticRetrievalResult:
         final_candidates = merge_dedupe_candidates(attempts, limit=top_k)
         fallback_attempts = attempts[1:]
@@ -360,6 +550,7 @@ class AgenticRetrievalExecutor:
             excluded_by_rdb_check_count=sum(
                 attempt.excluded_by_rdb_check_count for attempt in attempts
             ),
+            planner_events=list(planner_events or []),
         )
 
 
@@ -519,6 +710,50 @@ def _item_source_for_strategy(strategy: RetrievalStrategy) -> str:
     if strategy == RetrievalStrategy.FALLBACK_DENSE:
         return RetrievalStrategy.FALLBACK_DENSE.value
     return strategy.value
+
+
+def _attempt_summary(attempt: RetrievalAttemptResult) -> AgenticPlannerAttemptSummary:
+    return AgenticPlannerAttemptSummary(
+        strategy=attempt.strategy,
+        role=attempt.role,
+        candidate_count=attempt.candidate_count,
+        qdrant_candidate_count=attempt.qdrant_candidate_count,
+        sparse_candidate_count=attempt.sparse_candidate_count,
+        hybrid_candidate_count=attempt.hybrid_candidate_count,
+        excluded_by_rdb_check_count=attempt.excluded_by_rdb_check_count,
+        top_score=_top_score(attempt.candidates),
+    )
+
+
+def _sufficiency_summary(
+    decision: ContextSufficiencyDecision,
+) -> AgenticPlannerSufficiencySummary:
+    return AgenticPlannerSufficiencySummary(
+        sufficient=decision.sufficient,
+        score=decision.score,
+        reason_codes=decision.reason_codes,
+        candidate_count=decision.candidate_count,
+        selected_count=decision.selected_count,
+        top_score=decision.top_score,
+        fallback_recommended=decision.fallback_recommended,
+        source_diversity=decision.source_diversity,
+    )
+
+
+def _planner_strategy_rejection(
+    strategy: RetrievalStrategy,
+    *,
+    available: list[RetrievalStrategy],
+    attempts: list[RetrievalAttemptResult],
+) -> str | None:
+    if strategy in {attempt.strategy for attempt in attempts}:
+        return "planner_strategy_already_attempted"
+    attempted_families = {_execution_family(attempt.strategy) for attempt in attempts}
+    if _execution_family(strategy) in attempted_families:
+        return "planner_strategy_family_already_attempted"
+    if strategy not in available:
+        return "planner_strategy_unavailable"
+    return None
 
 
 def _sum_optional(values: Any) -> int | None:

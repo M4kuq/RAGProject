@@ -60,7 +60,7 @@ const RAG_STRATEGY_OPTIONS = [
   {
     value: "agentic_router" as const,
     label: "Agentic Router",
-    description: "Rule-based query planning and strategy routing before answer generation."
+    description: "LLM plannerで検索戦略を選び、失敗時はルールベースに戻して回答生成します。"
   }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
