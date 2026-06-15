@@ -152,6 +152,13 @@ def test_graph_settings_snapshot_includes_traversal_controls() -> None:
     assert snapshot["graph_retrieval_max_relations_per_entity"] == 7
     assert snapshot["graph_retrieval_max_source_chunks"] == 9
     assert snapshot["graph_retrieval_timeout_ms"] == 1500
+    assert snapshot["graph_store_provider"] == "postgres"
+
+
+def test_graph_store_provider_setting_accepts_neo4j_without_required_dependency() -> None:
+    settings = _settings(graph_store_provider=" neo4j ")
+
+    assert settings.graph_store_provider == "neo4j"
 
 
 def test_graph_router_selection_skipped_when_router_disabled(

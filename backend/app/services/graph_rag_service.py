@@ -19,6 +19,7 @@ from app.rag.graph_retrieval import (
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
     GraphSourceCandidate,
+    GraphStoreProvider,
     graph_query_signal_score,
 )
 from app.rag.rerank import RerankError
@@ -837,6 +838,7 @@ class GraphRagService:
 def _graph_retrieval_settings(settings: object) -> GraphRetrievalSettings:
     return GraphRetrievalSettings(
         enabled=bool(getattr(settings, "graph_retrieval_enabled", False)),
+        provider=str(getattr(settings, "graph_store_provider", GraphStoreProvider.POSTGRES.value)),
         max_start_entities=int(getattr(settings, "graph_retrieval_max_start_entities", 5)),
         max_depth=int(getattr(settings, "graph_retrieval_max_depth", 2)),
         max_paths=int(getattr(settings, "graph_retrieval_max_paths", 20)),
@@ -868,10 +870,12 @@ def _graph_settings_snapshot(
         strategy_type=strategy_type,
     )
     graph_settings = _graph_retrieval_settings(settings).bounded()
+    graph_store_provider = GraphStoreProvider(graph_settings.provider)
     snapshot.update(
         TraceRedactor.safe_dict(
             {
                 "graph_retrieval_enabled": bool(settings.graph_retrieval_enabled),
+                "graph_store_provider": graph_store_provider.value,
                 "graph_retrieval_max_depth": graph_settings.max_depth,
                 "graph_retrieval_max_paths": graph_settings.max_paths,
                 "graph_retrieval_max_relations_per_entity": (
