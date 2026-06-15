@@ -870,7 +870,11 @@ def _graph_settings_snapshot(
         strategy_type=strategy_type,
     )
     graph_settings = _graph_retrieval_settings(settings).bounded()
-    graph_store_provider = GraphStoreProvider(graph_settings.provider)
+    graph_store_provider = (
+        graph_settings.provider
+        if isinstance(graph_settings.provider, GraphStoreProvider)
+        else GraphStoreProvider.POSTGRES
+    )
     snapshot.update(
         TraceRedactor.safe_dict(
             {

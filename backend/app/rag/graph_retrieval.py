@@ -206,7 +206,7 @@ class GraphStoreResultMetadata:
 @dataclass(frozen=True)
 class GraphRetrievalSettings:
     enabled: bool = False
-    provider: GraphStoreProvider | str = GraphStoreProvider.POSTGRES
+    provider: GraphStoreProvider | str | None = None
     max_start_entities: int = 5
     max_depth: int = 2
     max_paths: int = 20
@@ -222,7 +222,9 @@ class GraphRetrievalSettings:
         )
         return GraphRetrievalSettings(
             enabled=self.enabled,
-            provider=_coerce_graph_store_provider(self.provider),
+            provider=(
+                _coerce_graph_store_provider(self.provider) if self.provider is not None else None
+            ),
             max_start_entities=_bounded_int(self.max_start_entities, 1, 20),
             max_depth=_bounded_int(self.max_depth, 1, 4),
             max_paths=_bounded_int(self.max_paths, 1, 100),
@@ -256,6 +258,7 @@ class GraphPathCandidate:
     provider: GraphStoreProvider = GraphStoreProvider.POSTGRES
     entity_types: tuple[str | None, ...] = ()
     relation_scores: tuple[float | None, ...] = ()
+    relation_node_id_pairs: tuple[tuple[int, int], ...] = ()
     evidence_hashes: tuple[str, ...] = ()
 
     def to_graph_path(self, *, source_chunk_ids: tuple[int, ...] | None = None) -> GraphPath:
@@ -275,34 +278,43 @@ class GraphPathCandidate:
             )
             for index, entity_id in enumerate(self.entity_ids)
         )
-        relation_refs = tuple(
-            GraphRelationRef(
-                provider=self.provider,
-                relation_id=str(relation_id),
-                source_node_id=str(self.entity_ids[index])
-                if index < len(self.entity_ids)
-                else None,
-                target_node_id=(
+        relation_refs: list[GraphRelationRef] = []
+        for index, relation_id in enumerate(self.relation_ids):
+            source_node_id: str | None
+            target_node_id: str | None
+            if index < len(self.relation_node_id_pairs):
+                source_node_id = str(self.relation_node_id_pairs[index][0])
+                target_node_id = str(self.relation_node_id_pairs[index][1])
+            else:
+                source_node_id = (
+                    str(self.entity_ids[index]) if index < len(self.entity_ids) else None
+                )
+                target_node_id = (
                     str(self.entity_ids[index + 1]) if index + 1 < len(self.entity_ids) else None
-                ),
-                relation_type=(
-                    self.relation_types[index]
-                    if index < len(self.relation_types)
-                    else f"relation:{relation_id}"
-                ),
-                safe_label=(
-                    self.relation_types[index]
-                    if index < len(self.relation_types)
-                    else f"relation:{relation_id}"
-                ),
-                score=(
-                    self.relation_scores[index]
-                    if index < len(self.relation_scores)
-                    else self.relation_score
-                ),
+                )
+            relation_refs.append(
+                GraphRelationRef(
+                    provider=self.provider,
+                    relation_id=str(relation_id),
+                    source_node_id=source_node_id,
+                    target_node_id=target_node_id,
+                    relation_type=(
+                        self.relation_types[index]
+                        if index < len(self.relation_types)
+                        else f"relation:{relation_id}"
+                    ),
+                    safe_label=(
+                        self.relation_types[index]
+                        if index < len(self.relation_types)
+                        else f"relation:{relation_id}"
+                    ),
+                    score=(
+                        self.relation_scores[index]
+                        if index < len(self.relation_scores)
+                        else self.relation_score
+                    ),
+                )
             )
-            for index, relation_id in enumerate(self.relation_ids)
-        )
         evidence_refs: tuple[GraphEvidenceRef, ...] = ()
         if chunk_ids:
             evidence_refs = (
@@ -326,7 +338,7 @@ class GraphPathCandidate:
             provider=self.provider,
             path_id=self.path_id,
             node_refs=node_refs,
-            relation_refs=relation_refs,
+            relation_refs=tuple(relation_refs),
             evidence_refs=evidence_refs,
             source_chunk_ids=chunk_ids,
             safe_entity_labels=self.safe_entity_labels,
@@ -640,6 +652,13 @@ class GraphPathSearchService:
                                 entity_types=entity_types,
                                 relation_scores=tuple(
                                     round(score, 6) for score in relation_confidences
+                                ),
+                                relation_node_id_pairs=tuple(
+                                    (
+                                        item.relation.source_entity_id,
+                                        item.relation.target_entity_id,
+                                    )
+                                    for item in next_relation_path
                                 ),
                                 evidence_hashes=tuple(
                                     item.relation.evidence_text_hash

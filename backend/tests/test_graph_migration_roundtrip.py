@@ -67,8 +67,21 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0015_langgraph_agentic"
+        assert version == "0016_graph_store_provider_seed"
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+
+        command.downgrade(config, "0015_langgraph_agentic")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == "0015_langgraph_agentic"
+        assert _graph_store_provider_value(pg_engine) is None
+
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == "0016_graph_store_provider_seed"
+        assert _graph_store_provider_value(pg_engine) == "postgres"
 
         command.downgrade(config, "0011_tool_result_compression")
         with pg_engine.connect() as conn:
@@ -79,8 +92,9 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0015_langgraph_agentic"
+        assert version == "0016_graph_store_provider_seed"
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _graph_store_provider_value(pg_engine) == "postgres"
     finally:
         get_settings.cache_clear()
 
@@ -93,6 +107,19 @@ def _alembic_config() -> Any:
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     config.set_main_option("prepend_sys_path", str(backend_dir))
     return config
+
+
+def _graph_store_provider_value(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT setting_value #>> '{}'
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.store.provider'
+                """
+            )
+        ).scalar_one_or_none()
 
 
 def _render_url(url: URL) -> str:
