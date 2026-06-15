@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     hybrid_sparse_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=2, ge=1, le=5)
     graph_retrieval_enabled: bool = False
+    graph_store_provider: str = "postgres"
     graph_retrieval_max_start_entities: int = Field(default=5, ge=1, le=20)
     graph_retrieval_max_depth: int = Field(default=2, ge=1, le=4)
     graph_retrieval_max_paths: int = Field(default=20, ge=1, le=100)
@@ -351,6 +352,9 @@ class Settings(BaseSettings):
         self.graph_retrieval_fallback_strategy = self.graph_retrieval_fallback_strategy.lower()
         if self.graph_retrieval_fallback_strategy not in {"dense", "hybrid"}:
             raise ValueError("GRAPH_RETRIEVAL_FALLBACK_STRATEGY must be dense or hybrid")
+        self.graph_store_provider = self.graph_store_provider.strip().lower()
+        if self.graph_store_provider not in {"postgres", "neo4j"}:
+            raise ValueError("GRAPH_STORE_PROVIDER must be postgres or neo4j")
         self.sparse_provider = self.sparse_provider.lower()
         if self.sparse_provider != "postgres_fts":
             raise ValueError("SPARSE_PROVIDER must be postgres_fts")

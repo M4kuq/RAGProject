@@ -30,6 +30,10 @@ PHASE3_GRAPH_SYSTEM_SETTINGS: dict[str, tuple[object, str]] = {
     "rag.graph.max_entities_per_chunk": (20, "Maximum entity candidates per chunk."),
     "rag.graph.max_relations_per_chunk": (40, "Maximum relation candidates per chunk."),
     "rag.graph.store_raw_evidence_text": (False, "Raw graph evidence text must not be stored."),
+    "rag.graph.store.provider": (
+        "postgres",
+        "GraphStore provider. Neo4j remains optional and disabled by default.",
+    ),
     "rag.graph.retrieval.enabled": (
         False,
         "Enable graph retrieval strategies. PR-48 connects retrieval.",

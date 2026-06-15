@@ -23,9 +23,8 @@ Implemented in PR-48:
 - `GraphRetrievalStrategy` for graph source chunk candidates.
 - `GraphRetrievalRepository` for graph lookup, bounded relation loading, active chunk filtering, and safe `graph_retrieval_paths` persistence.
 
-Not implemented in PR-48:
+Still future work:
 
-- Public `/rag/search strategy=graph` and `/rag/ask strategy=graph` API dispatch.
 - Graph Citation Builder.
 - Graph Path Validation UI.
 - Graph Debug UI.
@@ -38,9 +37,10 @@ Not implemented in PR-48:
 ```text
 query
  -> QueryAnalyzer / QueryPlanner
- -> graph_entity_lookup
- -> relation traversal / multi-hop path search
- -> graph_score_breakdown
+ -> GraphRetrievalStrategy
+ -> GraphStoreResolver
+ -> GraphStore provider
+ -> provider-independent GraphRetrievalResult
  -> source chunk mapping
  -> RDB final check
  -> retrieval_run_items
@@ -90,18 +90,46 @@ Paths are scored and summarized as IDs, safe labels, relation types, scores, and
 
 Neighborhood expansion can add related entities and chunks when direct lookup is weak. It should never grow unbounded; it must record why expansion occurred.
 
+## PR-49 GraphStore Boundary
+
+PR-49 keeps the PR-48 PostgreSQL traversal behavior but wraps it behind the
+`GraphStore` interface:
+
+- `GraphRetrievalStrategy` only resolves and calls a `GraphStore`.
+- `PostgresGraphStore` owns PostgreSQL-backed entity lookup, bounded path search,
+  mention-only fallback, graph scoring, and source chunk mapping.
+- `Neo4jGraphStore` is a skeleton only. It makes no driver import, network call,
+  or Docker requirement, and returns a safe unavailable result until PR-50.
+- `GRAPH_STORE_PROVIDER` defaults to `postgres`; setting it to `neo4j` must not
+  break application startup or non-graph retrieval paths.
+
+The common DTO surface is provider-neutral:
+
+- `GraphNodeRef`
+- `GraphRelationRef`
+- `GraphEvidenceRef`
+- `GraphPath`
+- `GraphRetrievalResult`
+
+`GraphPath` carries `source_chunk_ids`, `safe_entity_labels`, `relation_types`,
+and a safe `score_breakdown` so PR-50 can map Neo4j paths into the same shape.
+
 ## Safe Path Trace
 
 `graph_retrieval_paths.path_json` stores only safe references:
 
+- schema version
+- provider
 - graph path id
-- entity ids
-- relation ids
+- node refs
+- relation refs
+- evidence refs
+- source chunk ids
 - safe entity labels
 - relation types
-- source chunk ids
 - path score
 - depth
+- safe score breakdown
 
 It must not store raw document text, raw chunk text, full context, raw prompt, PII, tokens, secrets, or raw evidence text.
 
@@ -169,6 +197,11 @@ Graph path candidates consume context budget through their source chunk-backed e
 
 ## API Handoff
 
-PR-48 introduces the graph retrieval strategy object and safe graph path persistence, but it does not expose `strategy=graph` through `/rag/search` or `/rag/ask` yet. The request enums and service dispatch must be extended in a follow-up API integration PR before callers can use graph retrieval directly.
+Current graph retrieval requests already return chunk-backed candidates through
+the existing `/rag/search` and `/rag/ask` pipeline when `strategy=graph` is
+enabled. Graph-aware router selection and Auto-compatible fallback behavior use
+the same source chunk bridge.
 
-The implemented strategy already resolves each path back to `document_chunk_id`, so that follow-up can connect the existing Context Budget, Evidence Pack, citation, and confidence layers to the same chunk-backed candidate shape without exposing raw graph evidence.
+The implemented strategy resolves each path back to `document_chunk_id`, so
+future citation, debug, and evaluation work can connect to the same
+chunk-backed candidate shape without exposing raw graph evidence.

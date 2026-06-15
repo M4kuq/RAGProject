@@ -36,6 +36,9 @@ from app.rag.graph_retrieval import (
     GraphPathSearchService,
     GraphRetrievalSettings,
     GraphRetrievalStrategy,
+    GraphStoreProvider,
+    GraphStoreResolver,
+    Neo4jGraphStore,
     _select_paths_at_cap,
     _source_candidates,
     graph_query_signal_score,
@@ -102,6 +105,10 @@ def test_graph_retrieval_finds_bounded_paths_and_safe_scores(
         )
 
         assert result.entity_lookup_count >= 2
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert len(result.query_hash) == 64
+        assert result.paths
+        assert set(result.source_chunk_ids) <= seed.chunk_ids
         assert result.relation_count <= 6
         assert result.path_count <= 8
         assert result.source_candidate_count >= 1
@@ -153,6 +160,108 @@ def test_graph_retrieval_returns_no_context_when_disabled_or_unmatched(
         assert disabled.reason_codes == ("graph_disabled",)
         assert unmatched.no_context is True
         assert unmatched.reason_codes == ("no_entity_matches",)
+
+
+def test_graph_settings_provider_is_optional_and_resolver_defaults_to_postgres() -> None:
+    settings = GraphRetrievalSettings(enabled=True).bounded()
+    resolver = GraphStoreResolver()
+
+    assert settings.provider is None
+    assert resolver.resolve().provider == GraphStoreProvider.POSTGRES
+
+
+def test_graph_strategy_provider_default_is_honored_without_settings_override(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+
+        result = strategy.search(
+            db,
+            query="How does FastAPI depend on PostgreSQL?",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True),
+        )
+
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.no_context is True
+        assert result.reason_codes == (
+            "graph_store_provider_unavailable",
+            "neo4j_not_configured",
+        )
+
+
+def test_graph_resolver_provider_default_is_honored_without_settings_override(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        strategy = GraphRetrievalStrategy(
+            resolver=GraphStoreResolver(provider=GraphStoreProvider.NEO4J)
+        )
+
+        result = strategy.search(
+            db,
+            query="How does FastAPI depend on PostgreSQL?",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True),
+        )
+
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.no_context is True
+        assert result.reason_codes == (
+            "graph_store_provider_unavailable",
+            "neo4j_not_configured",
+        )
+
+
+def test_graph_settings_provider_overrides_strategy_default(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        _seed_graph(db)
+        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+
+        result = strategy.search(
+            db,
+            query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                provider=GraphStoreProvider.POSTGRES,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.graph_candidates
+
+
+def test_neo4j_graph_store_skeleton_is_safe_without_driver(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        store = Neo4jGraphStore()
+
+        result = store.search(
+            db,
+            query="How does FastAPI depend on PostgreSQL?",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True, provider=GraphStoreProvider.NEO4J),
+        )
+
+        assert result.no_context is True
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.fallback_used is True
+        assert result.reason_codes == (
+            "graph_store_provider_unavailable",
+            "neo4j_not_configured",
+        )
+        assert result.graph_candidates == ()
+        assert result.paths == ()
 
 
 def test_graph_retrieval_applies_filters_to_relation_chunks(
@@ -817,11 +926,68 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
         assert len(stored) == len(saved)
         assert stored[0].path_json["schema_version"] == GRAPH_PATH_SCHEMA_VERSION
         assert stored[0].path_json["strategy_type"] == "graph"
+        assert stored[0].path_json["provider"] == GraphStoreProvider.POSTGRES.value
+        assert "entity_ids" not in stored[0].path_json
+        assert "relation_ids" not in stored[0].path_json
+        assert stored[0].path_json["node_refs"]
+        assert stored[0].path_json["relation_refs"]
+        assert stored[0].path_json["evidence_refs"]
+        assert stored[0].path_json["score_breakdown"]["retrieval_source"] == "graph"
         assert set(stored[0].source_chunk_ids_json) <= selected_chunk_ids
         payload_dump = str(stored[0].path_json).lower()
         assert "raw chunk" not in payload_dump
         assert "full context" not in payload_dump
         assert "prompt" not in payload_dump
+
+
+def test_graph_path_relation_refs_preserve_actual_direction_for_incoming_edges(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        postgresql = db.get(GraphEntity, seed.postgresql_entity_id)
+        assert postgresql is not None
+        path_search = GraphPathSearchService()
+
+        paths, _, _ = path_search.search_paths(
+            db,
+            start_entities=[
+                GraphEntityLookupResult(
+                    entity=postgresql,
+                    match_score=1.0,
+                    matched_terms=("postgresql",),
+                )
+            ],
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                max_depth=1,
+                max_paths=5,
+                max_relations_per_entity=5,
+                min_entity_match_score=0.2,
+            ),
+            started_at=time.monotonic(),
+        )
+        incoming_paths = [
+            path
+            for path in paths
+            if path.entity_ids == (seed.postgresql_entity_id, seed.fastapi_entity_id)
+            and path.relation_ids
+        ]
+        assert incoming_paths
+
+        graph_path = incoming_paths[0].to_graph_path()
+        relation_ref = graph_path.relation_refs[0]
+        assert relation_ref.source_node_id == str(seed.fastapi_entity_id)
+        assert relation_ref.target_node_id == str(seed.postgresql_entity_id)
+
+        path_json = graph_path.path_json()
+        relation_refs = path_json["relation_refs"]
+        assert isinstance(relation_refs, list)
+        relation_ref_json = relation_refs[0]
+        assert isinstance(relation_ref_json, dict)
+        assert relation_ref_json["source_node_id"] == str(seed.fastapi_entity_id)
+        assert relation_ref_json["target_node_id"] == str(seed.postgresql_entity_id)
 
 
 def test_graph_query_signal_score_detects_relation_queries() -> None:

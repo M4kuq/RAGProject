@@ -123,6 +123,10 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         False,
         "Enable explicit strategy=graph graph retrieval requests for PR-48.",
     ),
+    "rag.graph.store.provider": (
+        "postgres",
+        "GraphStore provider. PR-49 defaults to PostgreSQL; Neo4j remains optional.",
+    ),
     "rag.graph.retrieval.max_start_entities": (
         5,
         "Maximum graph entities matched from one query for PR-48 graph retrieval.",

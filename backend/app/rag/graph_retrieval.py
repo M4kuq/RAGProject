@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Protocol
 
 from sqlalchemy.orm import Session
 
@@ -13,10 +17,14 @@ from app.repositories.graph_retrieval_repository import (
     GraphRelationRow,
     GraphRetrievalRepository,
 )
-from app.schemas.graph import GraphRetrievalPathCreate, validate_safe_graph_label
+from app.schemas.graph import (
+    GraphRetrievalPathCreate,
+    validate_safe_graph_label,
+    validate_safe_graph_metadata,
+)
 
 GRAPH_RETRIEVAL_SCHEMA_VERSION = "phase3.graph_retrieval.v1"
-GRAPH_PATH_SCHEMA_VERSION = "phase3.graph_path.v1"
+GRAPH_PATH_SCHEMA_VERSION = "phase3.graph_path.v2"
 GRAPH_SCORE_SCHEMA_VERSION = "phase3.graph_score.v1"
 # Match ASCII symbolic identifiers (e.g. C++, node.js) first so their punctuation
 # is preserved, then fall back to runs of non-ASCII word characters (e.g. Japanese
@@ -67,9 +75,138 @@ _JAPANESE_RELATION_MARKERS = (
 )
 
 
+class GraphStoreProvider(StrEnum):
+    POSTGRES = "postgres"
+    NEO4J = "neo4j"
+
+
+@dataclass(frozen=True)
+class GraphNodeRef:
+    provider: GraphStoreProvider
+    node_id: str
+    entity_id: int | None
+    safe_label: str
+    entity_type: str | None = None
+    score: float | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "provider": self.provider.value,
+            "node_id": self.node_id,
+            "entity_id": self.entity_id,
+            "safe_label": self.safe_label,
+            "entity_type": self.entity_type,
+            "score": self.score,
+            "metadata": validate_safe_graph_metadata(dict(self.metadata)),
+        }
+
+
+@dataclass(frozen=True)
+class GraphRelationRef:
+    provider: GraphStoreProvider
+    relation_id: str
+    source_node_id: str | None
+    target_node_id: str | None
+    relation_type: str
+    safe_label: str
+    score: float | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "provider": self.provider.value,
+            "relation_id": self.relation_id,
+            "source_node_id": self.source_node_id,
+            "target_node_id": self.target_node_id,
+            "relation_type": self.relation_type,
+            "safe_label": self.safe_label,
+            "score": self.score,
+            "metadata": validate_safe_graph_metadata(dict(self.metadata)),
+        }
+
+
+@dataclass(frozen=True)
+class GraphEvidenceRef:
+    provider: GraphStoreProvider
+    source_chunk_ids: tuple[int, ...]
+    document_chunk_ids: tuple[int, ...]
+    retrieval_run_item_ids: tuple[int, ...] | None = None
+    evidence_hashes: tuple[str, ...] | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "provider": self.provider.value,
+            "source_chunk_ids": list(self.source_chunk_ids),
+            "document_chunk_ids": list(self.document_chunk_ids),
+            "metadata": validate_safe_graph_metadata(dict(self.metadata)),
+        }
+        if self.retrieval_run_item_ids is not None:
+            payload["retrieval_run_item_ids"] = list(self.retrieval_run_item_ids)
+        if self.evidence_hashes is not None:
+            payload["evidence_hashes"] = list(self.evidence_hashes)
+        return payload
+
+
+@dataclass(frozen=True)
+class GraphPath:
+    provider: GraphStoreProvider
+    path_id: str
+    node_refs: tuple[GraphNodeRef, ...]
+    relation_refs: tuple[GraphRelationRef, ...]
+    evidence_refs: tuple[GraphEvidenceRef, ...]
+    source_chunk_ids: tuple[int, ...]
+    safe_entity_labels: tuple[str, ...]
+    relation_types: tuple[str, ...]
+    depth: int
+    path_score: float
+    score_breakdown: dict[str, object] = field(default_factory=dict)
+
+    def path_json(self) -> dict[str, object]:
+        return validate_safe_graph_metadata(
+            {
+                "schema_version": GRAPH_PATH_SCHEMA_VERSION,
+                "strategy_type": "graph",
+                "provider": self.provider.value,
+                "path_id": self.path_id,
+                "node_refs": [node.to_json() for node in self.node_refs],
+                "relation_refs": [relation.to_json() for relation in self.relation_refs],
+                "evidence_refs": [evidence.to_json() for evidence in self.evidence_refs],
+                "source_chunk_ids": list(self.source_chunk_ids),
+                "safe_entity_labels": list(self.safe_entity_labels),
+                "relation_types": list(self.relation_types),
+                "path_score": self.path_score,
+                "depth": self.depth,
+                "score_breakdown": dict(self.score_breakdown),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class GraphStoreResultMetadata:
+    entity_lookup_count: int = 0
+    relation_count: int = 0
+    path_count: int = 0
+    source_candidate_count: int = 0
+    reason_codes: tuple[str, ...] = ()
+    elapsed_ms: int = 0
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "entity_lookup_count": self.entity_lookup_count,
+            "relation_count": self.relation_count,
+            "path_count": self.path_count,
+            "source_candidate_count": self.source_candidate_count,
+            "reason_codes": list(self.reason_codes),
+            "elapsed_ms": self.elapsed_ms,
+        }
+
+
 @dataclass(frozen=True)
 class GraphRetrievalSettings:
     enabled: bool = False
+    provider: GraphStoreProvider | str | None = None
     max_start_entities: int = 5
     max_depth: int = 2
     max_paths: int = 20
@@ -85,6 +222,9 @@ class GraphRetrievalSettings:
         )
         return GraphRetrievalSettings(
             enabled=self.enabled,
+            provider=(
+                _coerce_graph_store_provider(self.provider) if self.provider is not None else None
+            ),
             max_start_entities=_bounded_int(self.max_start_entities, 1, 20),
             max_depth=_bounded_int(self.max_depth, 1, 4),
             max_paths=_bounded_int(self.max_paths, 1, 100),
@@ -115,20 +255,101 @@ class GraphPathCandidate:
     path_score: float
     entity_match_score: float
     relation_score: float
+    provider: GraphStoreProvider = GraphStoreProvider.POSTGRES
+    entity_types: tuple[str | None, ...] = ()
+    relation_scores: tuple[float | None, ...] = ()
+    relation_node_id_pairs: tuple[tuple[int, int], ...] = ()
+    evidence_hashes: tuple[str, ...] = ()
 
-    def path_json(self) -> dict[str, object]:
-        return {
-            "schema_version": GRAPH_PATH_SCHEMA_VERSION,
-            "strategy_type": "graph",
-            "path_id": self.path_id,
-            "entity_ids": list(self.entity_ids),
-            "relation_ids": list(self.relation_ids),
-            "safe_entity_labels": list(self.safe_entity_labels),
-            "relation_types": list(self.relation_types),
-            "source_chunk_ids": list(self.source_chunk_ids),
+    def to_graph_path(self, *, source_chunk_ids: tuple[int, ...] | None = None) -> GraphPath:
+        chunk_ids = source_chunk_ids if source_chunk_ids is not None else self.source_chunk_ids
+        node_refs = tuple(
+            GraphNodeRef(
+                provider=self.provider,
+                node_id=str(entity_id),
+                entity_id=entity_id,
+                safe_label=(
+                    self.safe_entity_labels[index]
+                    if index < len(self.safe_entity_labels)
+                    else f"entity:{entity_id}"
+                ),
+                entity_type=self.entity_types[index] if index < len(self.entity_types) else None,
+                score=self.entity_match_score if index == 0 else None,
+            )
+            for index, entity_id in enumerate(self.entity_ids)
+        )
+        relation_refs: list[GraphRelationRef] = []
+        for index, relation_id in enumerate(self.relation_ids):
+            source_node_id: str | None
+            target_node_id: str | None
+            if index < len(self.relation_node_id_pairs):
+                source_node_id = str(self.relation_node_id_pairs[index][0])
+                target_node_id = str(self.relation_node_id_pairs[index][1])
+            else:
+                source_node_id = (
+                    str(self.entity_ids[index]) if index < len(self.entity_ids) else None
+                )
+                target_node_id = (
+                    str(self.entity_ids[index + 1]) if index + 1 < len(self.entity_ids) else None
+                )
+            relation_refs.append(
+                GraphRelationRef(
+                    provider=self.provider,
+                    relation_id=str(relation_id),
+                    source_node_id=source_node_id,
+                    target_node_id=target_node_id,
+                    relation_type=(
+                        self.relation_types[index]
+                        if index < len(self.relation_types)
+                        else f"relation:{relation_id}"
+                    ),
+                    safe_label=(
+                        self.relation_types[index]
+                        if index < len(self.relation_types)
+                        else f"relation:{relation_id}"
+                    ),
+                    score=(
+                        self.relation_scores[index]
+                        if index < len(self.relation_scores)
+                        else self.relation_score
+                    ),
+                )
+            )
+        evidence_refs: tuple[GraphEvidenceRef, ...] = ()
+        if chunk_ids:
+            evidence_refs = (
+                GraphEvidenceRef(
+                    provider=self.provider,
+                    source_chunk_ids=chunk_ids,
+                    document_chunk_ids=chunk_ids,
+                    evidence_hashes=self.evidence_hashes or None,
+                ),
+            )
+        score_breakdown = {
+            "schema_version": GRAPH_SCORE_SCHEMA_VERSION,
+            "retrieval_source": "graph",
+            "entity_match_score": self.entity_match_score,
+            "relation_score": self.relation_score,
             "path_score": self.path_score,
-            "depth": self.depth,
+            "source_chunk_ids_count": len(chunk_ids),
+            "path_depth": self.depth,
         }
+        return GraphPath(
+            provider=self.provider,
+            path_id=self.path_id,
+            node_refs=node_refs,
+            relation_refs=tuple(relation_refs),
+            evidence_refs=evidence_refs,
+            source_chunk_ids=chunk_ids,
+            safe_entity_labels=self.safe_entity_labels,
+            relation_types=self.relation_types,
+            depth=self.depth,
+            path_score=self.path_score,
+            score_breakdown=score_breakdown,
+        )
+
+    def path_json(self, *, source_chunk_ids: tuple[int, ...] | None = None) -> dict[str, object]:
+        return self.to_graph_path(source_chunk_ids=source_chunk_ids).path_json()
 
 
 @dataclass(frozen=True)
@@ -152,6 +373,14 @@ class GraphSourceCandidate:
 
 @dataclass(frozen=True)
 class GraphRetrievalResult:
+    provider: GraphStoreProvider
+    query_hash: str
+    paths: tuple[GraphPath, ...]
+    source_chunk_ids: tuple[int, ...]
+    score_breakdown: dict[str, object]
+    latency_ms: int
+    fallback_used: bool
+    metadata: GraphStoreResultMetadata
     entity_lookup_count: int
     relation_count: int
     path_count: int
@@ -167,6 +396,8 @@ class GraphRetrievalResult:
     def summary_fields(self) -> dict[str, object]:
         return {
             "graph_schema_version": GRAPH_RETRIEVAL_SCHEMA_VERSION,
+            "graph_path_schema_version": GRAPH_PATH_SCHEMA_VERSION,
+            "graph_store_provider": self.provider.value,
             "graph_entity_lookup_count": self.entity_lookup_count,
             "graph_relation_count": self.relation_count,
             "graph_path_count": self.path_count,
@@ -174,7 +405,22 @@ class GraphRetrievalResult:
             "graph_no_context": self.no_context,
             "graph_reason_codes": list(self.reason_codes),
             "graph_elapsed_ms": self.elapsed_ms,
+            "graph_fallback_used": self.fallback_used,
         }
+
+
+class GraphStore(Protocol):
+    provider: GraphStoreProvider
+
+    def search(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        settings: GraphRetrievalSettings,
+    ) -> GraphRetrievalResult: ...
 
 
 class GraphEntityLookupService:
@@ -375,6 +621,11 @@ class GraphPathSearchService:
                         next_relation_path,
                         lookup_by_id,
                     )
+                    entity_types = _path_entity_types(
+                        next_entity_path,
+                        next_relation_path,
+                        lookup_by_id,
+                    )
                     relation_types = tuple(
                         validate_safe_graph_label(
                             item.relation.relation_type,
@@ -398,6 +649,22 @@ class GraphPathSearchService:
                                 path_score=path_score,
                                 entity_match_score=round(entity_match_score, 6),
                                 relation_score=relation_score,
+                                entity_types=entity_types,
+                                relation_scores=tuple(
+                                    round(score, 6) for score in relation_confidences
+                                ),
+                                relation_node_id_pairs=tuple(
+                                    (
+                                        item.relation.source_entity_id,
+                                        item.relation.target_entity_id,
+                                    )
+                                    for item in next_relation_path
+                                ),
+                                evidence_hashes=tuple(
+                                    item.relation.evidence_text_hash
+                                    for item in next_relation_path
+                                    if item.relation.evidence_text_hash is not None
+                                ),
                             )
                         )
                     elif "max_paths_reached" not in reason_codes:
@@ -420,7 +687,9 @@ class GraphPathSearchService:
         return selected, relation_count, _dedupe(reason_codes)
 
 
-class GraphRetrievalStrategy:
+class PostgresGraphStore:
+    provider = GraphStoreProvider.POSTGRES
+
     def __init__(
         self,
         *,
@@ -445,24 +714,30 @@ class GraphRetrievalStrategy:
         bounded_settings = settings.bounded()
         reason_codes: list[str] = []
         if not bounded_settings.enabled:
-            return GraphRetrievalResult(
-                0,
-                0,
-                0,
-                0,
-                (),
-                ("graph_disabled",),
-                _elapsed_ms(started_at),
+            return _graph_retrieval_result(
+                provider=self.provider,
+                query=query,
+                graph_candidates=(),
+                paths=(),
+                entity_lookup_count=0,
+                relation_count=0,
+                path_count=0,
+                source_candidate_count=0,
+                reason_codes=("graph_disabled",),
+                elapsed_ms=_elapsed_ms(started_at),
             )
         if not self.repository.has_active_graph_sources(db, filters=filters):
-            return GraphRetrievalResult(
-                0,
-                0,
-                0,
-                0,
-                (),
-                ("graph_unavailable",),
-                _elapsed_ms(started_at),
+            return _graph_retrieval_result(
+                provider=self.provider,
+                query=query,
+                graph_candidates=(),
+                paths=(),
+                entity_lookup_count=0,
+                relation_count=0,
+                path_count=0,
+                source_candidate_count=0,
+                reason_codes=("graph_unavailable",),
+                elapsed_ms=_elapsed_ms(started_at),
             )
 
         start_entities = self.entity_lookup.lookup(
@@ -472,14 +747,17 @@ class GraphRetrievalStrategy:
             filters=filters,
         )
         if not start_entities:
-            return GraphRetrievalResult(
-                0,
-                0,
-                0,
-                0,
-                (),
-                ("no_entity_matches",),
-                _elapsed_ms(started_at),
+            return _graph_retrieval_result(
+                provider=self.provider,
+                query=query,
+                graph_candidates=(),
+                paths=(),
+                entity_lookup_count=0,
+                relation_count=0,
+                path_count=0,
+                source_candidate_count=0,
+                reason_codes=("no_entity_matches",),
+                elapsed_ms=_elapsed_ms(started_at),
             )
         paths, relation_count, path_reasons = self.path_search.search_paths(
             db,
@@ -513,12 +791,15 @@ class GraphRetrievalStrategy:
                 reason_codes.append("mention_only_paths")
             else:
                 reason_codes.append("no_chunk_backed_paths")
-        return GraphRetrievalResult(
+        return _graph_retrieval_result(
+            provider=self.provider,
+            query=query,
+            graph_candidates=tuple(graph_candidates),
+            paths=tuple(path.to_graph_path() for path in paths),
             entity_lookup_count=len(start_entities),
             relation_count=relation_count,
             path_count=len(paths),
             source_candidate_count=len(graph_candidates),
-            graph_candidates=tuple(graph_candidates),
             reason_codes=tuple(_dedupe(reason_codes or ["graph_search_completed"])),
             elapsed_ms=_elapsed_ms(started_at),
         )
@@ -545,41 +826,105 @@ class GraphRetrievalStrategy:
         retrieval_run_id: int,
         candidates: tuple[GraphSourceCandidate, ...],
     ) -> list[GraphRetrievalPathCreate]:
-        paths_by_id: dict[str, GraphPathCandidate] = {}
-        selected_chunk_ids_by_path: dict[str, list[int]] = {}
-        for candidate in candidates:
-            for path in candidate.graph_path_candidates:
-                if candidate.document_chunk_id not in path.source_chunk_ids:
-                    continue
-                paths_by_id.setdefault(path.path_id, path)
-                selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
-                if candidate.document_chunk_id not in selected_chunk_ids:
-                    selected_chunk_ids.append(candidate.document_chunk_id)
+        return _path_records(retrieval_run_id=retrieval_run_id, candidates=candidates)
 
-        records: list[GraphRetrievalPathCreate] = []
-        for path_id, path in paths_by_id.items():
-            selected_chunk_ids = selected_chunk_ids_by_path.get(path_id, [])
-            if not selected_chunk_ids:
-                continue
-            path_json = path.path_json()
-            path_json["source_chunk_ids"] = list(selected_chunk_ids)
-            records.append(
-                GraphRetrievalPathCreate(
-                    retrieval_run_id=retrieval_run_id,
-                    path_json=path_json,
-                    score_breakdown_json={
-                        "schema_version": GRAPH_SCORE_SCHEMA_VERSION,
-                        "retrieval_source": "graph",
-                        "entity_match_score": path.entity_match_score,
-                        "relation_score": path.relation_score,
-                        "path_score": path.path_score,
-                        "source_chunk_ids_count": len(selected_chunk_ids),
-                        "path_depth": path.depth,
-                    },
-                    source_chunk_ids_json=list(selected_chunk_ids),
-                )
+
+class Neo4jGraphStore:
+    provider = GraphStoreProvider.NEO4J
+
+    def search(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        settings: GraphRetrievalSettings,
+    ) -> GraphRetrievalResult:
+        started_at = time.monotonic()
+        return _graph_retrieval_result(
+            provider=self.provider,
+            query=query,
+            graph_candidates=(),
+            paths=(),
+            entity_lookup_count=0,
+            relation_count=0,
+            path_count=0,
+            source_candidate_count=0,
+            reason_codes=("graph_store_provider_unavailable", "neo4j_not_configured"),
+            elapsed_ms=_elapsed_ms(started_at),
+            fallback_used=True,
+        )
+
+
+class GraphStoreResolver:
+    def __init__(
+        self,
+        *,
+        provider: GraphStoreProvider | str = GraphStoreProvider.POSTGRES,
+        postgres_store: GraphStore | None = None,
+        neo4j_store: GraphStore | None = None,
+    ) -> None:
+        self.provider = _coerce_graph_store_provider(provider)
+        self.postgres_store = postgres_store or PostgresGraphStore()
+        self.neo4j_store = neo4j_store or Neo4jGraphStore()
+
+    def resolve(self, provider: GraphStoreProvider | str | None = None) -> GraphStore:
+        resolved_provider = (
+            self.provider if provider is None else _coerce_graph_store_provider(provider)
+        )
+        if resolved_provider == GraphStoreProvider.NEO4J:
+            return self.neo4j_store
+        return self.postgres_store
+
+
+class GraphRetrievalStrategy:
+    def __init__(
+        self,
+        *,
+        resolver: GraphStoreResolver | None = None,
+        graph_store: GraphStore | None = None,
+        provider: GraphStoreProvider | str = GraphStoreProvider.POSTGRES,
+    ) -> None:
+        self.graph_store: GraphStore | None
+        if graph_store is not None:
+            self.resolver = GraphStoreResolver(
+                provider=graph_store.provider,
+                postgres_store=graph_store,
             )
-        return records
+            self.graph_store = graph_store
+            return
+        self.resolver = resolver or GraphStoreResolver(
+            provider=provider,
+        )
+        self.graph_store = None
+
+    def search(
+        self,
+        db: Session,
+        *,
+        query: str,
+        top_k: int,
+        filters: RetrievalFilters,
+        settings: GraphRetrievalSettings,
+    ) -> GraphRetrievalResult:
+        bounded_settings = settings.bounded()
+        store = self.graph_store or self.resolver.resolve(bounded_settings.provider)
+        return store.search(
+            db,
+            query=query,
+            top_k=top_k,
+            filters=filters,
+            settings=bounded_settings,
+        )
+
+    def path_records(
+        self,
+        *,
+        retrieval_run_id: int,
+        candidates: tuple[GraphSourceCandidate, ...],
+    ) -> list[GraphRetrievalPathCreate]:
+        return _path_records(retrieval_run_id=retrieval_run_id, candidates=candidates)
 
 
 def graph_query_signal_score(query: str) -> float:
@@ -602,6 +947,101 @@ def graph_query_signal_score(query: str) -> float:
             signal_hits * 0.45 + relation_markers * 0.15 + multi_entity_hint * 0.25,
         ),
         6,
+    )
+
+
+def _path_records(
+    *,
+    retrieval_run_id: int,
+    candidates: tuple[GraphSourceCandidate, ...],
+) -> list[GraphRetrievalPathCreate]:
+    paths_by_id: dict[str, GraphPathCandidate] = {}
+    selected_chunk_ids_by_path: dict[str, list[int]] = {}
+    for candidate in candidates:
+        for path in candidate.graph_path_candidates:
+            if candidate.document_chunk_id not in path.source_chunk_ids:
+                continue
+            paths_by_id.setdefault(path.path_id, path)
+            selected_chunk_ids = selected_chunk_ids_by_path.setdefault(path.path_id, [])
+            if candidate.document_chunk_id not in selected_chunk_ids:
+                selected_chunk_ids.append(candidate.document_chunk_id)
+
+    records: list[GraphRetrievalPathCreate] = []
+    for path_id, path in paths_by_id.items():
+        selected_chunk_ids = selected_chunk_ids_by_path.get(path_id, [])
+        if not selected_chunk_ids:
+            continue
+        selected_chunk_ids_tuple = tuple(selected_chunk_ids)
+        graph_path = path.to_graph_path(source_chunk_ids=selected_chunk_ids_tuple)
+        records.append(
+            GraphRetrievalPathCreate(
+                retrieval_run_id=retrieval_run_id,
+                path_json=graph_path.path_json(),
+                score_breakdown_json=graph_path.score_breakdown,
+                source_chunk_ids_json=list(selected_chunk_ids_tuple),
+            )
+        )
+    return records
+
+
+def _graph_retrieval_result(
+    *,
+    provider: GraphStoreProvider,
+    query: str,
+    graph_candidates: tuple[GraphSourceCandidate, ...],
+    paths: tuple[GraphPath, ...],
+    entity_lookup_count: int,
+    relation_count: int,
+    path_count: int,
+    source_candidate_count: int,
+    reason_codes: tuple[str, ...],
+    elapsed_ms: int,
+    fallback_used: bool = False,
+) -> GraphRetrievalResult:
+    path_source_chunk_ids = tuple(
+        _dedupe_ints(chunk_id for path in paths for chunk_id in path.source_chunk_ids)
+    )
+    source_chunk_ids = tuple(
+        _dedupe_ints(
+            [
+                *(candidate.document_chunk_id for candidate in graph_candidates),
+                *path_source_chunk_ids,
+            ]
+        )
+    )
+    score_breakdown = validate_safe_graph_metadata(
+        {
+            "schema_version": GRAPH_SCORE_SCHEMA_VERSION,
+            "retrieval_source": "graph",
+            "provider": provider.value,
+            "path_count": path_count,
+            "source_candidate_count": source_candidate_count,
+        }
+    )
+    metadata = GraphStoreResultMetadata(
+        entity_lookup_count=entity_lookup_count,
+        relation_count=relation_count,
+        path_count=path_count,
+        source_candidate_count=source_candidate_count,
+        reason_codes=reason_codes,
+        elapsed_ms=elapsed_ms,
+    )
+    return GraphRetrievalResult(
+        provider=provider,
+        query_hash=_safe_query_hash(query),
+        paths=paths,
+        source_chunk_ids=source_chunk_ids,
+        score_breakdown=score_breakdown,
+        latency_ms=elapsed_ms,
+        fallback_used=fallback_used,
+        metadata=metadata,
+        entity_lookup_count=entity_lookup_count,
+        relation_count=relation_count,
+        path_count=path_count,
+        source_candidate_count=source_candidate_count,
+        graph_candidates=graph_candidates,
+        reason_codes=reason_codes,
+        elapsed_ms=elapsed_ms,
     )
 
 
@@ -722,6 +1162,7 @@ def _mention_only_paths(
                 path_score=round(max(0.0, min(1.0, lookup.match_score)), 6),
                 entity_match_score=round(lookup.match_score, 6),
                 relation_score=round(lookup.match_score, 6),
+                entity_types=(lookup.entity.entity_type,),
             )
         )
         if len(paths) >= settings.max_paths:
@@ -755,6 +1196,33 @@ def _path_labels(
     return tuple(labels)
 
 
+def _path_entity_types(
+    entity_path: tuple[int, ...],
+    relation_path: tuple[GraphRelationRow, ...],
+    lookup_by_id: dict[int, GraphEntityLookupResult],
+) -> tuple[str | None, ...]:
+    entities_by_id = {
+        lookup.entity.graph_entity_id: lookup.entity for lookup in lookup_by_id.values()
+    }
+    for relation in relation_path:
+        entities_by_id[relation.source_entity.graph_entity_id] = relation.source_entity
+        entities_by_id[relation.target_entity.graph_entity_id] = relation.target_entity
+    entity_types: list[str | None] = []
+    for entity_id in entity_path:
+        entity = entities_by_id.get(entity_id)
+        if entity is None or entity.entity_type is None:
+            entity_types.append(None)
+            continue
+        entity_types.append(
+            validate_safe_graph_label(
+                entity.entity_type,
+                field_name="entity_type",
+                max_length=80,
+            )
+        )
+    return tuple(entity_types)
+
+
 def _source_chunk_ids(
     relation_path: tuple[GraphRelationRow, ...],
     max_source_chunks: int,
@@ -776,8 +1244,21 @@ def _bounded_int(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, int(value)))
 
 
+def _coerce_graph_store_provider(provider: GraphStoreProvider | str) -> GraphStoreProvider:
+    if isinstance(provider, GraphStoreProvider):
+        return provider
+    normalized = str(provider).strip().lower()
+    if normalized == GraphStoreProvider.NEO4J.value:
+        return GraphStoreProvider.NEO4J
+    return GraphStoreProvider.POSTGRES
+
+
 def _normalize_query_term(term: str) -> str:
     return term.strip().lower().rstrip(_TRAILING_TOKEN_PUNCTUATION)
+
+
+def _safe_query_hash(query: str) -> str:
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -820,6 +1301,17 @@ def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     for value in values:
         if value in seen:
+            continue
+        deduped.append(value)
+        seen.add(value)
+    return deduped
+
+
+def _dedupe_ints(values: Iterable[int]) -> list[int]:
+    deduped: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        if value <= 0 or value in seen:
             continue
         deduped.append(value)
         seen.add(value)
