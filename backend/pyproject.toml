@@ -30,6 +30,9 @@ dev = [
 observability = [
   "langsmith>=0.1.0",
 ]
+neo4j = [
+  "neo4j>=5.28.0,<7.0.0",
+]
 experiments = [
   "sentence-transformers>=2.7.0,<4",
 ]

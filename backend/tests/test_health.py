@@ -6,4 +6,6 @@ from app.main import app
 def test_health_returns_status() -> None:
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert "status" in response.json()
+    payload = response.json()
+    assert "status" in payload
+    assert payload["checks"]["neo4j"]["status"] == "disabled"

@@ -45,6 +45,7 @@ _SAFE_RESULT_KEYS = frozenset(
         "message_id",
         "mirror_action",
         "cleaned_count",
+        "neo4j_projection_result_code",
         "result_redacted",
     }
 )

@@ -134,6 +134,13 @@ class Settings(BaseSettings):
     graph_retrieval_timeout_ms: int = Field(default=3000, ge=100, le=30000)
     graph_retrieval_fallback_strategy: str = "hybrid"
     graph_retrieval_min_entity_match_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    neo4j_uri: str | None = None
+    neo4j_user: str | None = None
+    neo4j_password: str | None = None
+    neo4j_database: str = "neo4j"
+    neo4j_connect_timeout_seconds: float = Field(default=3.0, gt=0.0, le=30.0)
+    neo4j_health_check_enabled: bool = False
+    neo4j_projection_enabled: bool = False
     graph_router_enabled: bool = False
     graph_router_min_signal_score: float = Field(default=0.5, ge=0.0, le=1.0)
     sparse_enabled: bool = True
@@ -328,6 +335,13 @@ class Settings(BaseSettings):
             return json.loads(stripped)
         return [item.strip() for item in stripped.split(",") if item.strip()]
 
+    @field_validator("neo4j_uri", "neo4j_user", "neo4j_password", mode="before")
+    @classmethod
+    def blank_string_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_security_settings(self) -> Self:
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
@@ -355,6 +369,10 @@ class Settings(BaseSettings):
         self.graph_store_provider = self.graph_store_provider.strip().lower()
         if self.graph_store_provider not in {"postgres", "neo4j"}:
             raise ValueError("GRAPH_STORE_PROVIDER must be postgres or neo4j")
+        self.neo4j_uri = self.neo4j_uri.strip() if self.neo4j_uri else None
+        self.neo4j_user = self.neo4j_user.strip() if self.neo4j_user else None
+        self.neo4j_password = self.neo4j_password.strip() if self.neo4j_password else None
+        self.neo4j_database = self.neo4j_database.strip() or "neo4j"
         self.sparse_provider = self.sparse_provider.lower()
         if self.sparse_provider != "postgres_fts":
             raise ValueError("SPARSE_PROVIDER must be postgres_fts")

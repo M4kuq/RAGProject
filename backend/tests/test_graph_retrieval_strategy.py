@@ -28,6 +28,8 @@ from app.db.models import (
     Role,
     User,
 )
+from app.graph import neo4j_backend
+from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
 from app.rag.graph_retrieval import (
     GRAPH_PATH_SCHEMA_VERSION,
     GRAPH_SCORE_SCHEMA_VERSION,
@@ -59,6 +61,35 @@ class SeedGraph:
     fastapi_entity_id: int
     postgresql_entity_id: int
     qdrant_entity_id: int
+
+
+class _FakeNeo4jDriver:
+    def __init__(
+        self,
+        *,
+        entity_rows: list[dict[str, object]],
+        relation_rows: list[dict[str, object]],
+        mention_rows: list[dict[str, object]],
+    ) -> None:
+        self.entity_rows = entity_rows
+        self.relation_rows = relation_rows
+        self.mention_rows = mention_rows
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
+        parameters = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in {"database_", "result_transformer_"}
+        }
+        self.calls.append((query, parameters))
+        if "MATCH (entity:RAGGraphEntity)" in query and "RETURN entity.graph_entity_id" in query:
+            return self.entity_rows
+        if "UNWIND $entity_ids AS frontier_id" in query:
+            return self.relation_rows
+        if "MENTIONED_IN" in query:
+            return self.mention_rows
+        return []
 
 
 @pytest.fixture
@@ -239,7 +270,7 @@ def test_graph_settings_provider_overrides_strategy_default(
         assert result.graph_candidates
 
 
-def test_neo4j_graph_store_skeleton_is_safe_without_driver(
+def test_neo4j_graph_store_is_safe_without_config(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
@@ -262,6 +293,117 @@ def test_neo4j_graph_store_skeleton_is_safe_without_driver(
         )
         assert result.graph_candidates == ()
         assert result.paths == ()
+
+
+def test_neo4j_graph_store_is_safe_when_driver_is_missing(
+    graph_retrieval_session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(neo4j_backend, "_load_graph_database", lambda: None)
+    with graph_retrieval_session_factory() as db:
+        store = Neo4jGraphStore(
+            config=Neo4jConnectionConfig(
+                uri="bolt://neo4j.example.invalid:7687",
+                user="neo4j",
+                password="configured-test-password",
+            )
+        )
+
+        result = store.search(
+            db,
+            query="How does FastAPI depend on PostgreSQL?",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(enabled=True, provider=GraphStoreProvider.NEO4J),
+        )
+
+        assert result.no_context is True
+        assert result.fallback_used is True
+        assert result.reason_codes == (
+            "graph_store_provider_unavailable",
+            "neo4j_driver_unavailable",
+        )
+
+
+def test_neo4j_graph_store_maps_bounded_paths_to_common_dto(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.fastapi_entity_id,
+                    "safe_label": "FastAPI",
+                    "entity_type": "technology",
+                },
+                {
+                    "entity_id": seed.postgresql_entity_id,
+                    "safe_label": "PostgreSQL",
+                    "entity_type": "technology",
+                },
+            ],
+            relation_rows=[
+                {
+                    "frontier_entity_id": seed.fastapi_entity_id,
+                    "other_entity_id": seed.postgresql_entity_id,
+                    "other_safe_label": "PostgreSQL",
+                    "other_entity_type": "technology",
+                    "relation_id": 1001,
+                    "relation_type": "uses",
+                    "confidence": 0.85,
+                    "source_document_chunk_id": min(seed.chunk_ids),
+                    "evidence_text_hash": "f" * 64,
+                    "source_entity_id": seed.fastapi_entity_id,
+                    "source_safe_label": "FastAPI",
+                    "source_entity_type": "technology",
+                    "target_entity_id": seed.postgresql_entity_id,
+                    "target_safe_label": "PostgreSQL",
+                    "target_entity_type": "technology",
+                }
+            ],
+            mention_rows=[],
+        )
+        store = Neo4jGraphStore(
+            client=Neo4jClient(
+                config=Neo4jConnectionConfig(
+                    uri="bolt://neo4j.local:7687",
+                    user="neo4j",
+                    password="configured-test-password",
+                ),
+                driver=fake_driver,
+            )
+        )
+
+        result = store.search(
+            db,
+            query="How does FastAPI depend on PostgreSQL?",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                provider=GraphStoreProvider.NEO4J,
+                min_entity_match_score=0.2,
+                max_depth=2,
+                max_paths=5,
+                max_relations_per_entity=2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.fallback_used is False
+        assert result.graph_candidates
+        assert result.paths
+        assert result.paths[0].provider == GraphStoreProvider.NEO4J
+        assert result.paths[0].source_chunk_ids == (min(seed.chunk_ids),)
+        assert result.paths[0].relation_refs[0].source_node_id == str(seed.fastapi_entity_id)
+        assert result.paths[0].relation_refs[0].target_node_id == str(seed.postgresql_entity_id)
+        assert result.graph_candidates[0].document_chunk_id == min(seed.chunk_ids)
+        assert "raw chunk" not in str(result).lower()
+        assert all("How does FastAPI" not in str(parameters) for _, parameters in fake_driver.calls)
+        entity_call = fake_driver.calls[0]
+        assert "terms" in entity_call[1]
+        assert "query" not in entity_call[1]
 
 
 def test_graph_retrieval_applies_filters_to_relation_chunks(

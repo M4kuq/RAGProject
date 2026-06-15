@@ -59,6 +59,13 @@ x-backend-env: &backend-env
   LMSTUDIO_TIMEOUT_SECONDS: ${LMSTUDIO_TIMEOUT_SECONDS:-600}
   LLM_ORCHESTRATOR_TIMEOUT_SECONDS: ${LLM_ORCHESTRATOR_TIMEOUT_SECONDS:-600}
   LANGCHAIN_AGENTIC_TIMEOUT_SECONDS: ${LANGCHAIN_AGENTIC_TIMEOUT_SECONDS:-600}
+  GRAPH_STORE_PROVIDER: ${GRAPH_STORE_PROVIDER:-postgres}
+  NEO4J_URI: ${NEO4J_URI:-}
+  NEO4J_USER: ${NEO4J_USER:-}
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
+  NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+  NEO4J_HEALTH_CHECK_ENABLED: ${NEO4J_HEALTH_CHECK_ENABLED:-false}
+  NEO4J_PROJECTION_ENABLED: ${NEO4J_PROJECTION_ENABLED:-false}
 
 services:
   postgres:
@@ -86,6 +93,24 @@ services:
       - "6334"
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    profiles: ["neo4j"]
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change-me-local}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/7474'"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -195,3 +220,5 @@ volumes:
     name: ragproject_ollama_data
   upload_storage:
     name: ragproject_upload_storage
+  neo4j_data:
+    name: ragproject_neo4j_data

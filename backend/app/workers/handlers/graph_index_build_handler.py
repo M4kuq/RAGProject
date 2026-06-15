@@ -190,18 +190,27 @@ class GraphIndexBuildHandler:
                 snapshot=snapshot,
                 result=extraction_result,
             )
+            result_payload = {
+                "document_version_id": snapshot.document_version_id,
+                "graph_index_run_id": run.graph_index_run_id,
+                "entity_count": run.entity_count,
+                "relation_count": run.relation_count,
+                "mention_count": run.mention_count,
+                "status": "succeeded",
+                "result_code": "indexed",
+            }
             db.commit()
-            return JobHandlerResult.succeeded(
-                {
-                    "document_version_id": snapshot.document_version_id,
-                    "graph_index_run_id": run.graph_index_run_id,
-                    "entity_count": run.entity_count,
-                    "relation_count": run.relation_count,
-                    "mention_count": run.mention_count,
-                    "status": "succeeded",
-                    "result_code": "indexed",
-                }
+            result_payload.update(
+                _projection_payload(
+                    self._project_neo4j_after_commit(
+                        db,
+                        service,
+                        document_version_id=snapshot.document_version_id,
+                        graph_index_run_id=run.graph_index_run_id,
+                    )
+                )
             )
+            return JobHandlerResult.succeeded(result_payload)
         except LeaseLostError:
             db.rollback()
             raise
@@ -232,6 +241,31 @@ class GraphIndexBuildHandler:
             )
         finally:
             db.close()
+
+    def _project_neo4j_after_commit(
+        self,
+        db: Session,
+        service: GraphIndexService,
+        *,
+        document_version_id: int,
+        graph_index_run_id: int,
+    ) -> object | None:
+        try:
+            return service.project_neo4j_index_run(
+                db,
+                document_version_id=document_version_id,
+                graph_index_run_id=graph_index_run_id,
+            )
+        except Exception:
+            logger.warning(
+                "neo4j projection skipped after graph index",
+                extra={
+                    "document_version_id": document_version_id,
+                    "graph_index_run_id": graph_index_run_id,
+                    "error_code": "neo4j_projection_failed",
+                },
+            )
+            return None
 
     def _fail_run(
         self,
@@ -290,3 +324,20 @@ def _failed(error_code: str) -> JobHandlerResult:
         error_code=error_code,
         error_message=_SAFE_MESSAGES.get(error_code, _SAFE_MESSAGES["internal_error"]),
     )
+
+
+def _projection_payload(result: object | None) -> dict[str, object]:
+    if result is None:
+        return {"neo4j_projection_result_code": "neo4j_projection_failed"}
+    if not bool(getattr(result, "enabled", False)):
+        return {}
+    reason_codes = list(getattr(result, "reason_codes", ()))
+    return {
+        "neo4j_projection_result_code": str(
+            reason_codes[0] if reason_codes else "neo4j_projection_completed"
+        ),
+        "neo4j_projected_entity_count": int(getattr(result, "projected_entities", 0)),
+        "neo4j_projected_relation_count": int(getattr(result, "projected_relations", 0)),
+        "neo4j_projected_mention_count": int(getattr(result, "projected_mentions", 0)),
+        "neo4j_projected_chunk_count": int(getattr(result, "projected_chunks", 0)),
+    }

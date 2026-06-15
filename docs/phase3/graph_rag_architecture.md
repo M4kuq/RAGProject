@@ -57,8 +57,9 @@ hard-wired into `GraphRetrievalStrategy`. It also prepares a provider-neutral
 `graph_retrieval_paths.path_json` shape. It does not implement Neo4j traversal,
 Neo4j projection, graph citation, or graph debug UI.
 
-PR-50 can add Neo4j as an optional read-model backend behind the same
-`GraphStore` interface.
+PR-50 adds Neo4j as an optional read-model backend behind the same `GraphStore`
+interface. Neo4j stores safe projection data only and maps results back through
+`source_chunk_ids`.
 
 All future graph results must pass through Context Budget and Evidence Pack before answer generation. Tool outputs for future graph tools must be compressed and bounded before planner visibility.
 

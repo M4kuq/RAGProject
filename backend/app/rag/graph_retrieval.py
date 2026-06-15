@@ -10,6 +10,8 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig, Neo4jUnavailable
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate
 from app.repositories.graph_retrieval_repository import (
     GraphChunkRow,
@@ -829,8 +831,52 @@ class PostgresGraphStore:
         return _path_records(retrieval_run_id=retrieval_run_id, candidates=candidates)
 
 
+@dataclass(frozen=True)
+class _Neo4jEntityLookupResult:
+    entity_id: int
+    safe_label: str
+    entity_type: str | None
+    match_score: float
+
+
+@dataclass(frozen=True)
+class _Neo4jRelationLookupResult:
+    frontier_entity_id: int
+    other_entity_id: int
+    relation_id: int
+    source_entity_id: int
+    target_entity_id: int
+    relation_type: str
+    confidence: float | None
+    source_document_chunk_id: int | None
+    evidence_text_hash: str | None
+    other_safe_label: str
+    other_entity_type: str | None
+    source_safe_label: str
+    source_entity_type: str | None
+    target_safe_label: str
+    target_entity_type: str | None
+
+
 class Neo4jGraphStore:
     provider = GraphStoreProvider.NEO4J
+
+    def __init__(
+        self,
+        *,
+        client: Neo4jClient | None = None,
+        config: Neo4jConnectionConfig | None = None,
+        repository: GraphRetrievalRepository | None = None,
+        entity_lookup: GraphEntityLookupService | None = None,
+        score_calculator: GraphScoreCalculator | None = None,
+    ) -> None:
+        settings = get_settings()
+        self.client = client or Neo4jClient(
+            config=config or Neo4jConnectionConfig.from_settings(settings)
+        )
+        self.repository = repository or GraphRetrievalRepository()
+        self.entity_lookup = entity_lookup or GraphEntityLookupService(self.repository)
+        self.score_calculator = score_calculator or GraphScoreCalculator()
 
     def search(
         self,
@@ -842,6 +888,482 @@ class Neo4jGraphStore:
         settings: GraphRetrievalSettings,
     ) -> GraphRetrievalResult:
         started_at = time.monotonic()
+        bounded_settings = settings.bounded()
+        if not bounded_settings.enabled:
+            return _graph_retrieval_result(
+                provider=self.provider,
+                query=query,
+                graph_candidates=(),
+                paths=(),
+                entity_lookup_count=0,
+                relation_count=0,
+                path_count=0,
+                source_candidate_count=0,
+                reason_codes=("graph_disabled",),
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+
+        unavailable_reason = self.client.unavailable_reason()
+        if unavailable_reason is not None:
+            return self._unavailable_result(query, started_at, unavailable_reason)
+
+        try:
+            start_entities = self._lookup_entities(query=query, settings=bounded_settings)
+            if not start_entities:
+                return _graph_retrieval_result(
+                    provider=self.provider,
+                    query=query,
+                    graph_candidates=(),
+                    paths=(),
+                    entity_lookup_count=0,
+                    relation_count=0,
+                    path_count=0,
+                    source_candidate_count=0,
+                    reason_codes=("no_entity_matches",),
+                    elapsed_ms=_elapsed_ms(started_at),
+                )
+            paths, relation_count, reason_codes = self._search_paths(
+                start_entities=start_entities,
+                settings=bounded_settings,
+                started_at=started_at,
+            )
+        except Neo4jUnavailable as exc:
+            return self._unavailable_result(query, started_at, exc.reason_code)
+
+        raw_path_count = len(paths)
+        paths = self._filter_paths_by_active_chunks(db, paths=paths, filters=filters)
+        reason_list = list(reason_codes)
+        if raw_path_count and not paths:
+            reason_list.append("no_active_source_chunks")
+        elif len(paths) < raw_path_count:
+            reason_list.append("inactive_source_chunks_filtered")
+        if not paths:
+            reason_list.append("no_relation_paths")
+
+        graph_candidates = _source_candidates(
+            paths,
+            top_k=max(1, top_k),
+            max_source_chunks=bounded_settings.max_source_chunks,
+        )
+        if not graph_candidates:
+            try:
+                mention_paths = self._mention_only_paths_for_entities(
+                    db,
+                    start_entities=start_entities,
+                    filters=filters,
+                    settings=bounded_settings,
+                )
+            except Neo4jUnavailable as exc:
+                return self._unavailable_result(query, started_at, exc.reason_code)
+            if mention_paths:
+                paths = mention_paths
+                graph_candidates = _source_candidates(
+                    paths,
+                    top_k=max(1, top_k),
+                    max_source_chunks=bounded_settings.max_source_chunks,
+                )
+                reason_list.append("mention_only_paths")
+            else:
+                reason_list.append("no_chunk_backed_paths")
+
+        return _graph_retrieval_result(
+            provider=self.provider,
+            query=query,
+            graph_candidates=tuple(graph_candidates),
+            paths=tuple(path.to_graph_path() for path in paths),
+            entity_lookup_count=len(start_entities),
+            relation_count=relation_count,
+            path_count=len(paths),
+            source_candidate_count=len(graph_candidates),
+            reason_codes=tuple(_dedupe(reason_list or ["graph_search_completed"])),
+            elapsed_ms=_elapsed_ms(started_at),
+        )
+
+    def _lookup_entities(
+        self,
+        *,
+        query: str,
+        settings: GraphRetrievalSettings,
+    ) -> list[_Neo4jEntityLookupResult]:
+        safe_terms = _safe_neo4j_terms(self.entity_lookup.query_terms(query))
+        if not safe_terms:
+            return []
+        rows = self.client.execute(
+            """
+            MATCH (entity:RAGGraphEntity)
+            WHERE any(
+                term IN $terms
+                WHERE toLower(entity.safe_label) CONTAINS term
+                   OR toLower(coalesce(entity.entity_type, "")) CONTAINS term
+            )
+            RETURN entity.graph_entity_id AS entity_id,
+                   entity.safe_label AS safe_label,
+                   entity.entity_type AS entity_type
+            ORDER BY entity.graph_entity_id ASC
+            LIMIT $candidate_limit
+            """,
+            {
+                "terms": list(safe_terms),
+                "candidate_limit": min(640, max(settings.max_start_entities * 32, 100)),
+            },
+        )
+        results: list[_Neo4jEntityLookupResult] = []
+        for row in rows:
+            entity_id = _positive_int(row.get("entity_id"))
+            safe_label = _safe_neo4j_label(row.get("safe_label"), max_length=255)
+            if entity_id is None or safe_label is None:
+                continue
+            entity_type = _safe_neo4j_optional_label(row.get("entity_type"), max_length=80)
+            score = _neo4j_entity_match_score(
+                safe_label=safe_label,
+                entity_type=entity_type,
+                safe_terms=safe_terms,
+            )
+            if score < settings.min_entity_match_score:
+                continue
+            results.append(
+                _Neo4jEntityLookupResult(
+                    entity_id=entity_id,
+                    safe_label=safe_label,
+                    entity_type=entity_type,
+                    match_score=round(score, 6),
+                )
+            )
+        results.sort(key=lambda item: (item.match_score, -item.entity_id), reverse=True)
+        return results[: settings.max_start_entities]
+
+    def _search_paths(
+        self,
+        *,
+        start_entities: list[_Neo4jEntityLookupResult],
+        settings: GraphRetrievalSettings,
+        started_at: float,
+    ) -> tuple[list[GraphPathCandidate], int, list[str]]:
+        start_ids = {item.entity_id for item in start_entities}
+        if not start_ids:
+            return [], 0, ["no_start_entities"]
+
+        relation_count = 0
+        reason_codes: list[str] = []
+        paths: list[GraphPathCandidate] = []
+        lookup_by_id = {item.entity_id: item for item in start_entities}
+        entity_refs: dict[int, tuple[str, str | None]] = {
+            item.entity_id: (item.safe_label, item.entity_type) for item in start_entities
+        }
+        adjacency: dict[int, list[_Neo4jRelationLookupResult]] = {}
+        loaded_entity_ids: set[int] = set()
+        seen_relation_ids: set[int] = set()
+        path_collection_limit = min(
+            1000,
+            max(
+                settings.max_paths,
+                settings.max_paths * settings.max_depth * settings.max_relations_per_entity,
+            ),
+        )
+        frontier_limit = min(
+            500,
+            max(settings.max_paths, settings.max_paths * settings.max_relations_per_entity),
+        )
+        frontier: list[tuple[int, tuple[int, ...], tuple[_Neo4jRelationLookupResult, ...], float]]
+        frontier = [
+            (entity_id, (entity_id,), (), lookup.match_score)
+            for entity_id, lookup in lookup_by_id.items()
+        ]
+
+        for _depth in range(settings.max_depth):
+            if not frontier:
+                break
+            if _elapsed_ms(started_at) > settings.timeout_ms:
+                reason_codes.append("graph_timeout")
+                break
+
+            pending_entity_ids = {
+                current_id for current_id, *_rest in frontier if current_id not in loaded_entity_ids
+            }
+            if pending_entity_ids:
+                relation_rows = self._relations_for_frontier(
+                    entity_ids=pending_entity_ids,
+                    max_relations_per_entity=settings.max_relations_per_entity,
+                    exclude_relation_ids=seen_relation_ids,
+                )
+                relation_count += len(relation_rows)
+                for relation_row in relation_rows:
+                    adjacency.setdefault(relation_row.frontier_entity_id, []).append(relation_row)
+                    for entity_id, label, entity_type in (
+                        (
+                            relation_row.other_entity_id,
+                            relation_row.other_safe_label,
+                            relation_row.other_entity_type,
+                        ),
+                        (
+                            relation_row.source_entity_id,
+                            relation_row.source_safe_label,
+                            relation_row.source_entity_type,
+                        ),
+                        (
+                            relation_row.target_entity_id,
+                            relation_row.target_safe_label,
+                            relation_row.target_entity_type,
+                        ),
+                    ):
+                        entity_refs.setdefault(entity_id, (label, entity_type))
+                loaded_entity_ids.update(pending_entity_ids)
+
+            next_frontier: list[
+                tuple[int, tuple[int, ...], tuple[_Neo4jRelationLookupResult, ...], float]
+            ] = []
+            for current_id, entity_path, relation_path, entity_match_score in frontier:
+                expanded_relation_count = 0
+                for relation_row in adjacency.get(current_id, []):
+                    if relation_row.relation_id in seen_relation_ids:
+                        continue
+                    next_id = relation_row.other_entity_id
+                    if next_id in entity_path:
+                        continue
+                    seen_relation_ids.add(relation_row.relation_id)
+                    if expanded_relation_count >= settings.max_relations_per_entity:
+                        break
+                    expanded_relation_count += 1
+                    next_entity_path = (*entity_path, next_id)
+                    next_relation_path = (*relation_path, relation_row)
+                    relation_confidences = tuple(
+                        item.confidence if item.confidence is not None else 0.5
+                        for item in next_relation_path
+                    )
+                    relation_score, path_score = self.score_calculator.score_path(
+                        entity_match_score=entity_match_score,
+                        relation_confidences=relation_confidences,
+                        depth=len(next_relation_path),
+                    )
+                    if len(paths) < path_collection_limit:
+                        paths.append(
+                            GraphPathCandidate(
+                                path_id=f"neo4j_gp_{len(paths) + 1}",
+                                entity_ids=next_entity_path,
+                                relation_ids=tuple(item.relation_id for item in next_relation_path),
+                                safe_entity_labels=_neo4j_path_labels(
+                                    next_entity_path,
+                                    entity_refs,
+                                ),
+                                relation_types=tuple(
+                                    item.relation_type for item in next_relation_path
+                                ),
+                                source_chunk_ids=_neo4j_source_chunk_ids(
+                                    next_relation_path,
+                                    settings.max_source_chunks,
+                                ),
+                                depth=len(next_relation_path),
+                                path_score=path_score,
+                                entity_match_score=round(entity_match_score, 6),
+                                relation_score=relation_score,
+                                provider=self.provider,
+                                entity_types=_neo4j_path_entity_types(
+                                    next_entity_path,
+                                    entity_refs,
+                                ),
+                                relation_scores=tuple(
+                                    round(score, 6) for score in relation_confidences
+                                ),
+                                relation_node_id_pairs=tuple(
+                                    (item.source_entity_id, item.target_entity_id)
+                                    for item in next_relation_path
+                                ),
+                                evidence_hashes=tuple(
+                                    item.evidence_text_hash
+                                    for item in next_relation_path
+                                    if item.evidence_text_hash is not None
+                                ),
+                            )
+                        )
+                    elif "max_paths_reached" not in reason_codes:
+                        reason_codes.append("max_paths_reached")
+                    if (
+                        len(next_relation_path) < settings.max_depth
+                        and len(next_frontier) < frontier_limit
+                    ):
+                        next_frontier.append(
+                            (
+                                next_id,
+                                next_entity_path,
+                                next_relation_path,
+                                entity_match_score,
+                            )
+                        )
+            frontier = next_frontier
+
+        selected = _select_paths_at_cap(paths, settings.max_paths, reason_codes)
+        return selected, relation_count, _dedupe(reason_codes)
+
+    def _relations_for_frontier(
+        self,
+        *,
+        entity_ids: set[int],
+        max_relations_per_entity: int,
+        exclude_relation_ids: set[int],
+    ) -> list[_Neo4jRelationLookupResult]:
+        safe_entity_ids = _dedupe_ints(entity_ids)
+        if not safe_entity_ids:
+            return []
+        rows = self.client.execute(
+            """
+            UNWIND $entity_ids AS frontier_id
+            MATCH (frontier:RAGGraphEntity {graph_entity_id: frontier_id})
+            CALL {
+                WITH frontier
+                MATCH (frontier)-[relation:GRAPH_RELATION]-(other:RAGGraphEntity)
+                WHERE NOT relation.graph_relation_id IN $exclude_relation_ids
+                WITH relation, other
+                ORDER BY CASE
+                            WHEN relation.source_document_chunk_id IS NULL THEN 1
+                            ELSE 0
+                         END ASC,
+                         coalesce(relation.confidence, 0.5) DESC,
+                         relation.graph_relation_id ASC
+                LIMIT $max_relations_per_entity
+                RETURN relation, other
+            }
+            RETURN frontier.graph_entity_id AS frontier_entity_id,
+                   other.graph_entity_id AS other_entity_id,
+                   other.safe_label AS other_safe_label,
+                   other.entity_type AS other_entity_type,
+                   relation.graph_relation_id AS relation_id,
+                   relation.relation_type AS relation_type,
+                   relation.confidence AS confidence,
+                   relation.source_document_chunk_id AS source_document_chunk_id,
+                   relation.evidence_text_hash AS evidence_text_hash,
+                   startNode(relation).graph_entity_id AS source_entity_id,
+                   startNode(relation).safe_label AS source_safe_label,
+                   startNode(relation).entity_type AS source_entity_type,
+                   endNode(relation).graph_entity_id AS target_entity_id,
+                   endNode(relation).safe_label AS target_safe_label,
+                   endNode(relation).entity_type AS target_entity_type
+            """,
+            {
+                "entity_ids": safe_entity_ids,
+                "exclude_relation_ids": list(exclude_relation_ids),
+                "max_relations_per_entity": max_relations_per_entity,
+            },
+        )
+        relation_rows: list[_Neo4jRelationLookupResult] = []
+        for row in rows:
+            parsed = _neo4j_relation_lookup_result(row)
+            if parsed is not None:
+                relation_rows.append(parsed)
+        return relation_rows
+
+    def _filter_paths_by_active_chunks(
+        self,
+        db: Session,
+        *,
+        paths: list[GraphPathCandidate],
+        filters: RetrievalFilters,
+    ) -> list[GraphPathCandidate]:
+        source_chunk_ids = {
+            chunk_id for path in paths for chunk_id in path.source_chunk_ids if chunk_id > 0
+        }
+        if not source_chunk_ids:
+            return []
+        active_chunk_ids = set(
+            self.repository.list_chunks_by_ids(
+                db,
+                document_chunk_ids=source_chunk_ids,
+                filters=filters,
+            )
+        )
+        filtered: list[GraphPathCandidate] = []
+        for path in paths:
+            chunk_ids = tuple(
+                chunk_id for chunk_id in path.source_chunk_ids if chunk_id in active_chunk_ids
+            )
+            if not chunk_ids:
+                continue
+            filtered.append(_replace_path_source_chunk_ids(path, chunk_ids))
+        return filtered
+
+    def _mention_only_paths_for_entities(
+        self,
+        db: Session,
+        *,
+        start_entities: list[_Neo4jEntityLookupResult],
+        filters: RetrievalFilters,
+        settings: GraphRetrievalSettings,
+    ) -> list[GraphPathCandidate]:
+        entity_ids = [item.entity_id for item in start_entities]
+        if not entity_ids:
+            return []
+        rows = self.client.execute(
+            """
+            UNWIND $entity_ids AS entity_id
+            MATCH (entity:RAGGraphEntity {graph_entity_id: entity_id})
+                  -[mention:MENTIONED_IN]->(chunk:RAGGraphChunk)
+            RETURN entity.graph_entity_id AS entity_id,
+                   entity.safe_label AS safe_label,
+                   entity.entity_type AS entity_type,
+                   chunk.document_chunk_id AS document_chunk_id,
+                   mention.confidence AS confidence
+            ORDER BY entity.graph_entity_id ASC,
+                     coalesce(mention.confidence, 0.5) DESC,
+                     chunk.document_chunk_id ASC
+            LIMIT $limit
+            """,
+            {
+                "entity_ids": entity_ids,
+                "limit": max(settings.max_source_chunks * max(1, len(entity_ids)), 1),
+            },
+        )
+        candidate_chunk_ids = {
+            chunk_id
+            for row in rows
+            if (chunk_id := _positive_int(row.get("document_chunk_id"))) is not None
+        }
+        active_chunk_ids = set(
+            self.repository.list_chunks_by_ids(
+                db,
+                document_chunk_ids=candidate_chunk_ids,
+                filters=filters,
+            )
+        )
+        lookup_by_id = {item.entity_id: item for item in start_entities}
+        paths: list[GraphPathCandidate] = []
+        seen: set[tuple[int, int]] = set()
+        for row in rows:
+            entity_id = _positive_int(row.get("entity_id"))
+            chunk_id = _positive_int(row.get("document_chunk_id"))
+            if entity_id is None or chunk_id is None or chunk_id not in active_chunk_ids:
+                continue
+            lookup = lookup_by_id.get(entity_id)
+            if lookup is None:
+                continue
+            dedupe_key = (entity_id, chunk_id)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            paths.append(
+                GraphPathCandidate(
+                    path_id=f"neo4j_mention_{len(paths) + 1}",
+                    entity_ids=(entity_id,),
+                    relation_ids=(),
+                    safe_entity_labels=(lookup.safe_label,),
+                    relation_types=(),
+                    source_chunk_ids=(chunk_id,),
+                    depth=0,
+                    path_score=round(max(0.0, min(1.0, lookup.match_score)), 6),
+                    entity_match_score=round(lookup.match_score, 6),
+                    relation_score=round(lookup.match_score, 6),
+                    provider=self.provider,
+                    entity_types=(lookup.entity_type,),
+                )
+            )
+            if len(paths) >= settings.max_paths:
+                break
+        return paths
+
+    def _unavailable_result(
+        self,
+        query: str,
+        started_at: float,
+        reason_code: str,
+    ) -> GraphRetrievalResult:
         return _graph_retrieval_result(
             provider=self.provider,
             query=query,
@@ -851,7 +1373,7 @@ class Neo4jGraphStore:
             relation_count=0,
             path_count=0,
             source_candidate_count=0,
-            reason_codes=("graph_store_provider_unavailable", "neo4j_not_configured"),
+            reason_codes=("graph_store_provider_unavailable", reason_code),
             elapsed_ms=_elapsed_ms(started_at),
             fallback_used=True,
         )
@@ -1294,6 +1816,214 @@ def _select_paths_at_cap(
         reason_codes.append("chunk_backed_paths_preferred")
     selected.sort(key=_path_sort_key, reverse=True)
     return selected
+
+
+def _safe_neo4j_terms(query_terms: tuple[str, ...]) -> tuple[str, ...]:
+    safe: list[str] = []
+    seen: set[str] = set()
+    for term in query_terms:
+        normalized = " ".join(str(term).split()).strip().lower()
+        if not normalized or len(normalized) > 80 or normalized in seen:
+            continue
+        try:
+            validate_safe_graph_label(normalized, field_name="query_term", max_length=80)
+        except ValueError:
+            continue
+        safe.append(normalized)
+        seen.add(normalized)
+        if len(safe) >= 32:
+            break
+    return tuple(safe)
+
+
+def _neo4j_entity_match_score(
+    *,
+    safe_label: str,
+    entity_type: str | None,
+    safe_terms: tuple[str, ...],
+) -> float:
+    query_text = " ".join(safe_terms)
+    normalized_label = " ".join(safe_label.split()).strip().lower()
+    if normalized_label and _phrase_boundary_match(query_text, normalized_label):
+        return 1.0
+    label_terms = set(_neo4j_label_terms(safe_label))
+    type_terms = set(_neo4j_label_terms(entity_type or ""))
+    matched_label_terms = {term for term in safe_terms if term in label_terms}
+    matched_type_terms = {term for term in safe_terms if term in type_terms}
+    if matched_label_terms:
+        return min(1.0, len(matched_label_terms) / max(1, len(label_terms)))
+    if matched_type_terms:
+        return min(0.4, 0.2 * len(matched_type_terms))
+    return 0.0
+
+
+def _phrase_boundary_match(query_text: str, label: str) -> bool:
+    boundary_chars = r"A-Za-z0-9_+#"
+    pattern = re.compile(rf"(?<![{boundary_chars}]){re.escape(label)}(?![{boundary_chars}])")
+    return pattern.search(query_text) is not None
+
+
+def _neo4j_label_terms(value: str) -> tuple[str, ...]:
+    return tuple(
+        term
+        for term in " ".join(value.replace("_", " ").replace("-", " ").split()).lower().split()
+        if len(term) >= 1
+    )
+
+
+def _neo4j_relation_lookup_result(
+    row: dict[str, object],
+) -> _Neo4jRelationLookupResult | None:
+    frontier_entity_id = _positive_int(row.get("frontier_entity_id"))
+    other_entity_id = _positive_int(row.get("other_entity_id"))
+    relation_id = _positive_int(row.get("relation_id"))
+    source_entity_id = _positive_int(row.get("source_entity_id"))
+    target_entity_id = _positive_int(row.get("target_entity_id"))
+    relation_type = _safe_neo4j_label(row.get("relation_type"), max_length=120)
+    other_safe_label = _safe_neo4j_label(row.get("other_safe_label"), max_length=255)
+    source_safe_label = _safe_neo4j_label(row.get("source_safe_label"), max_length=255)
+    target_safe_label = _safe_neo4j_label(row.get("target_safe_label"), max_length=255)
+    if (
+        frontier_entity_id is None
+        or other_entity_id is None
+        or relation_id is None
+        or source_entity_id is None
+        or target_entity_id is None
+        or relation_type is None
+        or other_safe_label is None
+        or source_safe_label is None
+        or target_safe_label is None
+    ):
+        return None
+    return _Neo4jRelationLookupResult(
+        frontier_entity_id=frontier_entity_id,
+        other_entity_id=other_entity_id,
+        relation_id=relation_id,
+        source_entity_id=source_entity_id,
+        target_entity_id=target_entity_id,
+        relation_type=relation_type,
+        confidence=_optional_score(row.get("confidence")),
+        source_document_chunk_id=_positive_int(row.get("source_document_chunk_id")),
+        evidence_text_hash=_safe_hash_or_none(row.get("evidence_text_hash")),
+        other_safe_label=other_safe_label,
+        other_entity_type=_safe_neo4j_optional_label(row.get("other_entity_type"), max_length=80),
+        source_safe_label=source_safe_label,
+        source_entity_type=_safe_neo4j_optional_label(
+            row.get("source_entity_type"),
+            max_length=80,
+        ),
+        target_safe_label=target_safe_label,
+        target_entity_type=_safe_neo4j_optional_label(
+            row.get("target_entity_type"),
+            max_length=80,
+        ),
+    )
+
+
+def _neo4j_source_chunk_ids(
+    relation_path: tuple[_Neo4jRelationLookupResult, ...],
+    max_source_chunks: int,
+) -> tuple[int, ...]:
+    chunk_ids: list[int] = []
+    seen: set[int] = set()
+    for relation in relation_path:
+        chunk_id = relation.source_document_chunk_id
+        if chunk_id is None or chunk_id in seen:
+            continue
+        chunk_ids.append(chunk_id)
+        seen.add(chunk_id)
+        if len(chunk_ids) >= max_source_chunks:
+            break
+    return tuple(chunk_ids)
+
+
+def _neo4j_path_labels(
+    entity_path: tuple[int, ...],
+    entity_refs: dict[int, tuple[str, str | None]],
+) -> tuple[str, ...]:
+    return tuple(
+        entity_refs.get(entity_id, (f"entity:{entity_id}", None))[0] for entity_id in entity_path
+    )
+
+
+def _neo4j_path_entity_types(
+    entity_path: tuple[int, ...],
+    entity_refs: dict[int, tuple[str, str | None]],
+) -> tuple[str | None, ...]:
+    return tuple(
+        entity_refs.get(entity_id, (f"entity:{entity_id}", None))[1] for entity_id in entity_path
+    )
+
+
+def _replace_path_source_chunk_ids(
+    path: GraphPathCandidate,
+    source_chunk_ids: tuple[int, ...],
+) -> GraphPathCandidate:
+    return GraphPathCandidate(
+        path_id=path.path_id,
+        entity_ids=path.entity_ids,
+        relation_ids=path.relation_ids,
+        safe_entity_labels=path.safe_entity_labels,
+        relation_types=path.relation_types,
+        source_chunk_ids=source_chunk_ids,
+        depth=path.depth,
+        path_score=path.path_score,
+        entity_match_score=path.entity_match_score,
+        relation_score=path.relation_score,
+        provider=path.provider,
+        entity_types=path.entity_types,
+        relation_scores=path.relation_scores,
+        relation_node_id_pairs=path.relation_node_id_pairs,
+        evidence_hashes=path.evidence_hashes,
+    )
+
+
+def _safe_neo4j_label(value: object, *, max_length: int) -> str | None:
+    if value is None:
+        return None
+    try:
+        return validate_safe_graph_label(
+            str(value),
+            field_name="neo4j_label",
+            max_length=max_length,
+        )
+    except ValueError:
+        return None
+
+
+def _safe_neo4j_optional_label(value: object, *, max_length: int) -> str | None:
+    if value is None:
+        return None
+    return _safe_neo4j_label(value, max_length=max_length)
+
+
+def _safe_hash_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if re.fullmatch(r"[0-9a-f]{64}", text):
+        return text
+    return None
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _optional_score(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, number))
 
 
 def _dedupe(values: list[str]) -> list[str]:
