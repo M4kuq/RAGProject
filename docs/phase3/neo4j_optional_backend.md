@@ -92,6 +92,9 @@ Projection is idempotent for a document version:
 2. Entity and chunk nodes are `MERGE`d by stable IDs.
 3. Mention and relation relationships are `MERGE`d by stable graph row IDs.
 
+The delete and replacement writes run in one Neo4j write transaction so a failed
+replacement does not commit a partially removed read model.
+
 ## Search Behavior
 
 `Neo4jGraphStore` returns the same provider-independent DTOs as
