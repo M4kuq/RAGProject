@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -47,6 +47,7 @@ def graph_session_factory() -> Iterator[sessionmaker[Session]]:
 class _RecordingNeo4jDriver:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.write_transactions: list[list[str]] = []
 
     def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
         self.calls.append(
@@ -60,6 +61,42 @@ class _RecordingNeo4jDriver:
             )
         )
         return []
+
+    def session(self, **kwargs: object) -> _RecordingNeo4jSession:
+        assert kwargs == {"database": "neo4j"}
+        return _RecordingNeo4jSession(self)
+
+
+class _RecordingNeo4jSession:
+    def __init__(self, driver: _RecordingNeo4jDriver) -> None:
+        self.driver = driver
+
+    def __enter__(self) -> _RecordingNeo4jSession:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+
+    def execute_write(self, callback: Callable[[_RecordingNeo4jTransaction], None]) -> None:
+        transaction = _RecordingNeo4jTransaction(self.driver)
+        callback(transaction)
+        self.driver.write_transactions.append(transaction.queries)
+
+
+class _RecordingNeo4jTransaction:
+    def __init__(self, driver: _RecordingNeo4jDriver) -> None:
+        self.driver = driver
+        self.queries: list[str] = []
+
+    def run(self, query: str, **kwargs: object) -> _RecordingNeo4jResult:
+        self.queries.append(query)
+        self.driver.calls.append((query, dict(kwargs)))
+        return _RecordingNeo4jResult()
+
+
+class _RecordingNeo4jResult:
+    def consume(self) -> None:
+        return None
 
 
 class _RecordingNeo4jProjectionService:
@@ -225,6 +262,13 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
         assert any("MERGE (entity:RAGGraphEntity" in query for query, _ in fake_driver.calls)
         assert any(
             "MERGE (source)-[relation:GRAPH_RELATION" in query for query, _ in fake_driver.calls
+        )
+        assert len(fake_driver.write_transactions) == 2
+        assert all(len(batch) == 7 for batch in fake_driver.write_transactions)
+        assert all(
+            any("DELETE mention" in query for query in batch)
+            and any("MERGE (entity:RAGGraphEntity" in query for query in batch)
+            for batch in fake_driver.write_transactions
         )
         entity_payloads = [
             parameters["entities"]
