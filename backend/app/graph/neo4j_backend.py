@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -68,6 +69,36 @@ class Neo4jClient:
         if isinstance(result, list):
             return [dict(item) for item in result]
         return list(result)
+
+    def execute_write(
+        self,
+        statements: Sequence[tuple[str, dict[str, object]]],
+    ) -> None:
+        if not statements:
+            return
+        driver = self._ensure_driver()
+        session_kwargs: dict[str, object] = {}
+        if self.config.database:
+            session_kwargs["database"] = self.config.database
+
+        def run_statements(transaction: Any) -> None:
+            for query, parameters in statements:
+                result = transaction.run(query, **dict(parameters))
+                consume = getattr(result, "consume", None)
+                if callable(consume):
+                    consume()
+
+        try:
+            with driver.session(**session_kwargs) as session:
+                execute_write = getattr(session, "execute_write", None)
+                if callable(execute_write):
+                    execute_write(run_statements)
+                else:
+                    session.write_transaction(run_statements)
+        except Neo4jUnavailable:
+            raise
+        except Exception as exc:
+            raise Neo4jUnavailable("neo4j_connection_failed") from exc
 
     def verify_connectivity(self) -> str | None:
         try:
