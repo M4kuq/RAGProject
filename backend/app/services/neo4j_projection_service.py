@@ -339,89 +339,92 @@ def _replace_document_version_projection(
     mentions: list[dict[str, object]],
     relations: list[dict[str, object]],
 ) -> None:
-    client.execute(
-        """
-        MATCH (:RAGGraphEntity)-[mention:MENTIONED_IN]->(:RAGGraphChunk)
-        WHERE mention.document_version_id = $document_version_id
-        DELETE mention
-        """,
-        {"document_version_id": document_version_id},
-    )
-    client.execute(
-        """
-        MATCH ()-[relation:GRAPH_RELATION]->()
-        WHERE relation.document_version_id = $document_version_id
-        DELETE relation
-        """,
-        {"document_version_id": document_version_id},
-    )
-    client.execute(
-        """
-        MATCH (chunk:RAGGraphChunk {document_version_id: $document_version_id})
-        DETACH DELETE chunk
-        """,
-        {"document_version_id": document_version_id},
-    )
-    client.execute(
-        """
-        UNWIND $entities AS row
-        MERGE (entity:RAGGraphEntity {graph_entity_id: row.graph_entity_id})
-        SET entity.safe_label = row.safe_label,
-            entity.entity_type = row.entity_type,
-            entity.aliases = row.aliases,
-            entity.last_graph_index_run_id = row.graph_index_run_id
-        """,
-        {"entities": entities},
-    )
-    client.execute(
-        """
-        UNWIND $chunks AS row
-        MERGE (chunk:RAGGraphChunk {document_chunk_id: row.document_chunk_id})
-        SET chunk.document_version_id = row.document_version_id,
-            chunk.logical_document_id = row.logical_document_id,
-            chunk.chunk_hash = row.chunk_hash,
-            chunk.modality = row.modality,
-            chunk.document_version_status = row.document_version_status,
-            chunk.document_version_is_active = row.document_version_is_active,
-            chunk.logical_document_status = row.logical_document_status,
-            chunk.last_graph_index_run_id = row.graph_index_run_id
-        """,
-        {"chunks": chunks},
-    )
-    client.execute(
-        """
-        UNWIND $mentions AS row
-        MATCH (entity:RAGGraphEntity {graph_entity_id: row.graph_entity_id})
-        MATCH (chunk:RAGGraphChunk {document_chunk_id: row.document_chunk_id})
-        MERGE (entity)-[mention:MENTIONED_IN {
-            graph_entity_mention_id: row.graph_entity_mention_id
-        }]->(chunk)
-        SET mention.document_chunk_id = row.document_chunk_id,
-            mention.document_version_id = row.document_version_id,
-            mention.mention_text_hash = row.mention_text_hash,
-            mention.confidence = row.confidence,
-            mention.graph_index_run_id = row.graph_index_run_id
-        """,
-        {"mentions": mentions},
-    )
-    client.execute(
-        """
-        UNWIND $relations AS row
-        MATCH (source:RAGGraphEntity {graph_entity_id: row.source_entity_id})
-        MATCH (target:RAGGraphEntity {graph_entity_id: row.target_entity_id})
-        MERGE (source)-[relation:GRAPH_RELATION {
-            graph_relation_id: row.graph_relation_id
-        }]->(target)
-        SET relation.relation_type = row.relation_type,
-            relation.confidence = row.confidence,
-            relation.source_document_chunk_id = row.source_document_chunk_id,
-            relation.source_chunk_ids = row.source_chunk_ids,
-            relation.document_version_id = row.document_version_id,
-            relation.evidence_text_hash = row.evidence_text_hash,
-            relation.graph_index_run_id = row.graph_index_run_id
-        """,
-        {"relations": relations},
-    )
+    statements: list[tuple[str, dict[str, object]]] = [
+        (
+            """
+            MATCH (:RAGGraphEntity)-[mention:MENTIONED_IN]->(:RAGGraphChunk)
+            WHERE mention.document_version_id = $document_version_id
+            DELETE mention
+            """,
+            {"document_version_id": document_version_id},
+        ),
+        (
+            """
+            MATCH ()-[relation:GRAPH_RELATION]->()
+            WHERE relation.document_version_id = $document_version_id
+            DELETE relation
+            """,
+            {"document_version_id": document_version_id},
+        ),
+        (
+            """
+            MATCH (chunk:RAGGraphChunk {document_version_id: $document_version_id})
+            DETACH DELETE chunk
+            """,
+            {"document_version_id": document_version_id},
+        ),
+        (
+            """
+            UNWIND $entities AS row
+            MERGE (entity:RAGGraphEntity {graph_entity_id: row.graph_entity_id})
+            SET entity.safe_label = row.safe_label,
+                entity.entity_type = row.entity_type,
+                entity.aliases = row.aliases,
+                entity.last_graph_index_run_id = row.graph_index_run_id
+            """,
+            {"entities": entities},
+        ),
+        (
+            """
+            UNWIND $chunks AS row
+            MERGE (chunk:RAGGraphChunk {document_chunk_id: row.document_chunk_id})
+            SET chunk.document_version_id = row.document_version_id,
+                chunk.logical_document_id = row.logical_document_id,
+                chunk.chunk_hash = row.chunk_hash,
+                chunk.modality = row.modality,
+                chunk.document_version_status = row.document_version_status,
+                chunk.document_version_is_active = row.document_version_is_active,
+                chunk.logical_document_status = row.logical_document_status,
+                chunk.last_graph_index_run_id = row.graph_index_run_id
+            """,
+            {"chunks": chunks},
+        ),
+        (
+            """
+            UNWIND $mentions AS row
+            MATCH (entity:RAGGraphEntity {graph_entity_id: row.graph_entity_id})
+            MATCH (chunk:RAGGraphChunk {document_chunk_id: row.document_chunk_id})
+            MERGE (entity)-[mention:MENTIONED_IN {
+                graph_entity_mention_id: row.graph_entity_mention_id
+            }]->(chunk)
+            SET mention.document_chunk_id = row.document_chunk_id,
+                mention.document_version_id = row.document_version_id,
+                mention.mention_text_hash = row.mention_text_hash,
+                mention.confidence = row.confidence,
+                mention.graph_index_run_id = row.graph_index_run_id
+            """,
+            {"mentions": mentions},
+        ),
+        (
+            """
+            UNWIND $relations AS row
+            MATCH (source:RAGGraphEntity {graph_entity_id: row.source_entity_id})
+            MATCH (target:RAGGraphEntity {graph_entity_id: row.target_entity_id})
+            MERGE (source)-[relation:GRAPH_RELATION {
+                graph_relation_id: row.graph_relation_id
+            }]->(target)
+            SET relation.relation_type = row.relation_type,
+                relation.confidence = row.confidence,
+                relation.source_document_chunk_id = row.source_document_chunk_id,
+                relation.source_chunk_ids = row.source_chunk_ids,
+                relation.document_version_id = row.document_version_id,
+                relation.evidence_text_hash = row.evidence_text_hash,
+                relation.graph_index_run_id = row.graph_index_run_id
+            """,
+            {"relations": relations},
+        ),
+    ]
+    client.execute_write(statements)
 
 
 def _optional_float(value: Decimal | None) -> float | None:
