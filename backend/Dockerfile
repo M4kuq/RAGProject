@@ -40,4 +40,7 @@ FROM base AS test
 # then switch to the unprivileged app user once for the rest of the stage.
 USER root
 RUN uv sync --frozen --no-install-project --extra dev
+COPY backend/Dockerfile /backend/Dockerfile
+COPY docker-compose.yml /docker-compose.yml
+COPY docs/phase3/neo4j_optional_backend.md /docs/phase3/neo4j_optional_backend.md
 USER app
