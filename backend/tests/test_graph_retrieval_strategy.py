@@ -406,6 +406,181 @@ def test_neo4j_graph_store_maps_bounded_paths_to_common_dto(
         assert "query" not in entity_call[1]
 
 
+def test_neo4j_entity_lookup_matches_sanitized_aliases(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        chunk_id = min(seed.chunk_ids)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.postgresql_entity_id,
+                    "safe_label": "PostgreSQL",
+                    "entity_type": "technology",
+                    "aliases": ["PGSQL"],
+                }
+            ],
+            relation_rows=[],
+            mention_rows=[
+                {
+                    "entity_id": seed.postgresql_entity_id,
+                    "safe_label": "PostgreSQL",
+                    "entity_type": "technology",
+                    "document_chunk_id": chunk_id,
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        store = Neo4jGraphStore(
+            client=Neo4jClient(
+                config=Neo4jConnectionConfig(
+                    uri="bolt://neo4j.local:7687",
+                    user="neo4j",
+                    password="configured-test-password",
+                ),
+                driver=fake_driver,
+            )
+        )
+
+        result = store.search(
+            db,
+            query="PGSQL",
+            top_k=3,
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                provider=GraphStoreProvider.NEO4J,
+                min_entity_match_score=0.9,
+            ),
+        )
+
+        assert result.graph_candidates
+        assert result.graph_candidates[0].document_chunk_id == chunk_id
+        entity_query, entity_parameters = fake_driver.calls[0]
+        assert "entity.aliases" in entity_query
+        assert "any(alias IN aliases WHERE alias CONTAINS term)" in entity_query
+        assert entity_parameters["terms"] == ["pgsql"]
+
+
+def test_neo4j_entity_lookup_applies_filters_before_limit(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.fastapi_entity_id,
+                    "safe_label": "FastAPI",
+                    "entity_type": "technology",
+                }
+            ],
+            relation_rows=[],
+            mention_rows=[],
+        )
+        store = Neo4jGraphStore(
+            client=Neo4jClient(
+                config=Neo4jConnectionConfig(
+                    uri="bolt://neo4j.local:7687",
+                    user="neo4j",
+                    password="configured-test-password",
+                ),
+                driver=fake_driver,
+            )
+        )
+
+        store.search(
+            db,
+            query="FastAPI",
+            top_k=3,
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                provider=GraphStoreProvider.NEO4J,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        entity_query, entity_parameters = fake_driver.calls[0]
+        assert "MATCH (entity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)" in entity_query
+        assert entity_query.index("EXISTS") < entity_query.index("LIMIT $candidate_limit")
+        assert entity_parameters["logical_document_ids"] == [seed.logical_document_id]
+        assert entity_parameters["modality"] == "text"
+
+
+def test_neo4j_filters_whole_paths_with_out_of_scope_relation_chunks(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        other_chunk_id = _seed_other_document_relation(db, seed)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.fastapi_entity_id,
+                    "safe_label": "FastAPI",
+                    "entity_type": "technology",
+                },
+                {
+                    "entity_id": seed.qdrant_entity_id,
+                    "safe_label": "Qdrant",
+                    "entity_type": "technology",
+                },
+            ],
+            relation_rows=[
+                {
+                    "frontier_entity_id": seed.fastapi_entity_id,
+                    "other_entity_id": seed.qdrant_entity_id,
+                    "other_safe_label": "Qdrant",
+                    "other_entity_type": "technology",
+                    "relation_id": 2001,
+                    "relation_type": "uses",
+                    "confidence": 0.99,
+                    "source_document_chunk_id": other_chunk_id,
+                    "evidence_text_hash": "7" * 64,
+                    "source_entity_id": seed.fastapi_entity_id,
+                    "source_safe_label": "FastAPI",
+                    "source_entity_type": "technology",
+                    "target_entity_id": seed.qdrant_entity_id,
+                    "target_safe_label": "Qdrant",
+                    "target_entity_type": "technology",
+                }
+            ],
+            mention_rows=[],
+        )
+        store = Neo4jGraphStore(
+            client=Neo4jClient(
+                config=Neo4jConnectionConfig(
+                    uri="bolt://neo4j.local:7687",
+                    user="neo4j",
+                    password="configured-test-password",
+                ),
+                driver=fake_driver,
+            )
+        )
+
+        result = store.search(
+            db,
+            query="FastAPI uses Qdrant",
+            top_k=3,
+            filters=RetrievalFilters(logical_document_ids=(seed.logical_document_id,)),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                provider=GraphStoreProvider.NEO4J,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.graph_candidates == ()
+        assert result.paths == ()
+        assert "no_active_source_chunks" in result.reason_codes
+        relation_query, relation_parameters = fake_driver.calls[1]
+        assert "relation.source_document_chunk_id IS NULL" in relation_query
+        assert "MATCH (" in relation_query
+        assert relation_parameters["logical_document_ids"] == [seed.logical_document_id]
+
+
 def test_graph_retrieval_applies_filters_to_relation_chunks(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:

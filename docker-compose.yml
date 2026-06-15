@@ -132,6 +132,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: backend
+      args:
+        BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}
     environment: *backend-env
     volumes:
       - upload_storage:/app/storage/uploads
@@ -159,6 +161,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: worker
+      args:
+        BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}
     environment: *backend-env
     volumes:
       - upload_storage:/app/storage/uploads
@@ -177,6 +181,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: backend
+      args:
+        BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}
     environment: *backend-env
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -189,6 +195,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: backend
+      args:
+        BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}
     environment: *backend-env
     command: ["python", "-m", "app.scripts.seed"]
     depends_on:

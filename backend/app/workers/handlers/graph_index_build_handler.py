@@ -108,16 +108,30 @@ class GraphIndexBuildHandler:
                         job_id=context.job_id,
                         worker_instance_id=context.worker_instance_id,
                     )
+                    document_version_id = payload.document_version_id
+                    graph_index_run_id = run.graph_index_run_id
+                    entity_count = run.entity_count
+                    relation_count = run.relation_count
+                    mention_count = run.mention_count
                     db.commit()
+                    projection_payload = _projection_payload(
+                        self._project_neo4j_after_commit(
+                            db,
+                            service,
+                            document_version_id=document_version_id,
+                            graph_index_run_id=graph_index_run_id,
+                        )
+                    )
                     return JobHandlerResult.succeeded(
                         {
-                            "document_version_id": payload.document_version_id,
-                            "graph_index_run_id": run.graph_index_run_id,
-                            "entity_count": run.entity_count,
-                            "relation_count": run.relation_count,
-                            "mention_count": run.mention_count,
+                            "document_version_id": document_version_id,
+                            "graph_index_run_id": graph_index_run_id,
+                            "entity_count": entity_count,
+                            "relation_count": relation_count,
+                            "mention_count": mention_count,
                             "status": "already_succeeded",
                             "result_code": "no_op",
+                            **projection_payload,
                         }
                     )
                 if run.status == "failed":

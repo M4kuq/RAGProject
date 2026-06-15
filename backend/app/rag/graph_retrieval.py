@@ -262,6 +262,7 @@ class GraphPathCandidate:
     relation_scores: tuple[float | None, ...] = ()
     relation_node_id_pairs: tuple[tuple[int, int], ...] = ()
     evidence_hashes: tuple[str, ...] = ()
+    relation_source_chunk_ids: tuple[int | None, ...] = ()
 
     def to_graph_path(self, *, source_chunk_ids: tuple[int, ...] | None = None) -> GraphPath:
         chunk_ids = source_chunk_ids if source_chunk_ids is not None else self.source_chunk_ids
@@ -667,6 +668,10 @@ class GraphPathSearchService:
                                     for item in next_relation_path
                                     if item.relation.evidence_text_hash is not None
                                 ),
+                                relation_source_chunk_ids=tuple(
+                                    item.relation.source_document_chunk_id
+                                    for item in next_relation_path
+                                ),
                             )
                         )
                     elif "max_paths_reached" not in reason_codes:
@@ -836,6 +841,7 @@ class _Neo4jEntityLookupResult:
     entity_id: int
     safe_label: str
     entity_type: str | None
+    aliases: tuple[str, ...]
     match_score: float
 
 
@@ -908,7 +914,11 @@ class Neo4jGraphStore:
             return self._unavailable_result(query, started_at, unavailable_reason)
 
         try:
-            start_entities = self._lookup_entities(query=query, settings=bounded_settings)
+            start_entities = self._lookup_entities(
+                query=query,
+                filters=filters,
+                settings=bounded_settings,
+            )
             if not start_entities:
                 return _graph_retrieval_result(
                     provider=self.provider,
@@ -924,6 +934,7 @@ class Neo4jGraphStore:
                 )
             paths, relation_count, reason_codes = self._search_paths(
                 start_entities=start_entities,
+                filters=filters,
                 settings=bounded_settings,
                 started_at=started_at,
             )
@@ -983,28 +994,54 @@ class Neo4jGraphStore:
         self,
         *,
         query: str,
+        filters: RetrievalFilters,
         settings: GraphRetrievalSettings,
     ) -> list[_Neo4jEntityLookupResult]:
         safe_terms = _safe_neo4j_terms(self.entity_lookup.query_terms(query))
         if not safe_terms:
             return []
+        filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
             """
             MATCH (entity:RAGGraphEntity)
+            WITH entity,
+                 [alias IN coalesce(entity.aliases, []) | toLower(toString(alias))] AS aliases
             WHERE any(
                 term IN $terms
                 WHERE toLower(entity.safe_label) CONTAINS term
+                   OR any(alias IN aliases WHERE alias CONTAINS term)
                    OR toLower(coalesce(entity.entity_type, "")) CONTAINS term
             )
+            AND EXISTS {
+                MATCH (entity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)
+                WHERE chunk.modality = $modality
+                  AND chunk.document_version_status = "ready"
+                  AND coalesce(chunk.document_version_is_active, false) = true
+                  AND chunk.logical_document_status = "active"
+                  AND (
+                      size($logical_document_ids) = 0
+                      OR chunk.logical_document_id IN $logical_document_ids
+                  )
+            }
             RETURN entity.graph_entity_id AS entity_id,
                    entity.safe_label AS safe_label,
-                   entity.entity_type AS entity_type
-            ORDER BY entity.graph_entity_id ASC
+                   entity.entity_type AS entity_type,
+                   entity.aliases AS aliases
+            ORDER BY CASE
+                       WHEN any(
+                           term IN $terms
+                           WHERE toLower(entity.safe_label) CONTAINS term
+                              OR any(alias IN aliases WHERE alias CONTAINS term)
+                       ) THEN 0
+                       ELSE 1
+                     END ASC,
+                     entity.graph_entity_id ASC
             LIMIT $candidate_limit
             """,
             {
                 "terms": list(safe_terms),
                 "candidate_limit": min(640, max(settings.max_start_entities * 32, 100)),
+                **filter_params,
             },
         )
         results: list[_Neo4jEntityLookupResult] = []
@@ -1014,9 +1051,11 @@ class Neo4jGraphStore:
             if entity_id is None or safe_label is None:
                 continue
             entity_type = _safe_neo4j_optional_label(row.get("entity_type"), max_length=80)
+            aliases = _safe_neo4j_aliases(row.get("aliases"))
             score = _neo4j_entity_match_score(
                 safe_label=safe_label,
                 entity_type=entity_type,
+                aliases=aliases,
                 safe_terms=safe_terms,
             )
             if score < settings.min_entity_match_score:
@@ -1026,6 +1065,7 @@ class Neo4jGraphStore:
                     entity_id=entity_id,
                     safe_label=safe_label,
                     entity_type=entity_type,
+                    aliases=aliases,
                     match_score=round(score, 6),
                 )
             )
@@ -1036,6 +1076,7 @@ class Neo4jGraphStore:
         self,
         *,
         start_entities: list[_Neo4jEntityLookupResult],
+        filters: RetrievalFilters,
         settings: GraphRetrievalSettings,
         started_at: float,
     ) -> tuple[list[GraphPathCandidate], int, list[str]]:
@@ -1085,6 +1126,7 @@ class Neo4jGraphStore:
                     entity_ids=pending_entity_ids,
                     max_relations_per_entity=settings.max_relations_per_entity,
                     exclude_relation_ids=seen_relation_ids,
+                    filters=filters,
                 )
                 relation_count += len(relation_rows)
                 for relation_row in relation_rows:
@@ -1173,6 +1215,9 @@ class Neo4jGraphStore:
                                     for item in next_relation_path
                                     if item.evidence_text_hash is not None
                                 ),
+                                relation_source_chunk_ids=tuple(
+                                    item.source_document_chunk_id for item in next_relation_path
+                                ),
                             )
                         )
                     elif "max_paths_reached" not in reason_codes:
@@ -1200,10 +1245,12 @@ class Neo4jGraphStore:
         entity_ids: set[int],
         max_relations_per_entity: int,
         exclude_relation_ids: set[int],
+        filters: RetrievalFilters,
     ) -> list[_Neo4jRelationLookupResult]:
         safe_entity_ids = _dedupe_ints(entity_ids)
         if not safe_entity_ids:
             return []
+        filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
             """
             UNWIND $entity_ids AS frontier_id
@@ -1212,6 +1259,24 @@ class Neo4jGraphStore:
                 WITH frontier
                 MATCH (frontier)-[relation:GRAPH_RELATION]-(other:RAGGraphEntity)
                 WHERE NOT relation.graph_relation_id IN $exclude_relation_ids
+                  AND (
+                      relation.source_document_chunk_id IS NULL
+                      OR EXISTS {
+                          MATCH (
+                              chunk:RAGGraphChunk {
+                                  document_chunk_id: relation.source_document_chunk_id
+                              }
+                          )
+                          WHERE chunk.modality = $modality
+                            AND chunk.document_version_status = "ready"
+                            AND coalesce(chunk.document_version_is_active, false) = true
+                            AND chunk.logical_document_status = "active"
+                            AND (
+                                size($logical_document_ids) = 0
+                                OR chunk.logical_document_id IN $logical_document_ids
+                            )
+                      }
+                  )
                 WITH relation, other
                 ORDER BY CASE
                             WHEN relation.source_document_chunk_id IS NULL THEN 1
@@ -1242,6 +1307,7 @@ class Neo4jGraphStore:
                 "entity_ids": safe_entity_ids,
                 "exclude_relation_ids": list(exclude_relation_ids),
                 "max_relations_per_entity": max_relations_per_entity,
+                **filter_params,
             },
         )
         relation_rows: list[_Neo4jRelationLookupResult] = []
@@ -1259,7 +1325,17 @@ class Neo4jGraphStore:
         filters: RetrievalFilters,
     ) -> list[GraphPathCandidate]:
         source_chunk_ids = {
-            chunk_id for path in paths for chunk_id in path.source_chunk_ids if chunk_id > 0
+            chunk_id
+            for path in paths
+            for chunk_id in (
+                *path.source_chunk_ids,
+                *(
+                    relation_chunk_id
+                    for relation_chunk_id in path.relation_source_chunk_ids
+                    if relation_chunk_id is not None
+                ),
+            )
+            if chunk_id > 0
         }
         if not source_chunk_ids:
             return []
@@ -1272,6 +1348,13 @@ class Neo4jGraphStore:
         )
         filtered: list[GraphPathCandidate] = []
         for path in paths:
+            relation_chunk_ids = tuple(
+                chunk_id
+                for chunk_id in path.relation_source_chunk_ids
+                if chunk_id is not None and chunk_id > 0
+            )
+            if any(chunk_id not in active_chunk_ids for chunk_id in relation_chunk_ids):
+                continue
             chunk_ids = tuple(
                 chunk_id for chunk_id in path.source_chunk_ids if chunk_id in active_chunk_ids
             )
@@ -1291,11 +1374,20 @@ class Neo4jGraphStore:
         entity_ids = [item.entity_id for item in start_entities]
         if not entity_ids:
             return []
+        filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
             """
             UNWIND $entity_ids AS entity_id
             MATCH (entity:RAGGraphEntity {graph_entity_id: entity_id})
                   -[mention:MENTIONED_IN]->(chunk:RAGGraphChunk)
+            WHERE chunk.modality = $modality
+              AND chunk.document_version_status = "ready"
+              AND coalesce(chunk.document_version_is_active, false) = true
+              AND chunk.logical_document_status = "active"
+              AND (
+                  size($logical_document_ids) = 0
+                  OR chunk.logical_document_id IN $logical_document_ids
+              )
             RETURN entity.graph_entity_id AS entity_id,
                    entity.safe_label AS safe_label,
                    entity.entity_type AS entity_type,
@@ -1309,6 +1401,7 @@ class Neo4jGraphStore:
             {
                 "entity_ids": entity_ids,
                 "limit": max(settings.max_source_chunks * max(1, len(entity_ids)), 1),
+                **filter_params,
             },
         )
         candidate_chunk_ids = {
@@ -1840,13 +1933,17 @@ def _neo4j_entity_match_score(
     *,
     safe_label: str,
     entity_type: str | None,
+    aliases: tuple[str, ...] = (),
     safe_terms: tuple[str, ...],
 ) -> float:
     query_text = " ".join(safe_terms)
-    normalized_label = " ".join(safe_label.split()).strip().lower()
-    if normalized_label and _phrase_boundary_match(query_text, normalized_label):
-        return 1.0
+    for label in (safe_label, *aliases):
+        normalized_label = " ".join(label.split()).strip().lower()
+        if normalized_label and _phrase_boundary_match(query_text, normalized_label):
+            return 1.0
     label_terms = set(_neo4j_label_terms(safe_label))
+    for alias in aliases:
+        label_terms.update(_neo4j_label_terms(alias))
     type_terms = set(_neo4j_label_terms(entity_type or ""))
     matched_label_terms = {term for term in safe_terms if term in label_terms}
     matched_type_terms = {term for term in safe_terms if term in type_terms}
@@ -1975,6 +2072,7 @@ def _replace_path_source_chunk_ids(
         relation_scores=path.relation_scores,
         relation_node_id_pairs=path.relation_node_id_pairs,
         evidence_hashes=path.evidence_hashes,
+        relation_source_chunk_ids=path.relation_source_chunk_ids,
     )
 
 
@@ -1995,6 +2093,33 @@ def _safe_neo4j_optional_label(value: object, *, max_length: int) -> str | None:
     if value is None:
         return None
     return _safe_neo4j_label(value, max_length=max_length)
+
+
+def _safe_neo4j_aliases(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for alias in value:
+        safe_alias = _safe_neo4j_label(alias, max_length=120)
+        if safe_alias is None:
+            continue
+        key = safe_alias.lower()
+        if key in seen:
+            continue
+        aliases.append(safe_alias)
+        seen.add(key)
+        if len(aliases) >= 32:
+            break
+    return tuple(aliases)
+
+
+def _neo4j_filter_params(filters: RetrievalFilters) -> dict[str, object]:
+    modality = _safe_neo4j_label(filters.modality, max_length=40) or "text"
+    return {
+        "logical_document_ids": list(_dedupe_ints(filters.logical_document_ids)),
+        "modality": modality,
+    }
 
 
 def _safe_hash_or_none(value: object) -> str | None:

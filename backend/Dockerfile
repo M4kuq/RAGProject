@@ -16,7 +16,8 @@ RUN groupadd --system --gid 10001 app \
 
 # Install runtime dependencies from the lock file for reproducible builds.
 COPY backend/pyproject.toml backend/uv.lock /app/
-RUN uv sync --frozen --no-install-project --no-dev
+ARG BACKEND_UV_EXTRA_ARGS=""
+RUN uv sync --frozen --no-install-project --no-dev $BACKEND_UV_EXTRA_ARGS
 
 COPY backend/ /app/
 RUN mkdir -p /app/storage/uploads \

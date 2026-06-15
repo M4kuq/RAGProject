@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.graph_models import GraphEntity, GraphEntityMention, GraphRelation
-from app.db.models import DocumentChunk
+from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig, Neo4jUnavailable
 from app.schemas.graph import validate_safe_graph_label
 
@@ -80,6 +80,9 @@ class Neo4jProjectionService:
             reason_codes=("neo4j_projection_completed",),
         )
 
+    def close(self) -> None:
+        self.client.close()
+
 
 @dataclass(frozen=True)
 class _ProjectionRows:
@@ -101,12 +104,37 @@ def _load_projection_rows(
                 DocumentChunk.document_chunk_id,
                 DocumentChunk.document_version_id,
                 DocumentChunk.chunk_hash,
+                DocumentChunk.modality,
+                DocumentVersion.logical_document_id,
+                DocumentVersion.status,
+                DocumentVersion.is_active,
+                LogicalDocument.status,
+            )
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
             .where(DocumentChunk.document_version_id == document_version_id)
             .order_by(DocumentChunk.document_chunk_id.asc())
         ).all()
     )
-    chunk_ids = {document_chunk_id for document_chunk_id, _version_id, _hash in chunk_rows}
+    chunk_ids = {
+        document_chunk_id
+        for (
+            document_chunk_id,
+            _version_id,
+            _hash,
+            _modality,
+            _logical_id,
+            _version_status,
+            _version_is_active,
+            _logical_status,
+        ) in chunk_rows
+    }
     mention_rows = list(
         db.execute(
             select(
@@ -155,6 +183,7 @@ def _load_projection_rows(
                     GraphEntity.graph_entity_id,
                     GraphEntity.canonical_name,
                     GraphEntity.entity_type,
+                    GraphEntity.aliases_json,
                 )
                 .where(GraphEntity.graph_entity_id.in_(entity_ids))
                 .order_by(GraphEntity.graph_entity_id.asc())
@@ -165,7 +194,16 @@ def _load_projection_rows(
     )
     chunk_version_by_id = {
         document_chunk_id: chunk_document_version_id
-        for document_chunk_id, chunk_document_version_id, _chunk_hash in chunk_rows
+        for (
+            document_chunk_id,
+            chunk_document_version_id,
+            _chunk_hash,
+            _modality,
+            _logical_id,
+            _version_status,
+            _version_is_active,
+            _logical_status,
+        ) in chunk_rows
     }
     return _ProjectionRows(
         entities=[
@@ -181,18 +219,45 @@ def _load_projection_rows(
                     field_name="entity_type",
                     max_length=80,
                 ),
+                "aliases": _safe_aliases(aliases_json),
                 "graph_index_run_id": graph_index_run_id,
             }
-            for graph_entity_id, canonical_name, entity_type in entity_rows
+            for graph_entity_id, canonical_name, entity_type, aliases_json in entity_rows
         ],
         chunks=[
             {
                 "document_chunk_id": document_chunk_id,
                 "document_version_id": chunk_document_version_id,
+                "logical_document_id": logical_document_id,
                 "chunk_hash": chunk_hash,
+                "modality": validate_safe_graph_label(
+                    modality,
+                    field_name="modality",
+                    max_length=40,
+                ),
+                "document_version_status": validate_safe_graph_label(
+                    document_version_status,
+                    field_name="document_version_status",
+                    max_length=40,
+                ),
+                "document_version_is_active": bool(document_version_is_active),
+                "logical_document_status": validate_safe_graph_label(
+                    logical_document_status,
+                    field_name="logical_document_status",
+                    max_length=40,
+                ),
                 "graph_index_run_id": graph_index_run_id,
             }
-            for document_chunk_id, chunk_document_version_id, chunk_hash in chunk_rows
+            for (
+                document_chunk_id,
+                chunk_document_version_id,
+                chunk_hash,
+                modality,
+                logical_document_id,
+                document_version_status,
+                document_version_is_active,
+                logical_document_status,
+            ) in chunk_rows
         ],
         mentions=[
             {
@@ -303,6 +368,7 @@ def _replace_document_version_projection(
         MERGE (entity:RAGGraphEntity {graph_entity_id: row.graph_entity_id})
         SET entity.safe_label = row.safe_label,
             entity.entity_type = row.entity_type,
+            entity.aliases = row.aliases,
             entity.last_graph_index_run_id = row.graph_index_run_id
         """,
         {"entities": entities},
@@ -312,7 +378,12 @@ def _replace_document_version_projection(
         UNWIND $chunks AS row
         MERGE (chunk:RAGGraphChunk {document_chunk_id: row.document_chunk_id})
         SET chunk.document_version_id = row.document_version_id,
+            chunk.logical_document_id = row.logical_document_id,
             chunk.chunk_hash = row.chunk_hash,
+            chunk.modality = row.modality,
+            chunk.document_version_status = row.document_version_status,
+            chunk.document_version_is_active = row.document_version_is_active,
+            chunk.logical_document_status = row.logical_document_status,
             chunk.last_graph_index_run_id = row.graph_index_run_id
         """,
         {"chunks": chunks},
@@ -355,3 +426,27 @@ def _replace_document_version_projection(
 
 def _optional_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
+
+
+def _safe_aliases(value: object) -> list[str]:
+    if not isinstance(value, list | tuple):
+        return []
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for alias in value:
+        try:
+            safe_alias = validate_safe_graph_label(
+                str(alias),
+                field_name="aliases_json",
+                max_length=120,
+            )
+        except ValueError:
+            continue
+        key = safe_alias.lower()
+        if key in seen:
+            continue
+        aliases.append(safe_alias)
+        seen.add(key)
+        if len(aliases) >= 32:
+            break
+    return aliases

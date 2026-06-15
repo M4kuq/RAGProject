@@ -43,8 +43,13 @@ NEO4J_URI=bolt://neo4j:7687 \
 NEO4J_USER=neo4j \
 NEO4J_PASSWORD=change-me-local \
 NEO4J_PROJECTION_ENABLED=true \
+BACKEND_UV_EXTRA_ARGS="--extra neo4j" \
 docker compose --profile neo4j up --build backend worker frontend
 ```
+
+`BACKEND_UV_EXTRA_ARGS="--extra neo4j"` is required for Docker-based Neo4j
+runs because the default backend image installs runtime dependencies with
+`uv sync --no-dev` and intentionally does not include optional extras.
 
 Use a local-only password for development and replace it before any shared
 environment. Do not paste real Neo4j credentials into docs, logs, PR comments,
@@ -58,11 +63,14 @@ properties to Neo4j:
 - entity IDs
 - safe labels
 - entity types
+- sanitized aliases
 - fixed Neo4j node labels
 - fixed relationship labels
 - relation types
 - source chunk IDs
 - document version IDs
+- logical document IDs
+- chunk modality and active-status metadata
 - graph index run IDs
 - confidence values
 - hashes
@@ -72,7 +80,10 @@ full context, PII, tokens, credentials, or `.env` values.
 
 When `NEO4J_PROJECTION_ENABLED=true`, the worker triggers projection after a
 successful `graph_index_build` commit. The projection is best-effort; failure
-does not fail the PostgreSQL graph index run.
+does not fail the PostgreSQL graph index run. If a retry sees that the graph
+index run has already succeeded, it still retries projection before returning a
+no-op job result so a crash between commit and projection does not permanently
+leave the read model stale.
 
 Projection is idempotent for a document version:
 

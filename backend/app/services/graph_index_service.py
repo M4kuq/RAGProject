@@ -428,15 +428,23 @@ class GraphIndexService:
         graph_index_run_id: int,
     ) -> object:
         projection_service = self.neo4j_projection_service
+        temporary_projection_service = False
         if projection_service is None:
             from app.services.neo4j_projection_service import Neo4jProjectionService
 
             projection_service = Neo4jProjectionService()
-        return projection_service.project_document_version(
-            db,
-            document_version_id=document_version_id,
-            graph_index_run_id=graph_index_run_id,
-        )
+            temporary_projection_service = True
+        try:
+            return projection_service.project_document_version(
+                db,
+                document_version_id=document_version_id,
+                graph_index_run_id=graph_index_run_id,
+            )
+        finally:
+            if temporary_projection_service:
+                close = getattr(projection_service, "close", None)
+                if callable(close):
+                    close()
 
 
 def _dedupe_mentions(

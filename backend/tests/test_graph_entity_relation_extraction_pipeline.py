@@ -4,6 +4,8 @@ import uuid
 from collections.abc import Iterator
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -18,6 +20,7 @@ from app.graph.extraction import EntityMentionCandidate, GraphExtractionResult, 
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
 from app.repositories.graph_repository import GraphRepository
 from app.repositories.job_repository import JobRepository
+from app.services import neo4j_projection_service as neo4j_projection_module
 from app.services.graph_index_service import GraphIndexBuildSnapshot, GraphIndexService
 from app.services.neo4j_projection_service import Neo4jProjectionResult, Neo4jProjectionService
 from app.workers.handlers.graph_index_build_handler import GraphIndexBuildHandler
@@ -185,6 +188,9 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
             snapshot=snapshot,
             result=graph_service.extract_from_snapshot(snapshot),
         )
+        aliased_entity = db.scalar(select(GraphEntity).order_by(GraphEntity.graph_entity_id.asc()))
+        assert aliased_entity is not None
+        aliased_entity.aliases_json = ["HRAG"]
         db.commit()
 
         fake_driver = _RecordingNeo4jDriver()
@@ -220,6 +226,26 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
         assert any(
             "MERGE (source)-[relation:GRAPH_RELATION" in query for query, _ in fake_driver.calls
         )
+        entity_payloads = [
+            parameters["entities"]
+            for query, parameters in fake_driver.calls
+            if "UNWIND $entities AS row" in query
+        ]
+        chunk_payloads = [
+            parameters["chunks"]
+            for query, parameters in fake_driver.calls
+            if "UNWIND $chunks AS row" in query
+        ]
+        assert entity_payloads
+        assert chunk_payloads
+        projected_entities = cast(list[dict[str, object]], entity_payloads[-1])
+        projected_chunks = cast(list[dict[str, object]], chunk_payloads[-1])
+        assert any(row["aliases"] == ["HRAG"] for row in projected_entities)
+        assert all("logical_document_id" in row for row in projected_chunks)
+        assert all(row["modality"] == "text" for row in projected_chunks)
+        assert all(row["document_version_status"] == "ready" for row in projected_chunks)
+        assert all(row["document_version_is_active"] is True for row in projected_chunks)
+        assert all(row["logical_document_status"] == "active" for row in projected_chunks)
 
         parameter_dump = str([parameters for _, parameters in fake_driver.calls]).lower()
         assert "admin@example.com" not in parameter_dump
@@ -338,6 +364,133 @@ def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commi
             stored_job.result_json["neo4j_projection_result_code"] == "neo4j_projection_completed"
         )
         assert stored_job.result_json["neo4j_projected_entity_count"] == 1
+
+
+def test_graph_index_build_worker_retries_projection_for_already_succeeded_run(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    projection_service = _RecordingNeo4jProjectionService()
+    job_repository = JobRepository()
+    graph_service = GraphIndexService()
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = graph_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = graph_service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+        graph_service.persist_extraction_result(
+            db,
+            snapshot=snapshot,
+            result=graph_service.extract_from_snapshot(snapshot),
+        )
+        job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=version.document_version_id,
+            payload_json=graph_service.build_graph_index_job_payload(
+                document_version_id=version.document_version_id,
+                graph_index_run_id=run.graph_index_run_id,
+            ),
+        )
+        db.commit()
+        job_id = job.job_id
+        run_id = run.graph_index_run_id
+        version_id = version.document_version_id
+
+    dispatcher = JobDispatcher(
+        {
+            GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
+                session_factory=graph_session_factory,
+                service_factory=lambda: GraphIndexService(
+                    neo4j_projection_service=projection_service
+                ),
+            )
+        }
+    )
+    runner = WorkerRunner(
+        config=_worker_config(enabled_job_types=frozenset({GRAPH_INDEX_BUILD_JOB_TYPE})),
+        session_factory=graph_session_factory,
+        dispatcher=dispatcher,
+    )
+    assert runner.run_once() == 1
+
+    with graph_session_factory() as db:
+        stored_job = db.get(Job, job_id)
+        assert stored_job is not None
+        assert stored_job.result_json is not None
+        assert projection_service.calls == [(version_id, run_id)]
+        assert stored_job.result_json["status"] == "already_succeeded"
+        assert stored_job.result_json["result_code"] == "no_op"
+        assert (
+            stored_job.result_json["neo4j_projection_result_code"] == "neo4j_projection_completed"
+        )
+
+
+def test_graph_index_service_closes_temporary_neo4j_projection_service(
+    graph_session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instances: list[object] = []
+
+    class _ClosingProjectionService:
+        def __init__(self) -> None:
+            self.closed = False
+            instances.append(self)
+
+        def project_document_version(
+            self,
+            db: Session,
+            *,
+            document_version_id: int,
+            graph_index_run_id: int | None = None,
+        ) -> Neo4jProjectionResult:
+            del db, document_version_id, graph_index_run_id
+            return Neo4jProjectionResult(
+                enabled=True,
+                reason_codes=("neo4j_projection_completed",),
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        neo4j_projection_module,
+        "Neo4jProjectionService",
+        _ClosingProjectionService,
+    )
+
+    service = GraphIndexService()
+    with graph_session_factory() as db:
+        service.project_neo4j_index_run(
+            db,
+            document_version_id=1,
+            graph_index_run_id=2,
+        )
+
+    assert len(instances) == 1
+    closed_instance = cast(_ClosingProjectionService, instances[0])
+    assert closed_instance.closed is True
+
+
+def test_neo4j_docker_path_installs_optional_extra() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    docs = (repo_root / "docs" / "phase3" / "neo4j_optional_backend.md").read_text(encoding="utf-8")
+
+    assert 'ARG BACKEND_UV_EXTRA_ARGS=""' in dockerfile
+    assert "uv sync --frozen --no-install-project --no-dev $BACKEND_UV_EXTRA_ARGS" in dockerfile
+    assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}" in compose
+    assert 'BACKEND_UV_EXTRA_ARGS="--extra neo4j"' in docs
 
 
 def test_graph_index_build_worker_retries_failed_run_with_new_run(
