@@ -15,6 +15,7 @@ from app.db.models import User
 from app.db.session import get_db
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag import RagAskRequest, RagSearchRequest
+from app.services.graph_debug_service import GraphDebugTraceService
 from app.services.graph_rag_service import GraphRagService
 from app.services.rag_service import (
     RagAskPipelineError,
@@ -33,6 +34,10 @@ def rag_search_service() -> RagService:
 
 def source_locator_service() -> SourceLocatorService:
     return SourceLocatorService()
+
+
+def graph_debug_trace_service() -> GraphDebugTraceService:
+    return GraphDebugTraceService()
 
 
 @router.post("/ask", dependencies=[Depends(require_csrf)])
@@ -115,6 +120,18 @@ def retrieval_run_detail(
     service: RagService = Depends(rag_search_service),
 ) -> dict[str, object]:
     result = service.get_retrieval_run_detail(db, retrieval_run_id=retrieval_run_id)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/retrieval-runs/{retrieval_run_id}/graph-trace")
+def retrieval_run_graph_trace(
+    retrieval_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: GraphDebugTraceService = Depends(graph_debug_trace_service),
+) -> dict[str, object]:
+    result = service.get_graph_trace(db, retrieval_run_id=retrieval_run_id)
     return success_response(result.model_dump(mode="json"), request)
 
 

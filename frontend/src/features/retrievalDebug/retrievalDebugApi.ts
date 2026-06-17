@@ -1,6 +1,7 @@
 import { apiFetch } from "../../lib/apiClient";
 import type { ApiResponse } from "../../types/api";
 import type {
+  GraphRunDebugTrace,
   RagSearchDebugRequest,
   RagSearchDebugResponse,
   RetrievalRunDebugDetail,
@@ -22,6 +23,13 @@ export async function getRetrievalRunDebugDetail(
 ): Promise<RetrievalRunDebugDetail> {
   const response = await apiFetch<ApiResponse<RetrievalRunDebugDetail>>(
     `/api/v1/rag/retrieval-runs/${retrievalRunId}`
+  );
+  return response.data;
+}
+
+export async function getRetrievalRunGraphTrace(retrievalRunId: number): Promise<GraphRunDebugTrace> {
+  const response = await apiFetch<ApiResponse<GraphRunDebugTrace>>(
+    `/api/v1/rag/retrieval-runs/${retrievalRunId}/graph-trace`
   );
   return response.data;
 }

@@ -684,6 +684,78 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
       if (url.includes("/api/v1/rag/retrieval-runs?")) {
         return jsonResponse({ data: { items: [] } });
       }
+      if (url.endsWith("/api/v1/rag/retrieval-runs/600/graph-trace")) {
+        return jsonResponse({
+          data: {
+            schema_version: "phase3.graph_citation_trace.v1",
+            retrieval_run_id: 600,
+            graph_path_count: 1,
+            valid_path_count: 1,
+            citable_path_count: 1,
+            excluded_path_count: 0,
+            citation_source_count: 1,
+            coverage: {
+              path_count: 1,
+              valid_path_count: 1,
+              citable_path_count: 1,
+              excluded_path_count: 0,
+              source_chunk_count: 1,
+              resolved_source_chunk_count: 1,
+              citable_source_chunk_count: 1,
+              citation_source_count: 1,
+              source_chunk_coverage_ratio: 1,
+              citation_coverage_ratio: 1,
+              reason_codes: []
+            },
+            paths: [
+              {
+                graph_retrieval_path_id: 700,
+                path_id: "gp_safe_1",
+                provider: "postgres",
+                validation_status: "valid",
+                reason_codes: [],
+                safe_metadata: { validation_status: "valid" },
+                source_chunk_ids: [300],
+                depth: 1,
+                path_score: 0.91,
+                safe_entity_labels: ["FastAPI", "PostgreSQL"],
+                relation_types: ["uses"],
+                node_refs: [
+                  {
+                    provider: "postgres",
+                    node_id: "1",
+                    entity_id: 1,
+                    safe_label: "FastAPI",
+                    entity_type: "technology"
+                  }
+                ],
+                relation_refs: [
+                  {
+                    provider: "postgres",
+                    relation_id: "10",
+                    source_node_id: "1",
+                    target_node_id: "2",
+                    relation_type: "uses",
+                    safe_label: "uses"
+                  }
+                ],
+                source_mappings: [
+                  {
+                    source_chunk_id: 300,
+                    document_chunk_id: 300,
+                    retrieval_run_item_id: 900,
+                    selected_flag: true,
+                    citation_ids: [1000],
+                    local_citation_ids: [1]
+                  }
+                ],
+                raw_evidence_text: "raw graph evidence must not appear"
+              }
+            ],
+            raw_prompt: "raw prompt must not appear"
+          }
+        });
+      }
       if (url.endsWith("/api/v1/rag/retrieval-runs/600")) {
         return jsonResponse({
           data: {
@@ -1076,6 +1148,7 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(screen.getByRole("option", { name: "dense" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "sparse" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "hybrid" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "graph" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "agentic_router" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "multi_query_hybrid" })).toBeDisabled();
 
@@ -1085,7 +1158,7 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
 
   await waitFor(() => expect(searchRequests.length).toBe(1));
   expect(JSON.parse(String(searchRequests[0].body)).strategy).toBe("hybrid");
-  expect(await screen.findByText("#600")).toBeInTheDocument();
+  expect((await screen.findAllByText("#600")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("dense_sparse_single_query")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("comparison")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("multi_query_hybrid")).length).toBeGreaterThan(0);
@@ -1102,6 +1175,9 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect((await screen.findAllByText("near_duplicate_removed")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("bounded_excerpt")).length).toBeGreaterThan(0);
   expect(await screen.findByRole("heading", { name: "Tool Result Compression" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Graph Trace" })).toBeInTheDocument();
+  expect((await screen.findAllByText("gp_safe_1")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("source_chunk_coverage")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("dense_search")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("max_chars_per_snippet")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("phase2-budget.md")).length).toBeGreaterThan(0);
@@ -1112,6 +1188,7 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(document.body).not.toHaveTextContent("full context must not appear");
   expect(document.body).not.toHaveTextContent("raw chunk text must not appear");
   expect(document.body).not.toHaveTextContent("raw evidence text must not appear");
+  expect(document.body).not.toHaveTextContent("raw graph evidence must not appear");
   expect(document.body).not.toHaveTextContent("raw tool snippet must not appear");
   expect(document.body).not.toHaveTextContent("raw tool payload must not appear");
   expect(document.body).not.toHaveTextContent("OPENAI_API_KEY");
@@ -1173,6 +1250,33 @@ test("retrieval debug loads run history and refreshes selected trace", async () 
                 created_at: "2026-05-01T00:00:00Z"
               }
             ]
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/rag/retrieval-runs/601/graph-trace")) {
+        return jsonResponse({
+          data: {
+            schema_version: "phase3.graph_citation_trace.v1",
+            retrieval_run_id: 601,
+            graph_path_count: 0,
+            valid_path_count: 0,
+            citable_path_count: 0,
+            excluded_path_count: 0,
+            citation_source_count: 0,
+            coverage: {
+              path_count: 0,
+              valid_path_count: 0,
+              citable_path_count: 0,
+              excluded_path_count: 0,
+              source_chunk_count: 0,
+              resolved_source_chunk_count: 0,
+              citable_source_chunk_count: 0,
+              citation_source_count: 0,
+              source_chunk_coverage_ratio: 1,
+              citation_coverage_ratio: 1,
+              reason_codes: []
+            },
+            paths: []
           }
         });
       }
