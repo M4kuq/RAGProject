@@ -98,8 +98,9 @@ PR-49 keeps the PR-48 PostgreSQL traversal behavior but wraps it behind the
 - `GraphRetrievalStrategy` only resolves and calls a `GraphStore`.
 - `PostgresGraphStore` owns PostgreSQL-backed entity lookup, bounded path search,
   mention-only fallback, graph scoring, and source chunk mapping.
-- `Neo4jGraphStore` is a skeleton only. It makes no driver import, network call,
-  or Docker requirement, and returns a safe unavailable result until PR-50.
+- `Neo4jGraphStore` is an optional PR-50 backend. It lazily imports the Neo4j
+  driver only when configured, keeps PostgreSQL as the source of truth, and
+  returns a safe unavailable result when Neo4j is not configured or reachable.
 - `GRAPH_STORE_PROVIDER` defaults to `postgres`; setting it to `neo4j` must not
   break application startup or non-graph retrieval paths.
 

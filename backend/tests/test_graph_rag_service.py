@@ -161,6 +161,34 @@ def test_graph_store_provider_setting_accepts_neo4j_without_required_dependency(
     assert settings.graph_store_provider == "neo4j"
 
 
+def test_neo4j_connection_settings_are_optional_and_normalized() -> None:
+    disabled = _settings(
+        graph_store_provider="neo4j",
+        neo4j_uri=" ",
+        neo4j_user=" ",
+        neo4j_password=" ",
+        neo4j_database=" ",
+    )
+    configured = _settings(
+        graph_store_provider="neo4j",
+        neo4j_uri=" bolt://neo4j:7687 ",
+        neo4j_user=" neo4j ",
+        neo4j_password=" configured-test-password ",
+        neo4j_database=" graph ",
+        neo4j_projection_enabled=True,
+    )
+
+    assert disabled.neo4j_uri is None
+    assert disabled.neo4j_user is None
+    assert disabled.neo4j_password is None
+    assert disabled.neo4j_database == "neo4j"
+    assert configured.neo4j_uri == "bolt://neo4j:7687"
+    assert configured.neo4j_user == "neo4j"
+    assert configured.neo4j_password == "configured-test-password"
+    assert configured.neo4j_database == "graph"
+    assert configured.neo4j_projection_enabled is True
+
+
 def test_graph_router_selection_skipped_when_router_disabled(
     graph_session_factory: sessionmaker[Session],
 ) -> None:

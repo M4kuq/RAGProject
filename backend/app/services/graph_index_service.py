@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Protocol
 
 from sqlalchemy.orm import Session
 
@@ -43,6 +44,16 @@ class GraphIndexBuildSnapshot:
     chunks: tuple[GraphChunkRef, ...]
 
 
+class Neo4jProjectionServiceProtocol(Protocol):
+    def project_document_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        graph_index_run_id: int | None = None,
+    ) -> object: ...
+
+
 class GraphIndexService:
     """Build document-version graph indexes without persisting raw evidence text."""
 
@@ -52,12 +63,14 @@ class GraphIndexService:
         *,
         entity_extractor: EntityExtractionService | None = None,
         relation_extractor: RelationExtractionService | None = None,
+        neo4j_projection_service: Neo4jProjectionServiceProtocol | None = None,
         extractor_type: str = RULE_BASED_GRAPH_EXTRACTOR_TYPE,
         extractor_version: str | None = RULE_BASED_GRAPH_EXTRACTOR_VERSION,
     ) -> None:
         self.repository = repository or GraphRepository()
         self.entity_extractor = entity_extractor or EntityExtractionService()
         self.relation_extractor = relation_extractor or RelationExtractionService()
+        self.neo4j_projection_service = neo4j_projection_service
         self.extractor_type = extractor_type
         self.extractor_version = extractor_version
 
@@ -406,6 +419,32 @@ class GraphIndexService:
             error_message=error_message,
         )
         return run
+
+    def project_neo4j_index_run(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        graph_index_run_id: int,
+    ) -> object:
+        projection_service = self.neo4j_projection_service
+        temporary_projection_service = False
+        if projection_service is None:
+            from app.services.neo4j_projection_service import Neo4jProjectionService
+
+            projection_service = Neo4jProjectionService()
+            temporary_projection_service = True
+        try:
+            return projection_service.project_document_version(
+                db,
+                document_version_id=document_version_id,
+                graph_index_run_id=graph_index_run_id,
+            )
+        finally:
+            if temporary_projection_service:
+                close = getattr(projection_service, "close", None)
+                if callable(close):
+                    close()
 
 
 def _dedupe_mentions(

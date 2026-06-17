@@ -46,16 +46,19 @@ responses must not include raw prompt text, raw chunk text, raw document text,
 full context, raw graph evidence, PII, credentials, tokens, secrets, or `.env`
 content. Hashes and IDs are allowed.
 
-## PR-50 Handoff
+## PR-50 Implementation
 
-PR-50 may add:
+PR-50 adds:
 
 - optional Neo4j Python driver dependency
 - optional Neo4j docker compose profile
 - Neo4j connection config and health check
 - PostgreSQL graph table to Neo4j projection
 - bounded Neo4j path search
-- PostgresGraphStore vs Neo4jGraphStore comparison smoke tests
+- PostgresGraphStore vs Neo4jGraphStore comparison smoke instructions
 
 PR-50 must keep PostgreSQL as the source of truth and must continue to map Neo4j
 results back through `source_chunk_ids`.
+
+See `neo4j_optional_backend.md` for local setup, projection behavior, and the
+optional smoke procedure.
