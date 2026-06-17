@@ -31,11 +31,11 @@ const SUPPORTED_STRATEGIES: Array<{ value: SupportedRetrievalDebugStrategy; labe
   { value: "dense", label: "dense" },
   { value: "sparse", label: "sparse" },
   { value: "hybrid", label: "hybrid" },
-  { value: "graph", label: "graph" },
   { value: "agentic_router", label: "agentic_router" }
 ];
 
 const FUTURE_STRATEGIES = [
+  "graph",
   "multi_query_dense",
   "multi_query_hybrid",
   "metadata_filtered",
@@ -712,6 +712,7 @@ function GraphSourceMappingTable({ mappings }: { mappings: GraphRunDebugTrace["p
             <th>Document Chunk</th>
             <th>Run Item</th>
             <th>Selected</th>
+            <th>Old Version</th>
             <th>Citations</th>
           </tr>
         </thead>
@@ -722,12 +723,13 @@ function GraphSourceMappingTable({ mappings }: { mappings: GraphRunDebugTrace["p
               <td>{mapping.document_chunk_id}</td>
               <td>{mapping.retrieval_run_item_id}</td>
               <td>{formatUnknownValue(mapping.selected_flag)}</td>
+              <td>{formatUnknownValue(mapping.old_version_flag)}</td>
               <td>{formatUnknownValue(mapping.local_citation_ids)}</td>
             </tr>
           ))}
           {!mappings.length ? (
             <tr>
-              <td colSpan={5}>No citable source mapping.</td>
+              <td colSpan={6}>No citable source mapping.</td>
             </tr>
           ) : null}
         </tbody>

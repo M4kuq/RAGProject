@@ -27,6 +27,7 @@ class GraphPathSourceMapping:
     document_chunk_id: int
     retrieval_run_item_id: int
     selected_flag: bool
+    old_version_flag: bool
     citation_ids: tuple[int, ...] = ()
     local_citation_ids: tuple[int, ...] = ()
 
@@ -41,6 +42,7 @@ class LocatedGraphPathSource:
     document_version: DocumentVersion | None = field(default=None, repr=False)
     logical_document: LogicalDocument | None = field(default=None, repr=False)
     citations: tuple[Citation, ...] = field(default_factory=tuple, repr=False)
+    old_version_flag: bool = False
 
     @property
     def resolved(self) -> bool:
@@ -60,6 +62,7 @@ class LocatedGraphPathSource:
             document_chunk_id=self.chunk.document_chunk_id,
             retrieval_run_item_id=self.retrieval_run_item.retrieval_run_item_id,
             selected_flag=self.retrieval_run_item.selected_flag,
+            old_version_flag=self.old_version_flag,
             citation_ids=tuple(citation.citation_id for citation in self.citations),
             local_citation_ids=tuple(citation.rank_order for citation in self.citations),
         )
@@ -155,7 +158,8 @@ class GraphPathSourceLocator:
         located: dict[int, LocatedGraphPathSource] = {}
         citations_by_chunk_id: dict[int, list[Citation]] = {}
         for chunk, version, document, run_item, citation in db.execute(statement).all():
-            active = version.status == "ready" and version.is_active and document.status == "active"
+            active = version.status == "ready" and document.status == "active"
+            old_version = _old_version_flag(version, document)
             source = located.get(chunk.document_chunk_id)
             if source is None:
                 source = LocatedGraphPathSource(
@@ -166,6 +170,7 @@ class GraphPathSourceLocator:
                     chunk=chunk,
                     document_version=version,
                     logical_document=document,
+                    old_version_flag=old_version,
                 )
                 located[chunk.document_chunk_id] = source
             if citation is not None:
@@ -182,6 +187,7 @@ class GraphPathSourceLocator:
                 document_version=source.document_version,
                 logical_document=source.logical_document,
                 citations=tuple(citations),
+                old_version_flag=source.old_version_flag,
             )
 
         for chunk_id in source_chunk_ids:
@@ -226,10 +232,12 @@ class GraphPathValidator:
                     mappings.append(mapping)
             if mappings and not any(mapping.selected_flag for mapping in mappings):
                 reason_codes.append("no_selected_retrieval_run_items")
+            if any(mapping.old_version_flag for mapping in mappings):
+                reason_codes.append("old_version_source_chunk")
 
             status = (
                 "valid"
-                if not reason_codes or reason_codes == ["no_selected_retrieval_run_items"]
+                if not reason_codes or set(reason_codes).issubset(_NON_EXCLUDING_REASON_CODES)
                 else "excluded"
             )
             deduped_reasons = tuple(_dedupe_strings(reason_codes))
@@ -242,6 +250,9 @@ class GraphPathValidator:
                     "resolved_source_chunk_count": len(mappings),
                     "citable_source_chunk_count": sum(
                         1 for mapping in mappings if mapping.selected_flag
+                    ),
+                    "old_version_source_chunk_count": sum(
+                        1 for mapping in mappings if mapping.old_version_flag
                     ),
                 }
             )
@@ -346,12 +357,11 @@ def calculate_graph_citation_coverage(
         chunk_id for path in paths for chunk_id in path.source_chunk_ids if chunk_id > 0
     }
     resolved_source_chunk_ids = {
-        mapping.source_chunk_id for path in paths if path.valid for mapping in path.source_mappings
+        mapping.source_chunk_id for path in paths for mapping in path.source_mappings
     }
     citable_source_chunk_ids = {
         mapping.source_chunk_id
         for path in paths
-        if path.valid
         for mapping in path.source_mappings
         if mapping.selected_flag
     }
@@ -389,6 +399,18 @@ def _path_id(path: GraphRetrievalPath) -> str:
 def _provider(path: GraphRetrievalPath) -> str:
     value = path.path_json.get("provider")
     return str(value)[:40] if isinstance(value, str) and value else "unknown"
+
+
+_NON_EXCLUDING_REASON_CODES = frozenset(
+    {
+        "no_selected_retrieval_run_items",
+        "old_version_source_chunk",
+    }
+)
+
+
+def _old_version_flag(version: DocumentVersion, document: LogicalDocument) -> bool:
+    return version.status != "ready" or not version.is_active or document.status != "active"
 
 
 def _ordered_positive_ids(values: Iterable[int]) -> tuple[int, ...]:

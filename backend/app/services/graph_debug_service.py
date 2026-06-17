@@ -128,6 +128,7 @@ def _graph_path_debug_trace(path: ValidatedGraphPath) -> GraphPathDebugTrace:
                 document_chunk_id=mapping.document_chunk_id,
                 retrieval_run_item_id=mapping.retrieval_run_item_id,
                 selected_flag=mapping.selected_flag,
+                old_version_flag=mapping.old_version_flag,
                 citation_ids=list(mapping.citation_ids),
                 local_citation_ids=list(mapping.local_citation_ids),
             )

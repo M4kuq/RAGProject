@@ -745,6 +745,7 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
                     document_chunk_id: 300,
                     retrieval_run_item_id: 900,
                     selected_flag: true,
+                    old_version_flag: false,
                     citation_ids: [1000],
                     local_citation_ids: [1]
                   }
@@ -1148,7 +1149,8 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(screen.getByRole("option", { name: "dense" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "sparse" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "hybrid" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "graph" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "graph" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "graph" })).toBeDisabled();
   expect(screen.getByRole("option", { name: "agentic_router" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "multi_query_hybrid" })).toBeDisabled();
 

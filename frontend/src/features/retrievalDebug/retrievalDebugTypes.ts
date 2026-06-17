@@ -353,6 +353,7 @@ export type GraphDebugSourceMapping = {
   document_chunk_id: number;
   retrieval_run_item_id: number;
   selected_flag: boolean;
+  old_version_flag: boolean;
   citation_ids: number[];
   local_citation_ids: number[];
 };

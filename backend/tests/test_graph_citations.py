@@ -104,6 +104,78 @@ def test_graph_debug_trace_returns_safe_path_summary_only(
     assert "prompt" not in serialized
 
 
+def test_graph_locator_preserves_superseded_version_mappings(
+    graph_citation_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        version = db.get(DocumentVersion, seed["document_version_id"])
+        assert version is not None
+        version.is_active = False
+        db.commit()
+        paths = [
+            path
+            for path in db.query(GraphRetrievalPath).all()
+            if path.path_json.get("path_id") == "gp_selected"
+        ]
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+            paths=paths,
+        )
+        validated = GraphPathValidator().validate(paths=paths, located_sources=located)
+        result = GraphCitationBuilder(snippet_max_chars=64).build(
+            validated_paths=validated,
+            located_sources=located,
+        )
+
+    assert result.coverage.valid_path_count == 1
+    assert result.coverage.citable_path_count == 1
+    assert result.coverage.citation_source_count == 1
+    assert result.paths[0].source_mappings[0].old_version_flag is True
+    assert result.paths[0].reason_codes == ("old_version_source_chunk",)
+    assert "inactive_source_chunk" not in result.coverage.reason_codes
+
+
+def test_graph_coverage_counts_partial_source_resolution(
+    graph_citation_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        partial_path = _path(
+            retrieval_run_id=seed["retrieval_run_id"],
+            path_id="gp_partial_missing",
+            source_chunk_ids=[seed["selected_chunk_id"], 999_999],
+        )
+        db.add(partial_path)
+        db.commit()
+        paths = [
+            path
+            for path in db.query(GraphRetrievalPath).all()
+            if path.path_json.get("path_id") == "gp_partial_missing"
+        ]
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+            paths=paths,
+        )
+        validated = GraphPathValidator().validate(paths=paths, located_sources=located)
+        result = GraphCitationBuilder(snippet_max_chars=64).build(
+            validated_paths=validated,
+            located_sources=located,
+        )
+
+    assert result.coverage.path_count == 1
+    assert result.coverage.valid_path_count == 0
+    assert result.coverage.resolved_source_chunk_count == 1
+    assert result.coverage.citable_source_chunk_count == 1
+    assert result.coverage.source_chunk_count == 2
+    assert result.coverage.source_chunk_coverage_ratio == 0.5
+    assert result.paths[0].validation_status == "excluded"
+    assert result.paths[0].source_mappings[0].source_chunk_id == seed["selected_chunk_id"]
+    assert result.paths[0].reason_codes == ("source_chunk_missing",)
+
+
 def _seed_graph_citation_run(db: Session) -> dict[str, int]:
     role = Role(role_name="graph-citation-role", description="Graph citation")
     db.add(role)
@@ -219,6 +291,7 @@ def _seed_graph_citation_run(db: Session) -> dict[str, int]:
     db.commit()
     return {
         "retrieval_run_id": run.retrieval_run_id,
+        "document_version_id": version.document_version_id,
         "selected_chunk_id": chunks[0].document_chunk_id,
         "selected_run_item_id": selected_item.retrieval_run_item_id,
     }

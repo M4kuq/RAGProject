@@ -178,6 +178,7 @@ class GraphDebugSourceMapping(BaseModel):
     document_chunk_id: int = Field(ge=1)
     retrieval_run_item_id: int = Field(ge=1)
     selected_flag: bool
+    old_version_flag: bool
     citation_ids: list[int] = Field(default_factory=list)
     local_citation_ids: list[int] = Field(default_factory=list)
 
