@@ -15,7 +15,8 @@ from app.db.models import (
     RetrievalRunItem,
 )
 from app.rag.citations import CitationSource
-from app.schemas.graph import validate_safe_graph_metadata
+from app.rag.trace import TraceRedactor
+from app.schemas.graph import validate_safe_graph_label, validate_safe_graph_metadata
 from app.services.source_locator_service import LocatedChunk, build_source_locator
 
 GRAPH_CITATION_TRACE_SCHEMA_VERSION = "phase3.graph_citation_trace.v1"
@@ -158,14 +159,16 @@ class GraphPathSourceLocator:
         located: dict[int, LocatedGraphPathSource] = {}
         citations_by_chunk_id: dict[int, list[Citation]] = {}
         for chunk, version, document, run_item, citation in db.execute(statement).all():
-            active = version.status == "ready" and document.status == "active"
+            current_source = (
+                version.status == "ready" and version.is_active and document.status == "active"
+            )
             old_version = _old_version_flag(version, document)
             source = located.get(chunk.document_chunk_id)
             if source is None:
                 source = LocatedGraphPathSource(
                     source_chunk_id=chunk.document_chunk_id,
                     chunk_exists=True,
-                    active=active,
+                    active=current_source or old_version,
                     retrieval_run_item=run_item,
                     chunk=chunk,
                     document_version=version,
@@ -389,11 +392,16 @@ def _source_chunk_ids_from_path(path: GraphRetrievalPath) -> tuple[int, ...]:
 
 def _path_id(path: GraphRetrievalPath) -> str:
     value = path.path_json.get("path_id")
-    return (
-        str(value)[:120]
-        if isinstance(value, str) and value
-        else f"graph_path:{path.graph_retrieval_path_id}"
-    )
+    fallback = f"graph_path:{path.graph_retrieval_path_id}"
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    safe_value = TraceRedactor.safe_string(value, max_length=120)
+    if not safe_value or safe_value == "redacted":
+        return fallback
+    try:
+        return validate_safe_graph_label(safe_value, field_name="path_id", max_length=120)
+    except ValueError:
+        return fallback
 
 
 def _provider(path: GraphRetrievalPath) -> str:

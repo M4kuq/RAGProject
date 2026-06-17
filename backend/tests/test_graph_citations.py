@@ -104,6 +104,36 @@ def test_graph_debug_trace_returns_safe_path_summary_only(
     assert "prompt" not in serialized
 
 
+def test_graph_debug_trace_sanitizes_unsafe_path_ids(
+    graph_citation_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        unsafe_path = _path(
+            retrieval_run_id=seed["retrieval_run_id"],
+            path_id="raw prompt OPENAI_API_KEY=sk-123456789012 user@example.com",
+            source_chunk_ids=[seed["selected_chunk_id"]],
+        )
+        db.add(unsafe_path)
+        db.flush()
+        graph_retrieval_path_id = unsafe_path.graph_retrieval_path_id
+        db.commit()
+        response = GraphDebugTraceService().get_graph_trace(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+        )
+
+    trace = next(
+        path for path in response.paths if path.graph_retrieval_path_id == graph_retrieval_path_id
+    )
+    assert trace.path_id == f"graph_path:{graph_retrieval_path_id}"
+    serialized = response.model_dump_json()
+    assert "raw prompt" not in serialized
+    assert "OPENAI_API_KEY" not in serialized
+    assert "sk-123456789012" not in serialized
+    assert "user@example.com" not in serialized
+
+
 def test_graph_locator_preserves_superseded_version_mappings(
     graph_citation_session_factory: sessionmaker[Session],
 ) -> None:
@@ -112,6 +142,54 @@ def test_graph_locator_preserves_superseded_version_mappings(
         version = db.get(DocumentVersion, seed["document_version_id"])
         assert version is not None
         version.is_active = False
+        db.commit()
+        paths = [
+            path
+            for path in db.query(GraphRetrievalPath).all()
+            if path.path_json.get("path_id") == "gp_selected"
+        ]
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+            paths=paths,
+        )
+        validated = GraphPathValidator().validate(paths=paths, located_sources=located)
+        result = GraphCitationBuilder(snippet_max_chars=64).build(
+            validated_paths=validated,
+            located_sources=located,
+        )
+
+    assert result.coverage.valid_path_count == 1
+    assert result.coverage.citable_path_count == 1
+    assert result.coverage.citation_source_count == 1
+    assert result.paths[0].source_mappings[0].old_version_flag is True
+    assert result.paths[0].reason_codes == ("old_version_source_chunk",)
+    assert "inactive_source_chunk" not in result.coverage.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("version_status", "version_is_active", "document_status"),
+    (
+        ("archived", False, "active"),
+        ("ready", True, "archived"),
+    ),
+)
+def test_graph_locator_preserves_archived_source_mappings(
+    graph_citation_session_factory: sessionmaker[Session],
+    version_status: str,
+    version_is_active: bool,
+    document_status: str,
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        version = db.get(DocumentVersion, seed["document_version_id"])
+        logical = db.get(LogicalDocument, seed["logical_document_id"])
+        assert version is not None
+        assert logical is not None
+        version.status = version_status
+        version.is_active = version_is_active
+        logical.status = document_status
+        logical.archived_at = datetime.now(UTC) if document_status == "archived" else None
         db.commit()
         paths = [
             path
@@ -291,6 +369,7 @@ def _seed_graph_citation_run(db: Session) -> dict[str, int]:
     db.commit()
     return {
         "retrieval_run_id": run.retrieval_run_id,
+        "logical_document_id": logical.logical_document_id,
         "document_version_id": version.document_version_id,
         "selected_chunk_id": chunks[0].document_chunk_id,
         "selected_run_item_id": selected_item.retrieval_run_item_id,
