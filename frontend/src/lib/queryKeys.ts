@@ -41,6 +41,8 @@ export const queryKeys = {
   retrievalDebug: {
     all: ["retrievalDebug"] as const,
     history: ["retrievalDebug", "history"] as const,
-    run: (retrievalRunId: number | null) => ["retrievalDebug", "run", retrievalRunId] as const
+    run: (retrievalRunId: number | null) => ["retrievalDebug", "run", retrievalRunId] as const,
+    graphTrace: (retrievalRunId: number | null) =>
+      ["retrievalDebug", "run", retrievalRunId, "graphTrace"] as const
   }
 };

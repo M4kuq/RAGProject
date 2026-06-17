@@ -156,6 +156,76 @@ class RetrievalRunDebugListResponse(BaseModel):
     items: list[RetrievalRunDebugSummary]
 
 
+class GraphDebugNodeRef(BaseModel):
+    provider: str
+    node_id: str
+    entity_id: int | None = None
+    safe_label: str
+    entity_type: str | None = None
+
+
+class GraphDebugRelationRef(BaseModel):
+    provider: str
+    relation_id: str
+    source_node_id: str | None = None
+    target_node_id: str | None = None
+    relation_type: str
+    safe_label: str
+
+
+class GraphDebugSourceMapping(BaseModel):
+    source_chunk_id: int = Field(ge=1)
+    document_chunk_id: int = Field(ge=1)
+    retrieval_run_item_id: int = Field(ge=1)
+    selected_flag: bool
+    old_version_flag: bool
+    citation_ids: list[int] = Field(default_factory=list)
+    local_citation_ids: list[int] = Field(default_factory=list)
+
+
+class GraphPathDebugTrace(BaseModel):
+    graph_retrieval_path_id: int = Field(ge=1)
+    path_id: str
+    provider: str
+    validation_status: Literal["valid", "excluded"]
+    reason_codes: list[str] = Field(default_factory=list)
+    safe_metadata: dict[str, object] = Field(default_factory=dict)
+    source_chunk_ids: list[int] = Field(default_factory=list)
+    depth: int | None = Field(default=None, ge=0)
+    path_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    safe_entity_labels: list[str] = Field(default_factory=list)
+    relation_types: list[str] = Field(default_factory=list)
+    node_refs: list[GraphDebugNodeRef] = Field(default_factory=list)
+    relation_refs: list[GraphDebugRelationRef] = Field(default_factory=list)
+    source_mappings: list[GraphDebugSourceMapping] = Field(default_factory=list)
+
+
+class GraphCitationCoverageResponse(BaseModel):
+    path_count: int = Field(ge=0)
+    valid_path_count: int = Field(ge=0)
+    citable_path_count: int = Field(ge=0)
+    excluded_path_count: int = Field(ge=0)
+    source_chunk_count: int = Field(ge=0)
+    resolved_source_chunk_count: int = Field(ge=0)
+    citable_source_chunk_count: int = Field(ge=0)
+    citation_source_count: int = Field(ge=0)
+    source_chunk_coverage_ratio: float = Field(ge=0.0, le=1.0)
+    citation_coverage_ratio: float = Field(ge=0.0, le=1.0)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class GraphRunDebugTraceResponse(BaseModel):
+    schema_version: str
+    retrieval_run_id: int = Field(ge=1)
+    graph_path_count: int = Field(ge=0)
+    valid_path_count: int = Field(ge=0)
+    citable_path_count: int = Field(ge=0)
+    excluded_path_count: int = Field(ge=0)
+    citation_source_count: int = Field(ge=0)
+    coverage: GraphCitationCoverageResponse
+    paths: list[GraphPathDebugTrace] = Field(default_factory=list)
+
+
 class RagSearchItem(BaseModel):
     retrieval_run_item_id: int
     document_chunk_id: int

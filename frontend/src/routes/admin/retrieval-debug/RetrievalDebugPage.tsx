@@ -7,7 +7,8 @@ import { formatUnknownValue, redactString, safeRecord } from "../../../features/
 import {
   useRagDebugSearch,
   useRetrievalRunDebugHistory,
-  useRetrievalRunDebugDetail
+  useRetrievalRunDebugDetail,
+  useRetrievalRunGraphTrace
 } from "../../../features/retrievalDebug/retrievalDebugHooks";
 import type {
   ContextBudgetItemRef,
@@ -15,6 +16,7 @@ import type {
   DroppedEvidenceRef,
   EvidenceItemRef,
   EvidencePackTrace,
+  GraphRunDebugTrace,
   RagSearchDebugItem,
   RetrievalRunDebugDetail,
   RetrievalRunDebugItem,
@@ -33,6 +35,7 @@ const SUPPORTED_STRATEGIES: Array<{ value: SupportedRetrievalDebugStrategy; labe
 ];
 
 const FUTURE_STRATEGIES = [
+  "graph",
   "multi_query_dense",
   "multi_query_hybrid",
   "metadata_filtered",
@@ -94,6 +97,7 @@ export function RetrievalDebugPage() {
   const history = useRetrievalRunDebugHistory();
   const latestRunId = selectedRunId ?? history.data?.items[0]?.retrieval_run_id ?? null;
   const detail = useRetrievalRunDebugDetail(latestRunId);
+  const graphTrace = useRetrievalRunGraphTrace(latestRunId);
   const evaluations = useEvaluationRuns({ page: 1, page_size: 5 });
   const displayItems = useMemo(() => {
     const searchItems =
@@ -130,7 +134,11 @@ export function RetrievalDebugPage() {
   }
 
   async function refreshTrace() {
-    await Promise.all([history.refetch(), latestRunId ? detail.refetch() : Promise.resolve()]);
+    await Promise.all([
+      history.refetch(),
+      latestRunId ? detail.refetch() : Promise.resolve(),
+      latestRunId ? graphTrace.refetch() : Promise.resolve()
+    ]);
   }
 
   return (
@@ -226,6 +234,9 @@ export function RetrievalDebugPage() {
           {detail.isLoading ? <LoadingState label="Loading trace..." /> : null}
           {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
+          {graphTrace.isLoading ? <LoadingState label="Loading graph trace..." /> : null}
+          {graphTrace.error ? <ErrorState title="Unable to load graph trace" error={graphTrace.error} /> : null}
+          {graphTrace.data ? <GraphTracePanel trace={graphTrace.data} /> : null}
           {detail.data ? <ContextBudgetPanel trace={detail.data.retrieval_run.context_budget_json} /> : null}
           {detail.data ? <EvidencePackPanel trace={detail.data.retrieval_run.context_compression_json} /> : null}
           {detail.data ? (
@@ -557,6 +568,172 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
       <TraceCard title="Retrieval Score Summary">
         <KeyValueTable record={summary} />
       </TraceCard>
+    </section>
+  );
+}
+
+function GraphTracePanel({ trace }: { trace: GraphRunDebugTrace }) {
+  return (
+    <section className="admin-section">
+      <h2>Graph Trace</h2>
+      <dl className="detail-grid">
+        <Detail label="retrieval_run_id" value={`#${trace.retrieval_run_id}`} />
+        <Detail label="graph_paths" value={trace.graph_path_count} />
+        <Detail label="valid_paths" value={trace.valid_path_count} />
+        <Detail label="citable_paths" value={trace.citable_path_count} />
+        <Detail label="excluded_paths" value={trace.excluded_path_count} />
+        <Detail label="citation_sources" value={trace.citation_source_count} />
+        <Detail label="source_chunk_coverage" value={formatRatio(trace.coverage.source_chunk_coverage_ratio)} />
+        <Detail label="citation_coverage" value={formatRatio(trace.coverage.citation_coverage_ratio)} />
+        <Detail label="reason_codes" value={formatUnknownValue(trace.coverage.reason_codes)} />
+      </dl>
+      {trace.paths.length ? (
+        <div className="retrieval-debug-grid">
+          {trace.paths.map((path) => (
+            <TraceCard key={path.graph_retrieval_path_id} title={formatDebugText(path.path_id, 80)}>
+              <dl className="detail-grid">
+                <Detail label="provider" value={formatDebugText(path.provider, 40)} />
+                <Detail label="status" value={formatUnknownValue(path.validation_status)} />
+                <Detail label="depth" value={formatUnknownValue(path.depth)} />
+                <Detail label="path_score" value={formatScore(path.path_score)} />
+                <Detail label="source_chunks" value={formatUnknownValue(path.source_chunk_ids)} />
+                <Detail label="reason_codes" value={formatUnknownValue(path.reason_codes)} />
+              </dl>
+              <GraphPathRefsTable
+                labels={path.safe_entity_labels}
+                nodeRefs={path.node_refs}
+                relationRefs={path.relation_refs}
+                relationTypes={path.relation_types}
+              />
+              <GraphSourceMappingTable mappings={path.source_mappings} />
+            </TraceCard>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="No graph paths">
+          This run has no saved graph path trace, or graph retrieval was not selected.
+        </EmptyState>
+      )}
+    </section>
+  );
+}
+
+function GraphPathRefsTable({
+  labels,
+  nodeRefs,
+  relationRefs,
+  relationTypes
+}: {
+  labels: string[];
+  nodeRefs: GraphRunDebugTrace["paths"][number]["node_refs"];
+  relationRefs: GraphRunDebugTrace["paths"][number]["relation_refs"];
+  relationTypes: string[];
+}) {
+  return (
+    <div className="retrieval-debug-grid">
+      <section>
+        <h3>Nodes</h3>
+        <table className="admin-table compact-table">
+          <thead>
+            <tr>
+              <th>Node</th>
+              <th>Entity</th>
+              <th>Label</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodeRefs.map((node) => (
+              <tr key={`${node.provider}-${node.node_id}`}>
+                <td>{formatDebugText(node.node_id, 40)}</td>
+                <td>{formatUnknownValue(node.entity_id)}</td>
+                <td>{formatDebugText(node.safe_label, 80)}</td>
+                <td>{formatDebugText(node.entity_type, 60)}</td>
+              </tr>
+            ))}
+            {!nodeRefs.length && labels.length ? (
+              <tr>
+                <td colSpan={4}>{formatUnknownValue(labels)}</td>
+              </tr>
+            ) : null}
+            {!nodeRefs.length && !labels.length ? (
+              <tr>
+                <td colSpan={4}>No node refs.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+      <section>
+        <h3>Relations</h3>
+        <table className="admin-table compact-table">
+          <thead>
+            <tr>
+              <th>Relation</th>
+              <th>Type</th>
+              <th>Source</th>
+              <th>Target</th>
+            </tr>
+          </thead>
+          <tbody>
+            {relationRefs.map((relation) => (
+              <tr key={`${relation.provider}-${relation.relation_id}`}>
+                <td>{formatDebugText(relation.relation_id, 40)}</td>
+                <td>{formatDebugText(relation.relation_type, 80)}</td>
+                <td>{formatDebugText(relation.source_node_id, 40)}</td>
+                <td>{formatDebugText(relation.target_node_id, 40)}</td>
+              </tr>
+            ))}
+            {!relationRefs.length && relationTypes.length ? (
+              <tr>
+                <td colSpan={4}>{formatUnknownValue(relationTypes)}</td>
+              </tr>
+            ) : null}
+            {!relationRefs.length && !relationTypes.length ? (
+              <tr>
+                <td colSpan={4}>No relation refs.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
+
+function GraphSourceMappingTable({ mappings }: { mappings: GraphRunDebugTrace["paths"][number]["source_mappings"] }) {
+  return (
+    <section>
+      <h3>Source Mapping</h3>
+      <table className="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>Source Chunk</th>
+            <th>Document Chunk</th>
+            <th>Run Item</th>
+            <th>Selected</th>
+            <th>Old Version</th>
+            <th>Citations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {mappings.map((mapping) => (
+            <tr key={`${mapping.source_chunk_id}-${mapping.retrieval_run_item_id}`}>
+              <td>{mapping.source_chunk_id}</td>
+              <td>{mapping.document_chunk_id}</td>
+              <td>{mapping.retrieval_run_item_id}</td>
+              <td>{formatUnknownValue(mapping.selected_flag)}</td>
+              <td>{formatUnknownValue(mapping.old_version_flag)}</td>
+              <td>{formatUnknownValue(mapping.local_citation_ids)}</td>
+            </tr>
+          ))}
+          {!mappings.length ? (
+            <tr>
+              <td colSpan={6}>No citable source mapping.</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
     </section>
   );
 }

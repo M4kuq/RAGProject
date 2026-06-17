@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -15,6 +16,7 @@ from app.api.routers.rag import rag_search_service
 from app.core.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db.base import Base
+from app.db.graph_models import GraphRetrievalPath
 from app.db.models import (
     ChatMessage,
     Citation,
@@ -853,6 +855,99 @@ def test_retrieval_run_debug_detail_is_admin_only_and_redacted(
     missing_response = client.get("/api/v1/rag/retrieval-runs/999999")
     assert missing_response.status_code == 404
     assert missing_response.json()["error"]["code"] == "resource_not_found"
+
+
+def test_graph_trace_debug_endpoint_is_admin_only_and_safe(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, _ = rag_client
+    _login(client, email="admin@example.com")
+    with session_factory() as db:
+        run = RetrievalRun(
+            status="succeeded",
+            top_k=1,
+            strategy_type="graph",
+            query_hash="e" * 64,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+        )
+        db.add(run)
+        db.flush()
+        item = RetrievalRunItem(
+            retrieval_run_id=run.retrieval_run_id,
+            document_chunk_id=100,
+            retrieval_score=Decimal("0.910000"),
+            rank_order=1,
+            selected_flag=True,
+            retrieval_source="graph",
+        )
+        db.add(item)
+        db.flush()
+        db.add(
+            GraphRetrievalPath(
+                retrieval_run_id=run.retrieval_run_id,
+                path_json={
+                    "schema_version": "phase3.graph_path.v2",
+                    "strategy_type": "graph",
+                    "provider": "postgres",
+                    "path_id": "gp_admin_safe",
+                    "node_refs": [
+                        {
+                            "provider": "postgres",
+                            "node_id": "1",
+                            "entity_id": 1,
+                            "safe_label": "FastAPI",
+                            "entity_type": "technology",
+                        }
+                    ],
+                    "relation_refs": [
+                        {
+                            "provider": "postgres",
+                            "relation_id": "10",
+                            "source_node_id": "1",
+                            "target_node_id": "2",
+                            "relation_type": "uses",
+                            "safe_label": "uses",
+                        }
+                    ],
+                    "source_chunk_ids": [100],
+                    "safe_entity_labels": ["FastAPI"],
+                    "relation_types": ["uses"],
+                    "depth": 1,
+                    "path_score": 0.91,
+                    "raw_evidence_text": "raw graph evidence must not leak",
+                    "raw_prompt": "raw prompt must not leak",
+                },
+                score_breakdown_json={"retrieval_source": "graph", "path_score": 0.91},
+                source_chunk_ids_json=[100],
+            )
+        )
+        db.commit()
+        retrieval_run_id = run.retrieval_run_id
+        retrieval_run_item_id = item.retrieval_run_item_id
+
+    response = client.get(f"/api/v1/rag/retrieval-runs/{retrieval_run_id}/graph-trace")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["retrieval_run_id"] == retrieval_run_id
+    assert data["graph_path_count"] == 1
+    assert data["valid_path_count"] == 1
+    assert data["citable_path_count"] == 1
+    assert data["coverage"]["citation_coverage_ratio"] == 1.0
+    assert data["paths"][0]["provider"] == "postgres"
+    assert data["paths"][0]["source_mappings"][0]["retrieval_run_item_id"] == retrieval_run_item_id
+    serialized = str(response.json())
+    assert "raw graph evidence must not leak" not in serialized
+    assert "raw prompt must not leak" not in serialized
+    assert "content_text" not in serialized
+    assert "alpha active" not in serialized
+
+    client.cookies.clear()
+    _login(client, email="viewer@example.com")
+    viewer_response = client.get(f"/api/v1/rag/retrieval-runs/{retrieval_run_id}/graph-trace")
+    assert viewer_response.status_code == 403
+    assert viewer_response.json()["error"]["code"] == "permission_denied"
 
 
 def test_retrieval_debug_history_lists_safe_recent_runs(

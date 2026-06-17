@@ -17,6 +17,7 @@ PR-45 is documentation only. It does not add Graph-RAG runtime code, database mi
 | Retrieval strategy and graph + vector hybrid | [graph_retrieval_strategy.md](graph_retrieval_strategy.md) |
 | Graph-aware Router | [graph_aware_router_design.md](graph_aware_router_design.md) |
 | Graph Citation and path validation | [graph_citation_design.md](graph_citation_design.md) |
+| PR-51 Graph citation debug implementation | [graph_citation_debug_pr51.md](graph_citation_debug_pr51.md) |
 | Graph Debug UI | [graph_debug_ui_design.md](graph_debug_ui_design.md) |
 | Graph Evaluation | [graph_evaluation_design.md](graph_evaluation_design.md) |
 | OCR / Multimodal boundary | [ocr_multimodal_boundary.md](ocr_multimodal_boundary.md) |

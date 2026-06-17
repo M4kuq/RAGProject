@@ -1,6 +1,11 @@
 import type { RetrievalStrategy } from "../evaluations/evaluationTypes";
 
-export type SupportedRetrievalDebugStrategy = "dense" | "sparse" | "hybrid" | "agentic_router";
+export type SupportedRetrievalDebugStrategy =
+  | "dense"
+  | "sparse"
+  | "hybrid"
+  | "graph"
+  | "agentic_router";
 export type FusionMethod = "rrf" | "weighted";
 
 export type RagSearchDebugRequest = {
@@ -324,4 +329,74 @@ export type RetrievalRunDebugDetail = {
 
 export type RetrievalRunDebugHistory = {
   items: RetrievalRunDebugSummary[];
+};
+
+export type GraphDebugNodeRef = {
+  provider: string;
+  node_id: string;
+  entity_id: number | null;
+  safe_label: string;
+  entity_type: string | null;
+};
+
+export type GraphDebugRelationRef = {
+  provider: string;
+  relation_id: string;
+  source_node_id: string | null;
+  target_node_id: string | null;
+  relation_type: string;
+  safe_label: string;
+};
+
+export type GraphDebugSourceMapping = {
+  source_chunk_id: number;
+  document_chunk_id: number;
+  retrieval_run_item_id: number;
+  selected_flag: boolean;
+  old_version_flag: boolean;
+  citation_ids: number[];
+  local_citation_ids: number[];
+};
+
+export type GraphPathDebugTrace = {
+  graph_retrieval_path_id: number;
+  path_id: string;
+  provider: string;
+  validation_status: "valid" | "excluded";
+  reason_codes: string[];
+  safe_metadata: Record<string, unknown>;
+  source_chunk_ids: number[];
+  depth: number | null;
+  path_score: number | null;
+  safe_entity_labels: string[];
+  relation_types: string[];
+  node_refs: GraphDebugNodeRef[];
+  relation_refs: GraphDebugRelationRef[];
+  source_mappings: GraphDebugSourceMapping[];
+};
+
+export type GraphCitationCoverage = {
+  path_count: number;
+  valid_path_count: number;
+  citable_path_count: number;
+  excluded_path_count: number;
+  source_chunk_count: number;
+  resolved_source_chunk_count: number;
+  citable_source_chunk_count: number;
+  citation_source_count: number;
+  source_chunk_coverage_ratio: number;
+  citation_coverage_ratio: number;
+  reason_codes: string[];
+};
+
+export type GraphRunDebugTrace = {
+  schema_version: string;
+  retrieval_run_id: number;
+  graph_path_count: number;
+  valid_path_count: number;
+  citable_path_count: number;
+  excluded_path_count: number;
+  citation_source_count: number;
+  coverage: GraphCitationCoverage;
+  paths: GraphPathDebugTrace[];
 };
