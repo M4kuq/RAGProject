@@ -397,7 +397,7 @@ class EvaluationRunCreateRequest(BaseModel):
     cache_modes: list[EvaluationCacheMode] | None = Field(
         default=None,
         min_length=1,
-        max_length=3,
+        max_length=4,
     )
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
@@ -427,7 +427,13 @@ class EvaluationRunCreateRequest(BaseModel):
         self.strategy_type = deduped[0]
         self.metrics = list(dict.fromkeys(self.metrics))
         if self.cache_modes:
-            self.cache_modes = list(dict.fromkeys(self.cache_modes))
+            deduped_cache_modes = list(dict.fromkeys(self.cache_modes))
+            if (
+                EvaluationCacheMode.WARM in deduped_cache_modes
+                and EvaluationCacheMode.COLD not in deduped_cache_modes
+            ):
+                deduped_cache_modes.append(EvaluationCacheMode.COLD)
+            self.cache_modes = deduped_cache_modes
         return self
 
 

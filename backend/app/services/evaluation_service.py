@@ -990,6 +990,7 @@ class EvaluationService:
 
         config = _config(run)
         now = datetime.now(UTC)
+        cache_attempt_id = _evaluation_cache_attempt_id(evaluation_run_id, now)
         self.repository.mark_run_running(db, run=run, started_at=now)
         self.repository.delete_items_and_results(db, evaluation_run_id=evaluation_run_id)
         db.commit()
@@ -1046,6 +1047,7 @@ class EvaluationService:
                             top_k=top_k,
                             rerank_top_n=rerank_top_n,
                             evaluation_run_id=evaluation_run_id,
+                            cache_attempt_id=cache_attempt_id,
                             baseline_latency_ms=latency_baselines.get(baseline_key),
                         )
                     except Exception:
@@ -1149,6 +1151,7 @@ class EvaluationService:
         top_k: int | None,
         rerank_top_n: int | None,
         evaluation_run_id: int,
+        cache_attempt_id: str,
         baseline_latency_ms: int | None,
     ) -> dict[str, object]:
         started = time.perf_counter()
@@ -1163,6 +1166,7 @@ class EvaluationService:
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
                 evaluation_run_id=evaluation_run_id,
+                cache_attempt_id=cache_attempt_id,
             )
         elif target.retrieval_strategy in ASK_ONLY_EVALUATION_STRATEGIES:
             rag_result = rag_service.evaluate_question(
@@ -1770,6 +1774,7 @@ class EvaluationService:
                     case_key=case_key,
                     question_hash=question_hash,
                     failure_type=failure_type,
+                    target_metadata=target_metadata,
                 )
                 candidates.append(
                     EvaluationFailureCandidate(
@@ -2267,7 +2272,7 @@ def _not_applicable_graph_metrics(
         MetricValue(
             metric_name="entity_relation_quality_summary",
             metric_score=None,
-            metric_value=0.0,
+            metric_value=None,
             metric_label="not_applicable",
             details=details,
         ),
@@ -2546,17 +2551,26 @@ def _selected_strategy_targets(
 ) -> list[EvaluationStrategyTarget]:
     cache_modes = _selected_cache_modes(payload.cache_modes)
     targets: list[EvaluationStrategyTarget] = []
+    seen: set[tuple[str, str, str | None, str]] = set()
     for strategy in payload.strategies or [payload.strategy_type]:
         base_target = _target_from_request_strategy(strategy)
         for cache_mode in cache_modes:
-            targets.append(
-                EvaluationStrategyTarget(
-                    comparison_label=_comparison_label(base_target, cache_mode),
-                    retrieval_strategy=base_target.retrieval_strategy,
-                    graph_store_provider=base_target.graph_store_provider,
-                    cache_mode=cache_mode,
-                )
+            target = EvaluationStrategyTarget(
+                comparison_label=_comparison_label(base_target, cache_mode),
+                retrieval_strategy=base_target.retrieval_strategy,
+                graph_store_provider=base_target.graph_store_provider,
+                cache_mode=cache_mode,
             )
+            key = (
+                target.comparison_label,
+                target.retrieval_strategy.value,
+                target.graph_store_provider,
+                target.cache_mode.value,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append(target)
     return targets
 
 
@@ -2699,6 +2713,11 @@ def _case_request_id(
     suffix = f":{strategy_type}:{digest}"
     prefix_length = max(RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH - len(suffix), 0)
     return f"{request_id[:prefix_length]}{suffix}"
+
+
+def _evaluation_cache_attempt_id(evaluation_run_id: int, started_at: datetime) -> str:
+    digest = hashlib.sha256(f"{evaluation_run_id}:{started_at.isoformat()}".encode()).hexdigest()
+    return digest[:12]
 
 
 def _unique_case_count(items: list[EvaluationRunItem]) -> int:
@@ -2991,14 +3010,20 @@ def _promotion_key(
     case_key: str | None,
     question_hash: str,
     failure_type: str,
+    target_metadata: dict[str, object],
 ) -> str:
     config = _config(run)
     dataset_identity = run.evaluation_dataset_id or cast(str, config["dataset_name"])
+    comparison_label = _metadata_comparison_label(target_metadata) or item.strategy_type
+    graph_provider = _metadata_graph_provider(target_metadata) or "none"
+    cache_mode = _metadata_cache_mode(target_metadata)
     base = ":".join(
         [
             str(dataset_identity),
             str(case_key or item.evaluation_case_id),
-            item.strategy_type,
+            comparison_label,
+            graph_provider,
+            cache_mode.value if cache_mode is not None else EvaluationCacheMode.DEFAULT.value,
             failure_type,
             question_hash,
         ]
@@ -3264,16 +3289,27 @@ def _strategy_metrics_summary_json(
                 summary_value
             )
     failure_summary = _failure_summary(failure_candidates or [])
-    agentic_metrics = cast(
-        dict[str, float],
-        by_strategy.get(RetrievalStrategy.AGENTIC_ROUTER.value, {}).get("metric_summary", {}),
+    agentic_entries = [
+        entry
+        for entry in by_strategy.values()
+        if entry.get("retrieval_strategy") == RetrievalStrategy.AGENTIC_ROUTER.value
+        or entry.get("comparison_label") == RetrievalStrategy.AGENTIC_ROUTER.value
+    ]
+    agentic_metrics = _average_metric_summaries(
+        [_metric_summary_mapping(entry.get("metric_summary")) for entry in agentic_entries]
     )
     agentic_summary: dict[str, object] | None = None
-    if RetrievalStrategy.AGENTIC_ROUTER.value in strategies or agentic_metrics:
-        agentic_entry = by_strategy.get(RetrievalStrategy.AGENTIC_ROUTER.value, {})
+    if (
+        any(
+            _base_comparison_label(strategy) == RetrievalStrategy.AGENTIC_ROUTER.value
+            for strategy in strategies
+        )
+        or agentic_metrics
+    ):
         agentic_summary = {
             "strategy_type": RetrievalStrategy.AGENTIC_ROUTER.value,
-            "case_count": agentic_entry.get("case_count", case_count),
+            "case_count": sum(_safe_count(entry.get("case_count")) for entry in agentic_entries)
+            or case_count,
             "fallback_rate": agentic_metrics.get("fallback_rate"),
             "budget_exhausted_rate": agentic_metrics.get("budget_exhausted_rate"),
             "strategy_selection_accuracy": agentic_metrics.get("strategy_selection_accuracy"),
@@ -3318,6 +3354,7 @@ def _provider_comparison_summary(
                     "succeeded_count": 0,
                     "failed_count": 0,
                     "metric_summary": {},
+                    "metric_summary_by_label": {},
                 },
             ),
         )
@@ -3333,7 +3370,10 @@ def _provider_comparison_summary(
         ) + _safe_count(entry.get("failed_count"))
         metric_summary = entry.get("metric_summary")
         if isinstance(metric_summary, dict):
-            cast(dict[str, object], provider_entry["metric_summary"]).update(metric_summary)
+            cast(dict[str, object], provider_entry["metric_summary_by_label"])[label] = (
+                _metric_summary_mapping(metric_summary)
+            )
+    _finalize_rollup_metric_summary(summary)
     return summary
 
 
@@ -3353,6 +3393,7 @@ def _cache_comparison_summary(by_strategy: dict[str, dict[str, object]]) -> dict
                     "succeeded_count": 0,
                     "failed_count": 0,
                     "metric_summary": {},
+                    "metric_summary_by_label": {},
                 },
             ),
         )
@@ -3368,8 +3409,51 @@ def _cache_comparison_summary(by_strategy: dict[str, dict[str, object]]) -> dict
         )
         metric_summary = entry.get("metric_summary")
         if isinstance(metric_summary, dict):
-            cast(dict[str, object], cache_entry["metric_summary"]).update(metric_summary)
+            cast(dict[str, object], cache_entry["metric_summary_by_label"])[label] = (
+                _metric_summary_mapping(metric_summary)
+            )
+    _finalize_rollup_metric_summary(summary)
     return summary
+
+
+def _finalize_rollup_metric_summary(summary: dict[str, object]) -> None:
+    for entry in summary.values():
+        if not isinstance(entry, dict):
+            continue
+        raw_by_label = entry.get("metric_summary_by_label")
+        if not isinstance(raw_by_label, dict):
+            continue
+        label_summaries = [
+            _metric_summary_mapping(value)
+            for value in raw_by_label.values()
+            if isinstance(value, dict)
+        ]
+        entry["metric_summary"] = _average_metric_summaries(label_summaries)
+
+
+def _metric_summary_mapping(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    summary: dict[str, float] = {}
+    for key, metric_value in value.items():
+        if isinstance(metric_value, bool) or not isinstance(metric_value, int | float):
+            continue
+        summary[str(key)] = float(metric_value)
+    return summary
+
+
+def _average_metric_summaries(summaries: list[dict[str, float]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for summary in summaries:
+        for key, value in summary.items():
+            totals[key] = totals.get(key, 0.0) + value
+            counts[key] = counts.get(key, 0) + 1
+    return {key: round(total / counts[key], 6) for key, total in totals.items() if counts[key]}
+
+
+def _base_comparison_label(label: str) -> str:
+    return label.split("__cache_", 1)[0]
 
 
 def _graph_quality_summary(by_strategy: dict[str, dict[str, object]]) -> dict[str, object]:

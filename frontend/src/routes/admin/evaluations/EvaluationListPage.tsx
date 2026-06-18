@@ -134,9 +134,7 @@ export function EvaluationListPage() {
                   type="checkbox"
                   checked={cacheModes.includes(mode)}
                   onChange={(event) => {
-                    const next = event.target.checked
-                      ? [...cacheModes, mode]
-                      : cacheModes.filter((item) => item !== mode);
+                    const next = nextCacheModes(cacheModes, mode, event.target.checked);
                     setCacheModes(next.length ? next : ["default"]);
                   }}
                 />
@@ -269,4 +267,18 @@ function formatMetricSummary(summary: Record<string, number>) {
       ))}
     </span>
   );
+}
+
+function nextCacheModes(
+  current: EvaluationCacheMode[],
+  mode: EvaluationCacheMode,
+  checked: boolean
+): EvaluationCacheMode[] {
+  if (checked && mode === "default") {
+    return ["default"];
+  }
+  if (checked) {
+    return [...current.filter((item) => item !== "default"), mode];
+  }
+  return current.filter((item) => item !== mode);
 }

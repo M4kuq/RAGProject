@@ -119,6 +119,7 @@ class EvaluationRagQuestionService:
         top_k: int | None = None,
         rerank_top_n: int | None = None,
         evaluation_run_id: int | None = None,
+        cache_attempt_id: str | None = None,
     ) -> RagEvaluationResult:
         raw_strategy = getattr(target, "retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)
         strategy_type = (
@@ -129,13 +130,14 @@ class EvaluationRagQuestionService:
         cache_mode = str(getattr(target, "cache_mode", "default"))
         graph_store_provider = getattr(target, "graph_store_provider", None)
         with _evaluation_target_settings(
-            self.service.settings,
+            self.service,
             strategy_type=strategy_type,
             graph_store_provider=graph_store_provider
             if isinstance(graph_store_provider, str)
             else None,
             cache_mode=cache_mode,
             evaluation_run_id=evaluation_run_id,
+            cache_attempt_id=cache_attempt_id,
         ):
             return self.answer_question_with_strategy(
                 db,
@@ -1549,38 +1551,37 @@ def _latest_retrieval_run_id(db: Session, *, request_id: str | None) -> int | No
 
 @contextmanager
 def _evaluation_target_settings(
-    settings: Settings,
+    service: RagService,
     *,
     strategy_type: RetrievalStrategy,
     graph_store_provider: str | None,
     cache_mode: str,
     evaluation_run_id: int | None,
+    cache_attempt_id: str | None,
 ):
-    fields = {
-        "graph_retrieval_enabled": settings.graph_retrieval_enabled,
-        "graph_store_provider": settings.graph_store_provider,
-        "retrieval_cache_enabled": settings.retrieval_cache_enabled,
-        "retrieval_cache_namespace": settings.retrieval_cache_namespace,
-    }
+    settings = service.settings
+    overrides: dict[str, object] = {}
     try:
         if strategy_type == RetrievalStrategy.GRAPH:
-            settings.graph_retrieval_enabled = True
-            settings.graph_store_provider = (
+            overrides["graph_retrieval_enabled"] = True
+            overrides["graph_store_provider"] = (
                 graph_store_provider
                 if graph_store_provider in {"postgres", "neo4j"}
                 else "postgres"
             )
         if cache_mode == "disabled":
-            settings.retrieval_cache_enabled = False
+            overrides["retrieval_cache_enabled"] = False
         elif cache_mode in {"cold", "warm"}:
-            settings.retrieval_cache_enabled = True
+            overrides["retrieval_cache_enabled"] = True
             if evaluation_run_id is not None:
-                namespace = fields["retrieval_cache_namespace"]
-                settings.retrieval_cache_namespace = f"{namespace}.eval.{evaluation_run_id}"
+                namespace = settings.retrieval_cache_namespace
+                suffix = f"{evaluation_run_id}.{cache_attempt_id or 'single'}"
+                overrides["retrieval_cache_namespace"] = f"{namespace}.eval.{suffix}"
+        if overrides:
+            service.settings = settings.model_copy(update=overrides)
         yield
     finally:
-        for field_name, value in fields.items():
-            setattr(settings, field_name, value)
+        service.settings = settings
 
 
 def _graph_provider_unavailable(summary: RetrievalScoreSummary) -> bool:

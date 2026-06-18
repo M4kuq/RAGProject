@@ -1274,10 +1274,11 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
                         "dense",
                         "hybrid",
                         "agentic_router",
+                        "graph",
                         "graph_postgres",
                         "graph_neo4j",
                     ],
-                    cache_modes=["warm", "cold", "disabled"],
+                    cache_modes=["warm", "disabled"],
                     metrics=[
                         "recall_at_k",
                         "citation_coverage",
@@ -1298,6 +1299,7 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             )
             assert "graph_postgres__cache_cold" in created.strategies
             assert "graph_neo4j__cache_warm" in created.strategies
+            assert created.strategies.count("graph_postgres__cache_cold") == 1
             assert created.strategies[:3] == [
                 "dense__cache_disabled",
                 "dense__cache_cold",
@@ -1331,8 +1333,15 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
             assert "graph_postgres__cache_cold" in strategy_metrics
             assert "graph_neo4j__cache_warm" in strategy_metrics
+            assert "agentic_summary" in run.strategy_metrics_summary_json
             assert run.strategy_metrics_summary_json["provider_comparison"]["postgres"]
             assert run.strategy_metrics_summary_json["provider_comparison"]["neo4j"]
+            assert (
+                "graph_postgres__cache_cold"
+                in run.strategy_metrics_summary_json["provider_comparison"]["postgres"][
+                    "metric_summary_by_label"
+                ]
+            )
             assert set(run.strategy_metrics_summary_json["cache_comparison"]) == {
                 "disabled",
                 "cold",
@@ -2664,8 +2673,9 @@ class _GraphCacheAwareEvaluationRagService(_StrategyAwareFakeEvaluationRagServic
         top_k: int | None = None,
         rerank_top_n: int | None = None,
         evaluation_run_id: int | None = None,
+        cache_attempt_id: str | None = None,
     ) -> RagEvaluationResult:
-        del top_k, rerank_top_n, evaluation_run_id
+        del top_k, rerank_top_n, evaluation_run_id, cache_attempt_id
         strategy = getattr(target, "retrieval_strategy", RetrievalStrategy.DENSE)
         if not isinstance(strategy, RetrievalStrategy):
             strategy = RetrievalStrategy(str(strategy))
