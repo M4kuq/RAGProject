@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -76,6 +77,7 @@ from app.schemas.rag import (
 from app.services.evaluation_service import (
     STRATEGY_METRIC_SPECS,
     EvaluationService,
+    _failure_reasons,
     _filter_graph_paths_for_source_chunk_ids,
     _graph_path_relevance_metric,
     _promotion_metadata,
@@ -1312,6 +1314,10 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             )
             assert "graph_postgres__cache_cold" in created.strategies
             assert "graph_neo4j__cache_warm" in created.strategies
+            assert "agentic_router" in created.strategies
+            assert not any(
+                strategy.startswith("agentic_router__cache_") for strategy in created.strategies
+            )
             assert created.strategies.count("graph_postgres__cache_cold") == 1
             assert created.strategies[:3] == [
                 "dense__cache_disabled",
@@ -1330,8 +1336,8 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
                 request_id="test-graph-cache-eval",
             )
             assert result["status"] == "succeeded"
-            assert result["case_count"] == 15
-            assert result["succeeded_count"] == 15
+            assert result["case_count"] == 13
+            assert result["succeeded_count"] == 13
             assert result["failed_count"] == 0
 
         with session_factory() as db:
@@ -1409,6 +1415,13 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
                 and metric.metric_name == "cache_hit_rate"
             )
             assert cache_hit.average == 1.0
+            cache_saved_latency = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_warm"
+                and metric.metric_name == "cache_saved_latency"
+            )
+            assert cache_saved_latency.average is not None
             persisted_details = json.dumps(
                 [result.metric_detail_json for result in db.scalars(select(EvaluationResult)).all()]
             ).lower()
@@ -1440,6 +1453,52 @@ def test_graph_path_relevance_is_not_applicable_without_expected_graph_hints() -
     assert metric.metric_score is None
     assert metric.metric_label == "not_applicable"
     assert metric.details["reason_code"] == "graph_relevance_hints_missing"
+
+
+def test_evaluation_cache_modes_skip_non_cacheable_strategy_variants() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="non_cacheable_strategy_modes",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="non_cacheable_modes",
+                    question="Which strategy variants should be cacheable?",
+                    expected_keywords=["strategy"],
+                ),
+            )
+
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "agentic_router", "llm_tool_orchestrator"],
+                    cache_modes=["warm"],
+                    metrics=["cache_hit_rate"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        assert created.strategies == [
+            "dense__cache_cold",
+            "dense__cache_warm",
+            "agentic_router",
+            "llm_tool_orchestrator",
+        ]
+    finally:
+        engine.dispose()
 
 
 def test_graph_path_metrics_only_use_selected_source_chunks() -> None:
@@ -1504,6 +1563,34 @@ def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
     assert metadata["expected_entity_labels"] == ["FastAPI", "PostgreSQL"]
     assert metadata["expected_relation_types"] == ["uses", "stores"]
     assert metadata["required_hop_count"] == 2
+
+
+def test_failure_reasons_include_low_graph_quality_metrics() -> None:
+    item = EvaluationRunItem(status="succeeded", strategy_type=RetrievalStrategy.GRAPH.value)
+    metric_by_name = {
+        "graph_path_relevance": EvaluationResult(
+            metric_name="graph_path_relevance",
+            metric_score=Decimal("0.5"),
+        ),
+        "graph_citation_coverage": EvaluationResult(
+            metric_name="graph_citation_coverage",
+            metric_score=Decimal("0.0"),
+        ),
+        "multi_hop_answerability": EvaluationResult(
+            metric_name="multi_hop_answerability",
+            metric_score=Decimal("0.0"),
+        ),
+    }
+
+    reasons = _failure_reasons(item, metric_by_name, Settings(app_env="test"))
+
+    assert {
+        (failure_type, tuple(reason_codes)) for failure_type, _severity, reason_codes in reasons
+    } >= {
+        ("low_graph_path_relevance", ("graph_path_relevance_below_threshold",)),
+        ("low_graph_citation_coverage", ("graph_citation_coverage_below_threshold",)),
+        ("low_multi_hop_answerability", ("multi_hop_answerability_below_threshold",)),
+    }
 
 
 def test_evaluation_cache_namespace_isolated_per_case_target() -> None:

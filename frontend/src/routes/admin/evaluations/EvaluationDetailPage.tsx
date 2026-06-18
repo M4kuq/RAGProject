@@ -569,7 +569,7 @@ function formatMetricDetails(metrics: EvaluationMetricResult[]) {
         return (
           <span className="metric-detail-item" key={`${metric.strategy_type}-${metric.metric_name}`}>
             <span>
-              {metric.metric_name}={formatScore(metric.metric_score)}
+              {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
               {label}
             </span>
             <MetricHelp metricName={metric.metric_name} />

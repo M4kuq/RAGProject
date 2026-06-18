@@ -93,8 +93,17 @@ ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
         RetrievalStrategy.LANGGRAPH_AGENTIC,
     }
 )
+CACHEABLE_EVALUATION_STRATEGIES = frozenset(
+    {
+        RetrievalStrategy.DENSE,
+        RetrievalStrategy.SPARSE,
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.GRAPH,
+    }
+)
 GRAPH_COMPARISON_LABELS = frozenset({"graph_postgres", "graph_neo4j"})
 EVALUATION_TARGET_SCHEMA_VERSION = "phase3.evaluation_target.v1"
+GRAPH_QUALITY_FAILURE_THRESHOLD = 1.0
 CACHE_MODE_ORDER = {
     EvaluationCacheMode.DEFAULT: 0,
     EvaluationCacheMode.DISABLED: 1,
@@ -1738,6 +1747,10 @@ class EvaluationService:
         latency_ms: int,
         baseline_latency_ms: int | None,
     ) -> list[MetricValue]:
+        if not _is_cacheable_target(target):
+            return _not_applicable_cache_metrics(
+                target=target, reason_code="strategy_not_cacheable"
+            )
         retrieval_run = (
             db.get(RetrievalRun, rag_result.retrieval_run_id)
             if rag_result.retrieval_run_id is not None
@@ -2696,6 +2709,38 @@ def _requires_strategy_target_runner(target: EvaluationStrategyTarget) -> bool:
     )
 
 
+def _is_cacheable_target(target: EvaluationStrategyTarget) -> bool:
+    return target.retrieval_strategy in CACHEABLE_EVALUATION_STRATEGIES
+
+
+def _not_applicable_cache_metrics(
+    *,
+    target: EvaluationStrategyTarget,
+    reason_code: str,
+) -> list[MetricValue]:
+    details = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "not_applicable": True,
+        "reason_code": reason_code,
+        "cache_mode": target.cache_mode.value,
+    }
+    return [
+        MetricValue(
+            metric_name="cache_hit_rate",
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+        MetricValue(
+            metric_name="cache_saved_latency",
+            metric_score=None,
+            metric_value=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+    ]
+
+
 def _selected_strategy_targets(
     payload: EvaluationRunCreateRequest,
 ) -> list[EvaluationStrategyTarget]:
@@ -2704,7 +2749,7 @@ def _selected_strategy_targets(
     seen: set[tuple[str, str, str | None, str]] = set()
     for strategy in payload.strategies or [payload.strategy_type]:
         base_target = _target_from_request_strategy(strategy)
-        for cache_mode in cache_modes:
+        for cache_mode in _target_cache_modes(base_target, cache_modes):
             target = EvaluationStrategyTarget(
                 comparison_label=_comparison_label(base_target, cache_mode),
                 retrieval_strategy=base_target.retrieval_strategy,
@@ -2722,6 +2767,15 @@ def _selected_strategy_targets(
             seen.add(key)
             targets.append(target)
     return targets
+
+
+def _target_cache_modes(
+    target: EvaluationStrategyTarget,
+    cache_modes: list[EvaluationCacheMode],
+) -> list[EvaluationCacheMode]:
+    if _is_cacheable_target(target):
+        return cache_modes
+    return [EvaluationCacheMode.DEFAULT]
 
 
 def _selected_cache_modes(
@@ -3112,6 +3166,33 @@ def _failure_reasons(
                 "low_citation_coverage",
                 EvaluationFailureSeverity.MEDIUM,
                 ["citation_coverage_below_threshold"],
+            )
+        )
+    graph_path_relevance = _metric_score(metric_by_name, "graph_path_relevance")
+    if graph_path_relevance is not None and graph_path_relevance < GRAPH_QUALITY_FAILURE_THRESHOLD:
+        reasons.append(
+            (
+                "low_graph_path_relevance",
+                EvaluationFailureSeverity.MEDIUM,
+                ["graph_path_relevance_below_threshold"],
+            )
+        )
+    graph_citation = _metric_score(metric_by_name, "graph_citation_coverage")
+    if graph_citation is not None and graph_citation < GRAPH_QUALITY_FAILURE_THRESHOLD:
+        reasons.append(
+            (
+                "low_graph_citation_coverage",
+                EvaluationFailureSeverity.MEDIUM,
+                ["graph_citation_coverage_below_threshold"],
+            )
+        )
+    multi_hop = _metric_score(metric_by_name, "multi_hop_answerability")
+    if multi_hop is not None and multi_hop < GRAPH_QUALITY_FAILURE_THRESHOLD:
+        reasons.append(
+            (
+                "low_multi_hop_answerability",
+                EvaluationFailureSeverity.MEDIUM,
+                ["multi_hop_answerability_below_threshold"],
             )
         )
     groundedness = _metric_score(metric_by_name, "groundedness")

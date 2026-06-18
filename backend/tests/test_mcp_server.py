@@ -305,6 +305,7 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
                 "llm_tool_orchestrator",
                 "langchain_agentic",
                 "langgraph_agentic",
+                "graph_postgres",
             ]
         },
     )
@@ -340,6 +341,10 @@ def test_phase2_mcp_rag_strategy_tools_return_safe_summaries(
     assert trace["strategy_decision"]["requested_strategy"] == "agentic_router"
     assert comparison["evaluation_run_id"] == 1
     assert {item["strategy"] for item in comparison["metrics"]} >= {"dense", "hybrid"}
+    graph_metrics = next(
+        item for item in comparison["metrics"] if item["strategy"] == "graph_postgres"
+    )
+    assert graph_metrics["metric_summary"]["graph_path_relevance"] == 1.0
     assert summary["agentic_summary"]["strategy_type"] == "agentic_router"
     dumped = json.dumps(
         [
@@ -1151,14 +1156,25 @@ def _seed_data(db: Session) -> None:
         metrics_config={
             "dataset_name": "phase2_strategy_smoke",
             "case_limit": 1,
-            "strategies": ["dense", "hybrid", "agentic_router"],
-            "metrics": ["recall_at_k", "mrr", "p95_latency", "fallback_rate"],
+            "strategies": ["dense", "hybrid", "agentic_router", "graph_postgres"],
+            "metrics": [
+                "recall_at_k",
+                "mrr",
+                "p95_latency",
+                "fallback_rate",
+                "graph_path_relevance",
+            ],
         },
         strategy_type="agentic_router",
         strategy_metrics_summary_json={
             "schema_version": "phase2.evaluation.v1",
-            "strategies": ["dense", "hybrid", "agentic_router"],
-            "metric_summary": {"recall_at_k": 1.0, "mrr": 1.0, "fallback_rate": 0.0},
+            "strategies": ["dense", "hybrid", "agentic_router", "graph_postgres"],
+            "metric_summary": {
+                "recall_at_k": 1.0,
+                "mrr": 1.0,
+                "fallback_rate": 0.0,
+                "graph_path_relevance": 1.0,
+            },
             "strategy_metrics": {
                 "dense": {
                     "metric_summary": {"recall_at_k": 1.0, "mrr": 1.0},
@@ -1181,6 +1197,15 @@ def _seed_data(db: Session) -> None:
                         "sufficiency_score_avg": 0.9,
                         "retrieval_call_count_avg": 1.0,
                     },
+                    "case_count": 1,
+                    "succeeded_count": 1,
+                    "failed_count": 0,
+                },
+                "graph_postgres": {
+                    "metric_summary": {"graph_path_relevance": 1.0},
+                    "comparison_label": "graph_postgres",
+                    "retrieval_strategy": "graph",
+                    "graph_store_provider": "postgres",
                     "case_count": 1,
                     "succeeded_count": 1,
                     "failed_count": 0,
