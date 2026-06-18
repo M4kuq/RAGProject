@@ -2507,11 +2507,17 @@ class RagService:
         strategy_type: str,
         retrieval_run_id: int,
     ) -> CachedRetrievalPayload:
+        ordered_items = [ref.saved_item for ref in result.context_candidates]
+        if not ordered_items and result.items:
+            ordered_items = self.repository.list_items_for_run(
+                db,
+                retrieval_run_id=retrieval_run_id,
+            )
         return payload_from_run_items(
             query_hash=query_hash,
             strategy_type=strategy_type,
             retrieval_score_summary=result.summary.model_dump(mode="json"),
-            items=self.repository.list_items_for_run(db, retrieval_run_id=retrieval_run_id),
+            items=ordered_items,
             graph_paths=self.graph_retrieval_repository.list_graph_retrieval_paths(
                 db,
                 retrieval_run_id=retrieval_run_id,
@@ -2808,7 +2814,6 @@ def _is_cacheable_retrieval_strategy(strategy: RetrievalStrategy) -> bool:
         RetrievalStrategy.SPARSE,
         RetrievalStrategy.HYBRID,
         RetrievalStrategy.GRAPH,
-        RetrievalStrategy.AGENTIC_ROUTER,
     }
 
 
