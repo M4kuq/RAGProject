@@ -7,6 +7,7 @@ Create Date: 2026-06-18
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import sqlalchemy as sa
@@ -18,6 +19,8 @@ revision = "0017_retrieval_cache_foundation"
 down_revision = "0016_graph_store_provider_seed"
 branch_labels = None
 depends_on = None
+
+_CORPUS_MARKER_SETTING_KEY = "rag.retrieval_cache.corpus_marker"
 
 
 def _jsonb() -> Any:
@@ -149,9 +152,11 @@ def upgrade() -> None:
             "retrieval_cache_entries",
             ["cache_namespace", "strategy_type", "created_at"],
         )
+    _seed_retrieval_cache_corpus_marker()
 
 
 def downgrade() -> None:
+    _delete_retrieval_cache_corpus_marker()
     if _has_table("retrieval_cache_entries"):
         op.drop_index(
             "ix_retrieval_cache_entries_namespace_strategy",
@@ -164,3 +169,29 @@ def downgrade() -> None:
         op.drop_table("retrieval_cache_entries")
     if _has_column("retrieval_runs", "cache_summary_json"):
         op.drop_column("retrieval_runs", "cache_summary_json")
+
+
+def _seed_retrieval_cache_corpus_marker() -> None:
+    bind = op.get_bind()
+    bind.execute(
+        sa.text(
+            """
+            INSERT INTO system_settings (setting_key, setting_value, description)
+            VALUES (:setting_key, CAST(:setting_value AS jsonb), :description)
+            ON CONFLICT (setting_key) DO NOTHING
+            """
+        ),
+        {
+            "setting_key": _CORPUS_MARKER_SETTING_KEY,
+            "setting_value": json.dumps({"version": 1, "updated_at": "migration"}),
+            "description": "Bumped when retrieval-visible active document corpus state changes.",
+        },
+    )
+
+
+def _delete_retrieval_cache_corpus_marker() -> None:
+    bind = op.get_bind()
+    bind.execute(
+        sa.text("DELETE FROM system_settings WHERE setting_key = :setting_key"),
+        {"setting_key": _CORPUS_MARKER_SETTING_KEY},
+    )

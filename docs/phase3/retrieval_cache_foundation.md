@@ -1,9 +1,13 @@
 # PR-52 Retrieval Result Cache Foundation
 
 PR-52 adds a strategy-agnostic retrieval result cache for dense, sparse, hybrid,
-graph, and Auto (`agentic_router`) retrieval runs. It caches retrieval result
-references only. It does not cache answers, prompts, full context, raw chunk text,
-or generated evidence.
+and graph retrieval runs. It caches retrieval result references only. It does not
+cache answers, prompts, full context, raw chunk text, or generated evidence.
+
+Auto (`agentic_router`) requests intentionally bypass the cache in this PR. They
+run live retrieval every time and record `strategy_not_cacheable` rather than
+`hit` or `miss`, because replaying their planner/fallback trace safely requires a
+separate trace-metadata design.
 
 ## Scope
 
@@ -51,23 +55,31 @@ share entries.
 PR-52 intentionally avoids broad cache deletion. Invalidation relies on versioned
 keys, TTL, and fingerprint changes.
 
-The active document fingerprint changes when the active ready document set, active
-document version, content hash, logical-document status, version status, chunk
-count, chunk hash boundary, or chunk creation boundary changes. This covers
-approved version switches, archive changes, and DB-visible reindex changes.
+For unfiltered requests, the active document fingerprint uses the
+`rag.retrieval_cache.corpus_marker` invalidation marker rather than joining and
+aggregating the full active `document_chunks` corpus on every lookup. Active
+version switches, archives, and active-version chunk mutations bump that marker.
+For filtered `logical_document_ids` requests, the scoped fingerprint remains
+chunk-aware and includes chunk count/hash boundaries for those documents. This
+covers approved version switches, archive changes, and DB-visible reindex changes
+without making the default cache-hit path scan the full chunk corpus.
 
-The graph index fingerprint changes when graph index runs for active versions
-change status, run id, extractor metadata, counts, or updated timestamp. This
-covers succeeded, failed, and retried graph index runs. Graph provider changes are
-separate through `graph_store_provider`.
+The graph index fingerprint is included only for graph-dependent retrieval paths.
+Dense, sparse, and hybrid cache keys use a stable placeholder so graph indexing
+maintenance does not invalidate unrelated retrieval entries. For graph paths, the
+fingerprint changes when graph index runs for active versions change status, run
+id, extractor metadata, counts, or updated timestamp. This covers succeeded,
+failed, and retried graph index runs. Graph provider changes are separate through
+`graph_store_provider`.
 
 The retrieval and rerank settings hashes include strategy, request kind, filters,
 hybrid/sparse/router/graph settings, model settings, and a hash of `rag.%`
 system settings. Embedding and rerank model identifiers are also top-level key
 fields so model changes naturally miss older entries.
 
-TTL handles residual drift and operational cleanup. The first stale lookup runs
-normal retrieval and replaces the entry.
+TTL handles residual drift. Expired persistent cache rows are pruned
+opportunistically on store, so one-off queries do not grow the table without
+bound.
 
 ## Payload Safety
 
@@ -105,4 +117,6 @@ It does not include raw query text, snippets, chunk text, prompts, or full conte
 - The default is disabled until operators explicitly enable the feature.
 - LLM tool orchestrator, LangChain agentic, and LangGraph agentic ask strategies
   are left uncached in this PR to avoid widening retrieval behavior beyond the
-  dense/hybrid/graph/Auto foundation.
+  dense/hybrid/graph foundation.
+- Auto (`agentic_router`) is also left uncached until cache payloads can safely
+  preserve and replay planner/fallback trace metadata.

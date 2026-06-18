@@ -2506,7 +2506,10 @@ class RagService:
         query_hash: str,
         strategy_type: str,
         retrieval_run_id: int,
-    ) -> CachedRetrievalPayload:
+    ) -> CachedRetrievalPayload | None:
+        retrieval_score_summary = result.summary.model_dump(mode="json")
+        if _has_transient_graph_reason(retrieval_score_summary):
+            return None
         ordered_items = [ref.saved_item for ref in result.context_candidates]
         if not ordered_items and result.items:
             ordered_items = self.repository.list_items_for_run(
@@ -2516,7 +2519,7 @@ class RagService:
         return payload_from_run_items(
             query_hash=query_hash,
             strategy_type=strategy_type,
-            retrieval_score_summary=result.summary.model_dump(mode="json"),
+            retrieval_score_summary=retrieval_score_summary,
             items=ordered_items,
             graph_paths=self.graph_retrieval_repository.list_graph_retrieval_paths(
                 db,
@@ -2815,6 +2818,16 @@ def _is_cacheable_retrieval_strategy(strategy: RetrievalStrategy) -> bool:
         RetrievalStrategy.HYBRID,
         RetrievalStrategy.GRAPH,
     }
+
+
+def _has_transient_graph_reason(summary: dict[str, object]) -> bool:
+    reason_codes = summary.get("graph_reason_codes")
+    if not isinstance(reason_codes, list):
+        return False
+    transient_markers = ("timeout", "error", "failed", "failure")
+    return any(
+        any(marker in str(code).lower() for marker in transient_markers) for code in reason_codes
+    )
 
 
 def _should_use_agentic_loop(

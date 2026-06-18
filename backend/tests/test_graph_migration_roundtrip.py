@@ -23,6 +23,7 @@ GRAPH_TABLES = {
 CACHE_TABLES = {"retrieval_cache_entries"}
 HEAD_REVISION = "0017_retrieval_cache_foundation"
 PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
+CORPUS_MARKER_SETTING_KEY = "rag.retrieval_cache.corpus_marker"
 
 
 @pytest.fixture(scope="module")
@@ -75,6 +76,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, PRE_CACHE_REVISION)
         with pg_engine.connect() as conn:
@@ -83,6 +85,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -91,6 +94,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "0015_langgraph_agentic")
         with pg_engine.connect() as conn:
@@ -99,6 +103,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) is None
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -107,6 +112,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _graph_store_provider_value(pg_engine) == "postgres"
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "0011_tool_result_compression")
         with pg_engine.connect() as conn:
@@ -115,6 +121,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -124,6 +131,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
     finally:
         get_settings.cache_clear()
 
@@ -148,6 +156,20 @@ def _graph_store_provider_value(engine: Engine) -> str | None:
                 WHERE setting_key = 'rag.graph.store.provider'
                 """
             )
+        ).scalar_one_or_none()
+
+
+def _retrieval_cache_corpus_marker_value(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT setting_value #>> '{}'
+                FROM system_settings
+                WHERE setting_key = :setting_key
+                """
+            ),
+            {"setting_key": CORPUS_MARKER_SETTING_KEY},
         ).scalar_one_or_none()
 
 

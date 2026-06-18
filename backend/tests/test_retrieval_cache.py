@@ -7,21 +7,23 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.db import graph_models as _graph_models  # noqa: F401
 from app.db.base import Base
-from app.db.graph_models import GraphRetrievalPath
+from app.db.graph_models import GraphIndexRun, GraphRetrievalPath
 from app.db.models import (
     ChatSession,
     DocumentChunk,
     DocumentVersion,
     LogicalDocument,
+    RetrievalCacheEntry,
     RetrievalRun,
     Role,
+    SystemSetting,
     User,
 )
 from app.ingest.embedding import FakeEmbeddingAdapter
@@ -29,15 +31,20 @@ from app.rag.generation import FakeAnswerGenerator
 from app.rag.rerank import FakeRerankerClient, RerankCandidate, RerankerClient, RerankResult
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.retrieval_cache import (
+    RETRIEVAL_CACHE_CORPUS_MARKER_SETTING,
     CacheKeyBuilder,
     InMemoryCacheStore,
+    PostgresCacheStore,
     RetrievalCacheContext,
     RetrievalCacheService,
     payload_from_run_items,
+    touch_retrieval_cache_corpus_marker,
 )
 from app.rag.strategy import RagSearchRequestStrategy, RetrievalStrategy
-from app.schemas.rag import RagAskRequest, RagSearchRequest
-from app.services.rag_service import RagService
+from app.rag.trace import LatencyTracker
+from app.repositories.document_repository import DocumentRepository
+from app.schemas.rag import RagAskRequest, RagSearchRequest, RetrievalScoreSummary
+from app.services.rag_service import RagService, RetrievalPipelineResult
 
 
 @pytest.fixture
@@ -318,6 +325,63 @@ def test_retrieval_cache_stale_entry_runs_retrieval_again(
         assert len(vector_client.query_vectors) == 2
 
 
+def test_persistent_cache_store_prunes_expired_rows(
+    session_factory: sessionmaker[Session],
+) -> None:
+    store = PostgresCacheStore()
+    builder = CacheKeyBuilder()
+    now = datetime(2030, 6, 18, tzinfo=UTC)
+    payload = payload_from_run_items(
+        query_hash=hashlib.sha256(b"payload").hexdigest(),
+        strategy_type=RetrievalStrategy.DENSE.value,
+        retrieval_score_summary=_summary_json(),
+        items=[],
+        graph_paths=[],
+        no_context=True,
+    )
+
+    with session_factory() as db:
+        expired_key = builder.build(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=_cache_context("expired"),
+        )
+        valid_key = builder.build(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=_cache_context("valid"),
+        )
+        new_key = builder.build(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=_cache_context("new"),
+        )
+        store.store(db, cache_key=expired_key, payload=payload, ttl_seconds=1, now=now)
+        store.store(db, cache_key=valid_key, payload=payload, ttl_seconds=60, now=now)
+        db.commit()
+
+        assert db.scalar(select(func.count()).select_from(RetrievalCacheEntry)) == 2
+
+        store.store(
+            db,
+            cache_key=new_key,
+            payload=payload,
+            ttl_seconds=60,
+            now=now + timedelta(seconds=2),
+        )
+        db.commit()
+
+        assert (
+            db.scalar(
+                select(RetrievalCacheEntry).where(
+                    RetrievalCacheEntry.cache_key == expired_key.cache_key
+                )
+            )
+            is None
+        )
+        assert db.scalar(select(func.count()).select_from(RetrievalCacheEntry)) == 2
+
+
 def test_cache_key_changes_for_router_and_planner_controls(
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -343,6 +407,7 @@ def test_cache_key_changes_for_router_and_planner_controls(
         _settings(retrieval_cache_enabled=True, router_max_retrieval_calls=3),
         _settings(retrieval_cache_enabled=True, router_sufficiency_top_score_threshold=0.9),
         _settings(retrieval_cache_enabled=True, router_enable_fallback_hybrid=False),
+        _settings(retrieval_cache_enabled=True, qdrant_distance="Dot"),
     ]
 
     with session_factory() as db:
@@ -351,6 +416,214 @@ def test_cache_key_changes_for_router_and_planner_controls(
             changed_key = builder.build(db, settings=settings, context=context)
             assert changed_key.cache_key != base_key.cache_key
             assert changed_key.retrieval_settings_hash != base_key.retrieval_settings_hash
+
+
+def test_unfiltered_cache_key_uses_cheap_corpus_marker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    builder = CacheKeyBuilder()
+
+    with session_factory() as db:
+        statements: list[str] = []
+
+        def collect_statement(
+            conn: object,
+            cursor: object,
+            statement: str,
+            parameters: object,
+            context: object,
+            executemany: bool,
+        ) -> None:
+            del conn, cursor, parameters, context, executemany
+            statements.append(statement.lower())
+
+        bind = cast(Any, db.get_bind())
+        event.listen(bind, "before_cursor_execute", collect_statement)
+        try:
+            key = builder.build(
+                db,
+                settings=_settings(retrieval_cache_enabled=True),
+                context=RetrievalCacheContext(
+                    query_hash=hashlib.sha256(b"unfiltered").hexdigest(),
+                    strategy_type=RetrievalStrategy.DENSE,
+                    execution_strategy=RetrievalStrategy.DENSE,
+                    top_k=3,
+                    rerank_top_n=2,
+                    filters=RetrievalFilters(),
+                    request_kind="search",
+                ),
+            )
+        finally:
+            event.remove(bind, "before_cursor_execute", collect_statement)
+
+    executed_sql = "\n".join(statements)
+    assert key.active_document_fingerprint != "0" * 64
+    assert "system_settings" in executed_sql
+    assert "logical_documents" not in executed_sql
+    assert "document_versions" not in executed_sql
+    assert "document_chunks" not in executed_sql
+    assert "graph_index_runs" not in executed_sql
+
+
+def test_unfiltered_cache_key_changes_when_corpus_marker_changes(
+    session_factory: sessionmaker[Session],
+) -> None:
+    builder = CacheKeyBuilder()
+    context = RetrievalCacheContext(
+        query_hash=hashlib.sha256(b"unfiltered marker").hexdigest(),
+        strategy_type=RetrievalStrategy.DENSE,
+        execution_strategy=RetrievalStrategy.DENSE,
+        top_k=3,
+        rerank_top_n=2,
+        filters=RetrievalFilters(),
+        request_kind="search",
+    )
+
+    with session_factory() as db:
+        before = builder.build(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=context,
+        )
+        touch_retrieval_cache_corpus_marker(
+            db,
+            updated_at=datetime(2026, 6, 18, 12, 1, tzinfo=UTC),
+        )
+        after = builder.build(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=context,
+        )
+
+    assert after.active_document_fingerprint != before.active_document_fingerprint
+    assert after.retrieval_settings_hash == before.retrieval_settings_hash
+    assert after.cache_key != before.cache_key
+
+
+def test_document_repository_bumps_corpus_marker_on_active_archive(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repository = DocumentRepository()
+    archived_at = datetime(2026, 6, 18, 12, 2, tzinfo=UTC)
+
+    with session_factory() as db:
+        marker_before = db.get(SystemSetting, RETRIEVAL_CACHE_CORPUS_MARKER_SETTING)
+        assert marker_before is not None
+        before_value = marker_before.setting_value
+        document = db.get(LogicalDocument, 1)
+        assert document is not None
+
+        repository.archive_document(db, document=document, archived_at=archived_at)
+
+        marker_after = db.get(SystemSetting, RETRIEVAL_CACHE_CORPUS_MARKER_SETTING)
+        assert marker_after is not None
+
+    assert marker_after.setting_value != before_value
+    assert marker_after.setting_value == {
+        "version": 1,
+        "updated_at": archived_at.isoformat(),
+    }
+
+
+def test_graph_fingerprint_only_affects_graph_cache_keys(
+    session_factory: sessionmaker[Session],
+) -> None:
+    builder = CacheKeyBuilder()
+    settings = _settings(retrieval_cache_enabled=True)
+    now = datetime(2026, 6, 18, tzinfo=UTC)
+
+    with session_factory() as db:
+        graph_run = GraphIndexRun(
+            graph_index_run_id=1,
+            document_version_id=10,
+            status="succeeded",
+            extractor_type="test",
+            extractor_version="v1",
+            entity_count=1,
+            relation_count=1,
+            mention_count=1,
+            finished_at=now,
+            updated_at=now,
+        )
+        db.add(graph_run)
+        db.commit()
+
+        dense_context = _cache_context("graph-scope", strategy=RetrievalStrategy.DENSE)
+        graph_context = _cache_context("graph-scope", strategy=RetrievalStrategy.GRAPH)
+        dense_before = builder.build(db, settings=settings, context=dense_context)
+        graph_before = builder.build(db, settings=settings, context=graph_context)
+
+        graph_run.entity_count = 2
+        graph_run.updated_at = now + timedelta(seconds=1)
+        db.commit()
+
+        dense_after = builder.build(db, settings=settings, context=dense_context)
+        graph_after = builder.build(db, settings=settings, context=graph_context)
+
+    assert dense_before.graph_index_fingerprint == "0" * 64
+    assert dense_after.graph_index_fingerprint == "0" * 64
+    assert dense_after.cache_key == dense_before.cache_key
+    assert graph_before.graph_index_fingerprint != graph_after.graph_index_fingerprint
+    assert graph_after.cache_key != graph_before.cache_key
+
+
+def test_graph_timeout_results_are_not_cache_payloads(
+    session_factory: sessionmaker[Session],
+) -> None:
+    service = _service(
+        store=InMemoryCacheStore(),
+        vector_client=_CountingVectorClient([]),
+        settings=_settings(retrieval_cache_enabled=True),
+    )
+    result = RetrievalPipelineResult(
+        summary=RetrievalScoreSummary(
+            **_summary_json(),
+            graph_reason_codes=["graph_timeout"],
+            graph_no_context=True,
+        ),
+        items=[],
+        selected_candidates=[],
+        citation_sources=[],
+        context_candidates=[],
+        no_context=True,
+    )
+
+    with session_factory() as db:
+        payload = service._cache_payload_from_result(
+            db,
+            result=result,
+            query_hash=hashlib.sha256(b"graph timeout").hexdigest(),
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            retrieval_run_id=1,
+        )
+
+    assert payload is None
+
+
+def test_cache_service_skips_store_when_payload_is_uncacheable(
+    session_factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 6, 18, tzinfo=UTC)
+    store = InMemoryCacheStore()
+    cache_service = RetrievalCacheService(store=store, clock=lambda: now)
+
+    with session_factory() as db:
+        execution = cache_service.execute(
+            db,
+            settings=_settings(retrieval_cache_enabled=True),
+            context=_cache_context("uncacheable-payload"),
+            bypass=False,
+            cacheable=True,
+            latency_tracker=LatencyTracker(),
+            hydrate=lambda payload: None,
+            retrieve=lambda: "live-result",
+            payload_from_result=lambda result: None,
+        )
+
+    assert execution.result == "live-result"
+    assert store.entries == {}
+    assert execution.summary["status"] == "miss"
+    assert "store_bypassed" in str(execution.summary["reason"])
 
 
 def test_cache_key_uses_provider_and_hashes_query(
@@ -493,6 +766,32 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**cast(Any, defaults))
 
 
+def _cache_context(
+    label: str,
+    *,
+    strategy: RetrievalStrategy = RetrievalStrategy.DENSE,
+) -> RetrievalCacheContext:
+    return RetrievalCacheContext(
+        query_hash=hashlib.sha256(label.encode("utf-8")).hexdigest(),
+        strategy_type=strategy,
+        execution_strategy=strategy,
+        top_k=3,
+        rerank_top_n=2,
+        filters=RetrievalFilters(logical_document_ids=(1,)),
+        request_kind="search",
+    )
+
+
+def _summary_json() -> dict[str, object]:
+    return {
+        "requested_top_k": 1,
+        "qdrant_candidate_count": 0,
+        "post_filter_candidate_count": 0,
+        "selected_count": 0,
+        "excluded_by_rdb_check_count": 0,
+    }
+
+
 def _seed_minimal_data(db: Session) -> None:
     role = Role(role_id=1, role_name="admin", description="admin")
     user = User(
@@ -534,7 +833,15 @@ def _seed_minimal_data(db: Session) -> None:
         section_title="Overview",
         modality="text",
     )
-    db.add_all([role, user, session, document, version, chunk])
+    marker = SystemSetting(
+        setting_key=RETRIEVAL_CACHE_CORPUS_MARKER_SETTING,
+        setting_value={
+            "version": 1,
+            "updated_at": datetime(2026, 6, 18, tzinfo=UTC).isoformat(),
+        },
+        description="test retrieval cache corpus marker",
+    )
+    db.add_all([role, user, session, document, version, chunk, marker])
 
 
 def _add_chunk(

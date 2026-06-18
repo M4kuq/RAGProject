@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -28,6 +28,7 @@ from app.schemas.graph import validate_safe_graph_metadata
 
 RETRIEVAL_CACHE_SCHEMA_VERSION = "rag.retrieval_cache.v1"
 RETRIEVAL_CACHE_KEY_VERSION = "rag.retrieval_cache.key.v1"
+RETRIEVAL_CACHE_CORPUS_MARKER_SETTING = "rag.retrieval_cache.corpus_marker"
 DEFAULT_RETRIEVAL_CACHE_NAMESPACE = "rag.retrieval"
 _HASH_NONE = "0" * 64
 
@@ -280,6 +281,11 @@ class PostgresCacheStore:
         now: datetime,
     ) -> None:
         expires_at = now + timedelta(seconds=ttl_seconds)
+        _prune_expired_entries(
+            db,
+            cache_namespace=cache_key.cache_namespace,
+            now=now,
+        )
         payload_with_metadata = CachedRetrievalPayload(
             schema_version=payload.schema_version,
             query_hash=payload.query_hash,
@@ -365,6 +371,8 @@ class InMemoryCacheStore:
         ttl_seconds: int,
         now: datetime,
     ) -> None:
+        del db
+        self.entries = {key: entry for key, entry in self.entries.items() if entry.expires_at > now}
         payload_with_metadata = CachedRetrievalPayload(
             schema_version=payload.schema_version,
             query_hash=payload.query_hash,
@@ -409,9 +417,13 @@ class CacheKeyBuilder:
             db,
             filters=context.filters,
         )
-        graph_index_fingerprint = _graph_index_fingerprint(
-            db,
-            filters=context.filters,
+        graph_index_fingerprint = (
+            _graph_index_fingerprint(
+                db,
+                filters=context.filters,
+            )
+            if _strategy_uses_graph_index(context)
+            else _HASH_NONE
         )
         embedding_model = TraceRedactor.safe_string(
             f"{settings.embedding_provider}:{settings.embedding_model}:"
@@ -481,7 +493,7 @@ class RetrievalCacheService:
         latency_tracker: LatencyTracker,
         hydrate: Callable[[CachedRetrievalPayload], Any | None],
         retrieve: Callable[[], Any],
-        payload_from_result: Callable[[Any], CachedRetrievalPayload],
+        payload_from_result: Callable[[Any], CachedRetrievalPayload | None],
     ) -> CacheExecutionResult:
         if not settings.retrieval_cache_enabled:
             result = retrieve()
@@ -550,13 +562,16 @@ class RetrievalCacheService:
             with latency_tracker.span("retrieval_cache_store_ms"):
                 with db.begin_nested():
                     payload = payload_from_result(result)
-                    self.store.store(
-                        db,
-                        cache_key=cache_key,
-                        payload=payload,
-                        ttl_seconds=settings.retrieval_cache_ttl_seconds,
-                        now=self.clock(),
-                    )
+                    if payload is None:
+                        store_reason = "store_bypassed"
+                    else:
+                        self.store.store(
+                            db,
+                            cache_key=cache_key,
+                            payload=payload,
+                            ttl_seconds=settings.retrieval_cache_ttl_seconds,
+                            now=self.clock(),
+                        )
         except Exception:
             store_reason = "store_failed"
 
@@ -594,6 +609,47 @@ def payload_from_run_items(
             if (safe_path := _cache_graph_path_from_row(path)) is not None
         ),
         no_context=no_context,
+    )
+
+
+def touch_retrieval_cache_corpus_marker(
+    db: Session,
+    *,
+    updated_at: datetime,
+) -> None:
+    marker_updated_at = _aware_utc(updated_at)
+    marker_value = {
+        "version": 1,
+        "updated_at": marker_updated_at.isoformat(),
+    }
+    row = db.get(SystemSetting, RETRIEVAL_CACHE_CORPUS_MARKER_SETTING)
+    if row is None:
+        db.add(
+            SystemSetting(
+                setting_key=RETRIEVAL_CACHE_CORPUS_MARKER_SETTING,
+                setting_value=marker_value,
+                description=("Bumped when retrieval-visible active document corpus state changes."),
+                created_at=marker_updated_at,
+                updated_at=marker_updated_at,
+            )
+        )
+    else:
+        row.setting_value = marker_value
+        row.updated_at = marker_updated_at
+    db.flush()
+
+
+def _prune_expired_entries(
+    db: Session,
+    *,
+    cache_namespace: str,
+    now: datetime,
+) -> None:
+    db.execute(
+        delete(RetrievalCacheEntry).where(
+            RetrievalCacheEntry.cache_namespace == cache_namespace,
+            RetrievalCacheEntry.expires_at <= now,
+        )
     )
 
 
@@ -667,6 +723,9 @@ def _retrieval_settings_hash(
         },
         "user_visible_scope": user_visible_scope,
         "qdrant_collection_name": settings.qdrant_collection_name,
+        "qdrant_distance": (
+            settings.qdrant_distance if _strategy_uses_vector_distance(context) else None
+        ),
         "hybrid_enabled": settings.hybrid_enabled,
         "hybrid_fusion_method": settings.hybrid_fusion_method,
         "hybrid_rrf_k": settings.hybrid_rrf_k,
@@ -738,6 +797,8 @@ def _rerank_settings_hash(settings: Settings) -> str:
 
 
 def _active_document_fingerprint(db: Session, *, filters: RetrievalFilters) -> str:
+    if not filters.logical_document_ids:
+        return _active_corpus_marker(db, filters=filters)
     statement = (
         select(
             LogicalDocument.logical_document_id,
@@ -794,6 +855,44 @@ def _active_document_fingerprint(db: Session, *, filters: RetrievalFilters) -> s
     return _hash_json([_json_ready_tuple(row) for row in rows])
 
 
+def _active_corpus_marker(db: Session, *, filters: RetrievalFilters) -> str:
+    row = db.execute(
+        select(SystemSetting.setting_value, SystemSetting.updated_at).where(
+            SystemSetting.setting_key == RETRIEVAL_CACHE_CORPUS_MARKER_SETTING
+        )
+    ).one_or_none()
+    if row is None:
+        return _HASH_NONE
+    return _hash_json(
+        {
+            "scope": "active_corpus_marker",
+            "modality": filters.modality,
+            "setting_key": RETRIEVAL_CACHE_CORPUS_MARKER_SETTING,
+            "setting_value": row[0],
+            "updated_at": row[1],
+        }
+    )
+
+
+def _strategy_uses_graph_index(context: RetrievalCacheContext) -> bool:
+    return (
+        context.strategy_type == RetrievalStrategy.GRAPH
+        or context.execution_strategy == RetrievalStrategy.GRAPH
+    )
+
+
+def _strategy_uses_vector_distance(context: RetrievalCacheContext) -> bool:
+    vector_strategies = {
+        RetrievalStrategy.DENSE,
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.FALLBACK_DENSE,
+    }
+    return (
+        context.strategy_type in vector_strategies
+        or context.execution_strategy in vector_strategies
+    )
+
+
 def _graph_index_fingerprint(db: Session, *, filters: RetrievalFilters) -> str:
     active_version_statement = (
         select(DocumentVersion.document_version_id)
@@ -840,7 +939,10 @@ def _graph_index_fingerprint(db: Session, *, filters: RetrievalFilters) -> str:
 def _system_settings_hash(db: Session) -> str:
     rows = db.execute(
         select(SystemSetting.setting_key, SystemSetting.setting_value, SystemSetting.updated_at)
-        .where(SystemSetting.setting_key.like("rag.%"))
+        .where(
+            SystemSetting.setting_key.like("rag.%"),
+            SystemSetting.setting_key != RETRIEVAL_CACHE_CORPUS_MARKER_SETTING,
+        )
         .order_by(SystemSetting.setting_key.asc())
     ).all()
     if not rows:
