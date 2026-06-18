@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0016_graph_store_provider_seed"
+    assert version == "0017_retrieval_cache_foundation"
 
     expected_tables = {
         "roles",
@@ -85,6 +85,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "jobs",
         "retrieval_runs",
         "retrieval_run_items",
+        "retrieval_cache_entries",
         "citations",
         "evaluation_datasets",
         "evaluation_cases",
@@ -119,6 +120,13 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_audit_logs_request_id_not_empty",
         "ck_retrieval_runs_strategy_type",
         "ck_retrieval_run_items_source",
+        "ck_retrieval_cache_entries_cache_key_hash",
+        "ck_retrieval_cache_entries_query_hash",
+        "ck_retrieval_cache_entries_retrieval_hash",
+        "ck_retrieval_cache_entries_rerank_hash",
+        "ck_retrieval_cache_entries_document_fp",
+        "ck_retrieval_cache_entries_graph_fp",
+        "ck_retrieval_cache_entries_scope_hash",
         "uq_evaluation_datasets_name",
         "uq_evaluation_cases_dataset_key",
         "ck_evaluation_runs_strategy_type",
@@ -144,6 +152,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ux_jobs_active_retry_per_source",
         "ux_jobs_active_message_edit",
         "ux_retrieval_run_items_run_rerank_order",
+        "ix_retrieval_cache_entries_expires",
+        "ix_retrieval_cache_entries_namespace_strategy",
         "ix_evaluation_results_metric_score",
         "ix_evaluation_datasets_status_created",
         "ix_evaluation_cases_dataset_status",
