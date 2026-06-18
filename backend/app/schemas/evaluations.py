@@ -63,10 +63,20 @@ class EvaluationRunRequestStrategy(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    GRAPH = "graph"
+    GRAPH_POSTGRES = "graph_postgres"
+    GRAPH_NEO4J = "graph_neo4j"
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
     LANGGRAPH_AGENTIC = "langgraph_agentic"
+
+
+class EvaluationCacheMode(StrEnum):
+    DEFAULT = "default"
+    DISABLED = "disabled"
+    COLD = "cold"
+    WARM = "warm"
 
 
 class EvaluationMetricName(StrEnum):
@@ -83,6 +93,12 @@ class EvaluationMetricName(StrEnum):
     SUFFICIENCY_SCORE_AVG = "sufficiency_score_avg"
     RETRIEVAL_CALL_COUNT_AVG = "retrieval_call_count_avg"
     CONTEXT_PRECISION = "context_precision"
+    GRAPH_PATH_RELEVANCE = "graph_path_relevance"
+    GRAPH_CITATION_COVERAGE = "graph_citation_coverage"
+    MULTI_HOP_ANSWERABILITY = "multi_hop_answerability"
+    CACHE_HIT_RATE = "cache_hit_rate"
+    CACHE_SAVED_LATENCY = "cache_saved_latency"
+    ENTITY_RELATION_QUALITY_SUMMARY = "entity_relation_quality_summary"
 
 
 DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY = EvaluationRunRequestStrategy.DENSE
@@ -101,6 +117,12 @@ DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.BUDGET_EXHAUSTED_RATE,
     EvaluationMetricName.SUFFICIENCY_SCORE_AVG,
     EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG,
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE,
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE,
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY,
+    EvaluationMetricName.CACHE_HIT_RATE,
+    EvaluationMetricName.CACHE_SAVED_LATENCY,
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY,
 )
 
 
@@ -146,7 +168,7 @@ class StrategyMetricSummary(BaseModel):
 
 class StrategyComparisonMetric(BaseModel):
     schema_version: Literal["phase2.evaluation.v1"] = EVALUATION_SCHEMA_VERSION
-    strategy_type: RetrievalStrategy
+    strategy_type: str
     metric_name: EvaluationMetricName | str
     average: float | None = None
     p50: float | None = None
@@ -154,6 +176,10 @@ class StrategyComparisonMetric(BaseModel):
     count: int = Field(default=0, ge=0)
     failed_count: int = Field(default=0, ge=0)
     not_applicable_count: int = Field(default=0, ge=0)
+    comparison_label: str | None = Field(default=None, max_length=120)
+    retrieval_strategy: RetrievalStrategy | None = None
+    graph_store_provider: str | None = Field(default=None, max_length=50)
+    cache_mode: EvaluationCacheMode | None = None
 
 
 class EvaluationCaseSpec(BaseModel):
@@ -361,12 +387,17 @@ class EvaluationRunCreateRequest(BaseModel):
     case_limit: int | None = Field(default=10, ge=1, le=50)
     strategy_type: EvaluationRunRequestStrategy = DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY
     strategies: list[EvaluationRunRequestStrategy] | None = Field(
-        default=None, min_length=1, max_length=7
+        default=None, min_length=1, max_length=10
     )
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
-        max_length=12,
+        max_length=20,
+    )
+    cache_modes: list[EvaluationCacheMode] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4,
     )
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
@@ -395,6 +426,14 @@ class EvaluationRunCreateRequest(BaseModel):
         self.strategies = deduped
         self.strategy_type = deduped[0]
         self.metrics = list(dict.fromkeys(self.metrics))
+        if self.cache_modes:
+            deduped_cache_modes = list(dict.fromkeys(self.cache_modes))
+            if (
+                EvaluationCacheMode.WARM in deduped_cache_modes
+                and EvaluationCacheMode.COLD not in deduped_cache_modes
+            ):
+                deduped_cache_modes.append(EvaluationCacheMode.COLD)
+            self.cache_modes = deduped_cache_modes
         return self
 
 
@@ -402,7 +441,7 @@ class EvaluationRunCreateResponse(BaseModel):
     evaluation_run_id: int
     job_id: int
     status: Literal["queued"]
-    strategies: list[RetrievalStrategy] = Field(default_factory=list)
+    strategies: list[str] = Field(default_factory=list)
 
 
 class EvaluationMetricResult(BaseModel):
@@ -441,9 +480,7 @@ class EvaluationRunSummary(BaseModel):
     evaluation_dataset_id: int | None = None
     dataset_name: str
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
-    strategies: list[RetrievalStrategy] = Field(
-        default_factory=lambda: [DEFAULT_RETRIEVAL_STRATEGY]
-    )
+    strategies: list[str] = Field(default_factory=lambda: [DEFAULT_RETRIEVAL_STRATEGY.value])
     metric_names: list[str] = Field(default_factory=list)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
     status: EvaluationStatus
@@ -551,7 +588,7 @@ class EvaluationRunDetail(EvaluationRunSummary):
 
 class EvaluationStrategyComparisonResponse(BaseModel):
     evaluation_run_id: int
-    strategies: list[RetrievalStrategy]
+    strategies: list[str]
     metrics: list[StrategyComparisonMetric]
 
 

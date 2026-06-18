@@ -17,7 +17,8 @@ import type {
   EvaluationFailureCandidate,
   EvaluationFailureSeverity,
   EvaluationMetricResult,
-  EvaluationDataset
+  EvaluationDataset,
+  StrategyComparisonMetric
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 
@@ -164,6 +165,8 @@ export function EvaluationDetailPage() {
           <thead>
             <tr>
               <th>Strategy</th>
+              <th>Provider</th>
+              <th>Cache</th>
               <th>
                 <span className="metric-heading">
                   Metric
@@ -179,8 +182,10 @@ export function EvaluationDetailPage() {
           </thead>
           <tbody>
             {[...run.data.strategy_comparison].sort(compareStrategyMetrics).map((metric) => (
-              <tr key={`${metric.strategy_type}-${metric.metric_name}`}>
-                <td>{metric.strategy_type}</td>
+              <tr key={`${comparisonMetricLabel(metric)}-${metric.metric_name}`}>
+                <td>{comparisonMetricLabel(metric)}</td>
+                <td>{metric.graph_store_provider ?? "-"}</td>
+                <td>{metric.cache_mode ?? "-"}</td>
                 <td>
                   <span className="metric-name-cell">
                     {metric.metric_name}
@@ -196,11 +201,53 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.strategy_comparison.length === 0 ? (
               <tr>
-                <td colSpan={7}>No strategy comparison yet.</td>
+                <td colSpan={9}>No strategy comparison yet.</td>
               </tr>
             ) : null}
           </tbody>
         </table>
+      </section>
+
+      <section className="admin-section">
+        <h2>Provider Summary</h2>
+        <dl className="detail-grid">
+          {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "provider_comparison").map(
+            ([name, value]) => (
+              <div key={name}>
+                <dt>{name}</dt>
+                <dd>{value}</dd>
+              </div>
+            )
+          )}
+          {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "provider_comparison").length ===
+          0 ? (
+            <div>
+              <dt>providers</dt>
+              <dd>No provider summary yet.</dd>
+            </div>
+          ) : null}
+        </dl>
+      </section>
+
+      <section className="admin-section">
+        <h2>Cache Summary</h2>
+        <dl className="detail-grid">
+          {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "cache_comparison").map(
+            ([name, value]) => (
+              <div key={name}>
+                <dt>{name}</dt>
+                <dd>{value}</dd>
+              </div>
+            )
+          )}
+          {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "cache_comparison").length ===
+          0 ? (
+            <div>
+              <dt>cache</dt>
+              <dd>No cache summary yet.</dd>
+            </div>
+          ) : null}
+        </dl>
       </section>
 
       <section className="admin-section">
@@ -522,7 +569,7 @@ function formatMetricDetails(metrics: EvaluationMetricResult[]) {
         return (
           <span className="metric-detail-item" key={`${metric.strategy_type}-${metric.metric_name}`}>
             <span>
-              {metric.metric_name}={formatScore(metric.metric_score)}
+              {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
               {label}
             </span>
             <MetricHelp metricName={metric.metric_name} />
@@ -533,12 +580,13 @@ function formatMetricDetails(metrics: EvaluationMetricResult[]) {
   );
 }
 
-function compareStrategyMetrics(
-  left: { strategy_type: string; metric_name: string },
-  right: { strategy_type: string; metric_name: string }
-) {
+function comparisonMetricLabel(metric: StrategyComparisonMetric) {
+  return metric.comparison_label || metric.strategy_type;
+}
+
+function compareStrategyMetrics(left: StrategyComparisonMetric, right: StrategyComparisonMetric) {
   return (
-    left.strategy_type.localeCompare(right.strategy_type) ||
+    comparisonMetricLabel(left).localeCompare(comparisonMetricLabel(right)) ||
     compareMetricNames(left.metric_name, right.metric_name)
   );
 }
@@ -574,6 +622,35 @@ function recordValue(value: Record<string, unknown> | null, key: string): Record
   return nested && typeof nested === "object" && !Array.isArray(nested)
     ? (nested as Record<string, unknown>)
     : null;
+}
+
+function comparisonSummaryEntries(
+  summary: Record<string, unknown> | null,
+  key: "provider_comparison" | "cache_comparison"
+): Array<[string, string]> {
+  const comparison = recordValue(summary, key);
+  if (!comparison) {
+    return [];
+  }
+  return Object.entries(comparison)
+    .map(([name, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return [name, "-"] as [string, string];
+      }
+      const metricSummary = recordValue(value as Record<string, unknown>, "metric_summary");
+      return [name, formatSummaryMetrics(metricSummary)] as [string, string];
+    })
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
+function formatSummaryMetrics(summary: Record<string, unknown> | null) {
+  if (!summary) {
+    return "-";
+  }
+  const parts = orderedMetricEntries(Object.entries(summary))
+    .map(([name, value]) => (typeof value === "number" ? `${name}=${value.toFixed(3)}` : null))
+    .filter((value): value is string => Boolean(value));
+  return parts.length ? parts.join(", ") : "-";
 }
 
 function formatUnknownMetric(value: unknown) {

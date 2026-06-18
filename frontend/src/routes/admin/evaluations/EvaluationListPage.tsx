@@ -9,7 +9,10 @@ import {
   useEvaluationDatasets,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
-import type { EvaluationRunnableStrategy } from "../../../features/evaluations/evaluationTypes";
+import type {
+  EvaluationCacheMode,
+  EvaluationRunnableStrategy
+} from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
@@ -20,6 +23,7 @@ export function EvaluationListPage() {
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
   const [strategies, setStrategies] = useState<EvaluationRunnableStrategy[]>(["dense"]);
+  const [cacheModes, setCacheModes] = useState<EvaluationCacheMode[]>(["default"]);
   const [message, setMessage] = useState<string | null>(null);
   const params = useMemo(
     () => ({
@@ -50,6 +54,7 @@ export function EvaluationListPage() {
       case_limit: safeCaseLimit,
       strategy_type: strategies[0] ?? "dense",
       strategies,
+      cache_modes: cacheModes,
       trigger_type: "manual"
     });
     setMessage(`Evaluation run #${result.evaluation_run_id} queued as job #${result.job_id}.`);
@@ -96,6 +101,8 @@ export function EvaluationListPage() {
                 "dense",
                 "sparse",
                 "hybrid",
+                "graph_postgres",
+                "graph_neo4j",
                 "agentic_router",
                 "llm_tool_orchestrator",
                 "langchain_agentic",
@@ -114,6 +121,24 @@ export function EvaluationListPage() {
                   }}
                 />
                 {strategy}
+              </label>
+            ))}
+          </span>
+        </div>
+        <div className="field-group">
+          cache modes
+          <span className="inline-options">
+            {(["default", "disabled", "cold", "warm"] as EvaluationCacheMode[]).map((mode) => (
+              <label key={mode}>
+                <input
+                  type="checkbox"
+                  checked={cacheModes.includes(mode)}
+                  onChange={(event) => {
+                    const next = nextCacheModes(cacheModes, mode, event.target.checked);
+                    setCacheModes(next.length ? next : ["default"]);
+                  }}
+                />
+                {mode}
               </label>
             ))}
           </span>
@@ -242,4 +267,18 @@ function formatMetricSummary(summary: Record<string, number>) {
       ))}
     </span>
   );
+}
+
+function nextCacheModes(
+  current: EvaluationCacheMode[],
+  mode: EvaluationCacheMode,
+  checked: boolean
+): EvaluationCacheMode[] {
+  if (checked && mode === "default") {
+    return ["default"];
+  }
+  if (checked) {
+    return [...current.filter((item) => item !== "default"), mode];
+  }
+  return current.filter((item) => item !== mode);
 }

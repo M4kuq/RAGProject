@@ -837,6 +837,10 @@ def _safe_strategy_comparison(value: object) -> list[dict[str, object]]:
         items.append(
             {
                 "strategy_type": entry.get("strategy_type"),
+                "comparison_label": entry.get("comparison_label"),
+                "retrieval_strategy": entry.get("retrieval_strategy"),
+                "graph_store_provider": entry.get("graph_store_provider"),
+                "cache_mode": entry.get("cache_mode"),
                 "metric_name": entry.get("metric_name"),
                 "average": entry.get("average"),
                 "p95": entry.get("p95"),
@@ -862,7 +866,10 @@ def _strategy_metrics(
                 metric_summary.update(cast(dict[str, object], entry["metric_summary"]))
         if isinstance(comparison, list):
             for item in comparison:
-                if not isinstance(item, dict) or item.get("strategy_type") != strategy:
+                if not isinstance(item, dict) or not _matches_strategy_comparison(
+                    item,
+                    strategy,
+                ):
                     continue
                 metric_name = item.get("metric_name")
                 average = item.get("average")
@@ -874,6 +881,19 @@ def _strategy_metrics(
         if metric_summary:
             metrics.append({"strategy": strategy, "metric_summary": metric_summary})
     return metrics
+
+
+def _matches_strategy_comparison(item: dict[str, object], strategy: str) -> bool:
+    candidates = {
+        value
+        for value in (
+            item.get("strategy_type"),
+            item.get("comparison_label"),
+            item.get("retrieval_strategy"),
+        )
+        if isinstance(value, str)
+    }
+    return strategy in candidates
 
 
 def _safe_output(data: dict[str, Any], max_chars: int) -> dict[str, Any]:

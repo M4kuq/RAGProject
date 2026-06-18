@@ -1,0 +1,52 @@
+{
+  "schema_version": "phase2.evaluation_dataset.v1",
+  "dataset": {
+    "dataset_name": "phase3_graph_multi_hop",
+    "description": "Safe synthetic GraphRAG multi-hop strategy comparison fixture.",
+    "version": "v1",
+    "source_type": "fixture",
+    "status": "active",
+    "metadata_json": {
+      "owner": "phase3_graph_evaluation"
+    }
+  },
+  "cases": [
+    {
+      "case_key": "graph_fastapi_postgres_qdrant",
+      "question": "Which storage components are connected to FastAPI in the demo architecture?",
+      "expected_answer": "FastAPI connects to PostgreSQL and Qdrant in the demo architecture.",
+      "expected_keywords": ["FastAPI", "PostgreSQL", "Qdrant"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["graph", "multi_hop", "synthetic"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "hybrid"],
+        "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
+        "expected_relation_types": ["uses", "stores"],
+        "required_hop_count": 2
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "graph_worker_cache_relations",
+      "question": "How does the worker relate to retrieval cache records?",
+      "expected_answer": "The worker evaluates retrieval runs that can record retrieval cache status.",
+      "expected_keywords": ["worker", "retrieval cache", "status"],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["graph", "cache", "synthetic"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "agentic_router"],
+        "expected_entity_labels": ["worker", "retrieval cache"],
+        "expected_relation_types": ["records", "evaluates"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    }
+  ],
+  "metric_specs": []
+}

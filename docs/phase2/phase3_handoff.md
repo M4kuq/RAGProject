@@ -32,7 +32,7 @@ Design baseline entry points:
 | PR-50 Graph Debug UI / Graph Evaluation | Add admin-safe graph panels and graph quality metrics. |
 | PR-51 OCR / PaddleOCR | Add scanned document/image OCR with confidence and region metadata. |
 | PR-52 Image Upload | Extend approved upload and processing paths for images. |
-| PR-53 Multimodal Citation UI | Navigate OCR/image regions without exposing raw private content. |
+| PR-53 Graph Evaluation / Strategy Comparison | Compare dense, hybrid, agentic, graph_postgres, and graph_neo4j with cache-aware safe reports. |
 | PR-54 External LLM Provider | Add optional provider switching with explicit secret/export handling. |
 | PR-55 S3 Storage Adapter | Add optional object storage path. |
 | PR-56 OIDC / OAuth | Add external identity while preserving viewer/admin boundaries. |

@@ -10,6 +10,7 @@ export type RetrievalStrategy =
   | "multi_query_hybrid"
   | "metadata_filtered"
   | "version_aware"
+  | "graph"
   | "agentic_router"
   | "llm_tool_orchestrator"
   | "langchain_agentic"
@@ -19,11 +20,15 @@ export type EvaluationRunnableStrategy =
   | "dense"
   | "sparse"
   | "hybrid"
+  | "graph"
+  | "graph_postgres"
+  | "graph_neo4j"
   | "agentic_router"
   | "llm_tool_orchestrator"
   | "langchain_agentic"
   | "langgraph_agentic";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
+export type EvaluationCacheMode = "default" | "disabled" | "cold" | "warm";
 
 export type EvaluationRunCreateRequest = {
   dataset_name: string;
@@ -31,6 +36,7 @@ export type EvaluationRunCreateRequest = {
   case_limit: number | null;
   strategy_type?: EvaluationRunnableStrategy;
   strategies?: EvaluationRunnableStrategy[];
+  cache_modes?: EvaluationCacheMode[];
   metrics?: string[];
   top_k?: number | null;
   rerank_top_n?: number | null;
@@ -41,7 +47,7 @@ export type EvaluationRunCreateResponse = {
   evaluation_run_id: number;
   job_id: number;
   status: "queued";
-  strategies: EvaluationRunnableStrategy[];
+  strategies: string[];
 };
 
 export type EvaluationMetricResult = {
@@ -80,7 +86,7 @@ export type EvaluationRunSummary = {
   evaluation_dataset_id: number | null;
   dataset_name: string;
   strategy_type: RetrievalStrategy;
-  strategies: RetrievalStrategy[];
+  strategies: string[];
   metric_names: string[];
   trigger_type: EvaluationTriggerType;
   status: EvaluationStatus;
@@ -148,7 +154,7 @@ export type EvaluationFailurePromotionResponse = {
 
 export type StrategyComparisonMetric = {
   schema_version: "phase2.evaluation.v1";
-  strategy_type: RetrievalStrategy;
+  strategy_type: string;
   metric_name: string;
   average: number | null;
   p50: number | null;
@@ -156,6 +162,10 @@ export type StrategyComparisonMetric = {
   count: number;
   failed_count: number;
   not_applicable_count: number;
+  comparison_label?: string | null;
+  retrieval_strategy?: RetrievalStrategy | null;
+  graph_store_provider?: string | null;
+  cache_mode?: EvaluationCacheMode | null;
 };
 
 export type PagedEvaluationRuns = {
