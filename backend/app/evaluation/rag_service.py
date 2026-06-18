@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -47,6 +48,7 @@ from app.schemas.rag import (
     RagSearchRequest,
     RetrievalScoreSummary,
 )
+from app.services.graph_rag_service import GraphRagService
 from app.services.rag_service import (
     ContextCandidateRef,
     RagSearchPipelineError,
@@ -99,12 +101,50 @@ def create_evaluation_rag_service(
         reranker=create_reranker(settings),
         answer_generator=create_answer_generator(settings),
     )
-    return EvaluationRagQuestionService(service)
+    return EvaluationRagQuestionService(service, graph_service=GraphRagService(service))
 
 
 class EvaluationRagQuestionService:
-    def __init__(self, service: RagService) -> None:
+    def __init__(self, service: RagService, graph_service: GraphRagService | None = None) -> None:
         self.service = service
+        self.graph_service = graph_service or GraphRagService(service)
+
+    def evaluate_strategy_target(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        target: object,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+        evaluation_run_id: int | None = None,
+    ) -> RagEvaluationResult:
+        raw_strategy = getattr(target, "retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)
+        strategy_type = (
+            raw_strategy
+            if isinstance(raw_strategy, RetrievalStrategy)
+            else RetrievalStrategy(str(raw_strategy))
+        )
+        cache_mode = str(getattr(target, "cache_mode", "default"))
+        graph_store_provider = getattr(target, "graph_store_provider", None)
+        with _evaluation_target_settings(
+            self.service.settings,
+            strategy_type=strategy_type,
+            graph_store_provider=graph_store_provider
+            if isinstance(graph_store_provider, str)
+            else None,
+            cache_mode=cache_mode,
+            evaluation_run_id=evaluation_run_id,
+        ):
+            return self.answer_question_with_strategy(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
 
     def _no_context_result_if_insufficient_answer(
         self,
@@ -305,6 +345,14 @@ class EvaluationRagQuestionService:
         top_k: int | None = None,
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
+        if strategy_type == RetrievalStrategy.GRAPH:
+            return self._answer_question_with_graph(
+                db,
+                question=question,
+                request_id=request_id,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
         if strategy_type == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
             return self._answer_question_with_llm_tool_orchestrator(
                 db,
@@ -341,6 +389,163 @@ class EvaluationRagQuestionService:
                 request_id=request_id,
             )
             if not response.items:
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=response.retrieval_run_id,
+                    error_code="no_context_found",
+                )
+                return _failed_evaluation_result(
+                    response.retrieval_run_id,
+                    "no_context_found",
+                    retrieval_score_summary=response.retrieval_score_summary,
+                )
+            citation_sources = [
+                _citation_source_from_search_item(index, item)
+                for index, item in enumerate(response.items, start=1)
+            ]
+            context_items = _context_items_from_search_items(
+                db,
+                response.items,
+                max_context_chars=self.service.settings.generation_max_context_chars,
+            )
+            prompt_citation_sources = _prompt_citation_sources(
+                context_items=context_items,
+                citation_sources=citation_sources,
+            )
+            if not context_items or not prompt_citation_sources:
+                self.service._mark_failed_safely(
+                    db,
+                    retrieval_run_id=response.retrieval_run_id,
+                    error_code="no_context_found",
+                )
+                return _failed_evaluation_result(
+                    response.retrieval_run_id,
+                    "no_context_found",
+                    retrieval_score_summary=response.retrieval_score_summary,
+                )
+            generation = self.service.answer_generator.generate(
+                GenerationRequest(
+                    message=question,
+                    context_items=context_items,
+                    max_output_chars=self.service.settings.generation_max_output_chars,
+                )
+            )
+            parsed_generation = parse_generation_output(generation.content)
+            if no_context_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=response.retrieval_run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=response.retrieval_score_summary,
+            ):
+                return no_context_result
+            _validate_generation_output_safety(
+                parsed_generation.answer_text,
+                context_items=context_items,
+            )
+            cited_sources = validate_generation_citations(
+                parsed_generation,
+                source_map=prompt_citation_sources,
+            )
+            self.service.repository.save_citations(
+                db,
+                citations=[
+                    _citation_input(source, retrieval_run_id=response.retrieval_run_id)
+                    for source in cited_sources
+                ],
+            )
+            citation_records = self.service.repository.list_citations_for_run(
+                db,
+                retrieval_run_id=response.retrieval_run_id,
+            )
+            confidence = calculate_confidence(
+                ConfidenceInputs(
+                    retrieval_score_summary=response.retrieval_score_summary,
+                    marker_count=len(parsed_generation.markers),
+                    unique_citation_count=len(cited_sources),
+                    selected_count=len(prompt_citation_sources),
+                ),
+                self.service.settings,
+            )
+            run = self.service._require_run(db, response.retrieval_run_id)
+            self.service.repository.mark_succeeded(
+                db,
+                run=run,
+                retrieval_score_summary=response.retrieval_score_summary.model_dump(mode="json"),
+                rerank_score_top1=_optional_decimal_score(
+                    response.retrieval_score_summary.top1_rerank_score
+                ),
+                answer_confidence=_decimal_score(confidence.answer_confidence),
+                groundedness_score=_decimal_score(confidence.groundedness_score),
+                confidence_label=confidence.confidence_label,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            db.refresh(run)
+            return RagEvaluationResult(
+                retrieval_run_id=response.retrieval_run_id,
+                status="succeeded",
+                answer_text=parsed_generation.answer_text,
+                citations=[_citation_response(record) for record in citation_records],
+                confidence=_confidence_response(run),
+                retrieval_score_summary=response.retrieval_score_summary,
+                retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
+                context_sources_for_safety=[item.text for item in context_items],
+            )
+        except CitationBuildError:
+            _mark_latest_failed_safely(
+                self.service,
+                db,
+                request_id=request_id,
+                error_code="citation_build_failed",
+            )
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                "citation_build_failed",
+            )
+        except AnswerGenerationError:
+            _mark_latest_failed_safely(
+                self.service,
+                db,
+                request_id=request_id,
+                error_code="generation_failed",
+            )
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                "generation_failed",
+            )
+        except RagSearchPipelineError as exc:
+            return _failed_evaluation_result(
+                _latest_retrieval_run_id(db, request_id=request_id),
+                exc.error_code,
+            )
+
+    def _answer_question_with_graph(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        top_k: int | None,
+        rerank_top_n: int | None,
+    ) -> RagEvaluationResult:
+        try:
+            response = self.graph_service.search(
+                db,
+                payload=RagSearchRequest(
+                    query=question,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    strategy=RagSearchRequestStrategy.GRAPH,
+                ),
+                request_id=request_id,
+            )
+            if not response.items:
+                if _graph_provider_unavailable(response.retrieval_score_summary):
+                    return _failed_evaluation_result(
+                        response.retrieval_run_id,
+                        "graph_provider_skipped",
+                        retrieval_score_summary=response.retrieval_score_summary,
+                    )
                 self.service._mark_failed_safely(
                     db,
                     retrieval_run_id=response.retrieval_run_id,
@@ -1340,6 +1545,48 @@ def _latest_retrieval_run_id(db: Session, *, request_id: str | None) -> int | No
         .order_by(RetrievalRun.created_at.desc(), RetrievalRun.retrieval_run_id.desc())
     )
     return run.retrieval_run_id if run is not None else None
+
+
+@contextmanager
+def _evaluation_target_settings(
+    settings: Settings,
+    *,
+    strategy_type: RetrievalStrategy,
+    graph_store_provider: str | None,
+    cache_mode: str,
+    evaluation_run_id: int | None,
+):
+    fields = {
+        "graph_retrieval_enabled": settings.graph_retrieval_enabled,
+        "graph_store_provider": settings.graph_store_provider,
+        "retrieval_cache_enabled": settings.retrieval_cache_enabled,
+        "retrieval_cache_namespace": settings.retrieval_cache_namespace,
+    }
+    try:
+        if strategy_type == RetrievalStrategy.GRAPH:
+            settings.graph_retrieval_enabled = True
+            settings.graph_store_provider = (
+                graph_store_provider
+                if graph_store_provider in {"postgres", "neo4j"}
+                else "postgres"
+            )
+        if cache_mode == "disabled":
+            settings.retrieval_cache_enabled = False
+        elif cache_mode in {"cold", "warm"}:
+            settings.retrieval_cache_enabled = True
+            if evaluation_run_id is not None:
+                namespace = fields["retrieval_cache_namespace"]
+                settings.retrieval_cache_namespace = f"{namespace}.eval.{evaluation_run_id}"
+        yield
+    finally:
+        for field_name, value in fields.items():
+            setattr(settings, field_name, value)
+
+
+def _graph_provider_unavailable(summary: RetrievalScoreSummary) -> bool:
+    payload = summary.model_dump(mode="json")
+    reason_codes = payload.get("graph_reason_codes")
+    return isinstance(reason_codes, list) and "graph_store_provider_unavailable" in reason_codes
 
 
 def _mark_latest_failed_safely(

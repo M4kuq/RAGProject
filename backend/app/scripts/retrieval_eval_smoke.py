@@ -1233,7 +1233,7 @@ def _request_id(evaluation_run_id: int, strategies: list[str]) -> str:
 def _metrics_by_strategy(detail: EvaluationRunDetail) -> list[dict[str, object]]:
     grouped: dict[str, dict[str, object]] = {}
     for metric in detail.strategy_comparison:
-        strategy = metric.strategy_type.value
+        strategy = metric.comparison_label or metric.strategy_type
         entry = grouped.setdefault(strategy, {"strategy": strategy, "metrics": {}})
         metrics = entry["metrics"]
         if not isinstance(metrics, dict):

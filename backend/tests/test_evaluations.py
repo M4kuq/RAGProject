@@ -19,6 +19,7 @@ from app.core.errors import ConflictError
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
+from app.db.graph_models import GraphRetrievalPath
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
@@ -205,6 +206,18 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
     assert cases[0].tags == ("dense", "baseline")
     assert cases[0].metadata_json == {"expected_strategy": "dense"}
     assert cases[4].metadata_json == {"expected_strategy": "hybrid"}
+    graph_cases = load_evaluation_cases("phase3_graph_multi_hop", case_limit=5)
+    assert [case.case_id for case in graph_cases] == [
+        "graph_fastapi_postgres_qdrant",
+        "graph_worker_cache_relations",
+    ]
+    assert graph_cases[0].metadata_json == {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "hybrid"],
+        "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
+        "expected_relation_types": ["uses", "stores"],
+        "required_hop_count": 2,
+    }
 
     fixture_path = (
         Path(__file__).resolve().parents[1]
@@ -226,8 +239,26 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "no_context_rate",
         "p95_latency",
         "strategy_selection_accuracy",
+        "graph_path_relevance",
+        "graph_citation_coverage",
+        "multi_hop_answerability",
+        "cache_hit_rate",
+        "cache_saved_latency",
+        "entity_relation_quality_summary",
     }
+    graph_fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "evaluation"
+        / "fixtures"
+        / "phase3_graph_multi_hop.json"
+    )
+    graph_manifest = EvaluationDatasetManifest.model_validate_json(
+        graph_fixture_path.read_text(encoding="utf-8")
+    )
+    assert graph_manifest.dataset.dataset_name == "phase3_graph_multi_hop"
     dumped = manifest.model_dump_json()
+    dumped += graph_manifest.model_dump_json()
     assert "raw prompt" not in dumped.lower()
     assert "full context" not in dumped.lower()
     assert "raw chunk" not in dumped.lower()
@@ -808,11 +839,26 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "budget_exhausted_rate",
                 "sufficiency_score_avg",
                 "retrieval_call_count_avg",
+                "graph_path_relevance",
+                "graph_citation_coverage",
+                "multi_hop_answerability",
+                "cache_hit_rate",
+                "cache_saved_latency",
+                "entity_relation_quality_summary",
+            ],
+            "cache_modes": ["default"],
+            "strategy_targets": [
+                {
+                    "schema_version": "phase3.evaluation_target.v1",
+                    "comparison_label": "dense",
+                    "retrieval_strategy": "dense",
+                    "cache_mode": "default",
+                }
             ],
             "case_limit": 1,
             "top_k": None,
             "rerank_top_n": None,
-            "runner_implementation": "phase2_strategy_evaluation_runner",
+            "runner_implementation": "phase3_graph_cache_strategy_evaluation_runner",
             "strategy_runner_enabled": True,
         }
 
@@ -1179,6 +1225,153 @@ def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> No
                 and metric.metric_name == "recall_at_k"
             )
             assert dense_recall.average == 1.0
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="graph_cache_compare",
+                    description="Compare graph providers and cache modes.",
+                    version="v1",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="graph_cache_case",
+                    question="Which graph provider should be compared without raw output?",
+                    expected_keywords=["graph"],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "graph",
+                        "acceptable_strategies": ["graph", "hybrid"],
+                        "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
+                        "expected_relation_types": ["uses", "stores"],
+                        "required_hop_count": 2,
+                    },
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=[
+                        "dense",
+                        "hybrid",
+                        "agentic_router",
+                        "graph_postgres",
+                        "graph_neo4j",
+                    ],
+                    cache_modes=["warm", "cold", "disabled"],
+                    metrics=[
+                        "recall_at_k",
+                        "citation_coverage",
+                        "faithfulness",
+                        "no_context_rate",
+                        "p95_latency",
+                        "fallback_rate",
+                        "graph_path_relevance",
+                        "graph_citation_coverage",
+                        "multi_hop_answerability",
+                        "cache_hit_rate",
+                        "cache_saved_latency",
+                        "entity_relation_quality_summary",
+                    ],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            assert "graph_postgres__cache_cold" in created.strategies
+            assert "graph_neo4j__cache_warm" in created.strategies
+            assert created.strategies[:3] == [
+                "dense__cache_disabled",
+                "dense__cache_cold",
+                "dense__cache_warm",
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-graph-cache-eval",
+            )
+            assert result["status"] == "succeeded"
+            assert result["case_count"] == 15
+            assert result["succeeded_count"] == 15
+            assert result["failed_count"] == 0
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            assert run.strategy_metrics_summary_json is not None
+            strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
+            assert "graph_postgres__cache_cold" in strategy_metrics
+            assert "graph_neo4j__cache_warm" in strategy_metrics
+            assert run.strategy_metrics_summary_json["provider_comparison"]["postgres"]
+            assert run.strategy_metrics_summary_json["provider_comparison"]["neo4j"]
+            assert set(run.strategy_metrics_summary_json["cache_comparison"]) == {
+                "disabled",
+                "cold",
+                "warm",
+            }
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.failed_count == 0
+            assert {metric.comparison_label for metric in detail.strategy_comparison} >= {
+                "graph_postgres__cache_cold",
+                "graph_neo4j__cache_warm",
+            }
+            graph_relevance = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_cold"
+                and metric.metric_name == "graph_path_relevance"
+            )
+            assert graph_relevance.average == 1.0
+            neo4j_graph_metric = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "graph_path_relevance"
+            )
+            assert neo4j_graph_metric.not_applicable_count == 1
+            cache_hit = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_warm"
+                and metric.metric_name == "cache_hit_rate"
+            )
+            assert cache_hit.average == 1.0
+            persisted_details = json.dumps(
+                [result.metric_detail_json for result in db.scalars(select(EvaluationResult)).all()]
+            ).lower()
+            assert "which graph provider" not in persisted_details
+            assert "safe target citation preview" not in persisted_details
+            assert "raw output" not in persisted_details
+            assert "graph_store_provider" in persisted_details
     finally:
         engine.dispose()
 
@@ -2460,6 +2653,173 @@ class _StrategyAwareFakeEvaluationRagService(_FakeEvaluationRagService):
         )
 
 
+class _GraphCacheAwareEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+    def evaluate_strategy_target(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        target: object,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+        evaluation_run_id: int | None = None,
+    ) -> RagEvaluationResult:
+        del top_k, rerank_top_n, evaluation_run_id
+        strategy = getattr(target, "retrieval_strategy", RetrievalStrategy.DENSE)
+        if not isinstance(strategy, RetrievalStrategy):
+            strategy = RetrievalStrategy(str(strategy))
+        provider = getattr(target, "graph_store_provider", None)
+        cache_mode = _target_cache_mode_value(target)
+        cache_summary = {
+            "schema_version": "phase3.retrieval_cache.v1",
+            "enabled": cache_mode != "disabled",
+            "status": "hit"
+            if cache_mode == "warm"
+            else "miss"
+            if cache_mode == "cold"
+            else "bypass",
+            "reason": "cache_disabled" if cache_mode == "disabled" else "evaluation_cache_mode",
+        }
+        if strategy == RetrievalStrategy.GRAPH and provider == "neo4j":
+            return self._neo4j_skipped_result(
+                db,
+                question=question,
+                request_id=request_id,
+                cache_summary=cache_summary,
+            )
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=strategy.value,
+            cache_summary_json=cache_summary,
+            retrieval_score_summary={
+                "requested_top_k": 5,
+                "qdrant_candidate_count": 1,
+                "post_filter_candidate_count": 1,
+                "selected_count": 1,
+                "excluded_by_rdb_check_count": 0,
+                "graph_store_provider": provider if provider in {"postgres", "neo4j"} else None,
+                "graph_entity_lookup_count": 3 if strategy == RetrievalStrategy.GRAPH else 0,
+                "graph_relation_count": 2 if strategy == RetrievalStrategy.GRAPH else 0,
+                "graph_source_candidate_count": 1 if strategy == RetrievalStrategy.GRAPH else 0,
+                "fallback_used": False,
+            },
+        )
+        if strategy == RetrievalStrategy.GRAPH:
+            db.add(
+                GraphRetrievalPath(
+                    retrieval_run_id=retrieval_run.retrieval_run_id,
+                    path_json={
+                        "schema_version": "phase3.graph_path.v2",
+                        "provider": "postgres",
+                        "safe_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
+                        "relation_types": ["uses", "stores"],
+                        "depth": 2,
+                    },
+                    score_breakdown_json={"combined_score": 0.91},
+                    source_chunk_ids_json=[100],
+                )
+            )
+            db.flush()
+        snippet = f"{strategy.value} safe target citation preview."
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="succeeded",
+            answer_text="Graph evaluation selects a safe provider comparison.",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=100,
+                    source_label="graph-eval.md",
+                    snippet=snippet,
+                    old_version_flag=False,
+                )
+            ],
+            confidence=RagAskConfidence(
+                answer_confidence=0.9,
+                groundedness_score=0.9,
+                confidence_label="High",
+            ),
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+                graph_store_provider=provider if provider in {"postgres", "neo4j"} else None,
+                graph_entity_lookup_count=3 if strategy == RetrievalStrategy.GRAPH else 0,
+                graph_relation_count=2 if strategy == RetrievalStrategy.GRAPH else 0,
+                graph_source_candidate_count=1 if strategy == RetrievalStrategy.GRAPH else 0,
+                fallback_used=False,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=100,
+                    logical_document_id=10,
+                    rank_order=1,
+                    snippet=snippet,
+                )
+            ],
+            context_sources_for_safety=[],
+        )
+
+    def _neo4j_skipped_result(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        cache_summary: dict[str, object],
+    ) -> RagEvaluationResult:
+        retrieval_run = _create_fake_retrieval_run(
+            db,
+            question=question,
+            status="failed",
+            request_id=request_id,
+            error_code="graph_provider_skipped",
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            cache_summary_json=cache_summary,
+            retrieval_score_summary={
+                "requested_top_k": 5,
+                "qdrant_candidate_count": 0,
+                "post_filter_candidate_count": 0,
+                "selected_count": 0,
+                "excluded_by_rdb_check_count": 0,
+                "graph_store_provider": "neo4j",
+                "graph_reason_codes": [
+                    "graph_store_provider_unavailable",
+                    "neo4j_not_configured",
+                ],
+            },
+        )
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run.retrieval_run_id,
+            status="failed",
+            answer_text="",
+            citations=[],
+            confidence=None,
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=0,
+                post_filter_candidate_count=0,
+                selected_count=0,
+                excluded_by_rdb_check_count=0,
+                graph_store_provider="neo4j",
+                graph_reason_codes=[
+                    "graph_store_provider_unavailable",
+                    "neo4j_not_configured",
+                ],
+            ),
+            retrieved_items=[],
+            context_sources_for_safety=[],
+            error_code="graph_provider_skipped",
+        )
+
+
 class _AgenticEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
     def evaluate_strategy(
         self,
@@ -2730,6 +3090,12 @@ def _failing_rag_service_factory(settings: Settings, db: Session) -> _FakeEvalua
     raise RuntimeError("synthetic evaluation setup failure")
 
 
+def _target_cache_mode_value(target: object) -> str:
+    cache_mode = getattr(target, "cache_mode", "default")
+    value = getattr(cache_mode, "value", cache_mode)
+    return str(value)
+
+
 def _create_fake_retrieval_run(
     db: Session,
     *,
@@ -2740,6 +3106,7 @@ def _create_fake_retrieval_run(
     strategy_type: str = "dense",
     strategy_decision_json: dict[str, object] | None = None,
     retrieval_score_summary: dict[str, object] | None = None,
+    cache_summary_json: dict[str, object] | None = None,
 ) -> RetrievalRun:
     now = datetime.now(UTC)
     run = RetrievalRun(
@@ -2758,6 +3125,7 @@ def _create_fake_retrieval_run(
             "excluded_by_rdb_check_count": 0,
         },
         strategy_decision_json=strategy_decision_json,
+        cache_summary_json=cache_summary_json,
         answer_confidence=0.9 if status == "succeeded" else None,
         groundedness_score=0.9 if status == "succeeded" else None,
         confidence_label="High" if status == "succeeded" else None,

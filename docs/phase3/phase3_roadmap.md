@@ -14,7 +14,7 @@ Phase3 expands the RAG system from advanced text retrieval into Graph-RAG, OCR, 
 | PR-50 | Graph Debug UI / Graph Evaluation | Add admin-safe graph panels and evaluation metrics for graph quality. |
 | PR-51 | OCR Ingest / PaddleOCR / Scanned PDF | Add OCR ingest for scanned documents with region metadata. |
 | PR-52 | Image Upload / Multimodal Metadata | Add image input lifecycle and safe metadata extraction. |
-| PR-53 | Multimodal Citation Panel / OCR Region UI | Add bounded region navigation for OCR/image citations. |
+| PR-53 | Graph Evaluation / Strategy Comparison | Compare dense, hybrid, agentic, graph_postgres, and graph_neo4j with cache-aware safe reports. |
 | PR-54 | External LLM Provider Adapter | Add optional provider adapter with explicit export policy and redaction. |
 | PR-55 | S3 Storage Adapter | Add optional object storage adapter and local-compatible test path. |
 | PR-56 | OIDC / OAuth Authentication | Add external identity boundary while preserving viewer/admin roles. |

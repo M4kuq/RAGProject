@@ -95,6 +95,23 @@ def evaluation_case_strategy_snapshot(
                 acceptable.append(strategy)
         if acceptable:
             snapshot["acceptable_strategies"] = acceptable
+    for key in ("expected_entity_labels", "expected_relation_types"):
+        raw_values = metadata_json.get(key)
+        if isinstance(raw_values, list):
+            values: list[str] = []
+            for item in raw_values:
+                safe_value = _safe_metadata_text_or_none(item, max_length=120)
+                if safe_value is not None and safe_value not in values:
+                    values.append(safe_value)
+            if values:
+                snapshot[key] = values
+    required_hop_count = metadata_json.get("required_hop_count")
+    if (
+        isinstance(required_hop_count, int)
+        and not isinstance(required_hop_count, bool)
+        and required_hop_count > 0
+    ):
+        snapshot["required_hop_count"] = required_hop_count
     return snapshot
 
 
@@ -208,6 +225,28 @@ def _optional_metadata_json(value: dict[str, Any]) -> dict[str, object] | None:
             if strategy not in acceptable:
                 acceptable.append(strategy)
         metadata["acceptable_strategies"] = acceptable
+    for key in ("expected_entity_labels", "expected_relation_types"):
+        raw_values = raw.get(key)
+        if raw_values is None:
+            continue
+        if not isinstance(raw_values, list):
+            raise EvaluationFixtureError("evaluation_case_invalid")
+        values: list[str] = []
+        for item in raw_values:
+            metadata_text = _safe_metadata_text(item, max_length=120)
+            if metadata_text not in values:
+                values.append(metadata_text)
+        metadata[key] = values
+    required_hop_count = raw.get("required_hop_count")
+    if required_hop_count is not None:
+        if (
+            isinstance(required_hop_count, bool)
+            or not isinstance(required_hop_count, int)
+            or required_hop_count < 1
+            or required_hop_count > 10
+        ):
+            raise EvaluationFixtureError("evaluation_case_invalid")
+        metadata["required_hop_count"] = required_hop_count
     return metadata or None
 
 
