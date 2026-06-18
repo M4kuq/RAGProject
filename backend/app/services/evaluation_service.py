@@ -1738,6 +1738,8 @@ class EvaluationService:
             source_case = source_cases.get(item.evaluation_run_item_id)
             results = results_by_item.get(item.evaluation_run_item_id, [])
             metric_by_name = {result.metric_name: result for result in results}
+            if _is_graph_provider_skip_item(item, metric_by_name):
+                continue
             metric_snapshot = _metric_snapshot(metric_by_name)
             case_metadata = _case_metadata_details(metric_by_name)
             item_case_snapshot = _item_case_snapshot(item)
@@ -2845,6 +2847,25 @@ def _case_metadata_details(metric_by_name: dict[str, EvaluationResult]) -> dict[
     if case_metadata is None or not isinstance(case_metadata.metric_detail_json, dict):
         return {}
     return case_metadata.metric_detail_json
+
+
+def _is_graph_provider_skip_item(
+    item: EvaluationRunItem,
+    metric_by_name: dict[str, EvaluationResult],
+) -> bool:
+    target_metadata = _item_target_metadata(item)
+    if _metadata_retrieval_strategy(target_metadata) != RetrievalStrategy.GRAPH:
+        return False
+    case_metadata = _case_metadata_details(metric_by_name)
+    if case_metadata.get("error_code") == "graph_provider_skipped":
+        return True
+    for result in metric_by_name.values():
+        detail = result.metric_detail_json
+        if not isinstance(detail, dict):
+            continue
+        if _is_graph_provider_unavailable(_string_values(detail.get("reason_codes"))):
+            return True
+    return False
 
 
 def _item_case_snapshot(item: EvaluationRunItem) -> dict[str, object]:

@@ -1349,6 +1349,12 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             }
             detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
             assert detail.failed_count == 0
+            assert not any(
+                str(candidate.metric_snapshot.get("evaluation_strategy_label", "")).startswith(
+                    "graph_neo4j"
+                )
+                for candidate in detail.failure_candidates
+            )
             assert {metric.comparison_label for metric in detail.strategy_comparison} >= {
                 "graph_postgres__cache_cold",
                 "graph_neo4j__cache_warm",
