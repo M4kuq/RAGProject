@@ -380,7 +380,12 @@ class EvaluationRagQuestionService:
                 rerank_top_n=rerank_top_n,
             )
         try:
-            response = self.service.search(
+            search_service: RagService | GraphRagService = (
+                self.graph_service
+                if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+                else self.service
+            )
+            response = search_service.search(
                 db,
                 payload=RagSearchRequest(
                     query=question,
@@ -919,7 +924,12 @@ class EvaluationRagQuestionService:
         rerank_top_n: int | None = None,
     ) -> RagEvaluationResult:
         try:
-            response = self.service.search(
+            search_service: RagService | GraphRagService = (
+                self.graph_service
+                if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+                else self.service
+            )
+            response = search_service.search(
                 db,
                 payload=RagSearchRequest(
                     query=question,

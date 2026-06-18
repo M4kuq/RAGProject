@@ -94,6 +94,17 @@ CACHE_MODE_ORDER = {
     EvaluationCacheMode.COLD: 2,
     EvaluationCacheMode.WARM: 3,
 }
+PROVIDER_SKIP_BASE_METRICS = frozenset(
+    {
+        "recall_at_k",
+        "mrr",
+        "faithfulness",
+        "groundedness",
+        "citation_coverage",
+        "context_precision",
+        "no_context_rate",
+    }
+)
 
 STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
@@ -1047,7 +1058,11 @@ class EvaluationService:
                             top_k=top_k,
                             rerank_top_n=rerank_top_n,
                             evaluation_run_id=evaluation_run_id,
-                            cache_attempt_id=cache_attempt_id,
+                            cache_attempt_id=_evaluation_cache_target_id(
+                                cache_attempt_id,
+                                case_key=loaded_case.case_key,
+                                target_label=target.request_strategy_label,
+                            ),
                             baseline_latency_ms=latency_baselines.get(baseline_key),
                         )
                     except Exception:
@@ -1216,6 +1231,11 @@ class EvaluationService:
                 rag_result=rag_result,
             ),
         )
+        if _is_safe_provider_skip(rag_result):
+            metrics = _replace_metrics(
+                metrics,
+                _provider_skip_base_metric_replacements(target=target, rag_result=rag_result),
+            )
         metrics = _replace_metrics(
             metrics,
             [
@@ -2304,11 +2324,25 @@ def _graph_path_relevance_metric(
     matched_count = len(expected_entities & observed_entities) + len(
         expected_relations & observed_relations
     )
-    score = (
-        _ratio_float(matched_count, expected_count)
-        if expected_count
-        else (1.0 if graph_paths else 0.0)
-    )
+    if expected_count <= 0:
+        return MetricValue(
+            metric_name="graph_path_relevance",
+            metric_score=None,
+            metric_label="not_applicable",
+            details={
+                "schema_version": EVALUATION_SCHEMA_VERSION,
+                "not_applicable": True,
+                "reason_code": "graph_relevance_hints_missing",
+                "graph_store_provider": provider,
+                "path_count": len(graph_paths),
+                "expected_entity_label_count": 0,
+                "matched_entity_label_count": 0,
+                "expected_relation_type_count": 0,
+                "matched_relation_type_count": 0,
+                "reason_codes": reason_codes,
+            },
+        )
+    score = _ratio_float(matched_count, expected_count)
     return MetricValue(
         metric_name="graph_path_relevance",
         metric_score=score,
@@ -2548,6 +2582,39 @@ def _is_safe_provider_skip(rag_result: RagEvaluationResult) -> bool:
     return _is_graph_provider_unavailable(reason_codes)
 
 
+def _provider_skip_base_metric_replacements(
+    *,
+    target: EvaluationStrategyTarget,
+    rag_result: RagEvaluationResult,
+) -> list[MetricValue]:
+    summary = (
+        rag_result.retrieval_score_summary.model_dump(mode="json")
+        if rag_result.retrieval_score_summary is not None
+        else {}
+    )
+    reason_codes = _string_values(summary.get("graph_reason_codes"))
+    reason_code = _provider_skip_reason(reason_codes)
+    provider = _safe_graph_provider(
+        target.graph_store_provider or summary.get("graph_store_provider")
+    )
+    details = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "not_applicable": True,
+        "reason_code": reason_code,
+        "reason_codes": reason_codes or [reason_code],
+        "graph_store_provider": provider,
+    }
+    return [
+        MetricValue(
+            metric_name=metric_name,
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        )
+        for metric_name in sorted(PROVIDER_SKIP_BASE_METRICS)
+    ]
+
+
 def _selected_strategy_targets(
     payload: EvaluationRunCreateRequest,
 ) -> list[EvaluationStrategyTarget]:
@@ -2720,6 +2787,16 @@ def _case_request_id(
 def _evaluation_cache_attempt_id(evaluation_run_id: int, started_at: datetime) -> str:
     digest = hashlib.sha256(f"{evaluation_run_id}:{started_at.isoformat()}".encode()).hexdigest()
     return digest[:12]
+
+
+def _evaluation_cache_target_id(
+    attempt_id: str,
+    *,
+    case_key: str,
+    target_label: str,
+) -> str:
+    digest = hashlib.sha256(f"{attempt_id}:{case_key}:{target_label}".encode()).hexdigest()
+    return f"{attempt_id}.{digest[:12]}"
 
 
 def _unique_case_count(items: list[EvaluationRunItem]) -> int:

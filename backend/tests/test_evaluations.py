@@ -5,7 +5,7 @@ import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -62,10 +62,16 @@ from app.schemas.evaluations import (
     EvaluationRunCreateRequest,
     StrategyComparisonMetric,
 )
-from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
+from app.schemas.rag import (
+    RagAskCitation,
+    RagAskConfidence,
+    RagSearchResponse,
+    RetrievalScoreSummary,
+)
 from app.services.evaluation_service import (
     STRATEGY_METRIC_SPECS,
     EvaluationService,
+    _graph_path_relevance_metric,
     _strategy_metrics_summary_json,
 )
 from app.services.rag_service import RagService
@@ -1373,6 +1379,14 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
                 and metric.metric_name == "graph_path_relevance"
             )
             assert neo4j_graph_metric.not_applicable_count == 1
+            neo4j_no_context = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "no_context_rate"
+            )
+            assert neo4j_no_context.average is None
+            assert neo4j_no_context.not_applicable_count == 1
             cache_hit = next(
                 metric
                 for metric in detail.strategy_comparison
@@ -1387,6 +1401,124 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             assert "safe target citation preview" not in persisted_details
             assert "raw output" not in persisted_details
             assert "graph_store_provider" in persisted_details
+    finally:
+        engine.dispose()
+
+
+def test_graph_path_relevance_is_not_applicable_without_expected_graph_hints() -> None:
+    metric = _graph_path_relevance_metric(
+        graph_paths=[
+            GraphRetrievalPath(
+                path_json={
+                    "safe_entity_labels": ["FastAPI"],
+                    "relation_types": ["uses"],
+                    "depth": 1,
+                },
+                source_chunk_ids_json=[100],
+            )
+        ],
+        metadata_json={},
+        provider="postgres",
+        reason_codes=[],
+    )
+
+    assert metric.metric_score is None
+    assert metric.metric_label == "not_applicable"
+    assert metric.details["reason_code"] == "graph_relevance_hints_missing"
+
+
+def test_evaluation_cache_namespace_isolated_per_case_target() -> None:
+    engine, session_factory = _session_factory()
+    attempts: list[tuple[str, str | None]] = []
+
+    class _RecordingCacheAttemptRagService(_GraphCacheAwareEvaluationRagService):
+        def evaluate_strategy_target(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            target: object,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+            evaluation_run_id: int | None = None,
+            cache_attempt_id: str | None = None,
+        ) -> RagEvaluationResult:
+            attempts.append((_target_cache_mode_value(target), cache_attempt_id))
+            return super().evaluate_strategy_target(
+                db,
+                question=question,
+                request_id=request_id,
+                target=target,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                evaluation_run_id=evaluation_run_id,
+                cache_attempt_id=cache_attempt_id,
+            )
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingCacheAttemptRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="graph_cache_namespace",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            for case_key in ("same_question_a", "same_question_b"):
+                service.create_case(
+                    db,
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    payload=EvaluationCaseCreateRequest(
+                        case_key=case_key,
+                        question="shared graph cache question",
+                        expected_keywords=["graph"],
+                        expected_chunk_ids=[100],
+                        required_citation=True,
+                        metadata_json={
+                            "expected_entity_labels": ["FastAPI"],
+                            "expected_relation_types": ["uses"],
+                        },
+                    ),
+                )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["graph_postgres"],
+                    cache_modes=["warm"],
+                    metrics=["cache_hit_rate", "cache_saved_latency", "p95_latency"],
+                    case_limit=2,
+                ),
+                user=user,
+            )
+            assert created.strategies == [
+                "graph_postgres__cache_cold",
+                "graph_postgres__cache_warm",
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingCacheAttemptRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-cache-namespace",
+            )
+            assert result["status"] == "succeeded"
+
+        assert [mode for mode, _ in attempts] == ["cold", "warm", "cold", "warm"]
+        assert attempts[0][1] == attempts[1][1]
+        assert attempts[2][1] == attempts[3][1]
+        assert attempts[0][1] != attempts[2][1]
     finally:
         engine.dispose()
 
@@ -2052,6 +2184,83 @@ def test_langchain_agentic_evaluation_marks_retrieval_run_failed_on_internal_err
             assert run.status == "failed"
             assert run.error_code == "internal_error"
             assert run.finished_at is not None
+    finally:
+        engine.dispose()
+
+
+def test_agentic_router_evaluation_uses_graph_service_search() -> None:
+    engine, session_factory = _session_factory()
+
+    class _RecordingGraphSearchService:
+        def __init__(self) -> None:
+            self.strategies: list[str] = []
+
+        def search(
+            self,
+            db: Session,
+            *,
+            payload: Any,
+            request_id: str | None,
+        ) -> RagSearchResponse:
+            query = str(payload.query)
+            strategy_value = str(payload.strategy.value)
+            self.strategies.append(strategy_value)
+            run = _create_fake_retrieval_run(
+                db,
+                question=query,
+                status="succeeded",
+                request_id=request_id,
+                strategy_type=strategy_value,
+                retrieval_score_summary={
+                    "requested_top_k": 5,
+                    "qdrant_candidate_count": 0,
+                    "post_filter_candidate_count": 0,
+                    "selected_count": 0,
+                    "excluded_by_rdb_check_count": 0,
+                },
+            )
+            db.commit()
+            db.refresh(run)
+            return RagSearchResponse(
+                retrieval_run_id=run.retrieval_run_id,
+                status="succeeded",
+                retrieval_score_summary=RetrievalScoreSummary(
+                    requested_top_k=5,
+                    qdrant_candidate_count=0,
+                    post_filter_candidate_count=0,
+                    selected_count=0,
+                    excluded_by_rdb_check_count=0,
+                ),
+                items=[],
+            )
+
+    try:
+        graph_service = _RecordingGraphSearchService()
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+        evaluator = EvaluationRagQuestionService(service, graph_service=cast(Any, graph_service))
+        with session_factory() as db:
+            result = evaluator.answer_question_with_strategy(
+                db,
+                question="agentic graph routing",
+                request_id="test-agentic-graph-routing",
+                strategy_type=RetrievalStrategy.AGENTIC_ROUTER,
+            )
+            run = db.scalar(
+                select(RetrievalRun).where(RetrievalRun.request_id == "test-agentic-graph-routing")
+            )
+
+        assert graph_service.strategies == [RetrievalStrategy.AGENTIC_ROUTER.value]
+        assert result.status == "failed"
+        assert result.error_code == "no_context_found"
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
     finally:
         engine.dispose()
 
