@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Sequence
 from contextlib import contextmanager
@@ -75,6 +76,8 @@ from app.services.rag_service import (
     build_llm_tool_orchestrator_query_plan,
     build_llm_tool_orchestrator_strategy_decision,
 )
+
+RETRIEVAL_CACHE_NAMESPACE_MAX_LENGTH = 80
 
 
 @dataclass(frozen=True)
@@ -1586,12 +1589,28 @@ def _evaluation_target_settings(
             if evaluation_run_id is not None:
                 namespace = settings.retrieval_cache_namespace
                 suffix = f"{evaluation_run_id}.{cache_attempt_id or 'single'}"
-                overrides["retrieval_cache_namespace"] = f"{namespace}.eval.{suffix}"
+                overrides["retrieval_cache_namespace"] = _evaluation_cache_namespace(
+                    namespace,
+                    suffix,
+                )
         if overrides:
             service.settings = settings.model_copy(update=overrides)
         yield
     finally:
         service.settings = settings
+
+
+def _evaluation_cache_namespace(namespace: str, suffix: str) -> str:
+    eval_suffix = f".eval.{suffix}"
+    if len(namespace) + len(eval_suffix) <= RETRIEVAL_CACHE_NAMESPACE_MAX_LENGTH:
+        return f"{namespace}{eval_suffix}"
+    namespace_hash = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:8]
+    hash_component = f".{namespace_hash}"
+    prefix_budget = RETRIEVAL_CACHE_NAMESPACE_MAX_LENGTH - len(eval_suffix) - len(hash_component)
+    if prefix_budget <= 0:
+        return f"{namespace_hash}{eval_suffix}"[-RETRIEVAL_CACHE_NAMESPACE_MAX_LENGTH:]
+    prefix = namespace[:prefix_budget].rstrip(".")
+    return f"{prefix}{hash_component}{eval_suffix}"
 
 
 def _graph_provider_unavailable(summary: RetrievalScoreSummary) -> bool:

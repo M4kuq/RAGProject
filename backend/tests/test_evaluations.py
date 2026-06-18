@@ -29,6 +29,7 @@ from app.db.models import (
     Job,
     LogicalDocument,
     RetrievalRun,
+    RetrievalRunItem,
     Role,
     User,
 )
@@ -46,6 +47,7 @@ from app.evaluation.rag_service import (
     DatabaseVectorSearchClient,
     EvaluationRagQuestionService,
     RagEvaluationResult,
+    _evaluation_cache_namespace,
 )
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
@@ -71,6 +73,7 @@ from app.schemas.rag import (
 from app.services.evaluation_service import (
     STRATEGY_METRIC_SPECS,
     EvaluationService,
+    _filter_graph_paths_for_source_chunk_ids,
     _graph_path_relevance_metric,
     _strategy_metrics_summary_json,
 )
@@ -1387,6 +1390,14 @@ def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() ->
             )
             assert neo4j_no_context.average is None
             assert neo4j_no_context.not_applicable_count == 1
+            neo4j_fallback = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "fallback_rate"
+            )
+            assert neo4j_fallback.average is None
+            assert neo4j_fallback.not_applicable_count == 1
             cache_hit = next(
                 metric
                 for metric in detail.strategy_comparison
@@ -1425,6 +1436,38 @@ def test_graph_path_relevance_is_not_applicable_without_expected_graph_hints() -
     assert metric.metric_score is None
     assert metric.metric_label == "not_applicable"
     assert metric.details["reason_code"] == "graph_relevance_hints_missing"
+
+
+def test_graph_path_metrics_only_use_selected_source_chunks() -> None:
+    selected_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["FastAPI"]},
+        source_chunk_ids_json=[100, 101],
+    )
+    unselected_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["Neo4j"]},
+        source_chunk_ids_json=[200],
+    )
+    empty_source_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["Qdrant"]},
+        source_chunk_ids_json=[],
+    )
+
+    filtered = _filter_graph_paths_for_source_chunk_ids(
+        [selected_path, unselected_path, empty_source_path],
+        {101},
+    )
+
+    assert filtered == [selected_path]
+
+
+def test_evaluation_cache_namespace_preserves_eval_suffix_when_long() -> None:
+    suffix = "123456789.case_target_cache_warm"
+    namespace = "retrieval-cache-namespace-" + ("long-segment-" * 8)
+    result = _evaluation_cache_namespace(namespace, suffix)
+
+    assert len(result) <= 80
+    assert result.endswith(f".eval.{suffix}")
+    assert result != f"{namespace}.eval.{suffix}"
 
 
 def test_evaluation_cache_namespace_isolated_per_case_target() -> None:
@@ -1519,6 +1562,110 @@ def test_evaluation_cache_namespace_isolated_per_case_target() -> None:
         assert attempts[0][1] == attempts[1][1]
         assert attempts[2][1] == attempts[3][1]
         assert attempts[0][1] != attempts[2][1]
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_preserves_retrieval_only_runner_for_default_search_targets() -> None:
+    engine, session_factory = _session_factory()
+    calls: list[str] = []
+
+    class _RecordingSearchEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+        def evaluate_strategy_target(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            target: object,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+            evaluation_run_id: int | None = None,
+            cache_attempt_id: str | None = None,
+        ) -> RagEvaluationResult:
+            del evaluation_run_id, cache_attempt_id
+            calls.append("target")
+            strategy = getattr(target, "retrieval_strategy", RetrievalStrategy.DENSE)
+            if not isinstance(strategy, RetrievalStrategy):
+                strategy = RetrievalStrategy(str(strategy))
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
+        def evaluate_strategy(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            strategy_type: RetrievalStrategy,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+        ) -> RagEvaluationResult:
+            calls.append("strategy")
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingSearchEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="retrieval_only_runner",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="dense_runner",
+                    question="Which runner should dense evaluation use?",
+                    expected_keywords=["dense"],
+                    expected_chunk_ids=[100],
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense"],
+                    metrics=["recall_at_k"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingSearchEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-retrieval-only-runner",
+            )
+
+        assert result["status"] == "succeeded"
+        assert calls == ["strategy"]
     finally:
         engine.dispose()
 
@@ -2934,6 +3081,17 @@ class _GraphCacheAwareEvaluationRagService(_StrategyAwareFakeEvaluationRagServic
             },
         )
         if strategy == RetrievalStrategy.GRAPH:
+            db.add(
+                RetrievalRunItem(
+                    retrieval_run_id=retrieval_run.retrieval_run_id,
+                    document_chunk_id=100,
+                    retrieval_score=0.91,
+                    rank_order=1,
+                    selected_flag=True,
+                    retrieval_source="graph",
+                    score_breakdown_json={"selected_flag": True},
+                )
+            )
             db.add(
                 GraphRetrievalPath(
                     retrieval_run_id=retrieval_run.retrieval_run_id,

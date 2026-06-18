@@ -19,7 +19,14 @@ from app.core.job_utils import redact_error_message
 from app.db.evaluation_models import EvaluationResult
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import EvaluationCase as EvaluationCaseModel
-from app.db.models import EvaluationDataset, EvaluationRun, EvaluationRunItem, RetrievalRun, User
+from app.db.models import (
+    EvaluationDataset,
+    EvaluationRun,
+    EvaluationRunItem,
+    RetrievalRun,
+    RetrievalRunItem,
+    User,
+)
 from app.evaluation.fixtures import (
     EvaluationCase,
     EvaluationFixtureError,
@@ -1172,7 +1179,7 @@ class EvaluationService:
         started = time.perf_counter()
         target_runner = getattr(rag_service, "evaluate_strategy_target", None)
         strategy_runner = getattr(rag_service, "evaluate_strategy", None)
-        if callable(target_runner):
+        if callable(target_runner) and _requires_strategy_target_runner(target):
             rag_result = target_runner(
                 db,
                 question=case.question,
@@ -1612,7 +1619,13 @@ class EvaluationService:
                 provider=provider,
                 reason_codes=reason_codes,
             )
-        graph_paths = _list_graph_paths(db, retrieval_run_id=rag_result.retrieval_run_id)
+        graph_paths = _filter_graph_paths_for_source_chunk_ids(
+            _list_graph_paths(db, retrieval_run_id=rag_result.retrieval_run_id),
+            _selected_retrieval_source_chunk_ids(
+                db,
+                retrieval_run_id=rag_result.retrieval_run_id,
+            ),
+        )
         relevance = _graph_path_relevance_metric(
             graph_paths=graph_paths,
             metadata_json=case_metadata_json,
@@ -1669,6 +1682,25 @@ class EvaluationService:
             score_summary.get("fallback_used"),
             score_summary.get("graph_fallback_used"),
         )
+        reason_codes = _string_values(score_summary.get("graph_reason_codes"))
+        if _is_graph_provider_unavailable(reason_codes):
+            reason_code = _provider_skip_reason(reason_codes)
+            return [
+                MetricValue(
+                    metric_name="fallback_rate",
+                    metric_score=None,
+                    metric_label="not_applicable",
+                    details={
+                        "schema_version": EVALUATION_SCHEMA_VERSION,
+                        "not_applicable": True,
+                        "reason_code": reason_code,
+                        "reason_codes": reason_codes or [reason_code],
+                        "graph_store_provider": _safe_graph_provider(
+                            target.graph_store_provider or score_summary.get("graph_store_provider")
+                        ),
+                    },
+                )
+            ]
         return [
             MetricValue(
                 metric_name="fallback_rate",
@@ -2258,6 +2290,38 @@ def _list_graph_paths(
     )
 
 
+def _selected_retrieval_source_chunk_ids(
+    db: Session,
+    *,
+    retrieval_run_id: int | None,
+) -> set[int]:
+    if retrieval_run_id is None:
+        return set()
+    return {
+        chunk_id
+        for chunk_id in db.scalars(
+            select(RetrievalRunItem.document_chunk_id).where(
+                RetrievalRunItem.retrieval_run_id == retrieval_run_id,
+                RetrievalRunItem.selected_flag.is_(True),
+            )
+        ).all()
+        if isinstance(chunk_id, int) and chunk_id > 0
+    }
+
+
+def _filter_graph_paths_for_source_chunk_ids(
+    graph_paths: list[GraphRetrievalPath],
+    source_chunk_ids: set[int],
+) -> list[GraphRetrievalPath]:
+    if not source_chunk_ids:
+        return []
+    return [
+        path
+        for path in graph_paths
+        if _path_positive_ids(path.source_chunk_ids_json) & source_chunk_ids
+    ]
+
+
 def _not_applicable_graph_metrics(
     *,
     target: EvaluationStrategyTarget,
@@ -2613,6 +2677,12 @@ def _provider_skip_base_metric_replacements(
         )
         for metric_name in sorted(PROVIDER_SKIP_BASE_METRICS)
     ]
+
+
+def _requires_strategy_target_runner(target: EvaluationStrategyTarget) -> bool:
+    return (
+        target.graph_store_provider is not None or target.cache_mode != EvaluationCacheMode.DEFAULT
+    )
 
 
 def _selected_strategy_targets(
