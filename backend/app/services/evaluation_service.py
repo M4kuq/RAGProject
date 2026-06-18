@@ -112,6 +112,17 @@ PROVIDER_SKIP_BASE_METRICS = frozenset(
         "no_context_rate",
     }
 )
+GRAPH_PROMOTION_STRING_HINT_KEYS = ("expected_entity_labels", "expected_relation_types")
+GRAPH_PROMOTION_INT_HINT_KEYS = ("required_hop_count",)
+GRAPH_PROMOTION_HINT_FORBIDDEN_PARTS = (
+    "api_key",
+    "apikey",
+    "bearer",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
 
 STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
@@ -3300,7 +3311,42 @@ def _promotion_metadata(
         metadata["expected_strategy"] = expected_strategy
     if acceptable_strategies:
         metadata["acceptable_strategies"] = acceptable_strategies
+    metadata.update(_graph_hint_metadata(source_metadata_json))
     return metadata
+
+
+def _graph_hint_metadata(source_metadata_json: dict[str, object] | None) -> dict[str, object]:
+    source = source_metadata_json or {}
+    metadata: dict[str, object] = {}
+    for key in GRAPH_PROMOTION_STRING_HINT_KEYS:
+        values = _safe_graph_hint_values(source.get(key))
+        if values:
+            metadata[key] = values
+    for key in GRAPH_PROMOTION_INT_HINT_KEYS:
+        value = _metadata_positive_int(source, key)
+        if value is not None and value <= 10:
+            metadata[key] = value
+    return metadata
+
+
+def _safe_graph_hint_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.replace("\x00", " ").split())
+        lowered = text.lower()
+        if (
+            not text
+            or len(text) > 120
+            or any(part in lowered for part in GRAPH_PROMOTION_HINT_FORBIDDEN_PARTS)
+        ):
+            continue
+        if text not in values:
+            values.append(text)
+    return values
 
 
 def _failure_summary(candidates: list[EvaluationFailureCandidate]) -> dict[str, object]:

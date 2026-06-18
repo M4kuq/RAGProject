@@ -63,6 +63,10 @@ _EXPORT_SAFE_KEYS = {
     "fallback_used",
     "finished_at",
     "generated_at",
+    "citable_path_count",
+    "excluded_path_count",
+    "graph_path_count",
+    "graph_path_relevance",
     "groundedness",
     "groundedness_score",
     "latency_breakdown",
@@ -73,6 +77,7 @@ _EXPORT_SAFE_KEYS = {
     "no_context_rate",
     "origin_type",
     "p95_latency",
+    "path_count",
     "query_hash",
     "reason_codes",
     "recall_at_k",
@@ -89,6 +94,7 @@ _EXPORT_SAFE_KEYS = {
     "threshold_result",
     "top_k",
     "trace_type",
+    "valid_path_count",
 }
 _WINDOWS_PATH_RE = re.compile(r"(?i)\b[a-z]:\\")
 _POSIX_PATH_RE = re.compile(r"(?<![A-Za-z0-9])/(?:app|home|tmp|var|users?)/")

@@ -119,6 +119,11 @@ def test_safe_trace_export_payload_redacts_paths_and_forbidden_keys() -> None:
                 "safe_metric": 0.5,
                 "note": r"C:\Users\example\secret.txt",
             },
+            "metric_summary": {
+                "graph_path_relevance": 0.75,
+                "graph_path_count": 2,
+                "storage_path": r"C:\Users\example\secret.txt",
+            },
         },
         settings=Settings(app_env="test"),
     )
@@ -129,6 +134,10 @@ def test_safe_trace_export_payload_redacts_paths_and_forbidden_keys() -> None:
     assert "session-secret" not in serialized
     assert "c:\\users" not in serialized
     assert payload["nested"] == {"safe_metric": 0.5, "note": "redacted"}
+    assert payload["metric_summary"] == {
+        "graph_path_relevance": 0.75,
+        "graph_path_count": 2,
+    }
 
 
 def test_trace_export_service_failure_is_non_fatal() -> None:

@@ -78,6 +78,14 @@ from app.services.rag_service import (
 )
 
 RETRIEVAL_CACHE_NAMESPACE_MAX_LENGTH = 80
+RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES = frozenset(
+    {
+        RetrievalStrategy.DENSE,
+        RetrievalStrategy.SPARSE,
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.AGENTIC_ROUTER,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,15 @@ class EvaluationRagQuestionService:
             evaluation_run_id=evaluation_run_id,
             cache_attempt_id=cache_attempt_id,
         ):
+            if strategy_type in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES:
+                return self.evaluate_strategy(
+                    db,
+                    question=question,
+                    request_id=request_id,
+                    strategy_type=strategy_type,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                )
             return self.answer_question_with_strategy(
                 db,
                 question=question,

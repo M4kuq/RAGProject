@@ -5,6 +5,7 @@ import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -60,7 +61,9 @@ from app.schemas.evaluations import (
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
     EvaluationDatasetManifest,
+    EvaluationFailureCandidate,
     EvaluationFailurePromotionRequest,
+    EvaluationFailureSeverity,
     EvaluationRunCreateRequest,
     StrategyComparisonMetric,
 )
@@ -75,6 +78,7 @@ from app.services.evaluation_service import (
     EvaluationService,
     _filter_graph_paths_for_source_chunk_ids,
     _graph_path_relevance_metric,
+    _promotion_metadata,
     _strategy_metrics_summary_json,
 )
 from app.services.rag_service import RagService
@@ -1470,6 +1474,38 @@ def test_evaluation_cache_namespace_preserves_eval_suffix_when_long() -> None:
     assert result != f"{namespace}.eval.{suffix}"
 
 
+def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
+    candidate = EvaluationFailureCandidate(
+        evaluation_run_id=1,
+        evaluation_run_item_id=2,
+        evaluation_case_id=3,
+        case_key="graph_case",
+        question_hash="a" * 64,
+        strategy_type=RetrievalStrategy.GRAPH,
+        failure_type="graph_path_relevance_low",
+        severity=EvaluationFailureSeverity.MEDIUM,
+        failure_reason_codes=["graph_path_relevance_low"],
+        metric_snapshot={"metric_name": "graph_path_relevance"},
+        recommended_tags=["strategy:graph"],
+        promotion_key="graph-case-key",
+    )
+
+    metadata = _promotion_metadata(
+        candidate,
+        {
+            "expected_strategy": "graph",
+            "acceptable_strategies": ["graph", "hybrid"],
+            "expected_entity_labels": ["FastAPI", "PostgreSQL", "FastAPI"],
+            "expected_relation_types": ["uses", "stores"],
+            "required_hop_count": 2,
+        },
+    )
+
+    assert metadata["expected_entity_labels"] == ["FastAPI", "PostgreSQL"]
+    assert metadata["expected_relation_types"] == ["uses", "stores"]
+    assert metadata["required_hop_count"] == 2
+
+
 def test_evaluation_cache_namespace_isolated_per_case_target() -> None:
     engine, session_factory = _session_factory()
     attempts: list[tuple[str, str | None]] = []
@@ -2408,6 +2444,98 @@ def test_agentic_router_evaluation_uses_graph_service_search() -> None:
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "no_context_found"
+    finally:
+        engine.dispose()
+
+
+def test_cached_search_target_uses_retrieval_only_evaluation_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session_factory = _session_factory()
+    search_calls: list[tuple[str, bool, str]] = []
+    service = RagService(
+        settings=Settings(app_env="test"),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=_FakeVectorClient(),
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    evaluator = EvaluationRagQuestionService(service)
+
+    def fail_answer_path(*args: Any, **kwargs: Any) -> RagEvaluationResult:
+        del args, kwargs
+        raise AssertionError("cached search targets must stay on evaluate_strategy")
+
+    def fake_search(
+        db: Session,
+        *,
+        payload: Any,
+        request_id: str | None,
+    ) -> RagSearchResponse:
+        search_calls.append(
+            (
+                str(payload.strategy.value),
+                service.settings.retrieval_cache_enabled,
+                service.settings.retrieval_cache_namespace,
+            )
+        )
+        run = _create_fake_retrieval_run(
+            db,
+            question=str(payload.query),
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=str(payload.strategy.value),
+            cache_summary_json={
+                "schema_version": "phase3.retrieval_cache.v1",
+                "enabled": True,
+                "status": "miss",
+                "reason": "evaluation_cache_mode",
+            },
+        )
+        db.commit()
+        db.refresh(run)
+        return RagSearchResponse(
+            retrieval_run_id=run.retrieval_run_id,
+            status="succeeded",
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=0,
+                post_filter_candidate_count=0,
+                selected_count=0,
+                excluded_by_rdb_check_count=0,
+            ),
+            items=[],
+        )
+
+    monkeypatch.setattr(evaluator, "answer_question_with_strategy", fail_answer_path)
+    monkeypatch.setattr(service, "search", fake_search)
+
+    try:
+        target = SimpleNamespace(
+            retrieval_strategy=RetrievalStrategy.DENSE,
+            graph_store_provider=None,
+            cache_mode="warm",
+        )
+        with session_factory() as db:
+            result = evaluator.evaluate_strategy_target(
+                db,
+                question="cached dense search target",
+                request_id="test-cached-search-target",
+                target=target,
+                evaluation_run_id=42,
+                cache_attempt_id="case-cache",
+            )
+
+        assert result.status == "succeeded"
+        assert result.answer_text == ""
+        assert result.error_code == "no_context_found"
+        assert search_calls == [
+            (
+                RetrievalStrategy.DENSE.value,
+                True,
+                "rag.retrieval.eval.42.case-cache",
+            )
+        ]
     finally:
         engine.dispose()
 
