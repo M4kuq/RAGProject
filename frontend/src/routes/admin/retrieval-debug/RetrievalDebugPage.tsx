@@ -54,6 +54,10 @@ const LATENCY_KEYS = [
   "langgraph_tool_execution_ms",
   "initial_retrieval_ms",
   "fallback_retrieval_ms",
+  "retrieval_cache_key_ms",
+  "retrieval_cache_lookup_ms",
+  "retrieval_cache_hydrate_ms",
+  "retrieval_cache_store_ms",
   "sufficiency_check_ms",
   "merge_dedupe_ms",
   "rerank_after_merge_ms",
@@ -408,6 +412,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
   const settings = safeRecord(run.retrieval_settings_json);
   const latency = safeRecord(run.latency_breakdown_json);
   const summary = safeRecord(run.retrieval_score_summary);
+  const cache = safeRecord(run.cache_summary_json);
   const preferSummaryTrace =
     run.strategy_type === "llm_tool_orchestrator" ||
     run.strategy_type === "langchain_agentic" ||
@@ -550,6 +555,24 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
           />
         </dl>
         <SafeDetails record={settings} />
+      </TraceCard>
+
+      <TraceCard title="Cache Summary">
+        <dl className="detail-grid">
+          <Detail label="status" value={formatUnknownValue(cache.status ?? "N/A")} />
+          <Detail label="reason" value={formatUnknownValue(cache.reason ?? "N/A")} />
+          <Detail label="namespace" value={formatUnknownValue(cache.cache_namespace ?? "N/A")} />
+          <Detail label="strategy_type" value={formatUnknownValue(cache.strategy_type ?? "N/A")} />
+          <Detail label="cache_key_hash" value={shortHash(cache.cache_key_hash)} />
+          <Detail label="query_hash" value={shortHash(cache.query_hash)} />
+          <Detail label="settings_hash" value={shortHash(cache.retrieval_settings_hash)} />
+          <Detail label="rerank_hash" value={shortHash(cache.rerank_settings_hash)} />
+          <Detail label="document_fingerprint" value={shortHash(cache.active_document_fingerprint)} />
+          <Detail label="graph_fingerprint" value={shortHash(cache.graph_index_fingerprint)} />
+          <Detail label="graph_store_provider" value={formatUnknownValue(cache.graph_store_provider ?? "N/A")} />
+          <Detail label="schema_version" value={formatUnknownValue(cache.schema_version ?? "N/A")} />
+        </dl>
+        <SafeDetails record={cache} />
       </TraceCard>
 
       <TraceCard title="Latency Breakdown">

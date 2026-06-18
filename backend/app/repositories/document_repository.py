@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
+from app.rag.retrieval_cache import touch_retrieval_cache_corpus_marker
 from app.schemas.common import PaginationParams
 
 
@@ -322,9 +323,15 @@ class DocumentRepository:
         return list(rows)
 
     def delete_chunks(self, db: Session, *, document_version_id: int) -> int:
+        was_visible = self._version_is_retrieval_visible(
+            db,
+            document_version_id=document_version_id,
+        )
         result = db.execute(
             delete(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)
         )
+        if was_visible:
+            touch_retrieval_cache_corpus_marker(db, updated_at=datetime.now(UTC))
         return int(getattr(result, "rowcount", 0) or 0)
 
     def bulk_insert_chunks(
@@ -336,6 +343,13 @@ class DocumentRepository:
         if not chunks:
             return
         db.execute(insert(DocumentChunk), list(chunks))
+        version_ids: set[int] = set()
+        for chunk in chunks:
+            version_id = chunk.get("document_version_id")
+            if not isinstance(version_id, bool) and isinstance(version_id, int):
+                version_ids.add(version_id)
+        if self._any_version_is_retrieval_visible(db, document_version_ids=version_ids):
+            touch_retrieval_cache_corpus_marker(db, updated_at=datetime.now(UTC))
         db.flush()
 
     def update_ingest_metadata(
@@ -363,12 +377,18 @@ class DocumentRepository:
         version: DocumentVersion,
         updated_at: datetime,
     ) -> None:
+        was_visible = self._version_is_retrieval_visible(
+            db,
+            document_version_id=version.document_version_id,
+        )
         version.status = "processing"
         version.error_code = None
         version.page_count = None
         version.extractor_name = None
         version.extractor_version = None
         version.updated_at = updated_at
+        if was_visible:
+            touch_retrieval_cache_corpus_marker(db, updated_at=updated_at)
         db.flush()
 
     def mark_version_failed(
@@ -379,12 +399,18 @@ class DocumentRepository:
         error_code: str,
         updated_at: datetime,
     ) -> None:
+        was_visible = self._version_is_retrieval_visible(
+            db,
+            document_version_id=version.document_version_id,
+        )
         version.status = "failed"
         version.error_code = error_code
         version.page_count = None
         version.extractor_name = None
         version.extractor_version = None
         version.updated_at = updated_at
+        if was_visible:
+            touch_retrieval_cache_corpus_marker(db, updated_at=updated_at)
         db.flush()
 
     def mark_version_ready(
@@ -397,6 +423,11 @@ class DocumentRepository:
         version.status = "ready"
         version.error_code = None
         version.updated_at = updated_at
+        if self._version_is_retrieval_visible(
+            db,
+            document_version_id=version.document_version_id,
+        ):
+            touch_retrieval_cache_corpus_marker(db, updated_at=updated_at)
         db.flush()
 
     def chunk_counts_by_version_ids(
@@ -447,6 +478,7 @@ class DocumentRepository:
             active.updated_at = updated_at
         version.is_active = True
         version.updated_at = updated_at
+        touch_retrieval_cache_corpus_marker(db, updated_at=updated_at)
         db.flush()
         return previous_id
 
@@ -479,7 +511,45 @@ class DocumentRepository:
         for version in active_versions:
             version.is_active = False
             version.updated_at = archived_at
+        touch_retrieval_cache_corpus_marker(db, updated_at=archived_at)
         db.flush()
+
+    def _any_version_is_retrieval_visible(
+        self,
+        db: Session,
+        *,
+        document_version_ids: set[int],
+    ) -> bool:
+        if not document_version_ids:
+            return False
+        return (
+            db.scalar(
+                select(DocumentVersion.document_version_id)
+                .join(
+                    LogicalDocument,
+                    LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+                )
+                .where(
+                    DocumentVersion.document_version_id.in_(document_version_ids),
+                    DocumentVersion.status == "ready",
+                    DocumentVersion.is_active.is_(True),
+                    LogicalDocument.status == "active",
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    def _version_is_retrieval_visible(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+    ) -> bool:
+        return self._any_version_is_retrieval_visible(
+            db,
+            document_version_ids={document_version_id},
+        )
 
     def _document_list_statement(
         self,
