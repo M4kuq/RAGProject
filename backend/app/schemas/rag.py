@@ -41,6 +41,7 @@ class RagSearchRequest(BaseModel):
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     strategy: RagSearchRequestStrategy = DEFAULT_RAG_SEARCH_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
+    cache_bypass: bool = False
 
     @field_validator("query")
     @classmethod
@@ -60,6 +61,7 @@ class RagAskRequest(BaseModel):
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
     strategy: RagAskRequestStrategy = DEFAULT_RAG_ASK_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
+    cache_bypass: bool = False
 
     @field_validator("client_message_id")
     @classmethod
@@ -120,6 +122,7 @@ class RetrievalRunDebugSummary(BaseModel):
     context_budget_json: dict[str, object] | None = None
     context_compression_json: dict[str, object] | None = None
     tool_result_compression_json: dict[str, object] | None = None
+    cache_summary_json: dict[str, object] | None = None
     rerank_score_top1: float | None = None
     answer_confidence: float | None = None
     groundedness_score: float | None = None

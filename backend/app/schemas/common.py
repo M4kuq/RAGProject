@@ -10,7 +10,7 @@ T = TypeVar("T")
 class ErrorBody(BaseModel):
     code: str
     message: str
-    details: object = Field(default_factory=dict)
+    details: object = Field(default_factory=lambda: {})
 
 
 class PaginationMeta(BaseModel):

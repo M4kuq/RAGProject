@@ -10,6 +10,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import PurePosixPath
 from typing import Any, Literal, cast
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,15 @@ from app.core.errors import (
     RequestInProgress,
     ResourceNotFound,
 )
-from app.db.models import ChatMessage, RetrievalRun, RetrievalRunItem, User
+from app.db.models import (
+    ChatMessage,
+    DocumentChunk,
+    DocumentVersion,
+    LogicalDocument,
+    RetrievalRun,
+    RetrievalRunItem,
+    User,
+)
 from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
@@ -98,6 +107,13 @@ from app.rag.retrieval import (
     VectorSearchCandidate,
     VectorSearchClient,
 )
+from app.rag.retrieval_cache import (
+    CachedGraphPathRef,
+    CachedRetrievalPayload,
+    RetrievalCacheContext,
+    RetrievalCacheService,
+    payload_from_run_items,
+)
 from app.rag.router import StrategyRouter
 from app.rag.sparse import SparseRetrievalStrategy, normalize_sparse_query
 from app.rag.strategy import (
@@ -128,6 +144,7 @@ from app.rag.trace import (
     build_sparse_strategy_decision,
 )
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.graph_retrieval_repository import GraphRetrievalRepository
 from app.repositories.retrieval_repository import (
     CheckedRetrievalCandidate,
     CitationInput,
@@ -135,6 +152,7 @@ from app.repositories.retrieval_repository import (
     RetrievalRepository,
     RetrievalRunItemInput,
 )
+from app.schemas.graph import GraphRetrievalPathCreate
 from app.schemas.rag import (
     RagAskAssistantMessage,
     RagAskCitation,
@@ -226,6 +244,8 @@ class RagService:
         context_budget_manager: ContextBudgetManager | None = None,
         evidence_pack_builder: EvidencePackBuilder | None = None,
         trace_export_service: TraceExportService | None = None,
+        retrieval_cache_service: RetrievalCacheService | None = None,
+        graph_retrieval_repository: GraphRetrievalRepository | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_adapter = embedding_adapter
@@ -264,6 +284,8 @@ class RagService:
         self.context_budget_manager = context_budget_manager or ContextBudgetManager()
         self.evidence_pack_builder = evidence_pack_builder or EvidencePackBuilder()
         self.trace_export_service = trace_export_service or TraceExportService(settings)
+        self.retrieval_cache_service = retrieval_cache_service or RetrievalCacheService()
+        self.graph_retrieval_repository = graph_retrieval_repository or GraphRetrievalRepository()
         self.chat_service = ChatService(self.chat_repository)
 
     def search(
@@ -377,45 +399,46 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if _should_use_agentic_loop(requested_strategy, router_decision):
-                result = self._retrieve_agentic(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    initial_strategy=execution_strategy,
-                    query_intent=(
-                        query_plan_build.analysis.intent
-                        if query_plan_build.analysis is not None
-                        else None
-                    ),
-                    latency_tracker=latency_tracker,
-                )
-            elif retrieval_execution_strategy == RetrievalStrategy.SPARSE:
-                result = self._retrieve_sparse(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            elif retrieval_execution_strategy == RetrievalStrategy.HYBRID:
-                result = self._retrieve_hybrid(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            else:
-                result = self._retrieve_and_rerank(
+
+            def retrieve_uncached() -> RetrievalPipelineResult:
+                retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
+                if _should_use_agentic_loop(requested_strategy, router_decision):
+                    return self._retrieve_agentic(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        initial_strategy=execution_strategy,
+                        query_intent=(
+                            query_plan_build.analysis.intent
+                            if query_plan_build.analysis is not None
+                            else None
+                        ),
+                        latency_tracker=latency_tracker,
+                    )
+                if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
+                    return self._retrieve_sparse(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                if retrieval_execution_strategy == RetrievalStrategy.HYBRID:
+                    return self._retrieve_hybrid(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                return self._retrieve_and_rerank(
                     db,
                     query=retrieval_query,
                     top_k=top_k,
@@ -427,6 +450,21 @@ class RagService:
                     if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
                     else RetrievalSource.DENSE,
                 )
+
+            result = self._execute_retrieval_with_cache(
+                db,
+                query_hash=query_hash,
+                requested_strategy=requested_strategy,
+                execution_strategy=execution_strategy,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                filters=filters,
+                retrieval_run_id=run_id,
+                request_kind="search",
+                bypass=payload.cache_bypass,
+                latency_tracker=latency_tracker,
+                retrieve=retrieve_uncached,
+            )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
                 db,
@@ -673,75 +711,76 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
-            retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
-            if requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
-                result = self._retrieve_llm_tool_orchestrator(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            elif requested_strategy == RetrievalStrategy.LANGCHAIN_AGENTIC:
-                result = self._retrieve_langchain_agentic(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            elif requested_strategy == RetrievalStrategy.LANGGRAPH_AGENTIC:
-                result = self._retrieve_langgraph_agentic(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            elif _should_use_agentic_loop(requested_strategy, router_decision):
-                result = self._retrieve_agentic(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    initial_strategy=execution_strategy,
-                    query_intent=(
-                        query_plan_build.analysis.intent
-                        if query_plan_build.analysis is not None
-                        else None
-                    ),
-                    latency_tracker=latency_tracker,
-                )
-            elif retrieval_execution_strategy == RetrievalStrategy.SPARSE:
-                result = self._retrieve_sparse(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            elif retrieval_execution_strategy == RetrievalStrategy.HYBRID:
-                result = self._retrieve_hybrid(
-                    db,
-                    query=retrieval_query,
-                    top_k=top_k,
-                    rerank_top_n=rerank_top_n,
-                    filters=filters,
-                    retrieval_run_id=run_id,
-                    latency_tracker=latency_tracker,
-                )
-            else:
-                result = self._retrieve_and_rerank(
+
+            def retrieve_uncached() -> RetrievalPipelineResult:
+                retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
+                if requested_strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
+                    return self._retrieve_llm_tool_orchestrator(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                if requested_strategy == RetrievalStrategy.LANGCHAIN_AGENTIC:
+                    return self._retrieve_langchain_agentic(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                if requested_strategy == RetrievalStrategy.LANGGRAPH_AGENTIC:
+                    return self._retrieve_langgraph_agentic(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                if _should_use_agentic_loop(requested_strategy, router_decision):
+                    return self._retrieve_agentic(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        initial_strategy=execution_strategy,
+                        query_intent=(
+                            query_plan_build.analysis.intent
+                            if query_plan_build.analysis is not None
+                            else None
+                        ),
+                        latency_tracker=latency_tracker,
+                    )
+                if retrieval_execution_strategy == RetrievalStrategy.SPARSE:
+                    return self._retrieve_sparse(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                if retrieval_execution_strategy == RetrievalStrategy.HYBRID:
+                    return self._retrieve_hybrid(
+                        db,
+                        query=retrieval_query,
+                        top_k=top_k,
+                        rerank_top_n=rerank_top_n,
+                        filters=filters,
+                        retrieval_run_id=run_id,
+                        latency_tracker=latency_tracker,
+                    )
+                return self._retrieve_and_rerank(
                     db,
                     query=retrieval_query,
                     top_k=top_k,
@@ -753,6 +792,21 @@ class RagService:
                     if execution_strategy == RetrievalStrategy.FALLBACK_DENSE
                     else RetrievalSource.DENSE,
                 )
+
+            result = self._execute_retrieval_with_cache(
+                db,
+                query_hash=query_hash,
+                requested_strategy=requested_strategy,
+                execution_strategy=execution_strategy,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                filters=filters,
+                retrieval_run_id=run_id,
+                request_kind="ask",
+                bypass=payload.cache_bypass,
+                latency_tracker=latency_tracker,
+                retrieve=retrieve_uncached,
+            )
             context_budget_decision = self._apply_context_budget(
                 db,
                 retrieval_run_id=run_id,
@@ -2237,6 +2291,276 @@ class RagService:
             raise RuntimeError("retrieval_run_missing")
         return run
 
+    def _execute_retrieval_with_cache(
+        self,
+        db: Session,
+        *,
+        query_hash: str,
+        requested_strategy: RetrievalStrategy,
+        execution_strategy: RetrievalStrategy | None,
+        top_k: int,
+        rerank_top_n: int,
+        filters: RetrievalFilters,
+        retrieval_run_id: int,
+        request_kind: Literal["search", "ask"],
+        bypass: bool,
+        latency_tracker: LatencyTracker,
+        retrieve: Any,
+    ) -> RetrievalPipelineResult:
+        cache_context = RetrievalCacheContext(
+            query_hash=query_hash,
+            strategy_type=requested_strategy,
+            execution_strategy=execution_strategy,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+            filters=filters,
+            request_kind=request_kind,
+        )
+        execution = self.retrieval_cache_service.execute(
+            db,
+            settings=self.settings,
+            context=cache_context,
+            bypass=bypass,
+            cacheable=_is_cacheable_retrieval_strategy(requested_strategy),
+            latency_tracker=latency_tracker,
+            hydrate=lambda payload: self._hydrate_cached_retrieval_result(
+                db,
+                payload=payload,
+                retrieval_run_id=retrieval_run_id,
+                filters=filters,
+            ),
+            retrieve=retrieve,
+            payload_from_result=lambda result: self._cache_payload_from_result(
+                db,
+                result=cast(RetrievalPipelineResult, result),
+                query_hash=query_hash,
+                strategy_type=requested_strategy.value,
+                retrieval_run_id=retrieval_run_id,
+            ),
+        )
+        self._update_cache_summary_safely(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            cache_summary=execution.summary,
+        )
+        return cast(RetrievalPipelineResult, execution.result)
+
+    def _hydrate_cached_retrieval_result(
+        self,
+        db: Session,
+        *,
+        payload: CachedRetrievalPayload,
+        retrieval_run_id: int,
+        filters: RetrievalFilters,
+    ) -> RetrievalPipelineResult | None:
+        summary = RetrievalScoreSummary(**payload.retrieval_score_summary)
+        if not payload.items:
+            return RetrievalPipelineResult(
+                summary=summary,
+                items=[],
+                selected_candidates=[],
+                citation_sources=[],
+                context_candidates=[],
+                no_context=payload.no_context,
+            )
+        ordered_ids = [item.document_chunk_id for item in payload.items]
+        rows = db.execute(
+            select(DocumentChunk, DocumentVersion, LogicalDocument)
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .where(
+                DocumentChunk.document_chunk_id.in_(ordered_ids),
+                DocumentChunk.modality == filters.modality,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+                LogicalDocument.status == "active",
+            )
+        ).all()
+        rows_by_chunk_id = {
+            chunk.document_chunk_id: (chunk, version, document) for chunk, version, document in rows
+        }
+        if len(rows_by_chunk_id) != len(set(ordered_ids)):
+            return None
+        if filters.logical_document_ids:
+            allowed_ids = set(filters.logical_document_ids)
+            if any(
+                document.logical_document_id not in allowed_ids
+                for _, _, document in rows_by_chunk_id.values()
+            ):
+                return None
+
+        candidates: list[CheckedRetrievalCandidate] = []
+        for item in payload.items:
+            row = rows_by_chunk_id.get(item.document_chunk_id)
+            if row is None:
+                return None
+            chunk, version, document = row
+            candidates.append(
+                CheckedRetrievalCandidate(
+                    chunk=chunk,
+                    document_version=version,
+                    logical_document=document,
+                    retrieval_score=item.retrieval_score,
+                    rank_order=item.rank_order,
+                    payload={},
+                )
+            )
+        saved_items = self.repository.save_items(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            items=[
+                RetrievalRunItemInput(
+                    document_chunk_id=item.document_chunk_id,
+                    retrieval_score=_decimal_score(item.retrieval_score),
+                    rerank_score=(
+                        _decimal_score(item.rerank_score) if item.rerank_score is not None else None
+                    ),
+                    rank_order=item.rank_order,
+                    rerank_order=item.rerank_order,
+                    selected_flag=item.selected_flag,
+                    payload_snapshot=_payload_snapshot(candidate),
+                    retrieval_source=item.retrieval_source,
+                    score_breakdown_json=(
+                        TraceRedactor.safe_dict(item.score_breakdown_json)
+                        if item.score_breakdown_json is not None
+                        else None
+                    ),
+                )
+                for item, candidate in zip(payload.items, candidates, strict=True)
+            ],
+        )
+        self._save_cached_graph_paths_safely(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            graph_paths=payload.graph_paths,
+        )
+        selected_pairs = [
+            (candidate, saved_item, item)
+            for candidate, saved_item, item in zip(
+                candidates,
+                saved_items,
+                payload.items,
+                strict=True,
+            )
+            if item.selected_flag
+        ]
+        return RetrievalPipelineResult(
+            summary=summary,
+            items=[
+                _response_item(
+                    candidate,
+                    saved_item_id=saved_item.retrieval_run_item_id,
+                    rerank_score=item.rerank_score,
+                    rerank_order=item.rerank_order,
+                    selected_flag=item.selected_flag,
+                    snippet_max_chars=self.settings.search_snippet_max_chars,
+                )
+                for candidate, saved_item, item in zip(
+                    candidates,
+                    saved_items,
+                    payload.items,
+                    strict=True,
+                )
+            ],
+            selected_candidates=[candidate for candidate, _, _ in selected_pairs],
+            citation_sources=[
+                _citation_source(
+                    candidate,
+                    saved_item=saved_item,
+                    local_citation_id=local_id,
+                    snippet_max_chars=self.settings.citation_preview_max_chars,
+                )
+                for local_id, (candidate, saved_item, _) in enumerate(
+                    selected_pairs,
+                    start=1,
+                )
+            ],
+            context_candidates=[
+                ContextCandidateRef(
+                    candidate=candidate,
+                    saved_item=saved_item,
+                    rank=index,
+                    rerank_score=item.rerank_score,
+                    rerank_order=item.rerank_order,
+                    citation_candidate=item.selected_flag,
+                )
+                for index, (candidate, saved_item, item) in enumerate(
+                    zip(candidates, saved_items, payload.items, strict=True),
+                    start=1,
+                )
+            ],
+            no_context=payload.no_context,
+        )
+
+    def _cache_payload_from_result(
+        self,
+        db: Session,
+        *,
+        result: RetrievalPipelineResult,
+        query_hash: str,
+        strategy_type: str,
+        retrieval_run_id: int,
+    ) -> CachedRetrievalPayload:
+        return payload_from_run_items(
+            query_hash=query_hash,
+            strategy_type=strategy_type,
+            retrieval_score_summary=result.summary.model_dump(mode="json"),
+            items=self.repository.list_items_for_run(db, retrieval_run_id=retrieval_run_id),
+            graph_paths=self.graph_retrieval_repository.list_graph_retrieval_paths(
+                db,
+                retrieval_run_id=retrieval_run_id,
+            ),
+            no_context=result.no_context,
+        )
+
+    def _save_cached_graph_paths_safely(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        graph_paths: tuple[CachedGraphPathRef, ...],
+    ) -> None:
+        if not graph_paths:
+            return
+        try:
+            self.graph_retrieval_repository.save_graph_retrieval_paths(
+                db,
+                retrieval_run_id=retrieval_run_id,
+                paths=[
+                    GraphRetrievalPathCreate(
+                        retrieval_run_id=retrieval_run_id,
+                        path_json=path.path_json,
+                        score_breakdown_json=path.score_breakdown_json,
+                        source_chunk_ids_json=path.source_chunk_ids_json,
+                    )
+                    for path in graph_paths
+                ],
+            )
+        except Exception:
+            return
+
+    def _update_cache_summary_safely(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        cache_summary: dict[str, object],
+    ) -> None:
+        run = self.repository.get_run(db, retrieval_run_id=retrieval_run_id)
+        if run is None:
+            return
+        self.repository.update_retrieval_run_trace(
+            db,
+            run=run,
+            cache_summary_json=TraceRedactor.safe_dict(cache_summary),
+        )
+
     def _apply_context_budget(
         self,
         db: Session,
@@ -2475,6 +2799,16 @@ def _is_executable_router_strategy(strategy: RetrievalStrategy) -> bool:
         RetrievalStrategy.SPARSE,
         RetrievalStrategy.HYBRID,
         RetrievalStrategy.FALLBACK_DENSE,
+    }
+
+
+def _is_cacheable_retrieval_strategy(strategy: RetrievalStrategy) -> bool:
+    return strategy in {
+        RetrievalStrategy.DENSE,
+        RetrievalStrategy.SPARSE,
+        RetrievalStrategy.HYBRID,
+        RetrievalStrategy.GRAPH,
+        RetrievalStrategy.AGENTIC_ROUTER,
     }
 
 
@@ -2798,6 +3132,7 @@ def _retrieval_run_debug_summary(run: RetrievalRun) -> RetrievalRunDebugSummary:
         tool_result_compression_json=sanitize_tool_result_compression_json(
             run.tool_result_compression_json
         ),
+        cache_summary_json=_safe_json_object(run.cache_summary_json),
         rerank_score_top1=_optional_rounded_float(run.rerank_score_top1),
         answer_confidence=_optional_rounded_float(run.answer_confidence),
         groundedness_score=_optional_rounded_float(run.groundedness_score),

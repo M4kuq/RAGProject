@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import NotRequired, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 
@@ -501,7 +501,7 @@ class LangGraphAgenticRetrievalOrchestrator:
             ],
         }
         with latency_tracker.span("langgraph_agentic_ms"):
-            final_state = cast(LangGraphAgenticState, graph.invoke(initial_state))
+            final_state = cast(LangGraphAgenticState, graph.invoke(cast(Any, initial_state)))
 
         selected_attempts = [
             final_state["attempts_by_tool_call_id"][tool_call_id]

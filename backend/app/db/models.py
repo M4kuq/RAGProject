@@ -580,6 +580,7 @@ class RetrievalRun(Base):
     context_budget_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     context_compression_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     tool_result_compression_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    cache_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     rerank_score_top1: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     answer_confidence: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
@@ -628,6 +629,82 @@ class RetrievalRunItem(Base):
     retrieval_source: Mapped[str | None] = mapped_column(String(50))
     score_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class RetrievalCacheEntry(Base):
+    __tablename__ = "retrieval_cache_entries"
+    __table_args__ = (
+        UniqueConstraint("cache_key", name="uq_retrieval_cache_entries_key"),
+        CheckConstraint("top_k BETWEEN 1 AND 20", name="ck_retrieval_cache_entries_top_k"),
+        CheckConstraint(
+            "rerank_top_n BETWEEN 1 AND 20",
+            name="ck_retrieval_cache_entries_rerank_top_n",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="ck_retrieval_cache_entries_expires_after_created",
+        ),
+        pg_check("btrim(cache_namespace) <> ''", "ck_retrieval_cache_entries_namespace"),
+        pg_check("btrim(schema_version) <> ''", "ck_retrieval_cache_entries_schema"),
+        pg_check("btrim(strategy_type) <> ''", "ck_retrieval_cache_entries_strategy"),
+        pg_check("btrim(embedding_model) <> ''", "ck_retrieval_cache_entries_embedding_model"),
+        pg_check("btrim(rerank_model) <> ''", "ck_retrieval_cache_entries_rerank_model"),
+        pg_check("btrim(graph_store_provider) <> ''", "ck_retrieval_cache_entries_graph_store"),
+        pg_check(
+            "cache_key ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_cache_key_hash",
+        ),
+        pg_check(
+            "query_hash ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_query_hash",
+        ),
+        pg_check(
+            "retrieval_settings_hash ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_retrieval_hash",
+        ),
+        pg_check(
+            "rerank_settings_hash ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_rerank_hash",
+        ),
+        pg_check(
+            "active_document_fingerprint ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_document_fp",
+        ),
+        pg_check(
+            "graph_index_fingerprint ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_graph_fp",
+        ),
+        pg_check(
+            "user_visible_scope ~ '^[0-9a-f]{64}$'",
+            "ck_retrieval_cache_entries_scope_hash",
+        ),
+    )
+
+    retrieval_cache_entry_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
+    cache_namespace: Mapped[str] = mapped_column(String(80), nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    retrieval_settings_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    rerank_settings_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    rerank_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    active_document_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    graph_index_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    graph_store_provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    rerank_top_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_visible_scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(jsonb(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -1039,6 +1116,13 @@ Index(
     sqlite_where=RetrievalRunItem.rerank_order.is_not(None),
 )
 Index("ix_retrieval_run_items_chunk", RetrievalRunItem.document_chunk_id)
+Index("ix_retrieval_cache_entries_expires", RetrievalCacheEntry.expires_at)
+Index(
+    "ix_retrieval_cache_entries_namespace_strategy",
+    RetrievalCacheEntry.cache_namespace,
+    RetrievalCacheEntry.strategy_type,
+    RetrievalCacheEntry.created_at.desc(),
+)
 Index("ux_citations_run_rank", Citation.retrieval_run_id, Citation.rank_order, unique=True)
 Index("ix_citations_chunk", Citation.document_chunk_id)
 Index("ix_evaluation_runs_status_created", EvaluationRun.status, EvaluationRun.created_at.desc())

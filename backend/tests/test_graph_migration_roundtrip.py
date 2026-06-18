@@ -20,6 +20,9 @@ GRAPH_TABLES = {
     "graph_index_runs",
     "graph_retrieval_paths",
 }
+CACHE_TABLES = {"retrieval_cache_entries"}
+HEAD_REVISION = "0017_retrieval_cache_foundation"
+PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
 
 
 @pytest.fixture(scope="module")
@@ -67,33 +70,59 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0016_graph_store_provider_seed"
+        assert version == HEAD_REVISION
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _has_cache_summary_column(pg_engine)
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+
+        command.downgrade(config, PRE_CACHE_REVISION)
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == PRE_CACHE_REVISION
+        assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
+        assert not _has_cache_summary_column(pg_engine)
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
 
         command.downgrade(config, "0015_langgraph_agentic")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == "0015_langgraph_agentic"
+        assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
+        assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) is None
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0016_graph_store_provider_seed"
+        assert version == HEAD_REVISION
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _has_cache_summary_column(pg_engine)
 
         command.downgrade(config, "0011_tool_result_compression")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == "0011_tool_result_compression"
         assert GRAPH_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
+        assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
+        assert not _has_cache_summary_column(pg_engine)
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0016_graph_store_provider_seed"
+        assert version == HEAD_REVISION
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
+        assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
     finally:
         get_settings.cache_clear()
@@ -120,6 +149,13 @@ def _graph_store_provider_value(engine: Engine) -> str | None:
                 """
             )
         ).scalar_one_or_none()
+
+
+def _has_cache_summary_column(engine: Engine) -> bool:
+    return any(
+        column["name"] == "cache_summary_json"
+        for column in inspect(engine).get_columns("retrieval_runs")
+    )
 
 
 def _render_url(url: URL) -> str:

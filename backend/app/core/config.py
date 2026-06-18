@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=32, ge=1)
     retrieval_top_k_default: int = Field(default=20, ge=1, le=20)
     retrieval_top_k_max: int = Field(default=20, ge=1, le=20)
+    retrieval_cache_enabled: bool = False
+    retrieval_cache_namespace: str = "rag.retrieval"
+    retrieval_cache_ttl_seconds: int = Field(default=300, ge=1, le=86400)
     hybrid_enabled: bool = True
     hybrid_fusion_method: str = "rrf"
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
@@ -353,6 +356,9 @@ class Settings(BaseSettings):
         self.embedding_provider = self.embedding_provider.lower()
         if self.embedding_provider not in {"fake", "local", "lmstudio"}:
             raise ValueError("EMBEDDING_PROVIDER must be fake, local, or lmstudio")
+        self.retrieval_cache_namespace = self.retrieval_cache_namespace.strip()
+        if not self.retrieval_cache_namespace:
+            raise ValueError("RETRIEVAL_CACHE_NAMESPACE must not be empty")
         self.rerank_provider = self.rerank_provider.lower()
         if self.rerank_provider not in {"none", "fake", "local"}:
             raise ValueError("RERANK_PROVIDER must be none, fake, or local")

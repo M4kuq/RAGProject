@@ -119,6 +119,18 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         2,
         "Candidate overfetch multiplier for hybrid retrieval final check.",
     ),
+    "rag.retrieval_cache.enabled": (
+        False,
+        "Enable strategy-agnostic retrieval result cache. Disabled by default.",
+    ),
+    "rag.retrieval_cache.namespace": (
+        "rag.retrieval",
+        "Retrieval cache namespace used in versioned cache keys.",
+    ),
+    "rag.retrieval_cache.ttl_seconds": (
+        300,
+        "Retrieval cache TTL in seconds. Versioned keys and fingerprints invalidate entries.",
+    ),
     "rag.graph.retrieval.enabled": (
         False,
         "Enable explicit strategy=graph graph retrieval requests for PR-48.",

@@ -68,6 +68,7 @@ export type RetrievalRunDebugSummary = {
   context_budget_json: ContextBudgetTrace | null;
   context_compression_json: EvidencePackTrace | null;
   tool_result_compression_json: ToolResultCompressionTrace | null;
+  cache_summary_json: Record<string, unknown> | null;
   rerank_score_top1: number | null;
   answer_confidence: number | null;
   groundedness_score: number | null;

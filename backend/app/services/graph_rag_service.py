@@ -148,15 +148,28 @@ class GraphRagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_graph_or_base_fallback(
+            result = self.base._execute_retrieval_with_cache(
                 db,
-                query=retrieval_query,
+                query_hash=query_hash,
+                requested_strategy=requested_strategy,
+                execution_strategy=RetrievalStrategy.GRAPH,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
                 filters=filters,
                 retrieval_run_id=run_id,
+                request_kind="search",
+                bypass=payload.cache_bypass,
                 latency_tracker=latency_tracker,
-                allow_base_fallback=allow_base_fallback,
+                retrieve=lambda: self._retrieve_graph_or_base_fallback(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                    allow_base_fallback=allow_base_fallback,
+                ),
             )
             run = self.base._require_run(db, run_id)
             self.base.repository.mark_succeeded(
@@ -320,15 +333,28 @@ class GraphRagService:
         run_id = run.retrieval_run_id
 
         try:
-            result = self._retrieve_graph_or_base_fallback(
+            result = self.base._execute_retrieval_with_cache(
                 db,
-                query=retrieval_query,
+                query_hash=query_hash,
+                requested_strategy=requested_strategy,
+                execution_strategy=RetrievalStrategy.GRAPH,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
                 filters=filters,
                 retrieval_run_id=run_id,
+                request_kind="ask",
+                bypass=payload.cache_bypass,
                 latency_tracker=latency_tracker,
-                allow_base_fallback=allow_base_fallback,
+                retrieve=lambda: self._retrieve_graph_or_base_fallback(
+                    db,
+                    query=retrieval_query,
+                    top_k=top_k,
+                    rerank_top_n=rerank_top_n,
+                    filters=filters,
+                    retrieval_run_id=run_id,
+                    latency_tracker=latency_tracker,
+                    allow_base_fallback=allow_base_fallback,
+                ),
             )
             context_budget_decision = self.base._apply_context_budget(
                 db,
