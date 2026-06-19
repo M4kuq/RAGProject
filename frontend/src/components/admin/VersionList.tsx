@@ -11,7 +11,7 @@ export function VersionList({
   versions: DocumentVersionSummary[];
 }) {
   if (versions.length === 0) {
-    return <p className="muted">No versions.</p>;
+    return <p className="muted">まだ版がありません。新しいファイルをアップロードするとここに表示されます。</p>;
   }
 
   return (
@@ -19,20 +19,20 @@ export function VersionList({
       <thead>
         <tr>
           <th>Version</th>
-          <th>Status</th>
-          <th>Display</th>
-          <th>File</th>
-          <th>Size</th>
-          <th>Chunks</th>
-          <th>Created</th>
-          <th>Actions</th>
+          <th>状態</th>
+          <th>表示状態</th>
+          <th>ファイル</th>
+          <th>サイズ</th>
+          <th>チャンク</th>
+          <th>作成日時</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
         {versions.map((version) => (
           <tr key={version.document_version_id}>
             <td>
-              v{version.version_no} {version.is_active ? <strong>(active)</strong> : null}
+              v{version.version_no} {version.is_active ? <strong>(有効)</strong> : null}
             </td>
             <td>
               <StatusBadge status={version.status} />
@@ -45,7 +45,7 @@ export function VersionList({
             <td>{version.chunk_count ?? "-"}</td>
             <td>{formatDate(version.created_at)}</td>
             <td>
-              <Link to={`/admin/documents/${logicalDocumentId}/versions/${version.document_version_id}`}>Detail</Link>
+              <Link to={`/admin/documents/${logicalDocumentId}/versions/${version.document_version_id}`}>詳細</Link>
             </td>
           </tr>
         ))}

@@ -11,17 +11,16 @@ export function Pagination({
     return null;
   }
   return (
-    <nav className="pagination" aria-label="Pagination">
+    <nav className="pagination" aria-label="ページ送り">
       <button type="button" disabled={meta.page <= 1} onClick={() => onPageChange(meta.page - 1)}>
-        Previous
+        前へ
       </button>
       <span>
-        Page {meta.page} / {Math.max(1, Math.ceil(meta.total / meta.page_size))}
+        {meta.page} / {Math.max(1, Math.ceil(meta.total / meta.page_size))} ページ
       </span>
       <button type="button" disabled={!meta.has_next} onClick={() => onPageChange(meta.page + 1)}>
-        Next
+        次へ
       </button>
     </nav>
   );
 }
-

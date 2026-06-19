@@ -3,19 +3,19 @@ import type { DocumentChunkItem } from "../../features/documents/documentTypes";
 
 export function ChunkPreviewTable({ chunks }: { chunks: DocumentChunkItem[] }) {
   if (chunks.length === 0) {
-    return <p className="muted">No chunks.</p>;
+    return <p className="muted">表示できるチャンクはまだありません。取り込み処理が完了すると確認できます。</p>;
   }
 
   return (
     <table className="admin-table">
       <thead>
         <tr>
-          <th>Index</th>
-          <th>Page</th>
-          <th>Source</th>
-          <th>Modality</th>
-          <th>Preview</th>
-          <th>Chars</th>
+          <th>番号</th>
+          <th>ページ</th>
+          <th>出典</th>
+          <th>種別</th>
+          <th>プレビュー</th>
+          <th>文字数</th>
         </tr>
       </thead>
       <tbody>
@@ -30,7 +30,7 @@ export function ChunkPreviewTable({ chunks }: { chunks: DocumentChunkItem[] }) {
             <td>{chunk.modality}</td>
             <td>
               {truncateText(chunk.preview, 160)}
-              {chunk.preview_truncated ? " [truncated]" : ""}
+              {chunk.preview_truncated ? " [省略]" : ""}
             </td>
             <td>{chunk.char_count ?? "-"}</td>
           </tr>

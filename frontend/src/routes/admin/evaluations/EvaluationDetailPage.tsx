@@ -51,7 +51,7 @@ export function EvaluationDetailPage() {
   if (run.isLoading) {
     return (
       <main className="admin-main">
-        <LoadingState />
+        <LoadingState label="評価詳細を読み込んでいます..." />
       </main>
     );
   }
@@ -59,7 +59,7 @@ export function EvaluationDetailPage() {
   if (run.error || !run.data) {
     return (
       <main className="admin-main">
-        <ErrorState error={run.error ?? new Error("Evaluation run not found.")} />
+        <ErrorState error={run.error ?? new Error("評価 run が見つかりません。")} />
       </main>
     );
   }
@@ -72,40 +72,40 @@ export function EvaluationDetailPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Evaluation #{run.data.evaluation_run_id}</h1>
+          <h1>評価 #{run.data.evaluation_run_id}</h1>
           <p className="muted">{truncateText(run.data.dataset_name, 80)}</p>
         </div>
         <button type="button" onClick={() => void run.refetch()}>
-          Refresh
+          更新
         </button>
       </header>
 
       <section className="admin-section">
-        <h2>Status</h2>
+        <h2>状態</h2>
         <dl className="detail-grid">
           <div>
-            <dt>Status</dt>
+            <dt>状態</dt>
             <dd>
               <StatusBadge status={run.data.status} />
             </dd>
           </div>
           <div>
-            <dt>Cases</dt>
+            <dt>ケース</dt>
             <dd>
-              {run.data.succeeded_count}/{run.data.case_count} succeeded
-              {run.data.failed_count ? `, ${run.data.failed_count} failed` : ""}
+              成功 {run.data.succeeded_count}/{run.data.case_count}
+              {run.data.failed_count ? ` / 失敗 ${run.data.failed_count}` : ""}
             </dd>
           </div>
           <div>
-            <dt>Strategies</dt>
+            <dt>strategy</dt>
             <dd>{run.data.strategies.length ? run.data.strategies.join(", ") : run.data.strategy_type}</dd>
           </div>
           <div>
-            <dt>Trigger</dt>
+            <dt>起動元</dt>
             <dd>{run.data.trigger_type}</dd>
           </div>
           <div>
-            <dt>Job</dt>
+            <dt>ジョブ</dt>
             <dd>
               {run.data.job_id ? (
                 <Link to={`/admin/jobs/${run.data.job_id}`}>#{run.data.job_id}</Link>
@@ -115,27 +115,27 @@ export function EvaluationDetailPage() {
             </dd>
           </div>
           <div>
-            <dt>Started</dt>
+            <dt>開始日時</dt>
             <dd>{formatDate(run.data.started_at)}</dd>
           </div>
           <div>
-            <dt>Finished</dt>
+            <dt>終了日時</dt>
             <dd>{formatDate(run.data.finished_at)}</dd>
           </div>
           <div>
-            <dt>Error</dt>
+            <dt>エラー</dt>
             <dd>{run.data.error_code ?? formatSafeText(run.data.error_message, 120)}</dd>
           </div>
         </dl>
       </section>
 
       <section className="admin-section">
-        <h2>Metric Summary</h2>
+        <h2>指標サマリー</h2>
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Metric</th>
-              <th>Average</th>
+              <th>metric</th>
+              <th>平均</th>
             </tr>
           </thead>
           <tbody>
@@ -152,7 +152,7 @@ export function EvaluationDetailPage() {
             ))}
             {Object.keys(run.data.metric_summary).length === 0 ? (
               <tr>
-                <td colSpan={2}>No metrics yet.</td>
+                <td colSpan={2}>まだ metric はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -160,24 +160,24 @@ export function EvaluationDetailPage() {
       </section>
 
       <section className="admin-section">
-        <h2>Strategy Comparison</h2>
+        <h2>strategy 比較</h2>
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Strategy</th>
-              <th>Provider</th>
-              <th>Cache</th>
+              <th>strategy</th>
+              <th>provider</th>
+              <th>cache</th>
               <th>
                 <span className="metric-heading">
                   Metric
                   <MetricHelp metricName="metric_summary" />
                 </span>
               </th>
-              <th>Average</th>
+              <th>平均</th>
               <th>p50</th>
               <th>p95</th>
-              <th>Count</th>
-              <th>Failed</th>
+              <th>件数</th>
+              <th>失敗</th>
             </tr>
           </thead>
           <tbody>
@@ -201,7 +201,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.strategy_comparison.length === 0 ? (
               <tr>
-                <td colSpan={9}>No strategy comparison yet.</td>
+                <td colSpan={9}>まだ strategy comparison はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -209,7 +209,7 @@ export function EvaluationDetailPage() {
       </section>
 
       <section className="admin-section">
-        <h2>Provider Summary</h2>
+        <h2>provider サマリー</h2>
         <dl className="detail-grid">
           {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "provider_comparison").map(
             ([name, value]) => (
@@ -223,14 +223,14 @@ export function EvaluationDetailPage() {
           0 ? (
             <div>
               <dt>providers</dt>
-              <dd>No provider summary yet.</dd>
+              <dd>まだ provider summary はありません。</dd>
             </div>
           ) : null}
         </dl>
       </section>
 
       <section className="admin-section">
-        <h2>Cache Summary</h2>
+        <h2>cache サマリー</h2>
         <dl className="detail-grid">
           {comparisonSummaryEntries(run.data.strategy_metrics_summary_json, "cache_comparison").map(
             ([name, value]) => (
@@ -244,14 +244,14 @@ export function EvaluationDetailPage() {
           0 ? (
             <div>
               <dt>cache</dt>
-              <dd>No cache summary yet.</dd>
+              <dd>まだ cache summary はありません。</dd>
             </div>
           ) : null}
         </dl>
       </section>
 
       <section className="admin-section">
-        <h2>Agentic Summary</h2>
+        <h2>Agentic サマリー</h2>
         <dl className="detail-grid">
           {agenticSummaryEntries(run.data.strategy_metrics_summary_json).map(([name, value]) => (
             <div key={name}>
@@ -267,7 +267,7 @@ export function EvaluationDetailPage() {
           {agenticSummaryEntries(run.data.strategy_metrics_summary_json).length === 0 ? (
             <div>
               <dt>agentic_router</dt>
-              <dd>No agentic summary yet.</dd>
+              <dd>まだ agentic summary はありません。</dd>
             </div>
           ) : null}
         </dl>
@@ -276,28 +276,27 @@ export function EvaluationDetailPage() {
       <section className="admin-section">
         <div className="section-header-row">
           <div>
-            <h2>Failure Candidates</h2>
+            <h2>失敗候補の dataset 化</h2>
             <span className="muted">
-              {selectedPromotionKeys.length} selected / {run.data.failure_candidates.length} candidates
+              {selectedPromotionKeys.length} 件選択 / {run.data.failure_candidates.length} 件
             </span>
             <p className="section-help">
-              Promote failed evaluation items into a reusable dataset. Use Select primary failures
-              to choose one representative candidate per source item, then promote it into the target
-              dataset. Repeating the same promotion should skip duplicates.
+              失敗した評価 item を再利用できる dataset に追加します。「主要な失敗を選択」で source item ごとの代表候補を選び、
+              選択した target dataset に追加します。同じ候補を再度追加しても重複は skip されます。
             </p>
             <p className="section-help">
-              Promotion copies safe failure metadata, metrics, reason codes, and strategy expectations only.
+              追加されるのは安全な失敗メタデータ、metric、reason code、strategy 期待値だけです。
             </p>
           </div>
           <div className="failure-promotion-controls">
             <label className="failure-promotion-target">
-              Target dataset
+              追加先 dataset
               <select
                 aria-label="failure promotion target dataset"
                 value={selectedTargetDatasetId}
                 onChange={(event) => setPromotionTargetDatasetId(event.target.value)}
               >
-                <option value="">Select dataset</option>
+                <option value="">dataset を選択</option>
                 {activeDatasets.map((dataset) => (
                   <option
                     key={dataset.evaluation_dataset_id}
@@ -317,7 +316,7 @@ export function EvaluationDetailPage() {
                   void createDataset
                     .mutateAsync({
                       dataset_name: datasetName,
-                      description: `Failure promotion target for evaluation run #${run.data.evaluation_run_id}.`,
+                      description: `Evaluation run #${run.data.evaluation_run_id} の失敗候補を追加する dataset。`,
                       version: "v1",
                       source_type: "feedback_promoted",
                       status: "active",
@@ -329,25 +328,25 @@ export function EvaluationDetailPage() {
                     .then((dataset) => {
                       setCreatedTargetDataset(dataset);
                       setPromotionTargetDatasetId(String(dataset.evaluation_dataset_id));
-                      setPromotionMessage(`Created target dataset ${dataset.dataset_name}.`);
+                      setPromotionMessage(`追加先 dataset ${dataset.dataset_name} を作成しました。`);
                     });
                 }}
               >
-                Create target dataset
+                追加先を作成
               </button>
               <button
                 type="button"
                 disabled={run.data.failure_candidates.length === 0}
                 onClick={() => setSelectedPromotionKeys(primaryPromotionKeys)}
               >
-                Select primary failures
+                主要な失敗を選択
               </button>
               <button
                 type="button"
                 disabled={selectedPromotionKeys.length === 0}
                 onClick={() => setSelectedPromotionKeys([])}
               >
-                Clear selection
+                選択を解除
               </button>
               <button
                 type="button"
@@ -362,7 +361,7 @@ export function EvaluationDetailPage() {
                     return;
                   }
                   const confirmed = window.confirm(
-                    "Promote selected failure candidates to this evaluation dataset?"
+                    "選択した失敗候補をこの evaluation dataset に追加しますか？"
                   );
                   if (!confirmed) {
                     return;
@@ -376,22 +375,22 @@ export function EvaluationDetailPage() {
                     })
                     .then((result) => {
                       setPromotionMessage(
-                        `Promoted ${result.created_count} case(s), skipped ${result.skipped_count}.`
+                        `${result.created_count} 件を追加し、${result.skipped_count} 件を skip しました。`
                       );
                     });
                 }}
               >
-                Promote selected failures
+                選択した失敗を追加
               </button>
             </div>
           </div>
         </div>
         {datasets.error ? (
-          <InlineAlert tone="error">Unable to load promotion target datasets.</InlineAlert>
+          <InlineAlert tone="error">追加先 dataset を読み込めません。</InlineAlert>
         ) : null}
         {activeDatasets.length === 0 ? (
           <InlineAlert tone="info">
-            No active target dataset exists. Create one here, then select failure candidates to promote.
+            有効な追加先 dataset がありません。ここで作成してから失敗候補を選択してください。
           </InlineAlert>
         ) : null}
         {promotionMessage ? <InlineAlert tone="success">{promotionMessage}</InlineAlert> : null}
@@ -404,13 +403,13 @@ export function EvaluationDetailPage() {
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Select</th>
-              <th>Case</th>
-              <th>Strategy</th>
-              <th>Failure</th>
-              <th>Severity</th>
-              <th>Reason</th>
-              <th>Promotion key</th>
+              <th>選択</th>
+              <th>case</th>
+              <th>strategy</th>
+              <th>失敗種別</th>
+              <th>重要度</th>
+              <th>理由</th>
+              <th>promotion_key</th>
             </tr>
           </thead>
           <tbody>
@@ -418,7 +417,7 @@ export function EvaluationDetailPage() {
               <tr key={candidate.promotion_key}>
                 <td>
                   <input
-                    aria-label={`select failure ${candidate.failure_type} ${truncateText(candidate.promotion_key, 8)}`}
+                    aria-label={`失敗候補 ${candidate.failure_type} ${truncateText(candidate.promotion_key, 8)} を選択`}
                     type="checkbox"
                     checked={selectedPromotionKeySet.has(candidate.promotion_key)}
                     onChange={(event) => {
@@ -440,7 +439,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.failure_candidates.length === 0 ? (
               <tr>
-                <td colSpan={7}>No failure candidates.</td>
+                <td colSpan={7}>失敗候補はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -448,18 +447,18 @@ export function EvaluationDetailPage() {
       </section>
 
       <section className="admin-section">
-        <h2>Case Results</h2>
+        <h2>ケース結果</h2>
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Case</th>
-              <th>Strategy</th>
-              <th>Status</th>
+              <th>case</th>
+              <th>strategy</th>
+              <th>状態</th>
               <th>Faithfulness</th>
               <th>Groundedness</th>
               <th>Citation</th>
               <th>Context</th>
-              <th>Error</th>
+              <th>エラー</th>
               <th>
                 <span className="metric-heading">
                   Metrics
@@ -486,7 +485,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.items.length === 0 ? (
               <tr>
-                <td colSpan={9}>No case results yet.</td>
+                <td colSpan={9}>まだケース結果はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -494,7 +493,7 @@ export function EvaluationDetailPage() {
       </section>
 
       <p>
-        <Link to="/admin/evaluations">Back to Evaluations</Link>
+        <Link to="/admin/evaluations">評価一覧へ戻る</Link>
       </p>
     </main>
   );

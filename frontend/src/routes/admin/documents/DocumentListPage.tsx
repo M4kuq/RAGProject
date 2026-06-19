@@ -45,12 +45,12 @@ export function DocumentListPage() {
   }
 
   async function archiveDocument(logicalDocumentId: number, alreadyArchived: boolean) {
-    if (!window.confirm(alreadyArchived ? "This document is already archived. Refresh state?" : "Archive this document?")) {
+    if (!window.confirm(alreadyArchived ? "このドキュメントはすでにアーカイブ済みです。状態を更新しますか？" : "このドキュメントをアーカイブしますか？")) {
       return;
     }
     try {
       const result = await archive.mutateAsync(logicalDocumentId);
-      setMessage(result.result_code === "already_archived" ? "Already archived." : "Archived.");
+      setMessage(result.result_code === "already_archived" ? "すでにアーカイブ済みです。" : "アーカイブしました。");
     } catch {
       setMessage(null);
     }
@@ -60,65 +60,67 @@ export function DocumentListPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Documents</h1>
-          <p className="muted">Manage uploaded documents, review state, and ingest status.</p>
+          <h1>ドキュメント</h1>
+          <p className="muted">アップロード済み文書、承認状況、取り込み状態を確認します。</p>
         </div>
         <Link className="button-link" to="/admin/documents/review">
-          Review
+          承認待ちを見る
         </Link>
       </header>
 
-      <DocumentUploadForm onUploaded={(result) => setMessage(`Upload accepted. Job #${result.job_id}`)} />
-      <DocumentUrlIngestForm onIngested={(result) => setMessage(`URL accepted. Job #${result.job_id}`)} />
+      <DocumentUploadForm onUploaded={(result) => setMessage(`アップロードを受け付けました。ジョブ #${result.job_id}`)} />
+      <DocumentUrlIngestForm onIngested={(result) => setMessage(`URL 取り込みを受け付けました。ジョブ #${result.job_id}`)} />
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {archive.error ? <InlineAlert tone="error">{archive.error.message}</InlineAlert> : null}
 
       <form className="filter-bar" onSubmit={submitSearch}>
         <label>
-          status
+          状態
           <select value={params.status} onChange={(event) => updateFilter("status", event.target.value)}>
-            <option value="">All</option>
-            <option value="active">active</option>
-            <option value="archived">archived</option>
+            <option value="">すべて</option>
+            <option value="active">有効</option>
+            <option value="archived">アーカイブ</option>
           </select>
         </label>
         <label>
-          display_status
+          表示状態
           <select
             value={params.display_status}
             onChange={(event) => updateFilter("display_status", event.target.value)}
           >
-            <option value="">All</option>
-            <option value="active">active</option>
-            <option value="pending_review">pending_review</option>
-            <option value="processing">processing</option>
-            <option value="failed">failed</option>
-            <option value="archived">archived</option>
+            <option value="">すべて</option>
+            <option value="active">有効</option>
+            <option value="pending_review">承認待ち</option>
+            <option value="processing">処理中</option>
+            <option value="failed">失敗</option>
+            <option value="archived">アーカイブ</option>
           </select>
         </label>
         <label>
-          q
+          キーワード
           <input value={qDraft} onChange={(event) => setQDraft(event.target.value)} />
         </label>
-        <button type="submit">Filter</button>
+        <button type="submit">絞り込む</button>
       </form>
 
-      {documents.isLoading ? <LoadingState /> : null}
+      {documents.isLoading ? <LoadingState label="ドキュメントを読み込んでいます..." /> : null}
       {documents.error ? <ErrorState error={documents.error} /> : null}
-      {documents.data?.items.length === 0 ? <EmptyState title="No documents">No uploaded documents.</EmptyState> : null}
+      {documents.data?.items.length === 0 ? (
+        <EmptyState title="ドキュメントがありません">まずファイルまたは URL を取り込むと、ここに一覧が表示されます。</EmptyState>
+      ) : null}
       {documents.data && documents.data.items.length > 0 ? (
         <>
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Display</th>
-                <th>Active</th>
-                <th>Latest</th>
-                <th>Updated</th>
-                <th>Created</th>
-                <th>Actions</th>
+                <th>タイトル</th>
+                <th>状態</th>
+                <th>表示状態</th>
+                <th>有効版</th>
+                <th>最新版</th>
+                <th>更新日時</th>
+                <th>作成日時</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -142,13 +144,14 @@ export function DocumentListPage() {
                     <td>{formatDate(document.updated_at)}</td>
                     <td>{formatDate(document.created_at)}</td>
                     <td className="actions">
-                      <Link to={`/admin/documents/${document.logical_document_id}`}>Detail</Link>
+                      <Link to={`/admin/documents/${document.logical_document_id}`}>詳細</Link>
                       <button
+                        className="button-danger"
                         type="button"
                         disabled={archive.isPending}
                         onClick={() => void archiveDocument(document.logical_document_id, alreadyArchived)}
                       >
-                        {alreadyArchived ? "Archived" : "Archive"}
+                        {alreadyArchived ? "アーカイブ済み" : "アーカイブ"}
                       </button>
                     </td>
                   </tr>

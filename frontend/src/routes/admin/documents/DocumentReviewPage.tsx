@@ -18,12 +18,12 @@ export function DocumentReviewPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   async function approveVersion(logicalDocumentId: number, documentVersionId: number, alreadyActive: boolean) {
-    if (!window.confirm(alreadyActive ? "This version is already active. Refresh state?" : "Approve this version?")) {
+    if (!window.confirm(alreadyActive ? "この版はすでに有効です。状態を更新しますか？" : "この版を承認して有効化しますか？")) {
       return;
     }
     try {
       const result = await approve.mutateAsync({ logicalDocumentId, documentVersionId });
-      setMessage(result.result_code === "already_active" ? "Already active." : "Approved. Ingest/index state updated.");
+      setMessage(result.result_code === "already_active" ? "すでに有効です。" : "承認しました。検索対象の状態も更新されます。");
     } catch {
       setMessage(null);
     }
@@ -33,27 +33,29 @@ export function DocumentReviewPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Review</h1>
-          <p className="muted">Approve ready versions that are not active yet.</p>
+          <h1>承認</h1>
+          <p className="muted">準備完了だがまだ有効化されていない版を確認します。</p>
         </div>
       </header>
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {approve.error ? <InlineAlert tone="error">{approve.error.message}</InlineAlert> : null}
-      {pending.isLoading ? <LoadingState /> : null}
+      {pending.isLoading ? <LoadingState label="承認待ちを読み込んでいます..." /> : null}
       {pending.error ? <ErrorState error={pending.error} /> : null}
-      {pending.data?.items.length === 0 ? <EmptyState title="No pending review">No pending versions.</EmptyState> : null}
+      {pending.data?.items.length === 0 ? (
+        <EmptyState title="承認待ちはありません">新しい版の取り込みが完了すると、ここから有効化できます。</EmptyState>
+      ) : null}
       {pending.data && pending.data.items.length > 0 ? (
         <>
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Document</th>
-                <th>Version</th>
-                <th>File</th>
-                <th>Created</th>
-                <th>Chunks</th>
-                <th>Status</th>
-                <th>Action</th>
+                <th>ドキュメント</th>
+                <th>版</th>
+                <th>ファイル</th>
+                <th>作成日時</th>
+                <th>チャンク</th>
+                <th>状態</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -84,7 +86,7 @@ export function DocumentReviewPage() {
                             : undefined
                         }
                       >
-                        Approve
+                        承認する
                       </button>
                     </td>
                   </tr>

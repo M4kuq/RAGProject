@@ -14,88 +14,88 @@ type HelpTooltipProps = {
 
 const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
   budget_exhausted_rate: {
-    description: "Share of evaluated cases that exhausted the agentic retrieval budget.",
-    direction: "Lower is better."
+    description: "Agentic retrieval の実行予算を使い切ったケースの割合です。",
+    direction: "低いほど軽く安定しています。"
   },
   cache_hit_rate: {
-    description: "Share of evaluated retrieval runs served from retrieval cache.",
-    direction: "Higher means more cache reuse."
+    description: "retrieval cache から再利用できた検索の割合です。",
+    direction: "高いほどキャッシュが効いています。"
   },
   cache_saved_latency: {
-    description: "Estimated latency saved by warm cache compared with the cold baseline.",
-    direction: "Higher means more milliseconds saved."
+    description: "cold baseline と比べてキャッシュで短縮できた推定時間です。",
+    direction: "高いほど待ち時間を削減できています。"
   },
   case_metrics: {
-    description: "Per-case metric values saved for the evaluation item.",
-    direction: "Interpretation depends on each metric."
+    description: "評価ケースごとに保存された指標値です。",
+    direction: "意味は各 metric_name に依存します。"
   },
   citation_coverage: {
-    description: "Whether the answer includes the required citation coverage.",
-    direction: "Higher is better."
+    description: "回答が必要な引用を満たしているかを示します。",
+    direction: "高いほど良好です。"
   },
   context_precision: {
-    description: "How much retrieved context is relevant to the expected answer signal.",
-    direction: "Higher is better."
+    description: "取得した context が期待回答にどれだけ関係しているかを示します。",
+    direction: "高いほど良好です。"
   },
   entity_relation_quality_summary: {
-    description: "Safe counts for extracted graph entities, relations, paths, and source chunks.",
-    direction: "Use with graph quality metrics."
+    description: "抽出した graph entity、relation、path、source chunk の安全な集計です。",
+    direction: "graph quality 系指標と合わせて確認します。"
   },
   faithfulness: {
-    description: "Whether the answer follows the expected answer or keyword signal.",
-    direction: "Higher is better."
+    description: "回答が期待回答や keyword signal に沿っているかを示します。",
+    direction: "高いほど良好です。"
   },
   fallback_rate: {
-    description: "Share of evaluated cases that used a fallback retrieval path.",
-    direction: "Lower is better."
+    description: "fallback retrieval path を使ったケースの割合です。",
+    direction: "低いほど想定どおりの経路で検索できています。"
   },
   graph_citation_coverage: {
-    description: "Graph paths that resolve back to citable retrieval sources.",
-    direction: "Higher is better."
+    description: "graph path が引用可能な retrieval source に戻れているかを示します。",
+    direction: "高いほど良好です。"
   },
   graph_path_relevance: {
-    description: "Graph paths matched to expected safe entity labels and relation types.",
-    direction: "Higher is better."
+    description: "graph path が期待する entity label や relation type に合っているかを示します。",
+    direction: "高いほど良好です。"
   },
   groundedness: {
-    description: "Whether the answer is supported by retrieved evidence.",
-    direction: "Higher is better."
+    description: "回答が取得済み evidence に支えられているかを示します。",
+    direction: "高いほど良好です。"
   },
   metric_summary: {
-    description: "Aggregate metric values for the evaluation run or strategy.",
-    direction: "Interpretation depends on each metric."
+    description: "評価 run または strategy の集計指標です。",
+    direction: "意味は各 metric_name に依存します。"
   },
   mrr: {
-    description: "Rank quality for the first relevant retrieved result.",
-    direction: "Higher is better."
+    description: "最初の関連結果がどれだけ上位に出たかを示すランキング指標です。",
+    direction: "高いほど良好です。"
   },
   multi_hop_answerability: {
-    description: "Retrieved graph paths cover the required hop depth for the case.",
-    direction: "Higher is better."
+    description: "取得した graph path が必要な hop depth を満たしているかを示します。",
+    direction: "高いほど良好です。"
   },
   no_context_rate: {
-    description: "Share of cases where no answerable context was found.",
-    direction: "Lower is better."
+    description: "回答に使える context が見つからなかったケースの割合です。",
+    direction: "低いほど良好です。"
   },
   p95_latency: {
-    description: "The slower-tail evaluation latency at the 95th percentile.",
-    direction: "Lower is better."
+    description: "遅い側 5% に近い評価 latency です。",
+    direction: "低いほど速く安定しています。"
   },
   recall_at_k: {
-    description: "Whether expected documents, chunks, or keywords were retrieved.",
-    direction: "Higher is better."
+    description: "期待 document、chunk、keyword が検索結果に含まれたかを示します。",
+    direction: "高いほど良好です。"
   },
   retrieval_call_count_avg: {
-    description: "Average number of retrieval calls used per evaluated case.",
-    direction: "Lower is lighter; higher means more search work."
+    description: "評価ケースごとの平均 retrieval call 数です。",
+    direction: "低いほど軽く、高いほど検索を多く試しています。"
   },
   strategy_selection_accuracy: {
-    description: "Whether the expected retrieval strategy was selected.",
-    direction: "Higher is better."
+    description: "期待した retrieval strategy が選ばれたかを示します。",
+    direction: "高いほど良好です。"
   },
   sufficiency_score_avg: {
-    description: "Average score for whether retrieved context is sufficient.",
-    direction: "Higher is better."
+    description: "取得 context が回答に十分かどうかの平均 score です。",
+    direction: "高いほど良好です。"
   }
 };
 
@@ -136,8 +136,8 @@ export function orderedMetricEntries<T>(entries: Array<[string, T]>): Array<[str
 
 export function MetricHelp({ metricName }: { metricName: string }) {
   const definition = METRIC_DEFINITIONS[metricName] ?? {
-    description: "Metric recorded by this evaluation run.",
-    direction: "Interpretation depends on the metric."
+    description: "この評価 run に記録された metric です。",
+    direction: "解釈は metric の定義に依存します。"
   };
 
   return (

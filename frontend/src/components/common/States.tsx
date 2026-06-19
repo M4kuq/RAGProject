@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export function LoadingState({ label = "Loading..." }: { label?: string }) {
+export function LoadingState({ label = "読み込み中..." }: { label?: string }) {
   return <p className="muted">{label}</p>;
 }
 
@@ -13,8 +13,8 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
   );
 }
 
-export function ErrorState({ title = "Error", error }: { title?: string; error: unknown }) {
-  const message = error instanceof Error ? error.message : "Operation failed.";
+export function ErrorState({ title = "エラー", error }: { title?: string; error: unknown }) {
+  const message = error instanceof Error ? error.message : "処理に失敗しました。";
   return (
     <div className="state-box error-box" role="alert">
       <strong>{title}</strong>

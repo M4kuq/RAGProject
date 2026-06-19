@@ -28,7 +28,7 @@ export function EvaluationDatasetDetailPage() {
   if (dataset.isLoading) {
     return (
       <main className="admin-main">
-        <LoadingState />
+        <LoadingState label="dataset を読み込んでいます..." />
       </main>
     );
   }
@@ -36,7 +36,7 @@ export function EvaluationDatasetDetailPage() {
   if (dataset.error || !dataset.data) {
     return (
       <main className="admin-main">
-        <ErrorState error={dataset.error ?? new Error("Evaluation dataset not found.")} />
+        <ErrorState error={dataset.error ?? new Error("評価 dataset が見つかりません。")} />
       </main>
     );
   }
@@ -49,59 +49,59 @@ export function EvaluationDatasetDetailPage() {
           <p className="muted">{formatSafeText(dataset.data.description, 140)}</p>
         </div>
         <button type="button" onClick={() => void exportManifest()}>
-          Export
+          エクスポート
         </button>
       </header>
 
       {exported.error ? <InlineAlert tone="error">{exported.error.message}</InlineAlert> : null}
       {exportText ? (
         <section className="admin-section">
-          <h2>Export manifest</h2>
+          <h2>エクスポート内容</h2>
           <pre className="payload-view">{exportText}</pre>
         </section>
       ) : null}
 
       <section className="admin-section">
-        <h2>Dataset</h2>
+        <h2>dataset 概要</h2>
         <dl className="detail-grid">
           <div>
-            <dt>Status</dt>
+            <dt>状態</dt>
             <dd>
               <StatusBadge status={dataset.data.status} />
             </dd>
           </div>
           <div>
-            <dt>Source</dt>
+            <dt>source</dt>
             <dd>{dataset.data.source_type}</dd>
           </div>
           <div>
-            <dt>Version</dt>
+            <dt>version</dt>
             <dd>{dataset.data.version}</dd>
           </div>
           <div>
-            <dt>Cases</dt>
+            <dt>ケース</dt>
             <dd>{dataset.data.case_count}</dd>
           </div>
           <div>
-            <dt>Updated</dt>
+            <dt>更新日時</dt>
             <dd>{formatDate(dataset.data.updated_at)}</dd>
           </div>
         </dl>
       </section>
 
       <section className="admin-section">
-        <h2>Cases</h2>
-        {cases.isLoading ? <LoadingState /> : null}
+        <h2>ケース</h2>
+        {cases.isLoading ? <LoadingState label="ケースを読み込んでいます..." /> : null}
         {cases.error ? <ErrorState error={cases.error} /> : null}
         {cases.data ? (
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Case</th>
-                <th>Status</th>
-                <th>Question</th>
-                <th>Citation</th>
-                <th>Tags</th>
+                <th>case</th>
+                <th>状態</th>
+                <th>質問</th>
+                <th>引用</th>
+                <th>tags</th>
               </tr>
             </thead>
             <tbody>
@@ -112,13 +112,13 @@ export function EvaluationDatasetDetailPage() {
                     <StatusBadge status={evaluationCase.status} />
                   </td>
                   <td>{truncateText(evaluationCase.question, 80)}</td>
-                  <td>{evaluationCase.required_citation ? "required" : "optional"}</td>
+                  <td>{evaluationCase.required_citation ? "必須" : "任意"}</td>
                   <td>{evaluationCase.tags.join(", ") || "-"}</td>
                 </tr>
               ))}
               {cases.data.items.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No cases.</td>
+                  <td colSpan={5}>ケースはありません。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -127,7 +127,7 @@ export function EvaluationDatasetDetailPage() {
       </section>
 
       <p>
-        <Link to="/admin/evaluations">Back to Evaluations</Link>
+        <Link to="/admin/evaluations">評価一覧へ戻る</Link>
       </p>
     </main>
   );

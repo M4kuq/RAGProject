@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -33,13 +33,13 @@ test("AdminSidebar renders document review and job links", () => {
     </MemoryRouter>
   );
 
-  expect(screen.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/admin/documents");
-  expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/admin/documents/review");
-  expect(screen.getByRole("link", { name: "Retrieval Debug" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "ドキュメント" })).toHaveAttribute("href", "/admin/documents");
+  expect(screen.getByRole("link", { name: "承認" })).toHaveAttribute("href", "/admin/documents/review");
+  expect(screen.getByRole("link", { name: "検索デバッグ" })).toHaveAttribute(
     "href",
     "/admin/retrieval-debug"
   );
-  expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute("href", "/admin/jobs");
+  expect(screen.getByRole("link", { name: "ジョブ" })).toHaveAttribute("href", "/admin/jobs");
 });
 
 test("AdminSidebar highlights review without also highlighting documents", () => {
@@ -49,9 +49,9 @@ test("AdminSidebar highlights review without also highlighting documents", () =>
     </MemoryRouter>
   );
 
-  expect(screen.getByRole("link", { name: "Review" })).toHaveClass("active");
-  expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("aria-current", "page");
-  expect(screen.getByRole("link", { name: "Documents" })).not.toHaveClass("active");
+  expect(screen.getByRole("link", { name: "承認" })).toHaveClass("active");
+  expect(screen.getByRole("link", { name: "承認" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("link", { name: "ドキュメント" })).not.toHaveClass("active");
 });
 
 test("AdminSidebar keeps documents active for document detail routes", () => {
@@ -61,8 +61,8 @@ test("AdminSidebar keeps documents active for document detail routes", () => {
     </MemoryRouter>
   );
 
-  expect(screen.getByRole("link", { name: "Documents" })).toHaveClass("active");
-  expect(screen.getByRole("link", { name: "Review" })).not.toHaveClass("active");
+  expect(screen.getByRole("link", { name: "ドキュメント" })).toHaveClass("active");
+  expect(screen.getByRole("link", { name: "承認" })).not.toHaveClass("active");
 });
 
 test("viewer cannot enter admin route and does not see admin navigation", async () => {
@@ -147,7 +147,7 @@ test("login returns to the originally requested admin route", async () => {
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Login" }));
-  expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "ドキュメント" })).toBeInTheDocument();
 });
 
 test("admin auth load failure is not shown as forbidden", async () => {
@@ -195,7 +195,7 @@ test("keeps the existing admin evaluation page reachable", async () => {
     </AppProviders>
   );
 
-  expect(await screen.findByRole("button", { name: "Run evaluation" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "評価を実行" })).toBeInTheDocument();
 });
 
 test("admin evaluation dataset detail shows cases and export", async () => {
@@ -280,7 +280,7 @@ test("admin evaluation dataset detail shows cases and export", async () => {
 
   expect(await screen.findByRole("heading", { name: "phase2_strategy_smoke" })).toBeInTheDocument();
   expect(await screen.findByText("dense_case")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Export" }));
+  fireEvent.click(screen.getByRole("button", { name: "エクスポート" }));
   expect(await screen.findByText(/phase2.evaluation_dataset.v1/)).toBeInTheDocument();
 });
 
@@ -474,23 +474,23 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Evaluation #77" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "評価 #77" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "recall_at_k の説明" }).length).toBeGreaterThan(1);
-  expect(screen.getByText(/Promote failed evaluation items/)).toBeInTheDocument();
-  expect(screen.getByText(/strategy expectations only/)).toBeInTheDocument();
+  expect(screen.getByText(/失敗した評価 item/)).toBeInTheDocument();
+  expect(screen.getByText(/strategy 期待値だけ/)).toBeInTheDocument();
   expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "archived_failures" })).not.toBeInTheDocument();
-  fireEvent.change(await screen.findByLabelText("failure promotion target dataset"), {
+  fireEvent.change(await screen.findByLabelText("追加先 dataset"), {
     target: { value: "42" }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Select primary failures" }));
-  fireEvent.click(screen.getByRole("button", { name: "Promote selected failures" }));
+  fireEvent.click(screen.getByRole("button", { name: "主要な失敗を選択" }));
+  fireEvent.click(screen.getByRole("button", { name: "選択した失敗を追加" }));
 
   await waitFor(() => expect(promoteRequests.length).toBe(1));
   const body = JSON.parse(String(promoteRequests[0].body));
   expect(body.target_dataset_id).toBe(42);
   expect(body.promotion_keys).toEqual(["promotion-key-retrieval", "promotion-key-known"]);
-  expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
+  expect(await screen.findByText("1 件を追加し、0 件を skip しました。")).toBeInTheDocument();
 });
 
 test("evaluation detail can create a target dataset and promote selected failures", async () => {
@@ -611,25 +611,25 @@ test("evaluation detail can create a target dataset and promote selected failure
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Evaluation #78" })).toBeInTheDocument();
-  expect(await screen.findByText(/No active target dataset exists/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Promote selected failures" })).toBeDisabled();
+  expect(await screen.findByRole("heading", { name: "評価 #78" })).toBeInTheDocument();
+  expect(await screen.findByText(/有効な追加先 dataset がありません/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "選択した失敗を追加" })).toBeDisabled();
 
-  fireEvent.click(screen.getByRole("button", { name: "Create target dataset" }));
+  fireEvent.click(screen.getByRole("button", { name: "追加先を作成" }));
 
   await waitFor(() => expect(createDatasetRequests.length).toBe(1));
   const createBody = JSON.parse(String(createDatasetRequests[0].body));
   expect(createBody.dataset_name).toBe("failure_promoted_run_78");
   expect(await screen.findByRole("option", { name: "failure_promoted_run_78" })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("checkbox", { name: /select failure no_context/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Promote selected failures" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /失敗候補 no_context/ }));
+  fireEvent.click(screen.getByRole("button", { name: "選択した失敗を追加" }));
 
   await waitFor(() => expect(promoteRequests.length).toBe(1));
   const promoteBody = JSON.parse(String(promoteRequests[0].body));
   expect(promoteBody.target_dataset_id).toBe(99);
   expect(promoteBody.promotion_keys).toEqual(["promotion-key-no-context"]);
-  expect(await screen.findByText("Promoted 1 case(s), skipped 0.")).toBeInTheDocument();
+  expect(await screen.findByText("1 件を追加し、0 件を skip しました。")).toBeInTheDocument();
 });
 
 test("retrieval debug runs hybrid search and renders redacted trace details", async () => {
@@ -1145,7 +1145,7 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Retrieval Debug" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "検索デバッグ" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "dense" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "sparse" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "hybrid" })).toBeInTheDocument();
@@ -1154,9 +1154,9 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect(screen.getByRole("option", { name: "agentic_router" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "multi_query_hybrid" })).toBeDisabled();
 
-  fireEvent.change(screen.getByLabelText("query"), { target: { value: "hybrid retrieval" } });
-  fireEvent.change(screen.getByLabelText("strategy"), { target: { value: "hybrid" } });
-  fireEvent.click(screen.getByRole("button", { name: "Run search" }));
+  fireEvent.change(screen.getByLabelText("検索クエリ"), { target: { value: "hybrid retrieval" } });
+  fireEvent.change(screen.getByLabelText("検索方式"), { target: { value: "hybrid" } });
+  fireEvent.click(screen.getByRole("button", { name: "検索を実行" }));
 
   await waitFor(() => expect(searchRequests.length).toBe(1));
   expect(JSON.parse(String(searchRequests[0].body)).strategy).toBe("hybrid");
@@ -1168,16 +1168,16 @@ test("retrieval debug runs hybrid search and renders redacted trace details", as
   expect((await screen.findAllByText(/file_extension/)).length).toBeGreaterThan(0);
   expect((await screen.findAllByText(/explicit_strategy_hybrid/)).length).toBeGreaterThan(0);
   expect(await screen.findByText("42 ms")).toBeInTheDocument();
-  expect(await screen.findByRole("heading", { name: "Context Budget" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Context Budget（文脈予算）" })).toBeInTheDocument();
   expect((await screen.findAllByText("6000")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("80")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("max_items_exceeded")).length).toBeGreaterThan(0);
-  expect(await screen.findByRole("heading", { name: "Evidence Pack" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Evidence Pack（根拠パック）" })).toBeInTheDocument();
   expect((await screen.findAllByText("deterministic_evidence_pack")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("near_duplicate_removed")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("bounded_excerpt")).length).toBeGreaterThan(0);
-  expect(await screen.findByRole("heading", { name: "Tool Result Compression" })).toBeInTheDocument();
-  expect(await screen.findByRole("heading", { name: "Graph Trace" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Tool Result Compression（tool 結果圧縮）" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "graph trace" })).toBeInTheDocument();
   expect((await screen.findAllByText("gp_safe_1")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("source_chunk_coverage")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("dense_search")).length).toBeGreaterThan(0);
@@ -1338,11 +1338,11 @@ test("retrieval debug loads run history and refreshes selected trace", async () 
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Recent Retrieval Runs" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "最近の検索 run" })).toBeInTheDocument();
   expect((await screen.findAllByText("#601")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("llm_tool_orchestrator")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText("llm_tool_additional_search")).length).toBeGreaterThan(0);
-  expect(await screen.findByText(/retrieval tool calls instead of the rule-based sufficiency check/)).toBeInTheDocument();
+  expect(await screen.findByText(/bounded retrieval tool/)).toBeInTheDocument();
   expect((await screen.findAllByText("tools_used")).length).toBeGreaterThan(0);
   expect((await screen.findAllByText(/dense_search/)).length).toBeGreaterThan(0);
   expect((await screen.findAllByText(/hybrid_search/)).length).toBeGreaterThan(0);
@@ -1350,13 +1350,13 @@ test("retrieval debug loads run history and refreshes selected trace", async () 
   expect(document.body).not.toHaveTextContent("raw prompt must not appear");
   await waitFor(() => expect(detailRequests).toBeGreaterThanOrEqual(1));
 
-  fireEvent.click(screen.getByRole("button", { name: "Refresh trace" }));
+  fireEvent.click(screen.getByRole("button", { name: "trace を更新" }));
 
   await waitFor(() => expect(historyRequests).toBeGreaterThanOrEqual(2));
   await waitFor(() => expect(detailRequests).toBeGreaterThanOrEqual(2));
 });
 
-test("document list renders filters, statuses and safe escaped text", async () => {
+test("document list renders filters, 状態es and safe escaped text", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
@@ -1397,9 +1397,9 @@ test("document list renders filters, statuses and safe escaped text", async () =
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
-  expect(screen.getByLabelText("status")).toBeInTheDocument();
-  expect(screen.getByText("pending_review")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "ドキュメント" })).toBeInTheDocument();
+  expect(screen.getByLabelText("状態")).toBeInTheDocument();
+  expect(screen.getByText("承認待ち")).toBeInTheDocument();
   expect(await screen.findByText("<b>Guide</b>")).toBeInTheDocument();
   expect(document.querySelector("script")).toBeNull();
 });
@@ -1514,12 +1514,12 @@ test("document detail renders version compare summary and bounded previews", asy
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Version Compare" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Version Compare" })).toHaveAttribute("href", "#version-compare");
-  expect(screen.getByText("Compare version metadata and bounded source previews. Full source bodies are not shown.")).toBeInTheDocument();
-  expect(await screen.findByText("Select versions and run compare to load the diff.")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "版の比較" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "版の比較" })).toHaveAttribute("href", "#version-compare");
+  expect(screen.getByText("版ごとのメタデータと短い出典プレビューだけを比較します。本文全体は表示しません。")).toBeInTheDocument();
+  expect(await screen.findByText("比較する版を選び、「比較する」を押すと差分を読み込みます。")).toBeInTheDocument();
   expect(compareRequests).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
+  fireEvent.click(screen.getByRole("button", { name: "比較する" }));
   expect(await screen.findByText("New bounded preview")).toBeInTheDocument();
   expect(compareRequests).toHaveLength(1);
   expect(screen.getByText("file_name")).toBeInTheDocument();
@@ -1572,7 +1572,7 @@ test("document list pagination requests the selected page", async () => {
     </AppProviders>
   );
 
-  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  fireEvent.click(await screen.findByRole("button", { name: "次へ" }));
   await waitFor(() => expect(documentRequests.some((url) => url.includes("page=2"))).toBe(true));
 });
 
@@ -1629,11 +1629,11 @@ test("review page exposes pagination", async () => {
     </AppProviders>
   );
 
-  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  fireEvent.click(await screen.findByRole("button", { name: "次へ" }));
   await waitFor(() => expect(reviewRequests.some((url) => url.includes("page=2"))).toBe(true));
 });
 
-test("upload form validates extension before reading or sending file", async () => {
+test("upload form validates extension before reading or sending アップロードファイル", async () => {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
@@ -1641,11 +1641,11 @@ test("upload form validates extension before reading or sending file", async () 
     </QueryClientProvider>
   );
 
-  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Unsafe file" } });
-  fireEvent.change(screen.getByLabelText("file"), {
+  fireEvent.change(screen.getByLabelText("タイトル"), { target: { value: "Unsafe アップロードファイル" } });
+  fireEvent.change(screen.getByLabelText("アップロードファイル"), {
     target: { files: [new File(["payload"], "payload.exe", { type: "application/octet-stream" })] }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+  fireEvent.click(screen.getByRole("button", { name: "アップロード" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(".pdf");
 });
@@ -1679,13 +1679,13 @@ test("upload success shows created document and job summary", async () => {
     </QueryClientProvider>
   );
 
-  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Guide" } });
-  fireEvent.change(screen.getByLabelText("file"), {
+  fireEvent.change(screen.getByLabelText("タイトル"), { target: { value: "Guide" } });
+  fireEvent.change(screen.getByLabelText("アップロードファイル"), {
     target: { files: [new File(["payload"], "guide.txt", { type: "text/plain" })] }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+  fireEvent.click(screen.getByRole("button", { name: "アップロード" }));
 
-  expect(await screen.findByText(/Uploaded document #1000/)).toHaveTextContent("job #300");
+  expect(await screen.findByText(/ドキュメント #1000/)).toHaveTextContent("ジョブ #300");
 });
 
 test("job payload view redacts secret and absolute path fields", () => {
@@ -1756,9 +1756,9 @@ test("succeeded job detail does not show failure message", async () => {
     </AppProviders>
   );
 
-  expect(await screen.findByRole("heading", { name: "Job #27" })).toBeInTheDocument();
-  expect(screen.getByText("succeeded")).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Error" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "ジョブ #27" })).toBeInTheDocument();
+  expect(screen.getByText("成功")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "エラー" })).not.toBeInTheDocument();
   expect(screen.queryByText("Job failed.")).not.toBeInTheDocument();
 });
 
@@ -1813,9 +1813,9 @@ test("failed job retry refreshes csrf before mutation", async () => {
     </AppProviders>
   );
 
-  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  fireEvent.click(await screen.findByRole("button", { name: "再実行" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/jobs/300/retry"), expect.any(Object)));
-  expect(await screen.findByRole("button", { name: "Retry queued" })).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "再実行待ち" })).toBeDisabled();
 });
 
 test("job list pagination requests the selected page", async () => {
@@ -1869,6 +1869,6 @@ test("job list pagination requests the selected page", async () => {
     </AppProviders>
   );
 
-  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+  fireEvent.click(await screen.findByRole("button", { name: "次へ" }));
   await waitFor(() => expect(jobRequests.some((url) => url.includes("page=2"))).toBe(true));
 });

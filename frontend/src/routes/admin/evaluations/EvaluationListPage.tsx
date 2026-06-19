@@ -57,16 +57,16 @@ export function EvaluationListPage() {
       cache_modes: cacheModes,
       trigger_type: "manual"
     });
-    setMessage(`Evaluation run #${result.evaluation_run_id} queued as job #${result.job_id}.`);
+    setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
   }
 
   return (
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Evaluations</h1>
+          <h1>評価</h1>
           <p className="muted">
-            Run deterministic Phase1 evaluation fixtures and inspect safe metric summaries.
+            評価 dataset や fixture を使って検索品質を確認し、安全な metric summary を確認します。
           </p>
         </div>
       </header>
@@ -74,7 +74,7 @@ export function EvaluationListPage() {
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
         <label>
-          fixture
+          fixture 名
           <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
         </label>
         <label>
@@ -85,7 +85,7 @@ export function EvaluationListPage() {
               setEvaluationDatasetId(event.target.value ? Number(event.target.value) : null)
             }
           >
-            <option value="">fixture only</option>
+            <option value="">fixture のみ</option>
             {datasets.data?.items.map((dataset) => (
               <option key={dataset.evaluation_dataset_id} value={dataset.evaluation_dataset_id}>
                 {dataset.dataset_name}
@@ -94,7 +94,7 @@ export function EvaluationListPage() {
           </select>
         </label>
         <div className="field-group">
-          strategies
+          strategy
           <span className="inline-options">
             {(
               [
@@ -126,7 +126,7 @@ export function EvaluationListPage() {
           </span>
         </div>
         <div className="field-group">
-          cache modes
+          cache mode
           <span className="inline-options">
             {(["default", "disabled", "cold", "warm"] as EvaluationCacheMode[]).map((mode) => (
               <label key={mode}>
@@ -144,7 +144,7 @@ export function EvaluationListPage() {
           </span>
         </div>
         <label>
-          case_limit
+          ケース上限
           <input
             type="number"
             min={1}
@@ -154,36 +154,36 @@ export function EvaluationListPage() {
           />
         </label>
         <button type="submit" disabled={createRun.isPending}>
-          Run evaluation
+          評価を実行
         </button>
         <button type="button" onClick={() => void runs.refetch()}>
-          Refresh
+          更新
         </button>
       </form>
-      {runs.isLoading ? <LoadingState /> : null}
+      {runs.isLoading ? <LoadingState label="評価 run を読み込んでいます..." /> : null}
       {runs.error ? <ErrorState error={runs.error} /> : null}
       {runs.data?.items.length === 0 ? (
-        <EmptyState title="No evaluation runs">No evaluation runs.</EmptyState>
+        <EmptyState title="評価 run がありません">上のフォームから評価を実行すると、結果と metric がここに表示されます。</EmptyState>
       ) : null}
       {runs.data && runs.data.items.length > 0 ? (
         <>
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Run</th>
-                <th>Dataset</th>
-                <th>Strategy</th>
-                <th>Status</th>
-                <th>Cases</th>
+                <th>評価 run</th>
+                <th>dataset</th>
+                <th>strategy</th>
+                <th>状態</th>
+                <th>ケース</th>
                 <th>
                   <span className="metric-heading">
                     Metrics
                     <MetricHelp metricName="metric_summary" />
                   </span>
                 </th>
-                <th>Job</th>
-                <th>Started</th>
-                <th>Finished</th>
+                <th>ジョブ</th>
+                <th>開始日時</th>
+                <th>終了日時</th>
               </tr>
             </thead>
             <tbody>
@@ -198,8 +198,8 @@ export function EvaluationListPage() {
                     <StatusBadge status={run.status} />
                   </td>
                   <td>
-                    {run.succeeded_count}/{run.case_count}
-                    {run.failed_count ? ` failed ${run.failed_count}` : ""}
+                    成功 {run.succeeded_count}/{run.case_count}
+                    {run.failed_count ? ` / 失敗 ${run.failed_count}` : ""}
                   </td>
                   <td>{formatMetricSummary(run.metric_summary)}</td>
                   <td>{run.job_id ? <Link to={`/admin/jobs/${run.job_id}`}>#{run.job_id}</Link> : "-"}</td>
@@ -215,16 +215,16 @@ export function EvaluationListPage() {
 
       <section className="admin-section">
         <h2>Datasets</h2>
-        {datasets.isLoading ? <LoadingState /> : null}
+        {datasets.isLoading ? <LoadingState label="dataset を読み込んでいます..." /> : null}
         {datasets.error ? <ErrorState error={datasets.error} /> : null}
         {datasets.data && datasets.data.items.length > 0 ? (
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Dataset</th>
-                <th>Status</th>
-                <th>Source</th>
-                <th>Cases</th>
+                <th>dataset</th>
+                <th>状態</th>
+                <th>source</th>
+                <th>ケース</th>
                 <th>Version</th>
               </tr>
             </thead>

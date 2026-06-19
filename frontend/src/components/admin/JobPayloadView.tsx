@@ -19,7 +19,7 @@ function safeEntries(payload: Record<string, unknown>): Array<[string, string]> 
 export function JobPayloadView({ payload }: { payload: Record<string, unknown> }) {
   const entries = safeEntries(payload);
   if (entries.length === 0) {
-    return <p className="muted">No safe payload fields.</p>;
+    return <p className="muted">安全に表示できる payload フィールドはありません。</p>;
   }
   return (
     <dl className="detail-grid">
@@ -32,4 +32,3 @@ export function JobPayloadView({ payload }: { payload: Record<string, unknown> }
     </dl>
   );
 }
-
