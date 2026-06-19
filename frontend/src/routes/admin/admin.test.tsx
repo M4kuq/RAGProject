@@ -172,7 +172,7 @@ test("admin auth load failure is not shown as forbidden", async () => {
   expect(screen.queryByRole("heading", { name: "Forbidden" })).not.toBeInTheDocument();
 });
 
-test("keeps the existing admin evaluation page reachable", async () => {
+test("dashboard links to evaluations without showing the run action", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
@@ -195,7 +195,43 @@ test("keeps the existing admin evaluation page reachable", async () => {
     </AppProviders>
   );
 
-  expect(await screen.findByRole("button", { name: "評価を実行" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "ダッシュボード" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "評価" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /直近評価/ })).toHaveAttribute("href", "/admin/evaluations");
+  expect(screen.queryByRole("button", { name: "評価を実行" })).not.toBeInTheDocument();
+});
+
+test("keeps the existing admin evaluation run action on the evaluations page", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeInTheDocument();
 });
 
 test("admin evaluation dataset detail shows cases and export", async () => {

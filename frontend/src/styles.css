@@ -730,45 +730,52 @@ textarea {
   position: relative;
 }
 
+.admin-layout .metric-help-button,
 .metric-help-button {
-  background: var(--admin-surface-soft);
-  border: 1px solid var(--admin-border-strong);
+  align-items: center;
+  background: #f6f8fa;
+  border: 1px solid #c9d1d9;
   border-radius: 50%;
   box-shadow: none;
-  color: var(--admin-muted);
+  color: #57606a;
   cursor: help;
+  display: inline-flex;
   font-size: 11px;
-  font-weight: 800;
-  height: 20px;
+  font-weight: 700;
+  height: 18px;
+  justify-content: center;
   line-height: 1;
-  min-height: 20px;
-  min-width: 20px;
+  min-height: 18px;
+  min-width: 18px;
   padding: 0;
-  width: 20px;
+  width: 18px;
 }
 
+.admin-layout .metric-help-button:hover:not(:disabled),
+.admin-layout .metric-help-button:focus-visible,
 .metric-help-button:hover,
 .metric-help-button:focus-visible {
-  background: var(--admin-accent-soft);
-  border-color: var(--admin-accent);
-  color: #1d4ed8;
+  background: #f6f8fa;
+  border-color: #0969da;
+  box-shadow: none;
+  color: #0969da;
+  outline: none;
 }
 
 .metric-help-tooltip {
-  background: #111827;
-  border-radius: 8px;
+  background: #24292f;
+  border-radius: 6px;
   bottom: calc(100% + 8px);
-  box-shadow: 0 14px 32px rgb(17 24 39 / 22%);
   color: #ffffff;
   display: grid;
   font-size: 12px;
   font-weight: 400;
   gap: 4px;
   left: 50%;
-  line-height: 1.5;
-  max-width: min(320px, 82vw);
+  line-height: 1.4;
+  max-width: min(280px, 80vw);
   opacity: 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   pointer-events: none;
   position: absolute;
   transform: translateX(-50%);
@@ -778,15 +785,26 @@ textarea {
   z-index: 20;
 }
 
-.metric-help-tooltip strong,
+.metric-help-tooltip-portal {
+  bottom: auto;
+  position: fixed;
+  transform: none;
+  z-index: 1000;
+}
+
+.metric-help-tooltip strong {
+  font-weight: 700;
+}
+
 .metric-help-tooltip span {
   display: block;
 }
 
 .metric-help-tooltip .metric-help-direction {
-  color: #cbd5e1;
+  color: #c9d1d9;
 }
 
+.metric-help-tooltip-open,
 .metric-help:hover .metric-help-tooltip,
 .metric-help:focus-within .metric-help-tooltip {
   opacity: 1;

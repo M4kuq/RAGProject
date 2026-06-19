@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { ContextBudgetHelpPortal } from "./ContextBudgetHelpPortal";
 
 describe("ContextBudgetHelpPortal", () => {
   afterEach(() => {
+    cleanup();
     document.body.innerHTML = "";
   });
 

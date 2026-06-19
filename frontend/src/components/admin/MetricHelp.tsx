@@ -1,4 +1,5 @@
-import { useId } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type MetricDefinition = {
   description: string;
@@ -11,6 +12,14 @@ type HelpTooltipProps = {
   direction?: string;
   title: string;
 };
+
+type TooltipPosition = {
+  left: number;
+  placement: "bottom" | "top";
+  top: number;
+};
+
+const TOOLTIP_OFFSET = 8;
 
 const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
   budget_exhausted_rate: {
@@ -152,23 +161,106 @@ export function MetricHelp({ metricName }: { metricName: string }) {
 
 export function HelpTooltip({ ariaLabel, description, direction, title }: HelpTooltipProps) {
   const tooltipId = useId();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState<TooltipPosition | null>(null);
   const plainDescription = `${title}: ${description}${direction ? ` ${direction}` : ""}`;
+
+  const updateTooltipPosition = useCallback(() => {
+    const button = buttonRef.current;
+    const tooltip = tooltipRef.current;
+    if (!button || !tooltip) {
+      return;
+    }
+
+    const buttonRect = button.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const preferredTop = buttonRect.top - tooltipRect.height - TOOLTIP_OFFSET;
+    const placement = preferredTop >= TOOLTIP_OFFSET ? "top" : "bottom";
+    const rawTop =
+      placement === "top" ? preferredTop : buttonRect.bottom + TOOLTIP_OFFSET;
+    const maxTop = Math.max(TOOLTIP_OFFSET, viewportHeight - tooltipRect.height - TOOLTIP_OFFSET);
+    const rawLeft = buttonRect.left + buttonRect.width / 2 - tooltipRect.width / 2;
+    const maxLeft = Math.max(TOOLTIP_OFFSET, viewportWidth - tooltipRect.width - TOOLTIP_OFFSET);
+
+    setPosition({
+      left: Math.min(Math.max(TOOLTIP_OFFSET, rawLeft), maxLeft),
+      placement,
+      top: Math.min(Math.max(TOOLTIP_OFFSET, rawTop), maxTop)
+    });
+  }, []);
+
+  const showTooltip = useCallback(() => {
+    setIsOpen(true);
+  }, []);
+
+  const hideTooltip = useCallback(() => {
+    setIsOpen(false);
+    setPosition(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    updateTooltipPosition();
+    window.addEventListener("resize", updateTooltipPosition);
+    window.addEventListener("scroll", updateTooltipPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateTooltipPosition);
+      window.removeEventListener("scroll", updateTooltipPosition, true);
+    };
+  }, [isOpen, updateTooltipPosition]);
+
+  useLayoutEffect(() => {
+    if (isOpen) {
+      updateTooltipPosition();
+    }
+  }, [description, direction, isOpen, title, updateTooltipPosition]);
+
+  const tooltip = (
+    <span
+      className={[
+        "metric-help-tooltip",
+        "metric-help-tooltip-portal",
+        position ? `metric-help-tooltip-${position.placement}` : "",
+        isOpen && position ? "metric-help-tooltip-open" : ""
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      id={tooltipId}
+      ref={tooltipRef}
+      role="tooltip"
+      style={{
+        left: position ? `${position.left}px` : 0,
+        top: position ? `${position.top}px` : 0
+      }}
+    >
+      <strong>{title}</strong>
+      <span>{description}</span>
+      {direction ? <span className="metric-help-direction">{direction}</span> : null}
+    </span>
+  );
+
   return (
-    <span className="metric-help">
+    <span className="metric-help" onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
       <button
         aria-describedby={tooltipId}
         aria-label={ariaLabel ?? `${title} の説明`}
         className="metric-help-button"
+        onBlur={hideTooltip}
+        onFocus={showTooltip}
+        ref={buttonRef}
         title={plainDescription}
         type="button"
       >
         ?
       </button>
-      <span className="metric-help-tooltip" id={tooltipId} role="tooltip">
-        <strong>{title}</strong>
-        <span>{description}</span>
-        {direction ? <span className="metric-help-direction">{direction}</span> : null}
-      </span>
+      {typeof document === "undefined" ? tooltip : createPortal(tooltip, document.body)}
     </span>
   );
 }

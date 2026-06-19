@@ -1,42 +1,20 @@
-import { useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { AdminIcon, type AdminIconName } from "../components/admin/AdminIcon";
 import { StatusBadge } from "../components/admin/StatusBadge";
 import { formatCount } from "../components/admin/adminLabels";
-import { InlineAlert } from "../components/common/States";
 import { useDocuments } from "../features/documents/documentHooks";
 import { useEvaluationRuns } from "../features/evaluations/evaluationHooks";
 import { useJobs } from "../features/jobs/jobHooks";
-import { apiFetch } from "../lib/apiClient";
 import { formatDate, truncateText } from "../lib/format";
 
 export function AdminPage() {
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
   const documents = useDocuments({ page: 1, page_size: 1 });
   const pendingReviews = useDocuments({ display_status: "pending_review", page: 1, page_size: 1 });
   const jobs = useJobs({ page: 1, page_size: 5 });
   const evaluations = useEvaluationRuns({ page: 1, page_size: 5 });
   const latestJob = jobs.data?.items[0];
   const latestEvaluation = evaluations.data?.items[0];
-
-  async function runEvaluation() {
-    setError("");
-    try {
-      const result = await apiFetch<{ data: { evaluation_run_id: number; job_id: number } }>(
-        "/api/v1/evaluations/runs",
-        {
-          method: "POST",
-          body: JSON.stringify({})
-        }
-      );
-      setStatus(`評価 #${result.data.evaluation_run_id} をジョブ #${result.data.job_id} として登録しました。`);
-    } catch (caught) {
-      setStatus("");
-      setError(caught instanceof Error ? caught.message : "評価 run の登録に失敗しました。");
-    }
-  }
 
   return (
     <main className="admin-main admin-dashboard">
@@ -51,9 +29,6 @@ export function AdminPage() {
           ドキュメントを管理
         </Link>
       </header>
-
-      {status ? <InlineAlert tone="success">{status}</InlineAlert> : null}
-      {error ? <InlineAlert tone="error">{error}</InlineAlert> : null}
 
       <section className="dashboard-metric-grid" aria-label="管理概要">
         <DashboardMetric
@@ -102,15 +77,11 @@ export function AdminPage() {
           to="/admin/documents/review"
         />
         <FeatureCard
-          description="評価 run と dataset を確認し、必要なら新しい評価を開始します。"
+          description="評価 run と dataset を確認します。"
           icon="evaluations"
           title="評価"
           to="/admin/evaluations"
-        >
-          <button type="button" onClick={() => void runEvaluation()}>
-            評価を実行
-          </button>
-        </FeatureCard>
+        />
         <FeatureCard
           description="検索経路、score、graph trace、圧縮 trace を安全な範囲で確認します。"
           icon="debug"
