@@ -64,8 +64,40 @@ Repository and DTO paths validate or sanitize graph metadata. Metadata must not 
 
 ## Viewer/Admin Boundary
 
-PR-46 does not add API or UI. Future admin debug surfaces may show counts, IDs, refs, scores, and validation summaries. Viewer-facing responses must not expose graph internals or raw evidence.
+Admin graph debug surfaces may show counts, IDs, refs, scores, validation
+summaries, provider labels, cache status, and reason codes. Viewer-facing
+responses must not expose graph internals or raw evidence.
+
+## PR-54 Demo And Docs Checklist
+
+Before publishing demo docs, screenshots, PR comments, smoke logs, or manual
+test evidence, confirm they do not contain:
+
+- raw prompt text
+- raw query text beyond safe synthetic examples
+- raw chunk text or raw document text
+- full generated context
+- raw graph evidence payloads
+- raw OCR text or image-derived private text
+- PII
+- credentials, tokens, cookies, password values, API keys, or `.env` values
+- Neo4j credentials or database dumps
+- PostgreSQL, Qdrant, Neo4j, upload volume, or cache dumps
+
+Safe evidence examples:
+
+- IDs, counts, hashes, version refs, source chunk IDs, retrieval run IDs, and
+  graph path IDs
+- provider labels such as `postgres` or `neo4j`
+- cache status such as `hit`, `miss`, `bypass`, `stale`, or
+  `strategy_not_cacheable`
+- metric names and aggregate scores
+- safe synthetic entity labels and relation types
+- not-applicable reason codes for optional Neo4j evaluation
 
 ## deploy/aws Boundary
 
-External provider and AWS export decisions remain future work. Before any graph, OCR, or image evidence leaves local runtime, the export policy must preserve Context Budget, Evidence Pack, Tool Result Compression, and this redaction policy.
+External provider and AWS export decisions remain future work. Before any graph,
+OCR, or image evidence leaves local runtime, the export policy must preserve
+Context Budget, Evidence Pack, Tool Result Compression, and this redaction
+policy.

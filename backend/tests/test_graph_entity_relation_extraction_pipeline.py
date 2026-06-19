@@ -20,6 +20,7 @@ from app.graph.extraction import EntityMentionCandidate, GraphExtractionResult, 
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
 from app.repositories.graph_repository import GraphRepository
 from app.repositories.job_repository import JobRepository
+from app.scripts.queue_graph_index_builds import queue_graph_index_build_jobs
 from app.services import neo4j_projection_service as neo4j_projection_module
 from app.services.graph_index_service import GraphIndexBuildSnapshot, GraphIndexService
 from app.services.neo4j_projection_service import Neo4jProjectionResult, Neo4jProjectionService
@@ -350,6 +351,48 @@ def test_graph_index_build_worker_is_registered_and_succeeds(
         assert stored_job.result_json["entity_count"] == stored_run.entity_count
         assert stored_run.status == "succeeded"
         assert stored_run.mention_count > 0
+
+
+def test_queue_graph_index_build_jobs_targets_active_ready_versions(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+
+        dry_run = queue_graph_index_build_jobs(db, dry_run=True)
+        assert dry_run.queued_count == 0
+        assert dry_run.would_queue_count == 1
+        assert dry_run.skipped_count == 0
+        assert dry_run.items[0].document_version_id == version.document_version_id
+        assert dry_run.items[0].job_id is None
+
+        queued = queue_graph_index_build_jobs(db)
+        db.commit()
+
+        assert queued.queued_count == 1
+        assert queued.would_queue_count == 0
+        assert queued.skipped_count == 0
+        assert queued.items[0].action == "queued"
+        assert queued.items[0].job_id is not None
+        stored_job = db.get(Job, queued.items[0].job_id)
+        assert stored_job is not None
+        assert stored_job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE
+        assert stored_job.target_type == "document_version"
+        assert stored_job.target_id == version.document_version_id
+        assert stored_job.payload_json == {
+            "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+            "document_version_id": version.document_version_id,
+            "reindex_policy": "replace_existing",
+        }
+        assert "Graph Index supports" not in str(stored_job.payload_json)
+
+        skipped = queue_graph_index_build_jobs(db)
+        assert skipped.queued_count == 0
+        assert skipped.skipped_count == 1
+        assert skipped.items[0].action == "skipped_active_job"
 
 
 def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commit(

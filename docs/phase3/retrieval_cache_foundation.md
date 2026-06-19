@@ -4,6 +4,10 @@ PR-52 adds a strategy-agnostic retrieval result cache for dense, sparse, hybrid,
 and graph retrieval runs. It caches retrieval result references only. It does not
 cache answers, prompts, full context, raw chunk text, or generated evidence.
 
+PR-54 keeps this cache as an opt-in demo hardening feature. It documents the
+expected behavior but does not add Redis, semantic cache, answer cache, or a new
+cache strategy.
+
 Auto (`agentic_router`) requests intentionally bypass the cache in this PR. They
 run live retrieval every time and record `strategy_not_cacheable` rather than
 `hit` or `miss`, because replaying their planner/fallback trace safely requires a
@@ -120,3 +124,14 @@ It does not include raw query text, snippets, chunk text, prompts, or full conte
   dense/hybrid/graph foundation.
 - Auto (`agentic_router`) is also left uncached until cache payloads can safely
   preserve and replay planner/fallback trace metadata.
+
+## PR-54 Demo Checks
+
+- Leave `RETRIEVAL_CACHE_ENABLED=false` for the default demo unless the presenter
+  explicitly wants a cache comparison.
+- When cache is enabled, compare cold and warm graph requests through safe
+  cache status and latency summaries only.
+- Verify that PostgreSQL and Neo4j graph runs do not share entries because
+  `graph_store_provider` is part of the key.
+- Do not export cache rows, snippets, prompts, answers, raw chunk text, raw graph
+  evidence, PII, tokens, credentials, or `.env` values as demo artifacts.

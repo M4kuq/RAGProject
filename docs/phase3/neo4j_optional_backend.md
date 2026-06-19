@@ -28,22 +28,38 @@ python -m uv sync --extra dev --extra neo4j
 
 Start only the optional Neo4j service:
 
-```bash
-NEO4J_USER=neo4j \
-NEO4J_PASSWORD=change-me-local \
+```powershell
+$env:NEO4J_USER = "neo4j"
+$env:NEO4J_PASSWORD = Read-Host "Local Neo4j password"
 docker compose --profile neo4j up -d neo4j
 ```
 
 Run the app with Neo4j enabled:
 
-```bash
-GRAPH_STORE_PROVIDER=neo4j \
-GRAPH_RETRIEVAL_ENABLED=true \
-NEO4J_URI=bolt://neo4j:7687 \
-NEO4J_USER=neo4j \
-NEO4J_PASSWORD=change-me-local \
-NEO4J_PROJECTION_ENABLED=true \
-BACKEND_UV_EXTRA_ARGS="--extra neo4j" \
+```powershell
+$env:GRAPH_STORE_PROVIDER = "neo4j"
+$env:GRAPH_RETRIEVAL_ENABLED = "true"
+$env:NEO4J_URI = "bolt://neo4j:7687"
+$env:NEO4J_PROJECTION_ENABLED = "true"
+$env:BACKEND_UV_EXTRA_ARGS = "--extra neo4j"
+docker compose --profile neo4j up --build backend worker frontend
+```
+
+Equivalent POSIX shell shape:
+
+```sh
+export NEO4J_USER=neo4j
+printf "Local Neo4j password: "
+stty -echo
+read -r NEO4J_PASSWORD
+stty echo
+printf "\n"
+export NEO4J_PASSWORD
+export GRAPH_STORE_PROVIDER=neo4j
+export GRAPH_RETRIEVAL_ENABLED=true
+export NEO4J_URI=bolt://neo4j:7687
+export NEO4J_PROJECTION_ENABLED=true
+export BACKEND_UV_EXTRA_ARGS="--extra neo4j"
 docker compose --profile neo4j up --build backend worker frontend
 ```
 
@@ -125,10 +141,18 @@ This smoke is not required for normal CI.
 
 1. Start PostgreSQL/Qdrant/backend/worker/frontend normally.
 2. Start Neo4j with the `neo4j` profile and enable projection.
-3. Ingest or seed documents so `graph_index_build` succeeds.
-4. Query once with `GRAPH_STORE_PROVIDER=postgres`.
-5. Query the same request with `GRAPH_STORE_PROVIDER=neo4j`.
-6. Compare that both responses are chunk-backed and that graph path summaries
+3. Ingest or seed documents so ready document versions exist.
+4. Queue graph index work without printing document text:
+
+   ```bash
+   docker compose exec backend python -m app.scripts.queue_graph_index_builds --dry-run
+   docker compose exec backend python -m app.scripts.queue_graph_index_builds
+   ```
+
+5. Confirm `graph_index_build` jobs succeed in the worker/admin job view.
+6. Query once with `GRAPH_STORE_PROVIDER=postgres`.
+7. Query the same request with `GRAPH_STORE_PROVIDER=neo4j`.
+8. Compare that both responses are chunk-backed and that graph path summaries
    contain only safe refs and `source_chunk_ids`.
 
 Useful checks:

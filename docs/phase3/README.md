@@ -1,13 +1,23 @@
-# Phase3 Design Baseline
+# Phase3 GraphRAG Handoff
 
-PR-45 starts Phase3 by fixing the design boundary for Graph-RAG and related expansion work. It builds on Phase2.5 Auto, Context Engineering, MCP `rag_ask_auto`, and the local Kubernetes baseline.
+PR-54 is the final hardening and demo-docs handoff for the local text GraphRAG
+path delivered through PR-46 to PR-53. It builds on Phase2.5 Auto, Context
+Engineering, MCP `rag_ask_auto`, and the local Kubernetes baseline.
 
-PR-45 is documentation only. It does not add Graph-RAG runtime code, database migrations, OCR, image upload, AWS infrastructure, OIDC, external LLM provider wiring, or online evaluation implementation.
+This directory still contains the earlier design docs because they explain how
+the implementation arrived here. Use the PR-54 entry points first for demo and
+acceptance work.
 
 ## Entry Points
 
 | Topic | Document |
 |---|---|
+| GraphRAG final operator README | [graph_rag_final_readme.md](graph_rag_final_readme.md) |
+| Local GraphRAG demo scenario | [graph_rag_demo_scenario.md](graph_rag_demo_scenario.md) |
+| Manual GraphRAG test cases | [graph_rag_manual_test_cases.md](graph_rag_manual_test_cases.md) |
+| GraphRAG acceptance checklist | [graph_rag_acceptance_checklist.md](graph_rag_acceptance_checklist.md) |
+| GraphRAG known limitations | [graph_rag_known_limitations.md](graph_rag_known_limitations.md) |
+| GraphRAG next phase handoff | [graph_rag_next_phase_handoff.md](graph_rag_next_phase_handoff.md) |
 | Roadmap and PR order | [phase3_roadmap.md](phase3_roadmap.md) |
 | Phase3 acceptance criteria | [phase3_acceptance_criteria.md](phase3_acceptance_criteria.md) |
 | Graph-RAG architecture | [graph_rag_architecture.md](graph_rag_architecture.md) |
@@ -28,29 +38,46 @@ PR-45 is documentation only. It does not add Graph-RAG runtime code, database mi
 | Risk register | [phase3_risk_register.md](phase3_risk_register.md) |
 | Security / redaction policy | [security_redaction_policy.md](security_redaction_policy.md) |
 
+## PR-54 Completion Scope
+
+PR-54 does not add a new retrieval strategy, new evaluation metric, OCR,
+multimodal input, external LLM provider, S3, OIDC, AWS deploy, Redis
+implementation, or production alerting. It completes the portfolio-demo
+handoff with:
+
+- root README and Phase3 README links that route directly to GraphRAG usage
+- local PostgreSQL GraphRAG demo steps
+- optional Neo4j read-model/projection demo steps
+- manual tests and acceptance checklist
+- PostgreSQL source-of-truth versus Neo4j read-model architecture explanation
+- retrieval cache and evaluation summaries for PR-52/PR-53
+- security/redaction checklist for docs, debug traces, cache, evaluation, and
+  graph paths
+- troubleshooting, known limitations, and PR-55+ handoff
+- non-destructive GraphRAG smoke scripts
+
 ## Phase2.5 Foundation
 
 Phase3 must extend, not bypass, the Phase2.5 safety path:
 
 - Auto and `llm_tool_orchestrator` remain retrieval-only until a separate design approves more tool classes.
-- Graph retrieval evidence must pass through Context Budget.
-- Graph evidence must preserve Evidence Pack citation mapping.
+- Graph retrieval evidence passes through Context Budget.
+- Graph evidence preserves Evidence Pack citation mapping through source chunk
+  backed retrieval run items.
 - Graph tool outputs must be bounded by Tool Result Compression before planner visibility.
 - Admin debug views may show safe graph summaries; viewer UI must not show internal trace details.
 - Local Kubernetes remains `k8s/local` for kind/minikube and is not AWS/EKS production.
 
-## PR-45 Non-Goals
+## Current Non-Goals
 
-- No Alembic migration.
-- No graph tables in runtime database.
-- No Graph-RAG backend implementation.
-- No entity or relation extractor implementation.
-- No graph database product integration.
 - No OCR or image upload implementation.
 - No multimodal UI implementation.
-- No AWS, S3, Bedrock, RDS, ECS, EKS, OIDC, Terraform, or production secret manager work.
+- No AWS, S3, Bedrock, RDS, ECS, EKS, OIDC, Terraform, or production secret
+  manager work.
 - No external LLM provider implementation.
-- No online evaluation or A/B implementation.
+- No online evaluation, A/B implementation, or production alerting.
+- No public `graph_hybrid` strategy; it remains a PR-55+ candidate.
+- No requirement that Neo4j be installed or enabled.
 
 ## Safety Invariant
 

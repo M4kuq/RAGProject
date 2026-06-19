@@ -1,17 +1,28 @@
 # Graph Retrieval Strategy
 
-PR-45 defines candidate graph retrieval behavior. PR-48 starts implementing the first Graph-RAG retrieval layer on top of the PR-46 graph schema and PR-47 entity/relation index.
+PR-45 defined candidate graph retrieval behavior. PR-48 implemented the first
+GraphRAG retrieval layer on top of the PR-46 graph schema and PR-47
+entity/relation index. PR-54 documents the current behavior without adding a
+new strategy.
 
 ## Strategy Names
 
-Candidate and implemented strategy values:
+Implemented graph-related request value:
 
 - `graph`
-- `graph_hybrid`
+
+Related internal/fallback labels:
+
 - `fallback_hybrid`
 - `fallback_dense`
 
-`graph` returns graph-supported chunk evidence. `graph_hybrid` combines graph paths with vector/hybrid retrieval and remains a future extension.
+Future candidate value:
+
+- `graph_hybrid`
+
+`graph` returns graph-supported chunk evidence. `graph_hybrid` would combine
+graph paths with vector/hybrid retrieval, but it remains a PR-55+ candidate and
+is not exposed as a completed PR-54 public strategy.
 
 ## PR-48 Scope
 
@@ -23,14 +34,18 @@ Implemented in PR-48:
 - `GraphRetrievalStrategy` for graph source chunk candidates.
 - `GraphRetrievalRepository` for graph lookup, bounded relation loading, active chunk filtering, and safe `graph_retrieval_paths` persistence.
 
+Completed after PR-48:
+
+- Graph Citation Builder and path validation.
+- Admin Graph Trace / Retrieval Debug integration.
+- Retrieval cache keying for graph fingerprint and graph store provider.
+- Evaluation targets for `graph_postgres` and optional `graph_neo4j`.
+
 Still future work:
 
-- Graph Citation Builder.
-- Graph Path Validation UI.
-- Graph Debug UI.
-- Graph Evaluation.
-- Graph + Vector Hybrid Fusion.
-- OCR, image upload, AWS/S3/OIDC, or external provider integration.
+- public Graph + Vector Hybrid Fusion through `graph_hybrid`.
+- OCR, image upload, AWS/S3/OIDC, Redis, alerting, or external provider
+  integration.
 
 ## Retrieval Flow
 
@@ -159,9 +174,10 @@ Future `graph_score_breakdown` fields may include:
 - final_graph_score
 - reason_codes
 
-## Graph + Vector Hybrid
+## Future Graph + Vector Hybrid
 
-`graph_hybrid` should merge graph path evidence with dense/sparse/hybrid chunk candidates:
+`graph_hybrid` is not part of PR-54. A future implementation should merge graph
+path evidence with dense/sparse/hybrid chunk candidates:
 
 1. Run graph lookup/traversal.
 2. Resolve supporting source chunks.
@@ -198,10 +214,10 @@ Graph path candidates consume context budget through their source chunk-backed e
 
 ## API Handoff
 
-Current graph retrieval requests already return chunk-backed candidates through
-the existing `/rag/search` and `/rag/ask` pipeline when `strategy=graph` is
-enabled. Graph-aware router selection and Auto-compatible fallback behavior use
-the same source chunk bridge.
+Current graph retrieval requests return chunk-backed candidates through the
+existing `/rag/search` and `/rag/ask` pipeline when `strategy=graph` is enabled.
+Graph-aware router selection and fallback behavior use the same source chunk
+bridge when graph routing is enabled.
 
 The implemented strategy resolves each path back to `document_chunk_id`, so
 future citation, debug, and evaluation work can connect to the same

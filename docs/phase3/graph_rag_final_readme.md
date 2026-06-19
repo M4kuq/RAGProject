@@ -1,0 +1,305 @@
+# GraphRAG Final README
+
+This is the operator-facing GraphRAG entry point for PR-54. It explains the
+implemented local GraphRAG path, the default PostgreSQL graph store, optional
+Neo4j projection, retrieval cache behavior, evaluation, demo checks, security
+constraints, and the PR-55+ handoff.
+
+## Current Status
+
+PR-54 does not add a new retrieval strategy or metric. It finalizes the
+portfolio/demo handoff for the GraphRAG work delivered through PR-46 to PR-53.
+
+Implemented GraphRAG scope:
+
+- graph schema and graph index run lifecycle
+- rule-based entity/relation extraction through `graph_index_build`
+- explicit `/api/v1/rag/search` and `/api/v1/rag/ask` `strategy=graph`
+- graph-aware `agentic_router` shortcut when graph retrieval and router flags are enabled
+- PostgreSQL-backed `GraphStore` as the default provider
+- optional Neo4j read-model projection behind the same `GraphStore` DTOs
+- chunk-backed graph citation bridge and admin-safe graph trace endpoint
+- retrieval result cache for dense, sparse, hybrid, and graph paths
+- evaluation comparison targets for `dense`, `hybrid`, `agentic_router`,
+  `graph_postgres`, and optional `graph_neo4j`
+
+Not implemented in PR-54:
+
+- a new `graph_hybrid` public strategy with full graph/vector fusion
+- OCR, image, or multimodal retrieval
+- new external provider wiring
+- Redis cache implementation
+- S3, OIDC, AWS deployment, or production alerting
+
+## Architecture
+
+PostgreSQL is the source of truth. Neo4j, when enabled, is only a read model.
+
+```text
+document_versions / document_chunks
+  -> graph_index_build job
+  -> PostgreSQL graph_entities / graph_entity_mentions / graph_relations
+  -> graph_retrieval_paths
+  -> retrieval_run_items
+  -> citations
+```
+
+Optional Neo4j projection:
+
+```text
+PostgreSQL graph tables
+  -> Neo4jProjectionService
+  -> Neo4j read model
+  -> Neo4jGraphStore
+  -> provider-neutral GraphPath DTO
+  -> source_chunk_ids
+  -> retrieval_run_items / citations
+```
+
+The source-of-truth rule is deliberate:
+
+- PostgreSQL already owns document versions, chunks, active/archived state,
+  retrieval runs, citations, evaluation runs, jobs, and migrations.
+- Graph rows must stay transactionally tied to the document version and chunk
+  references used for citation validation.
+- Neo4j can accelerate or explain traversal, but it must be rebuildable from
+  PostgreSQL projection data.
+- If Neo4j is absent or unhealthy, application startup and PostgreSQL GraphRAG
+  continue to work.
+
+## End-To-End Flow
+
+```text
+ingest
+  -> extraction / chunking
+  -> vector indexing
+  -> graph_index_build
+  -> entity / relation extraction
+  -> PostgreSQL graph index
+  -> optional Neo4j projection
+  -> graph retrieval
+  -> source_chunk_ids final check
+  -> retrieval_run_items
+  -> graph path trace
+  -> Context Budget
+  -> Evidence Pack
+  -> citations / answer
+  -> retrieval cache summary
+  -> strategy comparison evaluation
+```
+
+## Retrieval Mode Selection
+
+Use `dense` when the question is primarily semantic and the answer likely lives
+inside one chunk.
+
+Use `hybrid` when keyword matching matters, exact product/config terms matter,
+or dense retrieval alone is likely to miss terms.
+
+Use `agentic_router` when the user wants automatic strategy selection and the
+bounded router/tool flow. If graph retrieval and graph router flags are enabled,
+strong relation or multi-hop signals can route to graph. If graph produces no
+chunk-backed evidence, router-selected graph may fall back to configured dense
+or hybrid retrieval.
+
+Use explicit `graph` only for relation, dependency, ownership, "how A relates to
+B", and multi-hop checks where graph index data is expected to exist. Explicit
+`graph` preserves the no-context contract when no chunk-backed graph evidence is
+found.
+
+`graph_hybrid` remains a PR-55+ candidate. Current GraphRAG can fall back to
+hybrid but does not expose full graph/vector fusion as a separate public
+strategy.
+
+## Local Settings
+
+Defaults preserve existing behavior:
+
+```text
+GRAPH_RETRIEVAL_ENABLED=false
+GRAPH_STORE_PROVIDER=postgres
+GRAPH_ROUTER_ENABLED=false
+RETRIEVAL_CACHE_ENABLED=false
+NEO4J_PROJECTION_ENABLED=false
+NEO4J_HEALTH_CHECK_ENABLED=false
+```
+
+PostgreSQL GraphRAG demo profile:
+
+```powershell
+$env:GRAPH_RETRIEVAL_ENABLED = "true"
+$env:GRAPH_ROUTER_ENABLED = "true"
+$env:GRAPH_STORE_PROVIDER = "postgres"
+$env:RETRIEVAL_CACHE_ENABLED = "true"
+docker compose up --build
+```
+
+```sh
+export GRAPH_RETRIEVAL_ENABLED=true
+export GRAPH_ROUTER_ENABLED=true
+export GRAPH_STORE_PROVIDER=postgres
+export RETRIEVAL_CACHE_ENABLED=true
+docker compose up --build
+```
+
+Queue graph indexing for active ready local demo documents:
+
+```powershell
+docker compose exec -T backend python -m app.scripts.queue_graph_index_builds
+```
+
+```sh
+docker compose exec -T backend python -m app.scripts.queue_graph_index_builds
+```
+
+The queue helper emits only document version IDs, job IDs, and counts. It does
+not print chunk text, document text, prompts, graph evidence, credentials, or
+`.env` values.
+
+## Neo4j Optional Backend
+
+Neo4j is optional and disabled by default. Start the default stack first, then
+opt in to the `neo4j` profile only when you want to compare providers.
+
+Do not paste real Neo4j credentials into docs, logs, PR comments, or shell
+transcripts. Set the local password in your shell without committing it.
+
+```powershell
+$env:NEO4J_USER = "neo4j"
+$env:NEO4J_PASSWORD = Read-Host "Local Neo4j password"
+docker compose --profile neo4j up -d neo4j
+```
+
+```sh
+printf "Local Neo4j password: "
+stty -echo
+read -r NEO4J_PASSWORD
+stty echo
+printf "\n"
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD
+docker compose --profile neo4j up -d neo4j
+```
+
+Then restart backend and worker with Neo4j projection and provider selection:
+
+```powershell
+$env:GRAPH_STORE_PROVIDER = "neo4j"
+$env:GRAPH_RETRIEVAL_ENABLED = "true"
+$env:NEO4J_URI = "bolt://neo4j:7687"
+$env:NEO4J_PROJECTION_ENABLED = "true"
+$env:BACKEND_UV_EXTRA_ARGS = "--extra neo4j"
+docker compose --profile neo4j up --build backend worker frontend
+```
+
+```sh
+export GRAPH_STORE_PROVIDER=neo4j
+export GRAPH_RETRIEVAL_ENABLED=true
+export NEO4J_URI=bolt://neo4j:7687
+export NEO4J_PROJECTION_ENABLED=true
+export BACKEND_UV_EXTRA_ARGS="--extra neo4j"
+docker compose --profile neo4j up --build backend worker frontend
+```
+
+If Neo4j is not configured, the default PostgreSQL provider remains usable.
+
+## Cache Behavior
+
+The retrieval cache is disabled by default. When enabled, it caches retrieval
+references, scores, safe graph path refs, hashes, fingerprints, provider, and
+TTL metadata. It does not cache answers, prompts, raw query text, snippets, raw
+chunk text, full context, raw graph evidence, PII, credentials, tokens, or
+`.env` values.
+
+Graph cache keys include the graph store provider and graph index fingerprint.
+This prevents PostgreSQL and Neo4j graph runs from sharing cache entries and
+invalidates graph cache entries when active graph index state changes. Dense,
+sparse, and hybrid keys are not invalidated by unrelated graph index
+maintenance.
+
+## Evaluation Summary
+
+The `phase3_graph_multi_hop` fixture is a small safe synthetic dataset. PR-53
+evaluation can compare:
+
+- `dense`
+- `hybrid`
+- `agentic_router`
+- `graph_postgres`
+- `graph_neo4j`
+
+Graph metrics are safe summaries:
+
+- `graph_path_relevance`
+- `graph_citation_coverage`
+- `multi_hop_answerability`
+- `cache_hit_rate`
+- `cache_saved_latency`
+- `entity_relation_quality_summary`
+
+When Neo4j is not configured, `graph_neo4j` records a safe not-applicable reason
+instead of failing the full evaluation.
+
+## Verification
+
+Non-destructive PR-54 smoke:
+
+```powershell
+scripts\smoke_phase3_graph_rag.ps1
+```
+
+```sh
+sh scripts/smoke_phase3_graph_rag.sh
+```
+
+The smoke checks Compose config, required docs, the GraphRAG fixture, helper
+script presence, and optional running health endpoints. It does not delete
+volumes, print environment values, call external providers, or require Neo4j.
+
+## Security Checklist
+
+Safe to show:
+
+- IDs, hashes, counts, scores, status values, strategy labels
+- safe entity labels and relation types
+- source chunk IDs and retrieval run item IDs
+- cache status, fingerprints, provider names, schema versions
+- graph citation coverage ratios and reason codes
+
+Never show or commit:
+
+- raw prompt text
+- raw chunk text
+- raw document text
+- full context
+- raw graph evidence
+- answers copied from private documents
+- PII
+- secrets, tokens, credentials, cookies, API keys, Neo4j credentials, or `.env` values
+- database, Qdrant, Neo4j, or upload volume dumps
+
+## Troubleshooting
+
+If `strategy=graph` returns `strategy_not_enabled`, confirm
+`GRAPH_RETRIEVAL_ENABLED=true` reached backend and worker. With Docker Compose,
+restart backend and worker after changing env values.
+
+If graph search returns no context, queue graph index jobs, wait for worker
+completion, and confirm the active document version has succeeded graph index
+runs. Explicit graph does not silently fall back.
+
+If router does not select graph, confirm both `GRAPH_RETRIEVAL_ENABLED=true` and
+`GRAPH_ROUTER_ENABLED=true`, then use a relation or multi-hop synthetic query.
+
+If Neo4j comparison is unavailable, confirm the `neo4j` profile is running,
+the backend image was built with `BACKEND_UV_EXTRA_ARGS="--extra neo4j"`, and
+projection is enabled. PostgreSQL GraphRAG is still valid when Neo4j is absent.
+
+If cache does not hit, confirm `RETRIEVAL_CACHE_ENABLED=true`, avoid
+`cache_bypass=true`, and use the same strategy/provider/settings against the
+same active corpus before TTL expiry.
+
+## Handoff
+
+PR-54 closes the text GraphRAG portfolio/demo scope. PR-55+ candidates are
+tracked in [graph_rag_next_phase_handoff.md](graph_rag_next_phase_handoff.md).
