@@ -397,7 +397,7 @@ class GraphRetrievalResult:
         return not self.graph_candidates
 
     def summary_fields(self) -> dict[str, object]:
-        return {
+        fields: dict[str, object] = {
             "graph_schema_version": GRAPH_RETRIEVAL_SCHEMA_VERSION,
             "graph_path_schema_version": GRAPH_PATH_SCHEMA_VERSION,
             "graph_store_provider": self.provider.value,
@@ -410,6 +410,12 @@ class GraphRetrievalResult:
             "graph_elapsed_ms": self.elapsed_ms,
             "graph_fallback_used": self.fallback_used,
         }
+        fallback_reason_codes = self.score_breakdown.get("fallback_reason_codes")
+        if isinstance(fallback_reason_codes, list):
+            fields["graph_fallback_reason_codes"] = [
+                str(code) for code in fallback_reason_codes if isinstance(code, str)
+            ]
+        return fields
 
 
 class GraphStore(Protocol):
@@ -920,7 +926,7 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
             )
             if not start_entities:
-                if not self._has_projected_entities():
+                if not self._has_projected_entities(filters):
                     return self._unavailable_result(
                         query,
                         started_at,
@@ -996,10 +1002,22 @@ class Neo4jGraphStore:
             elapsed_ms=_elapsed_ms(started_at),
         )
 
-    def _has_projected_entities(self) -> bool:
+    def _has_projected_entities(self, filters: RetrievalFilters) -> bool:
+        filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
-            "MATCH (entity:RAGGraphEntity) RETURN count(entity) AS entity_count",
-            {},
+            """
+            MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)
+            WHERE chunk.modality = $modality
+              AND chunk.document_version_status = "ready"
+              AND coalesce(chunk.document_version_is_active, false) = true
+              AND chunk.logical_document_status = "active"
+              AND (
+                  size($logical_document_ids) = 0
+                  OR chunk.logical_document_id IN $logical_document_ids
+              )
+            RETURN count(DISTINCT entity) AS entity_count
+            """,
+            filter_params,
         )
         if not rows:
             return False
