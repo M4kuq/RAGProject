@@ -12,7 +12,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$ComposeFiles = @("-f", "docker-compose.yml", "-f", "docker-compose.neo4j-demo.yml")
+$ComposeArgs = @(
+  "-f", "docker-compose.yml",
+  "-f", "docker-compose.neo4j-demo.yml",
+  "--profile", "neo4j"
+)
 
 function Write-Step([string]$Message) {
   Write-Host "[neo4j-demo] $Message"
@@ -45,13 +49,13 @@ Push-Location $RepoRoot
 try {
   Write-Step "validate compose config"
   Invoke-Checked { docker compose config --quiet | Out-Null }
-  Invoke-Checked { docker compose @ComposeFiles --profile neo4j config --quiet | Out-Null }
+  Invoke-Checked { docker compose @ComposeArgs config --quiet | Out-Null }
 
   Write-Step "start compose stack with neo4j profile"
   if ($NoBuild) {
-    Invoke-Checked { docker compose @ComposeFiles --profile neo4j up -d }
+    Invoke-Checked { docker compose @ComposeArgs up -d }
   } else {
-    Invoke-Checked { docker compose @ComposeFiles --profile neo4j up -d --build }
+    Invoke-Checked { docker compose @ComposeArgs up -d --build }
   }
 
   Write-Step "wait for backend readiness"
@@ -60,7 +64,7 @@ try {
   if (-not $SkipCorpus) {
     Write-Step "ingest reproducible demo corpus through the existing API"
     Invoke-Checked {
-      docker compose @ComposeFiles exec -T backend python -m app.scripts.ingest_demo_corpus `
+      docker compose @ComposeArgs exec -T backend python -m app.scripts.ingest_demo_corpus `
         --repo-root /workspace `
         --manifest $Manifest `
         --base-url http://127.0.0.1:8000
@@ -68,12 +72,12 @@ try {
   }
 
   Write-Step "build PostgreSQL graph index and run optional Neo4j projection"
-  Invoke-Checked { docker compose @ComposeFiles exec -T backend python -m app.scripts.build_demo_graph_index }
+  Invoke-Checked { docker compose @ComposeArgs exec -T backend python -m app.scripts.build_demo_graph_index }
 
   if (-not $SkipEvaluation) {
     Write-Step "compare graph_postgres and graph_neo4j with existing evaluation runner"
     Invoke-Checked {
-      docker compose @ComposeFiles exec -T backend python -m app.scripts.retrieval_eval_smoke `
+      docker compose @ComposeArgs exec -T backend python -m app.scripts.retrieval_eval_smoke `
         --dataset $Dataset `
         --strategies $Strategies `
         --threshold-mode warn `

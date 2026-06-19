@@ -16,7 +16,7 @@ REPO_ROOT=$(CDPATH= cd "$SCRIPT_DIR/.." && pwd)
 
 say() { printf '%s\n' "[neo4j-demo] $*"; }
 compose() {
-  docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml "$@"
+  docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j "$@"
 }
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -50,13 +50,13 @@ cd "$REPO_ROOT"
 
 say "validate compose config"
 docker compose config --quiet
-compose --profile neo4j config --quiet
+compose config --quiet
 
 say "start compose stack with neo4j profile"
 if [ "$NO_BUILD" = "1" ]; then
-  compose --profile neo4j up -d
+  compose up -d
 else
-  compose --profile neo4j up -d --build
+  compose up -d --build
 fi
 
 say "wait for backend readiness"

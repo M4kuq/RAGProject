@@ -269,10 +269,14 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_unavailable_with_graph
         assert result.fallback_used is True
         assert result.graph_candidates
         assert "neo4j_to_postgres_fallback" in result.reason_codes
-        assert "graph_store_provider_unavailable" in result.reason_codes
-        assert "neo4j_not_configured" in result.reason_codes
+        assert "graph_store_provider_unavailable" not in result.reason_codes
+        assert "neo4j_not_configured" not in result.reason_codes
         assert result.score_breakdown["fallback_from_provider"] == "neo4j"
         assert result.score_breakdown["fallback_to_provider"] == "postgres"
+        assert result.score_breakdown["fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_not_configured",
+        ]
 
 
 def test_graph_settings_provider_overrides_strategy_default(

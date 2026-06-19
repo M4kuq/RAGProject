@@ -1691,7 +1691,6 @@ def _neo4j_to_postgres_fallback_result(
         _dedupe(
             [
                 "neo4j_to_postgres_fallback",
-                *neo4j_result.reason_codes,
                 *postgres_result.reason_codes,
             ]
         )

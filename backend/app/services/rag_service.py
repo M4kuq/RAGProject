@@ -2824,6 +2824,9 @@ def _has_transient_graph_reason(summary: dict[str, object]) -> bool:
     reason_codes = summary.get("graph_reason_codes")
     if not isinstance(reason_codes, list):
         return False
+    non_cacheable_codes = {"neo4j_to_postgres_fallback"}
+    if any(str(code) in non_cacheable_codes for code in reason_codes):
+        return True
     transient_markers = ("timeout", "error", "failed", "failure")
     return any(
         any(marker in str(code).lower() for marker in transient_markers) for code in reason_codes

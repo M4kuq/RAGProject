@@ -600,6 +600,39 @@ def test_graph_timeout_results_are_not_cache_payloads(
     assert payload is None
 
 
+def test_graph_provider_fallback_results_are_not_cache_payloads(
+    session_factory: sessionmaker[Session],
+) -> None:
+    service = _service(
+        store=InMemoryCacheStore(),
+        vector_client=_CountingVectorClient([]),
+        settings=_settings(retrieval_cache_enabled=True),
+    )
+    result = RetrievalPipelineResult(
+        summary=RetrievalScoreSummary(
+            **_summary_json(),
+            graph_reason_codes=["neo4j_to_postgres_fallback"],
+            graph_no_context=False,
+        ),
+        items=[],
+        selected_candidates=[],
+        citation_sources=[],
+        context_candidates=[],
+        no_context=False,
+    )
+
+    with session_factory() as db:
+        payload = service._cache_payload_from_result(
+            db,
+            result=result,
+            query_hash=hashlib.sha256(b"graph provider fallback").hexdigest(),
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            retrieval_run_id=1,
+        )
+
+    assert payload is None
+
+
 def test_cache_service_skips_store_when_payload_is_uncacheable(
     session_factory: sessionmaker[Session],
 ) -> None:
