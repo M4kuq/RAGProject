@@ -292,7 +292,6 @@ export function EvaluationDetailPage() {
             <label className="failure-promotion-target">
               追加先 dataset
               <select
-                aria-label="failure promotion target dataset"
                 value={selectedTargetDatasetId}
                 onChange={(event) => setPromotionTargetDatasetId(event.target.value)}
               >

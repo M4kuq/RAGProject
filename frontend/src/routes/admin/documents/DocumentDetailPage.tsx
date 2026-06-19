@@ -193,7 +193,6 @@ export function DocumentDetailPage() {
           <label>
             比較元
             <select
-              aria-label="base version"
               value={baseVersionId ?? ""}
               onChange={(event) => changeBaseVersion(event.target.value)}
             >
@@ -207,7 +206,6 @@ export function DocumentDetailPage() {
           <label>
             比較先
             <select
-              aria-label="target version"
               value={targetVersionId ?? ""}
               onChange={(event) => changeTargetVersion(event.target.value)}
             >

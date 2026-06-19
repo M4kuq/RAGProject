@@ -12,14 +12,14 @@ describe("ContextBudgetHelpPortal", () => {
     render(
       <main className="retrieval-debug-page">
         <section className="admin-section">
-          <h2>Context Budget</h2>
+          <h2>Context Budget（文脈予算）</h2>
           <dl />
         </section>
         <ContextBudgetHelpPortal />
       </main>
     );
 
-    expect(screen.getByRole("heading", { name: "Context Budget" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Context Budget（文脈予算）" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Context Budget の説明" })).toHaveTextContent("?");
     expect(
       screen.getByText(
