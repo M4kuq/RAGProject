@@ -57,6 +57,9 @@
   --admin-warning-soft: #fef3c7;
   --admin-danger: #b4232f;
   --admin-danger-hover: #971b27;
+  --admin-danger-button-bg: var(--admin-danger);
+  --admin-danger-button-hover: var(--admin-danger-hover);
+  --admin-danger-button-text: #ffffff;
   --admin-danger-soft: #fee2e2;
   --admin-success: #16794a;
   --admin-success-soft: #dcfce7;
@@ -94,6 +97,9 @@
   --chat-danger: #8a1f2d;
   --chat-danger-strong: #b4232f;
   --chat-danger-hover: #971b27;
+  --chat-danger-action-bg: var(--chat-danger-strong);
+  --chat-danger-action-hover: var(--chat-danger-hover);
+  --chat-danger-action-text: #ffffff;
   --chat-danger-soft: #fdebed;
   --chat-danger-border: #f0c3ca;
   --chat-backdrop: rgb(17 24 39 / 42%);
@@ -166,6 +172,9 @@
   --admin-warning-soft: #3a2d12;
   --admin-danger: #ff9aa5;
   --admin-danger-hover: #b4232f;
+  --admin-danger-button-bg: #b4232f;
+  --admin-danger-button-hover: #cf3345;
+  --admin-danger-button-text: #ffffff;
   --admin-danger-soft: #3a171d;
   --admin-success: #7ee2a8;
   --admin-success-soft: #123222;
@@ -202,6 +211,9 @@
   --chat-danger: #ffadb7;
   --chat-danger-strong: #ff7b8a;
   --chat-danger-hover: #d64d5d;
+  --chat-danger-action-bg: var(--chat-danger-strong);
+  --chat-danger-action-hover: #ff9aa5;
+  --chat-danger-action-text: #111315;
   --chat-danger-soft: #3a171d;
   --chat-danger-border: #74313a;
   --chat-backdrop: rgb(0 0 0 / 62%);
@@ -682,14 +694,15 @@ textarea {
 }
 
 .admin-layout .button-danger {
-  background: var(--admin-danger);
-  border-color: var(--admin-danger);
+  background: var(--admin-danger-button-bg);
+  border-color: var(--admin-danger-button-bg);
   box-shadow: 0 8px 18px rgb(180 35 47 / 14%);
+  color: var(--admin-danger-button-text);
 }
 
 .admin-layout .button-danger:hover:not(:disabled) {
-  background: var(--admin-danger-hover);
-  border-color: var(--admin-danger-hover);
+  background: var(--admin-danger-button-hover);
+  border-color: var(--admin-danger-button-hover);
 }
 
 .admin-layout input,
@@ -1887,13 +1900,14 @@ textarea {
 }
 
 .danger-action {
-  background: var(--chat-danger-strong);
-  border: 1px solid var(--chat-danger-strong);
-  color: #ffffff;
+  background: var(--chat-danger-action-bg);
+  border: 1px solid var(--chat-danger-action-bg);
+  color: var(--chat-danger-action-text);
 }
 
 .danger-action:hover:not(:disabled) {
-  background: var(--chat-danger-hover);
+  background: var(--chat-danger-action-hover);
+  border-color: var(--chat-danger-action-hover);
 }
 
 .secondary-action:disabled,
