@@ -121,7 +121,7 @@ export function RetrievalDebugPage() {
     event.preventDefault();
     const trimmedQuery = query.trim();
     if (!trimmedQuery) {
-      setFormError("Query is required.");
+      setFormError("検索クエリを入力してください。");
       return;
     }
     setFormError(null);
@@ -149,21 +149,21 @@ export function RetrievalDebugPage() {
     <main className="admin-main retrieval-debug-page">
       <header className="page-header">
         <div>
-          <h1>Retrieval Debug</h1>
-          <p className="muted">Run dense, sparse, and hybrid retrieval and inspect safe trace metadata.</p>
+          <h1>検索デバッグ</h1>
+          <p className="muted">検索 strategy を指定して実行し、安全に加工された trace metadata を確認します。</p>
         </div>
         <button
           type="button"
           disabled={history.isFetching || detail.isFetching}
           onClick={() => void refreshTrace()}
         >
-          Refresh trace
+          trace を更新
         </button>
       </header>
 
       <form className="admin-section retrieval-debug-form" onSubmit={submit}>
         <label>
-          query
+          検索クエリ
           <textarea
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -173,7 +173,7 @@ export function RetrievalDebugPage() {
           />
         </label>
         <label>
-          strategy
+          検索方式
           <select
             value={strategy}
             onChange={(event) => setStrategy(event.target.value as SupportedRetrievalDebugStrategy)}
@@ -206,13 +206,13 @@ export function RetrievalDebugPage() {
           />
         </label>
         <button type="submit" disabled={search.isPending}>
-          Run search
+          検索を実行
         </button>
         <div className="field-group unsupported-strategy-list">
-          coming soon
+          今後対応予定
           <span className="inline-options">
             {FUTURE_STRATEGIES.map((item) => (
-              <button key={item} type="button" disabled title="Coming soon">
+              <button key={item} type="button" disabled title="今後対応予定">
                 {item}
               </button>
             ))}
@@ -222,8 +222,8 @@ export function RetrievalDebugPage() {
 
       {formError ? <InlineAlert tone="error">{formError}</InlineAlert> : null}
       {search.error ? <InlineAlert tone="error">{search.error.message}</InlineAlert> : null}
-      {history.error ? <ErrorState title="Unable to load retrieval run history" error={history.error} /> : null}
-      {search.isPending ? <LoadingState label="Running retrieval..." /> : null}
+      {history.error ? <ErrorState title="検索履歴を読み込めません" error={history.error} /> : null}
+      {search.isPending ? <LoadingState label="検索を実行しています..." /> : null}
 
       <RetrievalRunHistoryPanel
         isLoading={history.isLoading}
@@ -235,11 +235,11 @@ export function RetrievalDebugPage() {
       {latestRunId ? (
         <>
           <SearchResultSummary detail={detail.data} retrievalRunId={latestRunId} searchData={search.data} />
-          {detail.isLoading ? <LoadingState label="Loading trace..." /> : null}
-          {detail.error ? <ErrorState title="Unable to load retrieval trace" error={detail.error} /> : null}
+          {detail.isLoading ? <LoadingState label="trace を読み込んでいます..." /> : null}
+          {detail.error ? <ErrorState title="検索 trace を読み込めません" error={detail.error} /> : null}
           {detail.data ? <RetrievalRunTracePanel detail={detail.data} /> : null}
-          {graphTrace.isLoading ? <LoadingState label="Loading graph trace..." /> : null}
-          {graphTrace.error ? <ErrorState title="Unable to load graph trace" error={graphTrace.error} /> : null}
+          {graphTrace.isLoading ? <LoadingState label="graph trace を読み込んでいます..." /> : null}
+          {graphTrace.error ? <ErrorState title="graph trace を読み込めません" error={graphTrace.error} /> : null}
           {graphTrace.data ? <GraphTracePanel trace={graphTrace.data} /> : null}
           {detail.data ? <ContextBudgetPanel trace={detail.data.retrieval_run.context_budget_json} /> : null}
           {detail.data ? <EvidencePackPanel trace={detail.data.retrieval_run.context_compression_json} /> : null}
@@ -250,8 +250,8 @@ export function RetrievalDebugPage() {
           <RetrievalRunItemsTable items={displayItems} />
         </>
       ) : (
-        <EmptyState title="No retrieval runs">
-          Run a retrieval search, use Chat RAG, or refresh after another retrieval to inspect trace and score breakdowns.
+        <EmptyState title="検索 run がありません">
+          検索を実行するか、Chat RAG を使うと trace と score breakdown を確認できます。
         </EmptyState>
       )}
 
@@ -279,11 +279,11 @@ function SearchResultSummary({
   const isToolOrchestrator = preferSummaryTrace;
   return (
     <section className="admin-section">
-      <h2>Run Summary</h2>
+      <h2>run 概要</h2>
       {isToolOrchestrator ? (
         <p className="section-help">
-          Tool orchestration uses retrieval tool calls instead of the rule-based sufficiency check.
-          Review tools_used, search_call_count, and fallback_reason for the retrieval path.
+          Tool orchestration は rule-based sufficiency check の代わりに retrieval tool call を使います。
+          検索経路は tools_used、search_call_count、fallback_reason を確認してください。
         </p>
       ) : null}
       <dl className="detail-grid">
@@ -344,24 +344,24 @@ function RetrievalRunHistoryPanel({
 }) {
   return (
     <section className="admin-section">
-      <h2>Recent Retrieval Runs</h2>
-      {isLoading ? <LoadingState label="Loading retrieval run history..." /> : null}
+      <h2>最近の検索 run</h2>
+      {isLoading ? <LoadingState label="検索 run 履歴を読み込んでいます..." /> : null}
       {!isLoading && runs.length === 0 ? (
-        <EmptyState title="No retrieval run history">No retrieval runs have been recorded yet.</EmptyState>
+        <EmptyState title="検索 run 履歴がありません">検索を実行するとここに履歴が表示されます。</EmptyState>
       ) : null}
       {runs.length ? (
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Run</th>
-              <th>Status</th>
-              <th>Origin</th>
-              <th>Strategy</th>
-              <th>Execution</th>
-              <th>Selected</th>
-              <th>Started</th>
-              <th>Finished</th>
-              <th>Action</th>
+              <th>run</th>
+              <th>状態</th>
+              <th>origin</th>
+              <th>strategy</th>
+              <th>execution</th>
+              <th>選択数</th>
+              <th>開始日時</th>
+              <th>終了日時</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -386,7 +386,7 @@ function RetrievalRunHistoryPanel({
                       disabled={run.retrieval_run_id === selectedRunId}
                       onClick={() => onSelect(run.retrieval_run_id)}
                     >
-                      {run.retrieval_run_id === selectedRunId ? "Selected" : "View"}
+                      {run.retrieval_run_id === selectedRunId ? "選択中" : "表示"}
                     </button>
                   </td>
                 </tr>
@@ -421,7 +421,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
 
   return (
     <section className="admin-section retrieval-debug-grid">
-      <TraceCard title="Query Plan">
+      <TraceCard title="query plan">
         <dl className="detail-grid">
           <Detail label="query_mode" value={formatUnknownValue(queryPlan.query_mode)} />
           <Detail label="query_hash" value={shortHash(queryPlan.query_hash)} />
@@ -454,16 +454,16 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
           <Detail label="recommended_strategy" value={formatUnknownValue(queryPlan.recommended_strategy)} />
           <Detail label="planned_only" value={formatUnknownValue(queryPlan.safety_flags ?? [])} />
         </dl>
-        <NestedList title="Sub-query previews" items={subQueries} />
-        <NestedList title="Metadata filter candidates" items={metadataCandidates} />
+        <NestedList title="Sub-query preview" items={subQueries} />
+        <NestedList title="Metadata filter candidate" items={metadataCandidates} />
         <SafeDetails record={queryPlan} />
       </TraceCard>
 
-      <TraceCard title="Strategy Decision">
+      <TraceCard title="strategy 判定">
         {isToolOrchestrator ? (
           <p className="section-help">
-            This run was controlled by bounded retrieval tools. Router-only fields may be unavailable;
-            use the tool call fields below for Agentic RAG tool behavior.
+            この run は bounded retrieval tool で制御されています。router 専用フィールドは空の場合があるため、
+            Agentic RAG の動きは下の tool call field を確認してください。
           </p>
         ) : null}
         <dl className="detail-grid">
@@ -539,7 +539,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
         <SafeDetails record={decision} />
       </TraceCard>
 
-      <TraceCard title="Retrieval Settings">
+      <TraceCard title="retrieval 設定">
         <dl className="detail-grid">
           <Detail label="top_k" value={formatUnknownValue(settings.top_k)} />
           <Detail label="rerank_top_n" value={formatUnknownValue(settings.rerank_top_n)} />
@@ -557,7 +557,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
         <SafeDetails record={settings} />
       </TraceCard>
 
-      <TraceCard title="Cache Summary">
+      <TraceCard title="cache サマリー">
         <dl className="detail-grid">
           <Detail label="status" value={formatUnknownValue(cache.status ?? "N/A")} />
           <Detail label="reason" value={formatUnknownValue(cache.reason ?? "N/A")} />
@@ -575,7 +575,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
         <SafeDetails record={cache} />
       </TraceCard>
 
-      <TraceCard title="Latency Breakdown">
+      <TraceCard title="latency 内訳">
         <table className="admin-table compact-table">
           <tbody>
             {LATENCY_KEYS.map((key) => (
@@ -588,7 +588,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
         </table>
       </TraceCard>
 
-      <TraceCard title="Retrieval Score Summary">
+      <TraceCard title="retrieval score サマリー">
         <KeyValueTable record={summary} />
       </TraceCard>
     </section>
@@ -598,7 +598,7 @@ function RetrievalRunTracePanel({ detail }: { detail: RetrievalRunDebugDetail })
 function GraphTracePanel({ trace }: { trace: GraphRunDebugTrace }) {
   return (
     <section className="admin-section">
-      <h2>Graph Trace</h2>
+      <h2>graph trace</h2>
       <dl className="detail-grid">
         <Detail label="retrieval_run_id" value={`#${trace.retrieval_run_id}`} />
         <Detail label="graph_paths" value={trace.graph_path_count} />
@@ -633,8 +633,8 @@ function GraphTracePanel({ trace }: { trace: GraphRunDebugTrace }) {
           ))}
         </div>
       ) : (
-        <EmptyState title="No graph paths">
-          This run has no saved graph path trace, or graph retrieval was not selected.
+        <EmptyState title="graph path はありません">
+          この run には graph path trace が保存されていないか、graph retrieval が選択されていません。
         </EmptyState>
       )}
     </section>
@@ -662,7 +662,7 @@ function GraphPathRefsTable({
               <th>Node</th>
               <th>Entity</th>
               <th>Label</th>
-              <th>Type</th>
+              <th>type</th>
             </tr>
           </thead>
           <tbody>
@@ -681,7 +681,7 @@ function GraphPathRefsTable({
             ) : null}
             {!nodeRefs.length && !labels.length ? (
               <tr>
-                <td colSpan={4}>No node refs.</td>
+                <td colSpan={4}>node ref はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -693,9 +693,9 @@ function GraphPathRefsTable({
           <thead>
             <tr>
               <th>Relation</th>
-              <th>Type</th>
-              <th>Source</th>
-              <th>Target</th>
+              <th>type</th>
+              <th>source</th>
+              <th>target</th>
             </tr>
           </thead>
           <tbody>
@@ -714,7 +714,7 @@ function GraphPathRefsTable({
             ) : null}
             {!relationRefs.length && !relationTypes.length ? (
               <tr>
-                <td colSpan={4}>No relation refs.</td>
+                <td colSpan={4}>relation ref はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -731,11 +731,11 @@ function GraphSourceMappingTable({ mappings }: { mappings: GraphRunDebugTrace["p
       <table className="admin-table compact-table">
         <thead>
           <tr>
-            <th>Source Chunk</th>
-            <th>Document Chunk</th>
-            <th>Run Item</th>
-            <th>Selected</th>
-            <th>Old Version</th>
+            <th>source_chunk</th>
+            <th>document_chunk</th>
+            <th>run_item</th>
+            <th>selected</th>
+            <th>old_version</th>
             <th>Citations</th>
           </tr>
         </thead>
@@ -752,7 +752,7 @@ function GraphSourceMappingTable({ mappings }: { mappings: GraphRunDebugTrace["p
           ))}
           {!mappings.length ? (
             <tr>
-              <td colSpan={6}>No citable source mapping.</td>
+              <td colSpan={6}>引用可能な source mapping はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -765,9 +765,9 @@ function ContextBudgetPanel({ trace }: { trace: ContextBudgetTrace | null }) {
   if (!trace) {
     return (
       <section className="admin-section">
-        <h2>Context Budget</h2>
-        <EmptyState title="No context budget trace">
-          Context budget data is recorded for RAG ask runs after PR-40.
+        <h2>Context Budget（文脈予算）</h2>
+        <EmptyState title="context budget trace はありません">
+          Context budget は RAG ask run で記録されます。
         </EmptyState>
       </section>
     );
@@ -775,7 +775,7 @@ function ContextBudgetPanel({ trace }: { trace: ContextBudgetTrace | null }) {
 
   return (
     <section className="admin-section">
-      <h2>Context Budget</h2>
+      <h2>Context Budget（文脈予算）</h2>
       <dl className="detail-grid">
         <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
         <Detail label="max_context_tokens" value={trace.budget.max_context_tokens} />
@@ -788,10 +788,10 @@ function ContextBudgetPanel({ trace }: { trace: ContextBudgetTrace | null }) {
         <Detail label="budget_exhausted" value={formatUnknownValue(trace.usage.budget_exhausted)} />
       </dl>
       <div className="retrieval-debug-grid">
-        <TraceCard title="Drop Reasons">
+        <TraceCard title="drop reasons">
           <KeyValueTable record={trace.drop_reasons} />
         </TraceCard>
-        <TraceCard title="Source Breakdown">
+        <TraceCard title="source 内訳">
           <table className="admin-table compact-table">
             <thead>
               <tr>
@@ -814,15 +814,15 @@ function ContextBudgetPanel({ trace }: { trace: ContextBudgetTrace | null }) {
               ))}
               {trace.sources.by_source.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No sources.</td>
+                <td colSpan={5}>source はありません。</td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </TraceCard>
       </div>
-      <ContextBudgetItemTable title="Selected Context Items" items={trace.selected_item_refs} />
-      <ContextBudgetItemTable title="Dropped Context Items" items={trace.dropped_item_refs} />
+      <ContextBudgetItemTable title="選択された context item" items={trace.selected_item_refs} />
+      <ContextBudgetItemTable title="除外された context item" items={trace.dropped_item_refs} />
     </section>
   );
 }
@@ -840,13 +840,13 @@ function ContextBudgetItemTable({
       <table className="admin-table compact-table">
         <thead>
           <tr>
-            <th>Item</th>
-            <th>Chunk</th>
-            <th>Source</th>
-            <th>Rank</th>
-            <th>Chars</th>
-            <th>Tokens</th>
-            <th>Reason</th>
+            <th>item</th>
+            <th>chunk</th>
+            <th>source</th>
+            <th>rank</th>
+            <th>文字数</th>
+            <th>tokens</th>
+            <th>reason</th>
           </tr>
         </thead>
         <tbody>
@@ -863,7 +863,7 @@ function ContextBudgetItemTable({
           ))}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={7}>No items.</td>
+              <td colSpan={7}>item はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -876,9 +876,9 @@ function EvidencePackPanel({ trace }: { trace: EvidencePackTrace | null }) {
   if (!trace) {
     return (
       <section className="admin-section">
-        <h2>Evidence Pack</h2>
-        <EmptyState title="No evidence pack trace">
-          Evidence Pack data is recorded for RAG ask runs after PR-41.
+        <h2>Evidence Pack（根拠パック）</h2>
+        <EmptyState title="evidence pack trace はありません">
+          Evidence Pack は RAG ask run で記録されます。
         </EmptyState>
       </section>
     );
@@ -886,7 +886,7 @@ function EvidencePackPanel({ trace }: { trace: EvidencePackTrace | null }) {
 
   return (
     <section className="admin-section">
-      <h2>Evidence Pack</h2>
+      <h2>Evidence Pack（根拠パック）</h2>
       <dl className="detail-grid">
         <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
         <Detail label="method" value={formatUnknownValue(trace.method)} />
@@ -903,10 +903,10 @@ function EvidencePackPanel({ trace }: { trace: EvidencePackTrace | null }) {
         />
       </dl>
       <div className="retrieval-debug-grid">
-        <TraceCard title="Compression Drops">
+        <TraceCard title="compression drops">
           <KeyValueTable record={trace.drops} />
         </TraceCard>
-        <TraceCard title="Evidence Groups">
+        <TraceCard title="evidence groups">
           <table className="admin-table compact-table">
             <thead>
               <tr>
@@ -927,7 +927,7 @@ function EvidencePackPanel({ trace }: { trace: EvidencePackTrace | null }) {
               ))}
               {trace.evidence_groups.length === 0 ? (
                 <tr>
-                  <td colSpan={4}>No evidence groups.</td>
+                <td colSpan={4}>evidence group はありません。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -947,14 +947,14 @@ function EvidenceItemTable({ items }: { items: EvidenceItemRef[] }) {
       <table className="admin-table compact-table">
         <thead>
           <tr>
-            <th>Evidence</th>
-            <th>Item</th>
-            <th>Chunk</th>
-            <th>Citation</th>
-            <th>Source</th>
-            <th>Chars</th>
-            <th>Tokens</th>
-            <th>Method</th>
+            <th>evidence</th>
+            <th>item</th>
+            <th>chunk</th>
+            <th>citation</th>
+            <th>source</th>
+            <th>文字数</th>
+            <th>tokens</th>
+            <th>method</th>
           </tr>
         </thead>
         <tbody>
@@ -972,7 +972,7 @@ function EvidenceItemTable({ items }: { items: EvidenceItemRef[] }) {
           ))}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={8}>No evidence items.</td>
+              <td colSpan={8}>evidence item はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -988,13 +988,13 @@ function DroppedEvidenceTable({ items }: { items: DroppedEvidenceRef[] }) {
       <table className="admin-table compact-table">
         <thead>
           <tr>
-            <th>Item</th>
-            <th>Chunk</th>
-            <th>Source</th>
-            <th>Rank</th>
-            <th>Chars</th>
-            <th>Tokens</th>
-            <th>Reason</th>
+            <th>item</th>
+            <th>chunk</th>
+            <th>source</th>
+            <th>rank</th>
+            <th>文字数</th>
+            <th>tokens</th>
+            <th>reason</th>
           </tr>
         </thead>
         <tbody>
@@ -1011,7 +1011,7 @@ function DroppedEvidenceTable({ items }: { items: DroppedEvidenceRef[] }) {
           ))}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={7}>No dropped evidence.</td>
+              <td colSpan={7}>除外された evidence はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -1024,9 +1024,9 @@ function ToolResultCompressionPanel({ trace }: { trace: ToolResultCompressionTra
   if (!trace) {
     return (
       <section className="admin-section">
-        <h2>Tool Result Compression</h2>
-        <EmptyState title="No tool result compression trace">
-          Tool result compression data is recorded for Auto / LLM tool orchestrator ask runs after PR-42.
+        <h2>Tool Result Compression（tool 結果圧縮）</h2>
+        <EmptyState title="tool result compression trace はありません">
+          Tool result compression は Auto / LLM tool orchestrator の ask run で記録されます。
         </EmptyState>
       </section>
     );
@@ -1034,7 +1034,7 @@ function ToolResultCompressionPanel({ trace }: { trace: ToolResultCompressionTra
 
   return (
     <section className="admin-section">
-      <h2>Tool Result Compression</h2>
+      <h2>Tool Result Compression（tool 結果圧縮）</h2>
       <dl className="detail-grid">
         <Detail label="enabled" value={formatUnknownValue(trace.enabled)} />
         <Detail label="tool_call_count" value={trace.summary.tool_call_count} />
@@ -1054,10 +1054,10 @@ function ToolResultCompressionPanel({ trace }: { trace: ToolResultCompressionTra
         <Detail label="oversized_rejected" value={trace.summary.oversized_rejected_count} />
       </dl>
       <div className="retrieval-debug-grid">
-        <TraceCard title="Drop Reasons">
+        <TraceCard title="drop reasons">
           <KeyValueTable record={trace.drop_reasons} />
         </TraceCard>
-        <TraceCard title="By Tool">
+        <TraceCard title="tool 別">
           <table className="admin-table compact-table">
             <thead>
               <tr>
@@ -1093,7 +1093,7 @@ function ToolResultCompressionPanel({ trace }: { trace: ToolResultCompressionTra
               ))}
               {trace.by_tool.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No tool calls.</td>
+                <td colSpan={7}>tool call はありません。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1113,13 +1113,13 @@ function ToolResultItemTable({ items }: { items: ToolResultItemRef[] }) {
         <thead>
           <tr>
             <th>tool_call</th>
-            <th>Item</th>
-            <th>Chunk</th>
-            <th>Source</th>
-            <th>Rank</th>
-            <th>Chars</th>
-            <th>Tokens</th>
-            <th>Method</th>
+            <th>item</th>
+            <th>chunk</th>
+            <th>source</th>
+            <th>rank</th>
+            <th>文字数</th>
+            <th>tokens</th>
+            <th>method</th>
           </tr>
         </thead>
         <tbody>
@@ -1137,7 +1137,7 @@ function ToolResultItemTable({ items }: { items: ToolResultItemRef[] }) {
           ))}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={8}>No tool result items.</td>
+              <td colSpan={8}>tool result item はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -1149,13 +1149,13 @@ function ToolResultItemTable({ items }: { items: ToolResultItemRef[] }) {
 function ScoreBreakdownTable({ items }: { items: DisplayItem[] }) {
   return (
     <section className="admin-section">
-      <h2>Score Breakdown</h2>
+      <h2>score 内訳</h2>
       <table className="admin-table">
         <thead>
           <tr>
-            <th>Rank</th>
-            <th>Chunk</th>
-            <th>Source</th>
+            <th>rank</th>
+            <th>chunk</th>
+            <th>source</th>
             <th>dense</th>
             <th>sparse</th>
             <th>fusion</th>
@@ -1181,7 +1181,7 @@ function ScoreBreakdownTable({ items }: { items: DisplayItem[] }) {
           })}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={8}>No retrieval items.</td>
+              <td colSpan={8}>retrieval item はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -1193,13 +1193,13 @@ function ScoreBreakdownTable({ items }: { items: DisplayItem[] }) {
 function RetrievalRunItemsTable({ items }: { items: DisplayItem[] }) {
   return (
     <section className="admin-section">
-      <h2>Retrieval Run Items</h2>
+      <h2>retrieval run items</h2>
       <table className="admin-table">
         <thead>
           <tr>
-            <th>Item</th>
-            <th>Chunk</th>
-            <th>Page</th>
+            <th>item</th>
+            <th>chunk</th>
+            <th>page</th>
             <th>retrieval_source</th>
             <th>rank_order</th>
             <th>rerank_order</th>
@@ -1222,7 +1222,7 @@ function RetrievalRunItemsTable({ items }: { items: DisplayItem[] }) {
           ))}
           {items.length === 0 ? (
             <tr>
-              <td colSpan={8}>No retrieval items.</td>
+              <td colSpan={8}>retrieval item はありません。</td>
             </tr>
           ) : null}
         </tbody>
@@ -1235,17 +1235,17 @@ function EvaluationStrategySummaryPanel({ metrics }: { metrics: StrategyComparis
   const visibleMetrics = metrics.filter((metric) => EVALUATION_METRICS.includes(metric.metric_name));
   return (
     <section className="admin-section">
-      <h2>Evaluation Strategy Summary</h2>
+      <h2>evaluation strategy サマリー</h2>
       {visibleMetrics.length ? (
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Strategy</th>
-              <th>Metric</th>
-              <th>Average</th>
+              <th>strategy</th>
+              <th>metric</th>
+              <th>平均</th>
               <th>p95</th>
-              <th>Count</th>
-              <th>Failed</th>
+              <th>件数</th>
+              <th>失敗</th>
             </tr>
           </thead>
           <tbody>
@@ -1262,8 +1262,8 @@ function EvaluationStrategySummaryPanel({ metrics }: { metrics: StrategyComparis
           </tbody>
         </table>
       ) : (
-        <EmptyState title="No strategy summary">
-          Strategy evaluation summary will be available after an evaluation run.
+        <EmptyState title="strategy summary はありません">
+          評価 run を実行すると strategy evaluation summary を確認できます。
         </EmptyState>
       )}
     </section>
@@ -1290,11 +1290,11 @@ function Detail({ label, value }: { label: string; value: ReactNode }) {
 
 function SafeDetails({ record }: { record: Record<string, unknown> }) {
   if (!Object.keys(record).length) {
-    return <p className="muted">No safe trace fields.</p>;
+    return <p className="muted">安全に表示できる trace field はありません。</p>;
   }
   return (
     <details className="safe-json-details">
-      <summary>Safe fields</summary>
+      <summary>安全な field</summary>
       <KeyValueTable record={record} />
     </details>
   );
@@ -1313,7 +1313,7 @@ function KeyValueTable({ record }: { record: Record<string, unknown> }) {
         ))}
         {entries.length === 0 ? (
           <tr>
-            <td>No fields.</td>
+            <td>field はありません。</td>
           </tr>
         ) : null}
       </tbody>

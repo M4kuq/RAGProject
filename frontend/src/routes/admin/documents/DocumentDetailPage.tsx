@@ -54,12 +54,12 @@ export function DocumentDetailPage() {
   }
 
   async function archiveDocument() {
-    if (!window.confirm("Archive this document?")) {
+    if (!window.confirm("このドキュメントをアーカイブしますか？")) {
       return;
     }
     try {
       const result = await archive.mutateAsync(logicalDocumentId);
-      setMessage(result.result_code === "already_archived" ? "Already archived." : "Archived.");
+      setMessage(result.result_code === "already_archived" ? "すでにアーカイブ済みです。" : "アーカイブしました。");
     } catch {
       setMessage(null);
     }
@@ -67,7 +67,7 @@ export function DocumentDetailPage() {
 
   async function submitVersion() {
     if (!versionFile) {
-      setMessage("Select a new version file.");
+      setMessage("新しい版のファイルを選択してください。");
       return;
     }
     const fileError = validateDocumentFile(versionFile);
@@ -79,8 +79,8 @@ export function DocumentDetailPage() {
       const result = await uploadVersion.mutateAsync({ logicalDocumentId, file: versionFile });
       setMessage(
         result.status === "duplicate_content_skipped"
-          ? "Duplicate content skipped."
-          : `New version uploaded. Job #${result.job_id}`
+          ? "同じ内容のため新しい版は作成しませんでした。"
+          : `新しい版をアップロードしました。ジョブ #${result.job_id}`
       );
       setVersionFile(null);
     } catch {
@@ -99,7 +99,7 @@ export function DocumentDetailPage() {
   if (document.error || !document.data) {
     return (
       <main className="admin-main">
-        <ErrorState error={document.error ?? new Error("Document not found.")} />
+        <ErrorState error={document.error ?? new Error("ドキュメントが見つかりません。")} />
       </main>
     );
   }
@@ -111,109 +111,107 @@ export function DocumentDetailPage() {
       <header className="page-header">
         <div>
           <h1>{truncateText(document.data.title || document.data.document_name, 80)}</h1>
-          <p className="muted">Logical document #{document.data.logical_document_id}</p>
+          <p className="muted">ドキュメント ID #{document.data.logical_document_id}</p>
         </div>
-        <button type="button" disabled={isArchived || archive.isPending} onClick={() => void archiveDocument()}>
-          {isArchived ? "Already archived" : "Archive"}
+        <button className="button-danger" type="button" disabled={isArchived || archive.isPending} onClick={() => void archiveDocument()}>
+          {isArchived ? "アーカイブ済み" : "アーカイブ"}
         </button>
       </header>
 
       {message ? (
-        <InlineAlert tone={message.includes("Select") || message.includes("Allowed") || message.includes("File size") ? "error" : "success"}>
+        <InlineAlert tone={message.includes("選択") || message.includes("利用できる") || message.includes("ファイルサイズ") ? "error" : "success"}>
           {message}
         </InlineAlert>
       ) : null}
       {archive.error ? <InlineAlert tone="error">{archive.error.message}</InlineAlert> : null}
       {uploadVersion.error ? <InlineAlert tone="error">{uploadVersion.error.message}</InlineAlert> : null}
 
-      <nav className="document-detail-tabs" aria-label="Document detail sections">
-        <a href="#document-metadata">Metadata</a>
-        <a href="#document-upload-version">Upload Version</a>
-        <a href="#document-versions">Versions</a>
-        <a href="#version-compare">Version Compare</a>
-        <a href="#chunk-preview">Chunk Preview</a>
+      <nav className="document-detail-tabs" aria-label="ドキュメント詳細セクション">
+        <a href="#document-metadata">メタデータ</a>
+        <a href="#document-upload-version">版を追加</a>
+        <a href="#document-versions">版一覧</a>
+        <a href="#version-compare">版の比較</a>
+        <a href="#chunk-preview">チャンク確認</a>
       </nav>
 
       <section className="admin-section" id="document-metadata">
-        <h2>Metadata</h2>
+        <h2>メタデータ</h2>
         <dl className="detail-grid">
           <div>
-            <dt>Status</dt>
+            <dt>状態</dt>
             <dd>
               <StatusBadge status={document.data.status} />
             </dd>
           </div>
           <div>
-            <dt>Display</dt>
+            <dt>表示状態</dt>
             <dd>
               <StatusBadge status={document.data.display_status} />
             </dd>
           </div>
           <div>
-            <dt>Active version</dt>
+            <dt>有効版</dt>
             <dd>{document.data.active_version ? `v${document.data.active_version.version_no}` : "-"}</dd>
           </div>
           <div>
-            <dt>Latest version</dt>
+            <dt>最新版</dt>
             <dd>{document.data.latest_version ? `v${document.data.latest_version.version_no}` : "-"}</dd>
           </div>
           <div>
-            <dt>Created</dt>
+            <dt>作成日時</dt>
             <dd>{formatDate(document.data.created_at)}</dd>
           </div>
           <div>
-            <dt>Updated</dt>
+            <dt>更新日時</dt>
             <dd>{formatDate(document.data.updated_at)}</dd>
           </div>
         </dl>
-        {isArchived ? <InlineAlert>Archived documents are excluded from retrieval.</InlineAlert> : null}
+        {isArchived ? <InlineAlert>アーカイブ済みドキュメントは検索対象から除外されます。</InlineAlert> : null}
       </section>
 
       <section className="admin-section" id="document-upload-version">
-        <h2>Upload New Version</h2>
+        <h2>新しい版をアップロード</h2>
         <div className="inline-form">
-          <input aria-label="new version file" type="file" onChange={(event) => setVersionFile(event.target.files?.[0] ?? null)} />
+          <input aria-label="新しい版のファイル" type="file" onChange={(event) => setVersionFile(event.target.files?.[0] ?? null)} />
           <button type="button" disabled={isArchived || uploadVersion.isPending} onClick={() => void submitVersion()}>
-            Upload Version
+            版をアップロード
           </button>
         </div>
       </section>
 
       <section className="admin-section" id="document-versions">
-        <h2>Versions</h2>
+        <h2>版一覧</h2>
         <VersionList logicalDocumentId={logicalDocumentId} versions={document.data.versions} />
       </section>
 
       <section className="admin-section" id="version-compare">
-        <h2>Version Compare</h2>
+        <h2>版の比較</h2>
         <p className="muted">
-          Compare version metadata and bounded source previews. Full source bodies are not shown.
+          版ごとのメタデータと短い出典プレビューだけを比較します。本文全体は表示しません。
         </p>
         <div className="inline-form">
           <label>
-            Base
+            比較元
             <select
-              aria-label="base version"
               value={baseVersionId ?? ""}
               onChange={(event) => changeBaseVersion(event.target.value)}
             >
               {documentVersions.map((version) => (
                 <option key={version.document_version_id} value={version.document_version_id}>
-                  v{version.version_no} {version.is_active ? "(active)" : ""}
+                  v{version.version_no} {version.is_active ? "(有効)" : ""}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Target
+            比較先
             <select
-              aria-label="target version"
               value={targetVersionId ?? ""}
               onChange={(event) => changeTargetVersion(event.target.value)}
             >
               {documentVersions.map((version) => (
                 <option key={version.document_version_id} value={version.document_version_id}>
-                  v{version.version_no} {version.is_active ? "(active)" : ""}
+                  v{version.version_no} {version.is_active ? "(有効)" : ""}
                 </option>
               ))}
             </select>
@@ -223,11 +221,11 @@ export function DocumentDetailPage() {
             disabled={baseVersionId === null || targetVersionId === null || compare.isLoading}
             onClick={() => setCompareRequested(true)}
           >
-            Compare versions
+            比較する
           </button>
         </div>
-        {!compareRequested ? <p className="muted">Select versions and run compare to load the diff.</p> : null}
-        {compareRequested && compare.isLoading ? <LoadingState label="Loading version diff..." /> : null}
+        {!compareRequested ? <p className="muted">比較する版を選び、「比較する」を押すと差分を読み込みます。</p> : null}
+        {compareRequested && compare.isLoading ? <LoadingState label="版の差分を読み込んでいます..." /> : null}
         {compareRequested && compare.error ? <ErrorState error={compare.error} /> : null}
         {compareRequested && compare.data ? (
           <>
@@ -235,16 +233,16 @@ export function DocumentDetailPage() {
             <MetadataDiffTable items={compare.data.metadata_diff.filter((item) => item.changed)} />
             <ChunkDiffTable items={compare.data.chunk_diff_items} />
             {compare.data.summary.diff_items_truncated ? (
-              <InlineAlert>Diff items are truncated. Narrow the versions or inspect chunks directly.</InlineAlert>
+              <InlineAlert>差分の表示件数を省略しています。必要に応じてチャンク一覧を確認してください。</InlineAlert>
             ) : null}
           </>
         ) : null}
       </section>
 
       <section className="admin-section" id="chunk-preview">
-        <h2>Chunk Preview</h2>
-        {previewVersion ? <p className="muted">Previewing version v{previewVersion.version_no}.</p> : null}
-        {chunks.isLoading ? <LoadingState /> : null}
+        <h2>チャンク確認</h2>
+        {previewVersion ? <p className="muted">v{previewVersion.version_no} の短いプレビューを表示しています。</p> : null}
+        {chunks.isLoading ? <LoadingState label="チャンクを読み込んでいます..." /> : null}
         {chunks.error ? <ErrorState error={chunks.error} /> : null}
         {chunks.data ? (
           <>
@@ -261,19 +259,19 @@ function DiffSummary({ summary }: { summary: { added_chunks: number; removed_chu
   return (
     <dl className="detail-grid compact-grid">
       <div>
-        <dt>Added</dt>
+        <dt>追加</dt>
         <dd>{summary.added_chunks}</dd>
       </div>
       <div>
-        <dt>Removed</dt>
+        <dt>削除</dt>
         <dd>{summary.removed_chunks}</dd>
       </div>
       <div>
-        <dt>Changed</dt>
+        <dt>変更</dt>
         <dd>{summary.changed_chunks}</dd>
       </div>
       <div>
-        <dt>Unchanged</dt>
+        <dt>変更なし</dt>
         <dd>{summary.unchanged_chunks}</dd>
       </div>
     </dl>
@@ -282,15 +280,15 @@ function DiffSummary({ summary }: { summary: { added_chunks: number; removed_chu
 
 function MetadataDiffTable({ items }: { items: DocumentMetadataDiffItem[] }) {
   if (items.length === 0) {
-    return <p className="muted">No metadata changes.</p>;
+    return <p className="muted">メタデータの変更はありません。</p>;
   }
   return (
     <table className="admin-table compact-table">
       <thead>
         <tr>
-          <th>Metadata</th>
-          <th>Base</th>
-          <th>Target</th>
+          <th>メタデータ</th>
+          <th>比較元</th>
+          <th>比較先</th>
         </tr>
       </thead>
       <tbody>
@@ -308,16 +306,16 @@ function MetadataDiffTable({ items }: { items: DocumentMetadataDiffItem[] }) {
 
 function ChunkDiffTable({ items }: { items: DocumentChunkDiffItem[] }) {
   if (items.length === 0) {
-    return <p className="muted">No chunk diff items.</p>;
+    return <p className="muted">チャンク差分はありません。</p>;
   }
   return (
     <table className="admin-table compact-table">
       <thead>
         <tr>
-          <th>Type</th>
-          <th>Source</th>
-          <th>Base Preview</th>
-          <th>Target Preview</th>
+          <th>種別</th>
+          <th>出典</th>
+          <th>比較元プレビュー</th>
+          <th>比較先プレビュー</th>
         </tr>
       </thead>
       <tbody>

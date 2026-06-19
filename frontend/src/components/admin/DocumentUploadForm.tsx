@@ -20,14 +20,14 @@ const ALLOWED_EXTENSIONS = [
 
 export function validateDocumentFile(file: File | null): string | null {
   if (!file) {
-    return "Select a file.";
+    return "ファイルを選択してください。";
   }
   const lowerName = file.name.toLowerCase();
   if (!ALLOWED_EXTENSIONS.some((extension) => lowerName.endsWith(extension))) {
-    return `Allowed extensions: ${ALLOWED_EXTENSIONS.join(", ")}.`;
+    return `利用できる拡張子: ${ALLOWED_EXTENSIONS.join(", ")}。`;
   }
   if (file.size > MAX_FILE_BYTES) {
-    return "File size must be 20 MB or less.";
+    return "ファイルサイズは 20 MB 以下にしてください。";
   }
   return null;
 }
@@ -44,7 +44,7 @@ export function DocumentUploadForm({ onUploaded }: { onUploaded?: (result: Docum
     const titleValue = title.trim();
     const fileError = validateDocumentFile(file);
     if (!titleValue) {
-      setClientError("Enter a title.");
+      setClientError("タイトルを入力してください。");
       return;
     }
     if (fileError) {
@@ -63,32 +63,33 @@ export function DocumentUploadForm({ onUploaded }: { onUploaded?: (result: Docum
 
   return (
     <section className="admin-section">
-      <h2>Upload</h2>
+      <h2>ファイルをアップロード</h2>
+      <p className="section-help">社内文書を取り込み、処理完了後に版として確認できます。</p>
       <form className="stack upload-form" onSubmit={submit}>
         <label>
-          Title
+          タイトル
           <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={255} />
         </label>
         <label>
-          File
+          ファイル
           <input
-            aria-label="file"
+            aria-label="アップロードファイル"
             type="file"
             accept={ALLOWED_EXTENSIONS.join(",")}
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
         </label>
-        <p className="muted">Allowed: {ALLOWED_EXTENSIONS.join(", ")} / Max: 20 MB</p>
+        <p className="muted">利用可能: {ALLOWED_EXTENSIONS.join(", ")} / 上限: 20 MB</p>
         <button type="submit" disabled={upload.isPending}>
-          {upload.isPending ? "Uploading..." : "Upload"}
+          {upload.isPending ? "アップロード中..." : "アップロード"}
         </button>
       </form>
       {clientError ? <InlineAlert tone="error">{clientError}</InlineAlert> : null}
       {upload.error ? <InlineAlert tone="error">{upload.error.message}</InlineAlert> : null}
       {success ? (
         <InlineAlert tone="success">
-          Uploaded document #{success.logical_document_id}, version #{success.document_version_id}, job #
-          {success.job_id}.
+          ドキュメント #{success.logical_document_id} / v{success.document_version_id} を登録しました。ジョブ #
+          {success.job_id} で処理します。
         </InlineAlert>
       ) : null}
     </section>
@@ -107,11 +108,11 @@ export function DocumentUrlIngestForm({ onIngested }: { onIngested?: (result: Do
     const urlValue = url.trim();
     const titleValue = title.trim();
     if (!urlValue) {
-      setClientError("Enter a URL.");
+      setClientError("URL を入力してください。");
       return;
     }
     if (!/^https?:\/\//i.test(urlValue)) {
-      setClientError("Only http and https URLs are supported.");
+      setClientError("http / https の URL だけ利用できます。");
       return;
     }
     setClientError(null);
@@ -129,27 +130,28 @@ export function DocumentUrlIngestForm({ onIngested }: { onIngested?: (result: Do
 
   return (
     <section className="admin-section">
-      <h2>URL ingest</h2>
+      <h2>URL から取り込み</h2>
+      <p className="section-help">公開 HTML / XML を取り込みます。private / localhost 宛ては拒否されます。</p>
       <form className="stack upload-form" onSubmit={submit}>
         <label>
           URL
           <input value={url} onChange={(event) => setUrl(event.target.value)} maxLength={2048} />
         </label>
         <label>
-          Title
+          タイトル
           <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={255} />
         </label>
-        <p className="muted">Allowed: http / https HTML or XML. Private and localhost targets are rejected.</p>
+        <p className="muted">利用可能: http / https の HTML または XML</p>
         <button type="submit" disabled={ingest.isPending}>
-          {ingest.isPending ? "Fetching..." : "Fetch URL"}
+          {ingest.isPending ? "取得中..." : "URL を取り込む"}
         </button>
       </form>
       {clientError ? <InlineAlert tone="error">{clientError}</InlineAlert> : null}
       {ingest.error ? <InlineAlert tone="error">{ingest.error.message}</InlineAlert> : null}
       {success ? (
         <InlineAlert tone="success">
-          URL accepted as document #{success.logical_document_id}, version #{success.document_version_id}, job #
-          {success.job_id}.
+          URL をドキュメント #{success.logical_document_id} / v{success.document_version_id} として登録しました。ジョブ #
+          {success.job_id} で処理します。
         </InlineAlert>
       ) : null}
     </section>

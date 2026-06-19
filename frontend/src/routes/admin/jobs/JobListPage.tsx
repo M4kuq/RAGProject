@@ -48,13 +48,13 @@ export function JobListPage() {
   }
 
   async function retryJob(jobId: number) {
-    if (!window.confirm("Retry this failed job?")) {
+    if (!window.confirm("この失敗ジョブを再実行しますか？")) {
       return;
     }
     try {
       const result = await retry.mutateAsync(jobId);
       setRetryingJobIds((current) => new Set(current).add(jobId));
-      setMessage(`Retry created. New job #${result.job_id}`);
+      setMessage(`再実行ジョブ #${result.job_id} を作成しました。`);
     } catch (error) {
       if (error instanceof ApiError && error.code === "job_active_retry_exists") {
         setRetryingJobIds((current) => new Set(current).add(jobId));
@@ -67,47 +67,47 @@ export function JobListPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Jobs</h1>
-          <p className="muted">Inspect asynchronous job status and retry failed jobs.</p>
+          <h1>ジョブ</h1>
+          <p className="muted">取り込みや評価などの非同期処理を確認し、失敗したジョブを再実行できます。</p>
         </div>
       </header>
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {retry.error ? <InlineAlert tone="error">{retry.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
         <label>
-          status
+          状態
           <select value={params.status} onChange={(event) => updateFilter("status", event.target.value)}>
-            <option value="">All</option>
-            <option value="queued">queued</option>
-            <option value="running">running</option>
-            <option value="succeeded">succeeded</option>
-            <option value="failed">failed</option>
-            <option value="canceled">canceled</option>
+            <option value="">すべて</option>
+            <option value="queued">待機中</option>
+            <option value="running">実行中</option>
+            <option value="succeeded">成功</option>
+            <option value="failed">失敗</option>
+            <option value="canceled">中止</option>
           </select>
         </label>
         <label>
-          job_type
+          ジョブ種別
           <input value={jobTypeDraft} onChange={(event) => setJobTypeDraft(event.target.value)} />
         </label>
-        <button type="submit">Filter</button>
+        <button type="submit">絞り込む</button>
       </form>
-      {jobs.isLoading ? <LoadingState /> : null}
+      {jobs.isLoading ? <LoadingState label="ジョブを読み込んでいます..." /> : null}
       {jobs.error ? <ErrorState error={jobs.error} /> : null}
-      {jobs.data?.items.length === 0 ? <EmptyState title="No jobs">No jobs.</EmptyState> : null}
+      {jobs.data?.items.length === 0 ? <EmptyState title="ジョブがありません">ドキュメント取り込みや評価を実行すると、ここに処理履歴が表示されます。</EmptyState> : null}
       {jobs.data && jobs.data.items.length > 0 ? (
         <>
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Job</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Target</th>
-                <th>Created</th>
-                <th>Started</th>
-                <th>Finished</th>
-                <th>Error</th>
-                <th>Action</th>
+                <th>ジョブ</th>
+                <th>種別</th>
+                <th>状態</th>
+                <th>対象</th>
+                <th>作成日時</th>
+                <th>開始日時</th>
+                <th>終了日時</th>
+                <th>エラー</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -129,10 +129,10 @@ export function JobListPage() {
                     <td>{formatDate(job.created_at)}</td>
                     <td>{formatDate(job.started_at)}</td>
                     <td>{formatDate(job.finished_at)}</td>
-                    <td>{job.error_code ? truncateText(job.error_code, 40) : formatSafeText(job.error_message, 40)}</td>
+                    <td>{job.status === "failed" ? formatJobFailureSummary(job.error_code, job.error_message) : "-"}</td>
                     <td>
                       <button type="button" disabled={!canRetry || retry.isPending} onClick={() => void retryJob(job.job_id)}>
-                        {retryKnownActive ? "Retry queued" : "Retry"}
+                        {retryKnownActive ? "再実行待ち" : "再実行"}
                       </button>
                     </td>
                   </tr>
@@ -141,8 +141,8 @@ export function JobListPage() {
             </tbody>
           </table>
           <section className="admin-section">
-            <h2>Payload Preview</h2>
-            <p className="muted">Selected rows expose only backend redacted payload fields.</p>
+            <h2>安全な payload プレビュー</h2>
+            <p className="muted">backend で redaction 済みの payload フィールドだけを表示します。</p>
             {jobs.data.items.slice(0, 1).map((job) => (
               <JobPayloadView key={job.job_id} payload={job.payload_view.payload} />
             ))}
@@ -152,4 +152,11 @@ export function JobListPage() {
       ) : null}
     </main>
   );
+}
+
+function formatJobFailureSummary(errorCode: string | null, errorMessage: string | null) {
+  if (errorCode) {
+    return formatSafeText(errorCode, 40);
+  }
+  return formatSafeText(errorMessage, 40);
 }

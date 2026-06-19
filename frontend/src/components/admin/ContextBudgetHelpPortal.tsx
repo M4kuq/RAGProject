@@ -23,7 +23,13 @@ export function ContextBudgetHelpPortal() {
     function attach() {
       const nextHeading = Array.from(
         document.querySelectorAll<HTMLElement>(".retrieval-debug-page .admin-section h2")
-      ).find((element) => element.textContent?.trim() === CONTEXT_BUDGET_HELP.title);
+      ).find((element) => {
+        const headingText = element.textContent?.trim() ?? "";
+        return (
+          headingText === CONTEXT_BUDGET_HELP.title ||
+          headingText.startsWith(`${CONTEXT_BUDGET_HELP.title}（`)
+        );
+      });
 
       const parent = nextHeading?.parentElement;
       if (!nextHeading || !parent) {

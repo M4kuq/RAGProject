@@ -34,12 +34,12 @@ function AdminShell() {
       <AdminSidebar />
       {csrf.isLoading ? (
         <main className="admin-main">
-          <LoadingState label="Loading admin session..." />
+          <LoadingState label="管理セッションを確認しています..." />
         </main>
       ) : null}
       {csrf.isError ? (
         <main className="admin-main">
-          <ErrorState title="Unable to load admin session" error={csrf.error} />
+          <ErrorState title="管理セッションを読み込めません" error={csrf.error} />
         </main>
       ) : null}
       {csrf.isSuccess ? (

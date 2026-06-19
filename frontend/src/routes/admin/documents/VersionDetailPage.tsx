@@ -23,12 +23,12 @@ export function VersionDetailPage() {
   const approve = useApproveDocumentVersion();
 
   async function approveVersion() {
-    if (!window.confirm("Make this version active?")) {
+    if (!window.confirm("この版を有効化しますか？")) {
       return;
     }
     try {
       const result = await approve.mutateAsync({ logicalDocumentId, documentVersionId });
-      setMessage(result.result_code === "already_active" ? "Already active." : "Approved.");
+      setMessage(result.result_code === "already_active" ? "すでに有効です。" : "承認しました。");
     } catch {
       setMessage(null);
     }
@@ -40,42 +40,42 @@ export function VersionDetailPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>Version Detail</h1>
+          <h1>版の詳細</h1>
           <p className="muted">
-            <Link to={`/admin/documents/${logicalDocumentId}`}>Document #{logicalDocumentId}</Link>
+            <Link to={`/admin/documents/${logicalDocumentId}`}>ドキュメント #{logicalDocumentId}</Link>
           </p>
         </div>
         <button type="button" disabled={!canApprove || approve.isPending} onClick={() => void approveVersion()}>
-          {version.data?.is_active ? "Already active" : "Approve"}
+          {version.data?.is_active ? "有効化済み" : "承認する"}
         </button>
       </header>
 
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {approve.error ? <InlineAlert tone="error">{approve.error.message}</InlineAlert> : null}
-      {version.isLoading ? <LoadingState /> : null}
+      {version.isLoading ? <LoadingState label="版の詳細を読み込んでいます..." /> : null}
       {version.error ? <ErrorState error={version.error} /> : null}
       {version.data ? (
         <section className="admin-section">
-          <h2>Version</h2>
+          <h2>版情報</h2>
           <dl className="detail-grid">
             <div>
-              <dt>Version</dt>
+              <dt>版</dt>
               <dd>v{version.data.version_no}</dd>
             </div>
             <div>
-              <dt>Status</dt>
+              <dt>状態</dt>
               <dd>
                 <StatusBadge status={version.data.status} />
               </dd>
             </div>
             <div>
-              <dt>Display</dt>
+              <dt>表示状態</dt>
               <dd>
                 <StatusBadge status={version.data.display_status} />
               </dd>
             </div>
             <div>
-              <dt>File</dt>
+              <dt>ファイル</dt>
               <dd>{truncateText(version.data.file_name, 60)}</dd>
             </div>
             <div>
@@ -83,25 +83,25 @@ export function VersionDetailPage() {
               <dd>{version.data.mime_type ?? "-"}</dd>
             </div>
             <div>
-              <dt>Size</dt>
+              <dt>サイズ</dt>
               <dd>{formatBytes(version.data.file_size_bytes)}</dd>
             </div>
             <div>
-              <dt>Chunks</dt>
+              <dt>チャンク</dt>
               <dd>{version.data.chunk_count ?? "-"}</dd>
             </div>
             <div>
-              <dt>Created</dt>
+              <dt>作成日時</dt>
               <dd>{formatDate(version.data.created_at)}</dd>
             </div>
           </dl>
-          {!canApprove && !version.data.is_active ? <InlineAlert>Only ready pending_review versions can be approved.</InlineAlert> : null}
+          {!canApprove && !version.data.is_active ? <InlineAlert>承認できるのは ready かつ pending_review の版だけです。</InlineAlert> : null}
         </section>
       ) : null}
 
       <section className="admin-section">
-        <h2>Chunks</h2>
-        {chunks.isLoading ? <LoadingState /> : null}
+        <h2>チャンク</h2>
+        {chunks.isLoading ? <LoadingState label="チャンクを読み込んでいます..." /> : null}
         {chunks.error ? <ErrorState error={chunks.error} /> : null}
         {chunks.data ? (
           <>
