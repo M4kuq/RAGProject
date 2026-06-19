@@ -42,9 +42,18 @@ function Test-Url([string]$Url) {
 Push-Location $RepoRoot
 try {
   Write-Step "validate compose files without reading .env"
+  $previousComposeDisableEnvFile = $env:COMPOSE_DISABLE_ENV_FILE
   $env:COMPOSE_DISABLE_ENV_FILE = "1"
-  Invoke-Checked { docker compose config --quiet | Out-Null }
-  Invoke-Checked { docker compose --profile neo4j config --quiet | Out-Null }
+  try {
+    Invoke-Checked { docker compose config --quiet | Out-Null }
+    Invoke-Checked { docker compose --profile neo4j config --quiet | Out-Null }
+  } finally {
+    if ($null -eq $previousComposeDisableEnvFile) {
+      Remove-Item Env:COMPOSE_DISABLE_ENV_FILE -ErrorAction SilentlyContinue
+    } else {
+      $env:COMPOSE_DISABLE_ENV_FILE = $previousComposeDisableEnvFile
+    }
+  }
 
   Write-Step "verify GraphRAG final docs and helper artifacts"
   @(

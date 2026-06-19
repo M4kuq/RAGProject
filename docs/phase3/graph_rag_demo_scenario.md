@@ -133,11 +133,11 @@ cookie_file=$(mktemp)
 csrf_json=$(curl -fsS -c "$cookie_file" http://localhost:8000/api/v1/auth/csrf)
 csrf_token=$(printf '%s' "$csrf_json" |
   python -c 'import json,sys; print(json.load(sys.stdin)["data"]["csrf_token"])')
-login_payload=$(python -c 'import json, os; print(json.dumps({"email": os.environ["DEMO_ADMIN_EMAIL"], "password": os.environ["DEMO_ADMIN_PASSWORD"]}))')
-login_json=$(curl -fsS -b "$cookie_file" -c "$cookie_file" \
+login_json=$(python -c 'import json, os; print(json.dumps({"email": os.environ["DEMO_ADMIN_EMAIL"], "password": os.environ["DEMO_ADMIN_PASSWORD"]}))' |
+  curl -fsS -b "$cookie_file" -c "$cookie_file" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: $csrf_token" \
-  -d "$login_payload" \
+  --data-binary @- \
   http://localhost:8000/api/v1/auth/login)
 csrf_token=$(printf '%s' "$login_json" |
   python -c 'import json,sys; print(json.load(sys.stdin)["data"]["csrf_token"])')
@@ -213,7 +213,16 @@ Neo4j is not required for the default demo.
 
 ```powershell
 $env:NEO4J_USER = "neo4j"
-$env:NEO4J_PASSWORD = Read-Host "Local Neo4j password"
+$secureNeo4jPassword = Read-Host "Local Neo4j password" -AsSecureString
+$neo4jPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
+  $secureNeo4jPassword
+)
+try {
+  $plainNeo4jPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($neo4jPasswordPtr)
+  $env:NEO4J_PASSWORD = $plainNeo4jPassword
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($neo4jPasswordPtr)
+}
 docker compose --profile neo4j up -d neo4j
 docker compose --profile neo4j config --services
 ```

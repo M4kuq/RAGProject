@@ -166,7 +166,16 @@ transcripts. Set the local password in your shell without committing it.
 
 ```powershell
 $env:NEO4J_USER = "neo4j"
-$env:NEO4J_PASSWORD = Read-Host "Local Neo4j password"
+$secureNeo4jPassword = Read-Host "Local Neo4j password" -AsSecureString
+$neo4jPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
+  $secureNeo4jPassword
+)
+try {
+  $plainNeo4jPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($neo4jPasswordPtr)
+  $env:NEO4J_PASSWORD = $plainNeo4jPassword
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($neo4jPasswordPtr)
+}
 docker compose --profile neo4j up -d neo4j
 ```
 
