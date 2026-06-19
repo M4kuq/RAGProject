@@ -1,19 +1,39 @@
 # RAGProject
 
-## Phase3 Design Baseline
+## Phase3 GraphRAG Final Handoff
 
-Phase3 Graph-RAG planning starts in [`docs/phase3/README.md`](docs/phase3/README.md).
+Phase3 GraphRAG documentation starts in
+[`docs/phase3/README.md`](docs/phase3/README.md). PR-54 is the final
+hardening and demo-docs handoff for the text GraphRAG path delivered through
+PR-46 to PR-53. It does not add a new retrieval strategy or evaluation metric.
 
 Start with:
 
+- [`docs/phase3/graph_rag_final_readme.md`](docs/phase3/graph_rag_final_readme.md)
+- [`docs/phase3/graph_rag_demo_scenario.md`](docs/phase3/graph_rag_demo_scenario.md)
+- [`docs/phase3/graph_rag_acceptance_checklist.md`](docs/phase3/graph_rag_acceptance_checklist.md)
+- [`docs/phase3/graph_rag_manual_test_cases.md`](docs/phase3/graph_rag_manual_test_cases.md)
 - [`docs/phase3/phase3_roadmap.md`](docs/phase3/phase3_roadmap.md)
 - [`docs/phase3/graph_rag_architecture.md`](docs/phase3/graph_rag_architecture.md)
-- [`docs/phase3/graph_schema_draft.md`](docs/phase3/graph_schema_draft.md)
 - [`docs/phase3/graph_retrieval_strategy.md`](docs/phase3/graph_retrieval_strategy.md)
-- [`docs/phase3/graph_citation_design.md`](docs/phase3/graph_citation_design.md)
+- [`docs/phase3/neo4j_optional_backend.md`](docs/phase3/neo4j_optional_backend.md)
+- [`docs/phase3/retrieval_cache_foundation.md`](docs/phase3/retrieval_cache_foundation.md)
+- [`docs/phase3/graph_evaluation_design.md`](docs/phase3/graph_evaluation_design.md)
 - [`docs/phase3/security_redaction_policy.md`](docs/phase3/security_redaction_policy.md)
 
-PR-45 is a design baseline only. It does not add Graph-RAG runtime code, database migrations, OCR, image upload, AWS/S3/OIDC, external provider integration, or online evaluation implementation.
+Safe PR-54 smoke:
+
+```powershell
+scripts\smoke_phase3_graph_rag.ps1
+```
+
+```sh
+sh scripts/smoke_phase3_graph_rag.sh
+```
+
+The smoke is non-destructive. It checks Compose config, GraphRAG docs, helper
+scripts, and fixture presence without printing `.env` values or requiring
+external providers, Neo4j, Redis, OCR, cloud resources, or model downloads.
 
 ## Phase2 Handoff
 
@@ -266,6 +286,7 @@ Windows:
 .\scripts\test.ps1 -Smoke
 .\scripts\smoke_phase1.ps1
 .\scripts\smoke_phase1.ps1 -Deep
+.\scripts\smoke_phase3_graph_rag.ps1
 ```
 
 Ubuntu:
@@ -275,6 +296,7 @@ sh scripts/test.sh
 sh scripts/test.sh --smoke
 sh scripts/smoke_phase1.sh
 sh scripts/smoke_phase1.sh --deep
+sh scripts/smoke_phase3_graph_rag.sh
 ```
 
 Backend:
@@ -370,6 +392,11 @@ metrics and reason codes. See
 - [CLI demo](docs/demo/cli_demo.md)
 - [MCP demo](docs/demo/mcp_demo.md)
 - [MCP advanced RAG tools](docs/phase2/mcp_advanced_rag_tools.md)
+- [GraphRAG final README](docs/phase3/graph_rag_final_readme.md)
+- [GraphRAG demo scenario](docs/phase3/graph_rag_demo_scenario.md)
+- [GraphRAG manual test cases](docs/phase3/graph_rag_manual_test_cases.md)
+- [GraphRAG acceptance checklist](docs/phase3/graph_rag_acceptance_checklist.md)
+- [GraphRAG known limitations](docs/phase3/graph_rag_known_limitations.md)
 - [sample questions](docs/demo/sample_questions.md)
 - [demo data](docs/demo/demo_data.md)
 - [manual test cases](docs/test-cases/phase1_manual_test_cases.md)
@@ -391,7 +418,8 @@ docker compose -f docker-compose.ci.yml config
 
 - Phase1 は local Docker Compose 検証向けであり、cloud deploy は扱わない。
 - MCP は stdio / local-only であり、remote MCP は扱わない。
-- OCR、GraphRAG、Agentic RAG は扱わない。
+- OCR and multimodal input remain future work. Text GraphRAG is covered by the
+  Phase3 PR-54 docs and remains opt-in for local demos.
 - CI の通常確認は fake adapter を優先する。
 - PDF / DOCX の大きな demo fixture は repository に追加しない。必要な場合は手動 upload 手順で確認する。
 - worker の重い実ジョブ確認は環境差が出るため、最終受け入れでは manual test と optional smoke に分ける。

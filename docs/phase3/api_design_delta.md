@@ -1,19 +1,26 @@
 # Phase3 API Design Delta
 
-PR-45 records candidate API changes only. No API implementation is added in this PR.
+PR-45 recorded candidate API changes. PR-48 through PR-53 implemented the
+current `graph` path, graph citation/debug support, cache metadata, and
+evaluation targets. PR-54 records the final demo boundary without adding new API
+surface.
 
 ## Strategy Values
 
-Candidate future request values:
+Implemented graph request value:
 
-- `/api/v1/rag/search`: `graph`, `graph_hybrid`
-- `/api/v1/rag/ask`: `graph`, `graph_hybrid`, and Auto-selected graph through `llm_tool_orchestrator`
+- `/api/v1/rag/search`: `graph`
+- `/api/v1/rag/ask`: `graph`
+
+Future candidate request value:
+
+- `graph_hybrid`
 
 Existing dense, hybrid, agentic router, and Auto behavior must remain backward compatible.
 
 ## Response Deltas
 
-Candidate safe additions:
+Safe additions used by graph/debug/cache/evaluation paths:
 
 - `graph_summary`
 - `graph_path_count`
@@ -33,8 +40,16 @@ Admin-only Retrieval Debug may include:
 - graph path refs
 - graph path validation summary
 - stale graph warnings
-- graph + vector merge score summary
+- graph score summary
+- cache summary
+- evaluation comparison target metadata
 - traversal budget summary
+
+## Admin Endpoints
+
+Implemented admin graph trace endpoint:
+
+- `GET /api/v1/rag/retrieval-runs/{retrieval_run_id}/graph-trace`
 
 ## New Admin Endpoints Candidate
 

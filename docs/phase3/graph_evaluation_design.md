@@ -1,6 +1,8 @@
 # Graph Evaluation Design
 
-PR-45 defines evaluation metrics and CI strategy for future graph work.
+PR-45 defined evaluation metrics and CI strategy for graph work. PR-53 added
+the current cache-aware strategy comparison path, and PR-54 documents how to use
+it for the final GraphRAG demo handoff.
 
 ## Evaluation Areas
 
@@ -11,8 +13,8 @@ PR-45 defines evaluation metrics and CI strategy for future graph work.
 | Graph path relevance | path relevance, hop correctness, source support coverage |
 | Multi-hop QA accuracy | answer correctness, required-hop coverage, no-context correctness |
 | Graph citation coverage | node citation coverage, edge citation coverage, path citation validation |
-| Strategy comparison | dense vs hybrid vs agentic_router vs graph vs graph_hybrid |
-| Graph-only vs graph + vector | answer quality, citation coverage, latency, context usage |
+| Strategy comparison | dense vs hybrid vs agentic_router vs graph_postgres vs graph_neo4j |
+| Future graph + vector fusion | answer quality, citation coverage, latency, context usage |
 
 ## PR-53 Implementation Scope
 
@@ -84,6 +86,23 @@ not-applicable reason codes.
 evaluation. It intentionally uses non-private demo concepts and safe metadata
 only.
 
+## PR-54 Demo Summary
+
+For the portfolio/demo handoff, use evaluation as a supporting explanation, not
+as a new heavy gate:
+
+- Start with `phase3_graph_multi_hop`.
+- Compare dense, hybrid, agentic_router, and graph_postgres targets.
+- Add graph_neo4j only when the optional Neo4j profile and projection are
+  configured.
+- Treat graph_neo4j unavailable as not-applicable rather than a default demo
+  failure.
+- Report aggregate metrics, provider labels, cache status, latency summaries,
+  counts, hashes, and reason codes only.
+- Do not include raw questions, prompts, chunk text, document text, answers,
+  full context, raw graph evidence, PII, credentials, tokens, or `.env` values
+  in reports or PR comments.
+
 ## PR-53 Failure Promotion
 
 The existing failure promotion path remains the mechanism for turning low
@@ -101,7 +120,7 @@ Future datasets should include safe synthetic or demo cases with:
 - multi-hop expected paths
 - version-specific comparisons
 - no-context graph queries
-- OCR/image cases after PR-51
+- OCR/image cases after a future multimodal/OCR design is accepted
 
 Datasets must not include PII, raw private documents, credential values, or secret values.
 

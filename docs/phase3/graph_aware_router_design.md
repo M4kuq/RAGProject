@@ -1,6 +1,9 @@
 # Graph-aware Router Design
 
-PR-45 defines how the existing QueryAnalyzer, QueryPlanner, StrategyRouter, and Auto path should grow to include graph strategies. It does not implement router changes.
+PR-45 defined how the existing QueryAnalyzer, QueryPlanner, StrategyRouter, and
+Auto path should grow to include graph strategies. Later PRs added graph-aware
+routing for the implemented `graph` path. PR-54 documents this boundary; it
+does not add `graph_hybrid`.
 
 ## Existing Foundation
 
@@ -20,30 +23,34 @@ Candidate signals:
 
 | Signal | Examples | Router impact |
 |---|---|---|
-| Multi-hop | asks how A relates to B through another concept | prefer `graph_hybrid` |
-| Relation query | asks dependency, ownership, cause, compatibility, sequence | prefer `graph` or `graph_hybrid` |
-| Entity comparison | asks differences between named entities/versions | prefer `graph_hybrid` |
-| Entity-centric | asks everything about one named system or concept | prefer `graph_hybrid` with neighborhood expansion |
+| Multi-hop | asks how A relates to B through another concept | prefer `graph` when graph is enabled and source-backed paths exist |
+| Relation query | asks dependency, ownership, cause, compatibility, sequence | prefer `graph` |
+| Entity comparison | asks differences between named entities/versions | prefer `graph` when version-aware source support exists, otherwise `hybrid` |
+| Entity-centric | asks everything about one named system or concept | prefer `graph` when entity/path confidence is high, otherwise `hybrid` |
 | Exact identifier | error code, API name, config key | hybrid first, graph if entity match exists |
 | Version-specific | old/new/current comparison | graph only if version support is available |
 
 ## Strategy Selection
 
-Candidate strategy values:
+Implemented strategy values and labels:
 
 - `dense`
 - `hybrid`
 - `agentic_router`
 - `llm_tool_orchestrator`
 - `graph`
-- `graph_hybrid`
 - `fallback_hybrid`
 - `fallback_dense`
+
+Future candidate:
+
+- `graph_hybrid`
 
 Selection rules should be deterministic before any optional LLM planning:
 
 1. If graph is disabled, never select graph.
-2. If query has strong relation or multi-hop signal and graph index is ready, select `graph_hybrid`.
+2. If query has strong relation or multi-hop signal and graph index is ready,
+   select `graph`.
 3. If query has exact entity signal but graph path confidence is low, select `hybrid`.
 4. If graph traversal is over budget, fallback to `fallback_hybrid` or `fallback_dense`.
 5. If selected graph path lacks source chunk support, do not use it for answer grounding.
@@ -118,4 +125,6 @@ Fallback names should be explicit in trace:
 
 ## Non-Goals
 
-PR-45 does not add strategy enum values, router code, settings, tools, or UI fields.
+PR-54 does not add a public `graph_hybrid` strategy, new router signals beyond
+the existing GraphRAG routing path, new tool classes, or viewer-facing graph
+debug fields.

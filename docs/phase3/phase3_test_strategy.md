@@ -1,7 +1,9 @@
 # Phase3 Test Strategy
 
-PR-46 added the first executable Graph-RAG foundation tests. PR-47 adds the
-first executable extraction pipeline and worker tests.
+PR-46 added the first executable GraphRAG foundation tests. PR-47 added the
+first executable extraction pipeline and worker tests. PR-48 through PR-54
+extend the same safety pattern into retrieval, routing, citation/debug, cache,
+evaluation, optional Neo4j, demo docs, and smoke.
 
 ## PR-46 Tests
 
@@ -43,12 +45,43 @@ PR-46 migration checks should cover:
 - invalid hash rejection
 - negative count rejection
 
-## Later PRs
+## PR-48 Through PR-53 Tests
 
-PR-48 adds graph retrieval tests.
+Added/expected coverage:
 
-PR-49 adds graph citation/path validation tests.
+- explicit `graph` retrieval returns source chunk-backed candidates.
+- graph traversal is bounded by max depth, path count, relation count, source
+  chunk count, and timeout settings.
+- graph-aware router selects graph only when enabled and falls back safely.
+- GraphStore DTOs keep PostgreSQL and optional Neo4j provider behavior
+  compatible.
+- Neo4j unavailable paths return safe reason codes without breaking default
+  PostgreSQL GraphRAG.
+- graph citation validation maps paths through retrieval run items before
+  citations.
+- admin graph debug returns safe refs, counts, status, and reason codes only.
+- retrieval cache stores result references and safe graph path summaries only.
+- cache keys include graph fingerprint and graph store provider.
+- evaluation compares dense, hybrid, agentic_router, graph_postgres, and
+  optional graph_neo4j with safe reports.
 
-PR-50 adds Graph Debug UI and evaluation tests.
+## PR-54 Smoke / Docs Checks
+
+PR-54 adds non-destructive smoke scripts and docs acceptance checks rather than
+new retrieval behavior:
+
+- `docker compose config --quiet`
+- `docker compose --profile neo4j config --quiet`
+- final GraphRAG docs and helper scripts exist
+- docs include PostgreSQL source-of-truth / Neo4j read-model language
+- docs include cache and evaluation summary language
+- `.env.example` and Compose expose opt-in graph/cache/Neo4j env names without
+  requiring them
+- optional deep mode can run the queue helper with `--dry-run` inside an already
+  running backend container
+
+The smoke must not delete volumes, reset databases, print `.env` values, call
+external providers, require Neo4j by default, or store raw prompt/chunk/document
+text.
 
 OCR, multimodal, external provider, and AWS tests remain opt-in until their respective PRs.

@@ -9,7 +9,7 @@ Local runtime remains:
 - Docker Compose for development and CI-adjacent checks
 - `k8s/local` for kind/minikube local Kubernetes demo
 
-Production expansion is future work for PR-54+ or a dedicated deploy/aws branch.
+Production expansion is future work for PR-55+ or a dedicated deploy/aws branch.
 
 ## Candidate Workstreams
 
