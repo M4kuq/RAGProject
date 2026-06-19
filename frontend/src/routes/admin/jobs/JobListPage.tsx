@@ -129,7 +129,7 @@ export function JobListPage() {
                     <td>{formatDate(job.created_at)}</td>
                     <td>{formatDate(job.started_at)}</td>
                     <td>{formatDate(job.finished_at)}</td>
-                    <td>{job.error_code ? truncateText(job.error_code, 40) : formatSafeText(job.error_message, 40)}</td>
+                    <td>{job.status === "failed" ? formatJobFailureSummary(job.error_code, job.error_message) : "-"}</td>
                     <td>
                       <button type="button" disabled={!canRetry || retry.isPending} onClick={() => void retryJob(job.job_id)}>
                         {retryKnownActive ? "再実行待ち" : "再実行"}
@@ -152,4 +152,11 @@ export function JobListPage() {
       ) : null}
     </main>
   );
+}
+
+function formatJobFailureSummary(errorCode: string | null, errorMessage: string | null) {
+  if (errorCode) {
+    return formatSafeText(errorCode, 40);
+  }
+  return formatSafeText(errorMessage, 40);
 }

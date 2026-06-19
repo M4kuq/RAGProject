@@ -433,7 +433,46 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
             finished_at: "2026-05-01T00:00:01Z",
             created_at: "2026-05-01T00:00:00Z",
             updated_at: "2026-05-01T00:00:01Z",
-            items: [],
+            items: [
+              {
+                evaluation_run_item_id: 700,
+                evaluation_case_id: null,
+                retrieval_run_id: null,
+                strategy_type: "agentic_router",
+                status: "succeeded",
+                faithfulness_score: 0.8,
+                groundedness_score: 0.7,
+                citation_coverage: 0.6,
+                context_precision: 0.5,
+                latency_ms: 120,
+                latency_breakdown_json: null,
+                metric_summary_json: null,
+                error_code: null,
+                error_message: null,
+                case_id: null,
+                case_key: "fixture_case",
+                metrics: [
+                  {
+                    metric_name: "recall_at_k",
+                    metric_score: 0.75,
+                    metric_value: null,
+                    metric_label: null,
+                    details: null,
+                    metric_detail_json: null,
+                    strategy_type: "agentic_router"
+                  },
+                  {
+                    metric_name: "mrr",
+                    metric_score: 0.5,
+                    metric_value: null,
+                    metric_label: null,
+                    details: null,
+                    metric_detail_json: null,
+                    strategy_type: "agentic_router"
+                  }
+                ]
+              }
+            ],
             failure_candidates: [
               {
                 schema_version: "phase2.evaluation.v1",
@@ -512,6 +551,9 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
 
   expect(await screen.findByRole("heading", { name: "評価 #77" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "recall_at_k の説明" }).length).toBeGreaterThan(1);
+  const metricDetailList = document.querySelector(".metric-detail-list");
+  expect(metricDetailList).toBeInTheDocument();
+  expect(metricDetailList?.querySelectorAll(".metric-detail-item")).toHaveLength(2);
   expect(screen.getByText(/失敗した評価 item/)).toBeInTheDocument();
   expect(screen.getByText(/strategy 期待値だけ/)).toBeInTheDocument();
   expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();
@@ -1798,6 +1840,64 @@ test("succeeded job detail does not show failure message", async () => {
   expect(screen.queryByText("Job failed.")).not.toBeInTheDocument();
 });
 
+test("failed job detail shows safe failure diagnostics", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/jobs/28")) {
+        return jsonResponse({
+          data: {
+            job_id: 28,
+            job_type: "evaluation_run",
+            status: "failed",
+            priority: 100,
+            target_type: "evaluation_run",
+            target_id: 3,
+            retry_of_job_id: null,
+            retry_count: 0,
+            created_by: 1,
+            started_at: "2026-05-30T23:28:00Z",
+            finished_at: "2026-05-30T23:29:00Z",
+            created_at: "2026-05-30T23:28:00Z",
+            updated_at: "2026-05-30T23:29:00Z",
+            locked_at: null,
+            lease_expires_at: null,
+            result_json: null,
+            source_job_id: null,
+            active_retry_job_id: null,
+            error_code: "evaluation_execution_failed",
+            error_message: "Evaluation runner timed out after 30s",
+            payload_view: { payload: { evaluation_run_id: 3 }, payload_redacted: true }
+          }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/jobs/28");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "ジョブ #28" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "失敗理由" })).toBeInTheDocument();
+  expect(screen.getAllByText("evaluation_execution_failed").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Evaluation runner timed out after 30s").length).toBeGreaterThan(0);
+  expect(screen.getByText("診断ログを表示")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("session-token");
+});
+
 test("failed job retry refreshes csrf before mutation", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
@@ -1886,7 +1986,7 @@ test("job list pagination requests the selected page", async () => {
               finished_at: null,
               created_at: "2026-04-30T00:00:00Z",
               updated_at: "2026-04-30T00:00:00Z",
-              error_code: null,
+              error_code: "stale_error",
               error_message: null,
               payload_view: { payload: { logical_document_id: 1000 + page }, payload_redacted: true }
             }
@@ -1907,4 +2007,5 @@ test("job list pagination requests the selected page", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "次へ" }));
   await waitFor(() => expect(jobRequests.some((url) => url.includes("page=2"))).toBe(true));
+  expect(screen.queryByText("stale_error")).not.toBeInTheDocument();
 });

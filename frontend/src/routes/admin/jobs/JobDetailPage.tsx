@@ -41,7 +41,16 @@ export function JobDetailPage() {
   }
 
   const canRetry = job.data.status === "failed" && !job.data.active_retry_job_id;
-  const hasErrorDetails = Boolean(job.data.error_code || job.data.error_message || job.data.status === "failed");
+  const showFailureDetails = job.data.status === "failed";
+  const failureMessage = formatFailureMessage(job.data.error_message, 500);
+  const failureCode = formatSafeText(job.data.error_code, 160);
+  const failureDiagnosticLog = [
+    `status: ${job.data.status}`,
+    `job_type: ${formatSafeText(job.data.job_type, 160)}`,
+    `target: ${job.data.target_type ?? "-"} ${job.data.target_id ?? ""}`.trim(),
+    `error_code: ${failureCode}`,
+    `error_message: ${failureMessage}`
+  ].join("\n");
 
   return (
     <main className="admin-main">
@@ -101,10 +110,23 @@ export function JobDetailPage() {
         </dl>
       </section>
 
-      {hasErrorDetails ? (
-        <section className="admin-section">
-          <h2>エラー</h2>
-          <p>{job.data.error_code ? truncateText(job.data.error_code, 160) : formatSafeText(job.data.error_message, 160)}</p>
+      {showFailureDetails ? (
+        <section className="admin-section job-failure-alert" aria-labelledby="job-failure-heading">
+          <h2 id="job-failure-heading">失敗理由</h2>
+          <dl className="detail-grid">
+            <div>
+              <dt>error_code</dt>
+              <dd>{failureCode}</dd>
+            </div>
+            <div>
+              <dt>error_message</dt>
+              <dd>{failureMessage}</dd>
+            </div>
+          </dl>
+          <details className="job-error-details">
+            <summary>診断ログを表示</summary>
+            <pre>{failureDiagnosticLog}</pre>
+          </details>
         </section>
       ) : null}
 
@@ -118,4 +140,9 @@ export function JobDetailPage() {
       </p>
     </main>
   );
+}
+
+function formatFailureMessage(value: string | null | undefined, maxLength = 500): string {
+  const message = formatSafeText(value, maxLength);
+  return message === "-" ? "Job failed." : message;
 }

@@ -719,10 +719,10 @@ textarea {
 }
 
 .metric-detail-list {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
+  align-items: start;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
 }
 
 .metric-help {
@@ -1080,6 +1080,37 @@ textarea {
   background: var(--admin-danger-soft);
   border-color: #fca5a5;
   color: var(--admin-danger);
+}
+
+.job-failure-alert {
+  background: #fff1f2;
+  border-color: #fda4af;
+  color: #7f1d1d;
+}
+
+.job-failure-alert h2 {
+  color: #7f1d1d;
+}
+
+.job-error-details {
+  margin-top: 14px;
+}
+
+.job-error-details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.job-error-details pre {
+  background: #2b1215;
+  border-radius: 8px;
+  color: #ffe4e6;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 10px 0 0;
+  overflow-x: auto;
+  padding: 12px;
+  white-space: pre-wrap;
 }
 
 .inline-alert-success {
