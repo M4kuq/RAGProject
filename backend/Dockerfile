@@ -42,5 +42,6 @@ USER root
 RUN uv sync --frozen --no-install-project --extra dev
 COPY backend/Dockerfile /backend/Dockerfile
 COPY docker-compose.yml /docker-compose.yml
-COPY docs/phase3/neo4j_optional_backend.md /docs/phase3/neo4j_optional_backend.md
+COPY README.md /README.md
+COPY docs/ /docs/
 USER app

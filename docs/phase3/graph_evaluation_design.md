@@ -44,9 +44,11 @@ The runner stores each comparison target as safe metadata:
 - cache mode
 
 Graph provider differences stay in the evaluation target metadata and report
-summary. `graph_neo4j` is optional; if Neo4j is not configured or available,
-that target records a safe not-applicable reason while the overall evaluation
-continues.
+summary. `graph_neo4j` is optional; if Neo4j is not configured, unavailable, or
+unprojected, graph retrieval uses PostgreSQL graph as a visible fallback when
+PostgreSQL graph sources can answer and records `neo4j_to_postgres_fallback`.
+If neither provider has usable graph sources, the target records safe reason
+codes while the overall evaluation continues.
 
 ## PR-53 Metrics
 
@@ -77,8 +79,8 @@ Evaluation result details and admin summaries must not include:
 - credential or secret values
 
 Allowed values include metric scores, safe labels, relation types, source chunk
-IDs, retrieval run IDs, providers, cache status, latencies, counts, hashes, and
-not-applicable reason codes.
+IDs, retrieval run IDs, providers, cache status, latencies, counts, hashes,
+fallback reason codes, and not-applicable reason codes.
 
 ## PR-53 Dataset
 
@@ -92,11 +94,11 @@ For the portfolio/demo handoff, use evaluation as a supporting explanation, not
 as a new heavy gate:
 
 - Start with `phase3_graph_multi_hop`.
-- Compare dense, hybrid, agentic_router, and graph_postgres targets.
-- Add graph_neo4j only when the optional Neo4j profile and projection are
-  configured.
-- Treat graph_neo4j unavailable as not-applicable rather than a default demo
-  failure.
+- Compare dense, hybrid, agentic_router, graph_postgres, and graph_neo4j targets
+  after starting the optional Neo4j demo profile.
+- Treat graph_neo4j unavailable or unprojected as a visible
+  `neo4j_to_postgres_fallback` when PostgreSQL graph sources exist, otherwise as
+  safe reason codes rather than a default demo failure.
 - Report aggregate metrics, provider labels, cache status, latency summaries,
   counts, hashes, and reason codes only.
 - Do not include raw questions, prompts, chunk text, document text, answers,

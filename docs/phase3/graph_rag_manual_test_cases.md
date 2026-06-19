@@ -22,7 +22,7 @@ PII, secrets, tokens, credentials, cookies, Neo4j credentials, or `.env` values.
 | G-TC-013 | Cache enabled | `RETRIEVAL_CACHE_ENABLED=true` | Run same graph query twice before TTL expiry | Second compatible request can hit cache; payload remains refs/hashes only | cache summary |
 | G-TC-014 | Cache provider split | Compare Postgres and Neo4j providers | Run equivalent graph query per provider | Cache keys differ by provider | cache summary hashes |
 | G-TC-015 | Evaluation graph_postgres | Graph index exists | Run small evaluation with `phase3_graph_multi_hop`, `graph_postgres` | Graph metrics are recorded as safe summaries | evaluation detail |
-| G-TC-016 | Evaluation graph_neo4j optional | Neo4j not configured | Include `graph_neo4j` target | Target records safe not-applicable reason, overall run continues | evaluation detail |
+| G-TC-016 | Evaluation graph_neo4j optional | Neo4j not configured or unprojected | Include `graph_neo4j` target after PostgreSQL graph sources exist | Target records `neo4j_to_postgres_fallback` when PostgreSQL graph can answer, or safe reason codes when no graph source is usable; overall run continues | evaluation detail |
 | G-TC-017 | Neo4j default optional | No `neo4j` profile | Run default stack | App starts without Neo4j and uses PostgreSQL graph store | compose services |
 | G-TC-018 | Neo4j projection | `neo4j` profile enabled | Queue graph index after enabling projection | Neo4j projection writes safe refs only and does not block PostgreSQL graph index success | worker result summary |
 | G-TC-019 | Redaction docs | Review PR docs | Search for raw/secret examples | Docs contain policy terms but no real secret values or raw private payloads | scan output |

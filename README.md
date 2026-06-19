@@ -20,6 +20,7 @@ Start with:
 - [`docs/phase3/retrieval_cache_foundation.md`](docs/phase3/retrieval_cache_foundation.md)
 - [`docs/phase3/graph_evaluation_design.md`](docs/phase3/graph_evaluation_design.md)
 - [`docs/phase3/security_redaction_policy.md`](docs/phase3/security_redaction_policy.md)
+- [`docs/demo/corpus_neo4j_demo.md`](docs/demo/corpus_neo4j_demo.md)
 
 Safe PR-54 smoke:
 
@@ -34,6 +35,19 @@ sh scripts/smoke_phase3_graph_rag.sh
 The smoke is non-destructive. It checks Compose config, GraphRAG docs, helper
 scripts, and fixture presence without printing `.env` values or requiring
 external providers, Neo4j, Redis, OCR, cloud resources, or model downloads.
+
+Reproducible local demo corpus and optional Neo4j provider comparison:
+
+```powershell
+scripts\neo4j_demo.ps1
+```
+
+```sh
+sh scripts/neo4j_demo.sh
+```
+
+See [Demo Corpus and Neo4j Demo Profile](docs/demo/corpus_neo4j_demo.md) for
+the manifest-driven corpus rebuild and provider comparison runbook.
 
 ## Phase2 Handoff
 

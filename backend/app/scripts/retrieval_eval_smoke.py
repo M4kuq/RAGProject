@@ -58,6 +58,8 @@ ALLOWED_STRATEGIES = {
     RetrievalStrategy.DENSE.value,
     RetrievalStrategy.SPARSE.value,
     RetrievalStrategy.HYBRID.value,
+    EvaluationRunRequestStrategy.GRAPH_POSTGRES.value,
+    EvaluationRunRequestStrategy.GRAPH_NEO4J.value,
     RetrievalStrategy.AGENTIC_ROUTER.value,
     RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value,
     RetrievalStrategy.LANGCHAIN_AGENTIC.value,

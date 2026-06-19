@@ -28,11 +28,14 @@ from app.scripts.retrieval_eval_smoke import (
 
 def test_parse_strategies_dedupes_and_rejects_unsupported() -> None:
     assert parse_strategies(
-        "dense, hybrid, dense, agentic_router, langchain_agentic, langgraph_agentic"
+        "dense, hybrid, dense, agentic_router, graph_postgres, graph_neo4j, "
+        "langchain_agentic, langgraph_agentic"
     ) == [
         "dense",
         "hybrid",
         "agentic_router",
+        "graph_postgres",
+        "graph_neo4j",
         "langchain_agentic",
         "langgraph_agentic",
     ]

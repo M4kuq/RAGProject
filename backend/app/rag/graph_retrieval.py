@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -1525,13 +1525,34 @@ class GraphRetrievalStrategy:
     ) -> GraphRetrievalResult:
         bounded_settings = settings.bounded()
         store = self.graph_store or self.resolver.resolve(bounded_settings.provider)
-        return store.search(
+        result = store.search(
             db,
             query=query,
             top_k=top_k,
             filters=filters,
             settings=bounded_settings,
         )
+        if (
+            store.provider == GraphStoreProvider.NEO4J
+            and result.no_context
+            and self.graph_store is None
+        ):
+            postgres_store = self.resolver.resolve(GraphStoreProvider.POSTGRES)
+            if postgres_store.provider != GraphStoreProvider.POSTGRES:
+                return result
+            postgres_result = postgres_store.search(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                settings=replace(bounded_settings, provider=GraphStoreProvider.POSTGRES),
+            )
+            if postgres_result.graph_candidates:
+                return _neo4j_to_postgres_fallback_result(
+                    neo4j_result=result,
+                    postgres_result=postgres_result,
+                )
+        return result
 
     def path_records(
         self,
@@ -1655,6 +1676,44 @@ def _graph_retrieval_result(
         path_count=path_count,
         source_candidate_count=source_candidate_count,
         graph_candidates=graph_candidates,
+        reason_codes=reason_codes,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _neo4j_to_postgres_fallback_result(
+    *,
+    neo4j_result: GraphRetrievalResult,
+    postgres_result: GraphRetrievalResult,
+) -> GraphRetrievalResult:
+    elapsed_ms = neo4j_result.elapsed_ms + postgres_result.elapsed_ms
+    reason_codes = tuple(
+        _dedupe(
+            [
+                "neo4j_to_postgres_fallback",
+                *neo4j_result.reason_codes,
+                *postgres_result.reason_codes,
+            ]
+        )
+    )
+    score_breakdown = validate_safe_graph_metadata(
+        {
+            **postgres_result.score_breakdown,
+            "fallback_from_provider": GraphStoreProvider.NEO4J.value,
+            "fallback_to_provider": GraphStoreProvider.POSTGRES.value,
+            "fallback_reason_codes": list(neo4j_result.reason_codes),
+        }
+    )
+    return replace(
+        postgres_result,
+        score_breakdown=score_breakdown,
+        latency_ms=elapsed_ms,
+        fallback_used=True,
+        metadata=replace(
+            postgres_result.metadata,
+            reason_codes=reason_codes,
+            elapsed_ms=elapsed_ms,
+        ),
         reason_codes=reason_codes,
         elapsed_ms=elapsed_ms,
     )

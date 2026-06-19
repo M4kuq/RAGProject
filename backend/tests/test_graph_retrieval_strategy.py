@@ -247,6 +247,34 @@ def test_graph_resolver_provider_default_is_honored_without_settings_override(
         )
 
 
+def test_graph_strategy_falls_back_to_postgres_when_neo4j_unavailable_with_graph_sources(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        _seed_graph(db)
+        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+
+        result = strategy.search(
+            db,
+            query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.fallback_used is True
+        assert result.graph_candidates
+        assert "neo4j_to_postgres_fallback" in result.reason_codes
+        assert "graph_store_provider_unavailable" in result.reason_codes
+        assert "neo4j_not_configured" in result.reason_codes
+        assert result.score_breakdown["fallback_from_provider"] == "neo4j"
+        assert result.score_breakdown["fallback_to_provider"] == "postgres"
+
+
 def test_graph_settings_provider_overrides_strategy_default(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
