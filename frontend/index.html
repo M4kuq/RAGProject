@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RAGProject</title>
+    <script>
+      (() => {
+        const storageKey = "ragproject.themePreference";
+        let storedPreference = null;
+        try {
+          storedPreference = window.localStorage.getItem(storageKey);
+        } catch (_error) {
+          storedPreference = null;
+        }
+
+        const systemTheme =
+          window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        const resolvedTheme =
+          storedPreference === "dark" || storedPreference === "light" ? storedPreference : systemTheme;
+        document.documentElement.dataset.theme = resolvedTheme;
+        document.documentElement.style.colorScheme = resolvedTheme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
