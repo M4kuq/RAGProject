@@ -920,6 +920,12 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
             )
             if not start_entities:
+                if not self._has_projected_entities():
+                    return self._unavailable_result(
+                        query,
+                        started_at,
+                        "neo4j_projection_empty",
+                    )
                 return _graph_retrieval_result(
                     provider=self.provider,
                     query=query,
@@ -989,6 +995,18 @@ class Neo4jGraphStore:
             reason_codes=tuple(_dedupe(reason_list or ["graph_search_completed"])),
             elapsed_ms=_elapsed_ms(started_at),
         )
+
+    def _has_projected_entities(self) -> bool:
+        rows = self.client.execute(
+            "MATCH (entity:RAGGraphEntity) RETURN count(entity) AS entity_count",
+            {},
+        )
+        if not rows:
+            return False
+        try:
+            return int(str(rows[0].get("entity_count", 0))) > 0
+        except (TypeError, ValueError):
+            return False
 
     def _lookup_entities(
         self,
@@ -1535,6 +1553,7 @@ class GraphRetrievalStrategy:
         if (
             store.provider == GraphStoreProvider.NEO4J
             and result.no_context
+            and _neo4j_result_allows_postgres_fallback(result)
             and self.graph_store is None
         ):
             postgres_store = self.resolver.resolve(GraphStoreProvider.POSTGRES)
@@ -1716,6 +1735,16 @@ def _neo4j_to_postgres_fallback_result(
         reason_codes=reason_codes,
         elapsed_ms=elapsed_ms,
     )
+
+
+def _neo4j_result_allows_postgres_fallback(result: GraphRetrievalResult) -> bool:
+    setup_reason_codes = {
+        "neo4j_not_configured",
+        "neo4j_driver_unavailable",
+        "neo4j_connection_failed",
+        "neo4j_projection_empty",
+    }
+    return any(reason_code in setup_reason_codes for reason_code in result.reason_codes)
 
 
 def _source_candidates(

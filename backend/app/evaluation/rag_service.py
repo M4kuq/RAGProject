@@ -83,6 +83,7 @@ RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES = frozenset(
         RetrievalStrategy.DENSE,
         RetrievalStrategy.SPARSE,
         RetrievalStrategy.HYBRID,
+        RetrievalStrategy.GRAPH,
         RetrievalStrategy.AGENTIC_ROUTER,
     }
 )

@@ -18,8 +18,8 @@ If Neo4j is not configured, the driver is not installed, the server is down, or
 projection has not been populated, the application still starts and PostgreSQL
 Graph-RAG remains usable. When graph retrieval asks for the Neo4j provider and
 PostgreSQL graph sources can answer the query, the strategy falls back to
-PostgreSQL graph and records `neo4j_to_postgres_fallback` plus the Neo4j reason
-codes.
+PostgreSQL graph, records `neo4j_to_postgres_fallback`, and keeps the Neo4j
+setup reason codes in `fallback_reason_codes`.
 
 ## Local Setup
 

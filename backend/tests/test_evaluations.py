@@ -46,6 +46,7 @@ from app.evaluation.metrics import (
     calculate_metrics,
 )
 from app.evaluation.rag_service import (
+    RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES,
     DatabaseVectorSearchClient,
     EvaluationRagQuestionService,
     RagEvaluationResult,
@@ -1791,6 +1792,10 @@ def test_evaluation_service_preserves_retrieval_only_runner_for_default_search_t
         assert calls == ["strategy"]
     finally:
         engine.dispose()
+
+
+def test_graph_evaluation_targets_use_retrieval_only_runner() -> None:
+    assert RetrievalStrategy.GRAPH in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES
 
 
 def test_evaluation_runner_honors_metric_selection_and_bounds_request_ids() -> None:
