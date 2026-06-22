@@ -9,6 +9,7 @@ import type {
   EvaluationFailurePromotionResponse,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
+  EvaluationRunComparison,
   EvaluationRunDetail,
   EvaluationRunSummary,
   PagedEvaluationCases,
@@ -60,6 +61,19 @@ export async function listEvaluationRuns(params: {
 export async function getEvaluationRunDetail(evaluationRunId: number): Promise<EvaluationRunDetail> {
   const response = await apiFetch<ApiResponse<EvaluationRunDetail>>(
     `/api/v1/evaluations/runs/${evaluationRunId}`
+  );
+  return response.data;
+}
+
+export async function compareEvaluationRuns(
+  baseRunId: number,
+  candidateRunId: number
+): Promise<EvaluationRunComparison> {
+  const response = await apiFetch<ApiResponse<EvaluationRunComparison>>(
+    `/api/v1/evaluations/runs/compare${toQuery({
+      base: baseRunId,
+      candidate: candidateRunId
+    })}`
   );
   return response.data;
 }

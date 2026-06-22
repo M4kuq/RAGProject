@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ResourceNotFound
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
@@ -1035,6 +1035,188 @@ def test_evaluation_service_runner_persists_items_results_and_safe_details() -> 
             assert "full context" not in response.model_dump_json().lower()
     finally:
         engine.dispose()
+
+
+def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_base",
+                items=[
+                    _comparison_item("shared_pass", "succeeded"),
+                    _comparison_item("shared_fail", "failed"),
+                    _comparison_item("base_only", "succeeded"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.8"),
+                    "mrr": Decimal("0.5"),
+                    "no_context_rate": Decimal("0.0"),
+                    "p95_latency": Decimal("200.0"),
+                },
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_candidate",
+                items=[
+                    _comparison_item("shared_pass", "failed"),
+                    _comparison_item("shared_fail", "succeeded"),
+                    _comparison_item("candidate_only", "succeeded"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.7"),
+                    "mrr": Decimal("0.5"),
+                    "no_context_rate": Decimal("0.2"),
+                    "p95_latency": Decimal("100.0"),
+                },
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        metrics = {metric.metric_name: metric for metric in comparison.metrics}
+        assert metrics["recall_at_k"].direction == "regressed"
+        assert metrics["recall_at_k"].delta == pytest.approx(-0.1)
+        assert metrics["p95_latency"].lower_is_better is True
+        assert metrics["p95_latency"].direction == "improved"
+        assert metrics["p95_latency"].delta == pytest.approx(-100.0)
+        assert metrics["no_context_rate"].direction == "regressed"
+        assert metrics["mrr"].direction == "unchanged"
+        assert comparison.summary.improved_metric_count == 1
+        assert comparison.summary.regressed_metric_count == 2
+        assert comparison.summary.unchanged_metric_count == 1
+
+        cases = {case.case_id: case for case in comparison.cases}
+        assert cases["shared_pass"].transition == "regressed"
+        assert cases["shared_fail"].transition == "improved"
+        assert cases["base_only"].transition == "removed"
+        assert cases["candidate_only"].transition == "added"
+        assert cases["shared_pass"].metric_deltas["recall_at_k"] == pytest.approx(-0.1)
+        assert cases["shared_pass"].metric_deltas["p95_latency"] == pytest.approx(-100.0)
+        assert comparison.summary.common_case_count == 2
+        assert comparison.summary.base_only_case_count == 1
+        assert comparison.summary.candidate_only_case_count == 1
+        assert comparison.summary.regressed_case_count == 1
+        assert comparison.summary.improved_case_count == 1
+        serialized = comparison.model_dump_json().lower()
+        assert "raw question" not in serialized
+        assert "raw answer" not in serialized
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_identical_run_is_unchanged() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            run = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_same",
+                items=[
+                    _comparison_item("same_a", "succeeded"),
+                    _comparison_item("same_b", "failed"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.5"),
+                    "p95_latency": Decimal("120.0"),
+                },
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=run.evaluation_run_id,
+                candidate_run_id=run.evaluation_run_id,
+            )
+
+        assert {metric.direction for metric in comparison.metrics} == {"unchanged"}
+        assert {case.transition for case in comparison.cases} == {"unchanged"}
+        assert comparison.summary.common_case_count == 2
+        assert comparison.summary.base_only_case_count == 0
+        assert comparison.summary.candidate_only_case_count == 0
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_missing_run_raises_not_found() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            run = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_missing",
+                items=[_comparison_item("existing", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.5")},
+            )
+            db.commit()
+
+            with pytest.raises(ResourceNotFound):
+                EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                    db,
+                    base_run_id=run.evaluation_run_id,
+                    candidate_run_id=999999,
+                )
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_endpoint_returns_safe_payload(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert user is not None
+        base = _seed_comparison_run(
+            db,
+            created_by=user.user_id,
+            dataset_name="comparison_api_base",
+            items=[_comparison_item("api_case", "succeeded")],
+            metrics={"recall_at_k": Decimal("0.8"), "p95_latency": Decimal("200.0")},
+        )
+        candidate = _seed_comparison_run(
+            db,
+            created_by=user.user_id,
+            dataset_name="comparison_api_candidate",
+            items=[_comparison_item("api_case", "failed")],
+            metrics={"recall_at_k": Decimal("0.7"), "p95_latency": Decimal("100.0")},
+        )
+        db.commit()
+        base_id = base.evaluation_run_id
+        candidate_id = candidate.evaluation_run_id
+
+    _login_as(client, "admin@example.com")
+    response = client.get(
+        f"/api/v1/evaluations/runs/compare?base={base_id}&candidate={candidate_id}",
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["base_run"]["evaluation_run_id"] == base_id
+    assert payload["candidate_run"]["evaluation_run_id"] == candidate_id
+    assert payload["metrics"][0]["metric_name"] in {"p95_latency", "recall_at_k"}
+    serialized = json.dumps(payload).lower()
+    assert "raw question" not in serialized
+    assert "raw answer" not in serialized
+    assert "secret" not in serialized
+
+    missing = client.get(
+        f"/api/v1/evaluations/runs/compare?base={base_id}&candidate=999999",
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing.status_code == 404
 
 
 def test_evaluation_service_runs_persistent_dataset_cases() -> None:
@@ -3807,6 +3989,109 @@ def _create_fake_retrieval_run(
         strategy_type=strategy_type,
     )
     db.add(run)
+    db.flush()
+    return run
+
+
+def _comparison_item(case_id: str, status: str) -> dict[str, str]:
+    return {"case_id": case_id, "status": status}
+
+
+def _seed_comparison_run(
+    db: Session,
+    *,
+    created_by: int,
+    dataset_name: str,
+    items: Sequence[dict[str, str]],
+    metrics: dict[str, Decimal],
+) -> EvaluationRun:
+    now = datetime.now(UTC)
+    metric_names = list(metrics)
+    run = EvaluationRun(
+        created_by=created_by,
+        status="succeeded",
+        target_type="fixture_dataset",
+        evaluation_dataset_id=None,
+        strategy_type="dense",
+        trigger_type="manual",
+        metrics_config={
+            "dataset_name": dataset_name,
+            "evaluation_dataset_id": None,
+            "case_limit": len(items),
+            "strategy_type": "dense",
+            "strategies": ["dense"],
+            "trigger_type": "manual",
+            "metrics": metric_names,
+            "top_k": None,
+            "rerank_top_n": None,
+        },
+        started_at=now,
+        finished_at=now,
+    )
+    db.add(run)
+    db.flush()
+    target = {
+        "schema_version": "phase3.evaluation_target.v1",
+        "comparison_label": "dense",
+        "retrieval_strategy": "dense",
+        "cache_mode": "default",
+    }
+    for item_spec in items:
+        case_id = item_spec["case_id"]
+        status = item_spec["status"]
+        question_hash = hashlib.sha256(f"{case_id}:question".encode()).hexdigest()
+        case_snapshot_hash = hashlib.sha256(f"{case_id}:snapshot".encode()).hexdigest()
+        item = EvaluationRunItem(
+            evaluation_run_id=run.evaluation_run_id,
+            status=status,
+            strategy_type="dense",
+            case_key=case_id,
+            error_code="comparison_failed" if status == "failed" else None,
+            metric_summary_json={
+                "schema_version": "phase2.evaluation.v1",
+                "case_snapshot": {
+                    "question_hash": question_hash,
+                    "case_snapshot_hash": case_snapshot_hash,
+                },
+                "evaluation_target": target,
+                "metrics": {
+                    name: float(value) for name, value in metrics.items() if name != "p95_latency"
+                },
+            },
+        )
+        db.add(item)
+        db.flush()
+        details = {
+            "case_id": case_id,
+            "question_hash": question_hash,
+            "case_snapshot_hash": case_snapshot_hash,
+            "evaluation_target": target,
+        }
+        db.add(
+            EvaluationResult(
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                metric_name="case_metadata",
+                metric_score=None,
+                metric_value=None,
+                metric_label=case_id,
+                details_json=details,
+                metric_detail_json=details,
+                strategy_type="dense",
+            )
+        )
+        for metric_name, value in metrics.items():
+            db.add(
+                EvaluationResult(
+                    evaluation_run_item_id=item.evaluation_run_item_id,
+                    metric_name=metric_name,
+                    metric_score=None if metric_name == "p95_latency" else value,
+                    metric_value=value,
+                    metric_label=None,
+                    details_json={"evaluation_target": target},
+                    metric_detail_json={"evaluation_target": target},
+                    strategy_type="dense",
+                )
+            )
     db.flush()
     return run
 
