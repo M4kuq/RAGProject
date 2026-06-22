@@ -3162,9 +3162,9 @@ def _case_comparison_sources(
         ) or _safe_hash_value(_item_case_snapshot(item).get("case_snapshot_hash"))
         case_id = (
             _safe_case_identifier(details.get("case_id"))
+            or _safe_case_identifier(item.case_key)
             or question_hash
             or case_snapshot_hash
-            or _safe_case_identifier(item.case_key)
             or (
                 f"evaluation_case:{item.evaluation_case_id}"
                 if item.evaluation_case_id is not None

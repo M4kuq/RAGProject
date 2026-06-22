@@ -1148,6 +1148,56 @@ def test_compare_runs_identical_run_is_unchanged() -> None:
         engine.dispose()
 
 
+def test_compare_runs_prefers_safe_case_key_when_metadata_is_missing() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_base_no_metadata",
+                items=[
+                    _comparison_item(
+                        "readable_case_key",
+                        "succeeded",
+                        include_case_metadata=False,
+                    )
+                ],
+                metrics={"recall_at_k": Decimal("1.0")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_candidate_no_metadata",
+                items=[
+                    _comparison_item(
+                        "readable_case_key",
+                        "failed",
+                        include_case_metadata=False,
+                    )
+                ],
+                metrics={"recall_at_k": Decimal("0.5")},
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert len(comparison.cases) == 1
+        case = comparison.cases[0]
+        assert case.case_id == "readable_case_key"
+        assert case.question_hash is not None
+        assert case.case_snapshot_hash is not None
+        assert case.transition == "regressed"
+        assert comparison.summary.common_case_count == 1
+    finally:
+        engine.dispose()
+
+
 def test_compare_runs_missing_run_raises_not_found() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -3993,8 +4043,17 @@ def _create_fake_retrieval_run(
     return run
 
 
-def _comparison_item(case_id: str, status: str) -> dict[str, str]:
-    return {"case_id": case_id, "status": status}
+def _comparison_item(
+    case_id: str,
+    status: str,
+    *,
+    include_case_metadata: bool = True,
+) -> dict[str, object]:
+    return {
+        "case_id": case_id,
+        "status": status,
+        "include_case_metadata": include_case_metadata,
+    }
 
 
 def _seed_comparison_run(
@@ -4002,7 +4061,7 @@ def _seed_comparison_run(
     *,
     created_by: int,
     dataset_name: str,
-    items: Sequence[dict[str, str]],
+    items: Sequence[dict[str, object]],
     metrics: dict[str, Decimal],
 ) -> EvaluationRun:
     now = datetime.now(UTC)
@@ -4037,8 +4096,9 @@ def _seed_comparison_run(
         "cache_mode": "default",
     }
     for item_spec in items:
-        case_id = item_spec["case_id"]
-        status = item_spec["status"]
+        case_id = str(item_spec["case_id"])
+        status = str(item_spec["status"])
+        include_case_metadata = bool(item_spec.get("include_case_metadata", True))
         question_hash = hashlib.sha256(f"{case_id}:question".encode()).hexdigest()
         case_snapshot_hash = hashlib.sha256(f"{case_id}:snapshot".encode()).hexdigest()
         item = EvaluationRunItem(
@@ -4067,18 +4127,19 @@ def _seed_comparison_run(
             "case_snapshot_hash": case_snapshot_hash,
             "evaluation_target": target,
         }
-        db.add(
-            EvaluationResult(
-                evaluation_run_item_id=item.evaluation_run_item_id,
-                metric_name="case_metadata",
-                metric_score=None,
-                metric_value=None,
-                metric_label=case_id,
-                details_json=details,
-                metric_detail_json=details,
-                strategy_type="dense",
+        if include_case_metadata:
+            db.add(
+                EvaluationResult(
+                    evaluation_run_item_id=item.evaluation_run_item_id,
+                    metric_name="case_metadata",
+                    metric_score=None,
+                    metric_value=None,
+                    metric_label=case_id,
+                    details_json=details,
+                    metric_detail_json=details,
+                    strategy_type="dense",
+                )
             )
-        )
         for metric_name, value in metrics.items():
             db.add(
                 EvaluationResult(
