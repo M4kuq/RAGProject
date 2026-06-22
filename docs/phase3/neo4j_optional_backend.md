@@ -14,8 +14,13 @@ retrieval runs, retrieval run items, and citations.
 - Neo4j projection is disabled unless `NEO4J_PROJECTION_ENABLED=true`.
 - Neo4j health checking is disabled unless `NEO4J_HEALTH_CHECK_ENABLED=true`.
 
-If Neo4j is not configured, the driver is not installed, or the server is down,
-the application still starts and PostgreSQL Graph-RAG remains usable.
+If Neo4j is not configured, the driver is not installed, the server is down, or
+projection has not been populated, the application still starts and PostgreSQL
+Graph-RAG remains usable. When graph retrieval asks for the Neo4j provider and
+PostgreSQL graph sources can answer the query, the strategy falls back to
+PostgreSQL graph, records `neo4j_to_postgres_fallback`, and keeps the Neo4j
+setup reason codes in `fallback_reason_codes` and the persisted retrieval score
+summary field `graph_fallback_reason_codes`.
 
 ## Local Setup
 
@@ -79,6 +84,21 @@ runs because the default backend image installs runtime dependencies with
 Use a local-only password for development and replace it before any shared
 environment. Do not paste real Neo4j credentials into docs, logs, PR comments,
 or shell transcripts.
+
+For a single local demo command that starts the `neo4j` profile, rebuilds the
+self-docs corpus, builds PostgreSQL graph indexes, projects to Neo4j, and runs
+`graph_postgres` vs `graph_neo4j` comparison, use:
+
+```powershell
+scripts\neo4j_demo.ps1
+```
+
+```sh
+sh scripts/neo4j_demo.sh
+```
+
+The detailed corpus manifest and provider comparison runbook are in
+[`docs/demo/corpus_neo4j_demo.md`](../demo/corpus_neo4j_demo.md).
 
 ## Projection
 

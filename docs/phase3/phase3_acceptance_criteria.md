@@ -27,7 +27,7 @@ uses the implemented GraphRAG scope as the portfolio-demo completion boundary.
 | PostgreSQL source of truth is explicit | Required | Architecture docs explain that Neo4j is a rebuildable read model/projection only. |
 | Graph index queue helper is safe | Required | Helper queues active ready document versions and prints IDs/counts only. |
 | Cache behavior is explained | Required | PR-52 cache docs and final README explain query hashes, graph fingerprint, graph store provider split, disabled default, and payload exclusions. |
-| Evaluation behavior is explained | Required | PR-53 evaluation docs and final README explain dense/hybrid/agentic_router/graph_postgres/graph_neo4j targets and optional Neo4j not-applicable handling. |
+| Evaluation behavior is explained | Required | PR-53 evaluation docs and final README explain dense/hybrid/agentic_router/graph_postgres/graph_neo4j targets, optional Neo4j projection, visible Postgres graph fallback, and safe reason-code handling. |
 | Debug/citation behavior is explained | Required | Graph citation/debug docs explain source chunk-backed citations and admin-safe graph trace fields. |
 | Dense/hybrid/graph guidance exists | Required | Final README explains when to use each implemented strategy and states `graph_hybrid` is future work. |
 | Manual test cases exist | Required | `graph_rag_manual_test_cases.md` lists reproducible checks and a minimum acceptance set. |

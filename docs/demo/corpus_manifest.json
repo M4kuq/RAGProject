@@ -1,0 +1,267 @@
+{
+  "schema_version": "ragproject.demo_corpus.v1",
+  "corpus_key": "ragproject_self_docs_technical",
+  "description": "Reproducible technical demo corpus built from this repository's own documentation. No external documents or generated raw chunks are stored here.",
+  "allowed_extensions": [
+    ".md",
+    ".markdown",
+    ".txt"
+  ],
+  "license_policy": {
+    "primary_content": "repository_self_docs",
+    "external_content_policy": "Do not add third-party documents unless they are authored for this repo, explicitly permitted, or under a compatible open license.",
+    "raw_data_policy": "Commit only this manifest and runbooks. Do not commit uploaded files, extracted text dumps, chunks, Qdrant data, Neo4j data, logs, or .env values."
+  },
+  "extension_template": {
+    "title": "Short safe display title",
+    "source_path": "docs/demo/your-technical-doc.md",
+    "metadata": {
+      "domain": "technical",
+      "content_kind": "self_doc_or_permitted_doc",
+      "license": "repo-owned-or-compatible-open-license",
+      "safe_to_commit": true
+    }
+  },
+  "entries": [
+    {
+      "title": "RAGProject README",
+      "source_path": "README.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Phase3 README",
+      "source_path": "docs/phase3/README.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "GraphRAG Final README",
+      "source_path": "docs/phase3/graph_rag_final_readme.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "GraphRAG Architecture",
+      "source_path": "docs/phase3/graph_rag_architecture.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Graph Retrieval Strategy",
+      "source_path": "docs/phase3/graph_retrieval_strategy.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Graph Indexing Design",
+      "source_path": "docs/phase3/graph_indexing_design.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Graph Evaluation Design",
+      "source_path": "docs/phase3/graph_evaluation_design.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Neo4j Optional Backend",
+      "source_path": "docs/phase3/neo4j_optional_backend.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Graph Citation Design",
+      "source_path": "docs/phase3/graph_citation_design.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Graph Debug UI Design",
+      "source_path": "docs/phase3/graph_debug_ui_design.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "GraphRAG Demo Scenario",
+      "source_path": "docs/phase3/graph_rag_demo_scenario.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "GraphRAG Known Limitations",
+      "source_path": "docs/phase3/graph_rag_known_limitations.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "GraphRAG Security Redaction Policy",
+      "source_path": "docs/phase3/security_redaction_policy.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Phase2 README",
+      "source_path": "docs/phase2/README.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Hybrid Retrieval",
+      "source_path": "docs/phase2/hybrid_retrieval.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Agentic Strategy Evaluation",
+      "source_path": "docs/phase2/agentic_strategy_evaluation.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Retrieval Trace Foundation",
+      "source_path": "docs/phase2/retrieval_trace_foundation.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "MCP Advanced RAG Tools",
+      "source_path": "docs/phase2/mcp_advanced_rag_tools.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Database DDL",
+      "source_path": "docs/DDL.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "API Design",
+      "source_path": "docs/API設計書.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "OpenAPI Contract Design",
+      "source_path": "docs/OpenAPI 3.1 契約設計書.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Basic Design",
+      "source_path": "docs/基本設計書.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Pipeline Detail Design",
+      "source_path": "docs/パイプライン詳細設計書.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    },
+    {
+      "title": "Test Design",
+      "source_path": "docs/テスト設計書.md",
+      "metadata": {
+        "domain": "technical",
+        "content_kind": "self_doc",
+        "license": "repo-owned",
+        "safe_to_commit": true
+      }
+    }
+  ]
+}

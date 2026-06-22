@@ -46,6 +46,7 @@ from app.evaluation.metrics import (
     calculate_metrics,
 )
 from app.evaluation.rag_service import (
+    RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES,
     DatabaseVectorSearchClient,
     EvaluationRagQuestionService,
     RagEvaluationResult,
@@ -1793,6 +1794,10 @@ def test_evaluation_service_preserves_retrieval_only_runner_for_default_search_t
         engine.dispose()
 
 
+def test_graph_evaluation_targets_use_retrieval_only_runner() -> None:
+    assert RetrievalStrategy.GRAPH in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES
+
+
 def test_evaluation_runner_honors_metric_selection_and_bounds_request_ids() -> None:
     engine, session_factory = _session_factory()
     long_case_key = "case_" + ("x" * 115)
@@ -2531,6 +2536,77 @@ def test_agentic_router_evaluation_uses_graph_service_search() -> None:
         assert run is not None
         assert run.status == "failed"
         assert run.error_code == "no_context_found"
+    finally:
+        engine.dispose()
+
+
+def test_graph_evaluation_uses_graph_service_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine, session_factory = _session_factory()
+
+    class _RecordingGraphSearchService:
+        def __init__(self) -> None:
+            self.strategies: list[str] = []
+
+        def search(
+            self,
+            db: Session,
+            *,
+            payload: Any,
+            request_id: str | None,
+        ) -> RagSearchResponse:
+            query = str(payload.query)
+            strategy_value = str(payload.strategy.value)
+            self.strategies.append(strategy_value)
+            run = _create_fake_retrieval_run(
+                db,
+                question=query,
+                status="succeeded",
+                request_id=request_id,
+                strategy_type=strategy_value,
+            )
+            db.commit()
+            db.refresh(run)
+            return RagSearchResponse(
+                retrieval_run_id=run.retrieval_run_id,
+                status="succeeded",
+                retrieval_score_summary=RetrievalScoreSummary(
+                    requested_top_k=5,
+                    qdrant_candidate_count=0,
+                    post_filter_candidate_count=0,
+                    selected_count=0,
+                    excluded_by_rdb_check_count=0,
+                ),
+                items=[],
+            )
+
+    try:
+        graph_service = _RecordingGraphSearchService()
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+
+        def fail_default_search(*args: Any, **kwargs: Any) -> RagSearchResponse:
+            del args, kwargs
+            raise AssertionError("graph evaluation must use GraphRagService search")
+
+        monkeypatch.setattr(service, "search", fail_default_search)
+        evaluator = EvaluationRagQuestionService(service, graph_service=cast(Any, graph_service))
+        with session_factory() as db:
+            result = evaluator.evaluate_strategy(
+                db,
+                question="graph routing",
+                request_id="test-graph-eval-routing",
+                strategy_type=RetrievalStrategy.GRAPH,
+            )
+
+        assert graph_service.strategies == [RetrievalStrategy.GRAPH.value]
+        assert result.status == "succeeded"
+        assert result.answer_text == ""
+        assert result.error_code == "no_context_found"
     finally:
         engine.dispose()
 

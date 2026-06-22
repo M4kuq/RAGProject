@@ -83,6 +83,7 @@ RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES = frozenset(
         RetrievalStrategy.DENSE,
         RetrievalStrategy.SPARSE,
         RetrievalStrategy.HYBRID,
+        RetrievalStrategy.GRAPH,
         RetrievalStrategy.AGENTIC_ROUTER,
     }
 )
@@ -402,7 +403,7 @@ class EvaluationRagQuestionService:
         try:
             search_service: RagService | GraphRagService = (
                 self.graph_service
-                if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+                if strategy_type in {RetrievalStrategy.AGENTIC_ROUTER, RetrievalStrategy.GRAPH}
                 else self.service
             )
             response = search_service.search(
@@ -946,7 +947,7 @@ class EvaluationRagQuestionService:
         try:
             search_service: RagService | GraphRagService = (
                 self.graph_service
-                if strategy_type == RetrievalStrategy.AGENTIC_ROUTER
+                if strategy_type in {RetrievalStrategy.AGENTIC_ROUTER, RetrievalStrategy.GRAPH}
                 else self.service
             )
             response = search_service.search(

@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -397,7 +397,7 @@ class GraphRetrievalResult:
         return not self.graph_candidates
 
     def summary_fields(self) -> dict[str, object]:
-        return {
+        fields: dict[str, object] = {
             "graph_schema_version": GRAPH_RETRIEVAL_SCHEMA_VERSION,
             "graph_path_schema_version": GRAPH_PATH_SCHEMA_VERSION,
             "graph_store_provider": self.provider.value,
@@ -410,6 +410,12 @@ class GraphRetrievalResult:
             "graph_elapsed_ms": self.elapsed_ms,
             "graph_fallback_used": self.fallback_used,
         }
+        fallback_reason_codes = self.score_breakdown.get("fallback_reason_codes")
+        if isinstance(fallback_reason_codes, list):
+            fields["graph_fallback_reason_codes"] = [
+                str(code) for code in fallback_reason_codes if isinstance(code, str)
+            ]
+        return fields
 
 
 class GraphStore(Protocol):
@@ -920,6 +926,12 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
             )
             if not start_entities:
+                if not self._has_projected_entities(filters):
+                    return self._unavailable_result(
+                        query,
+                        started_at,
+                        "neo4j_projection_empty",
+                    )
                 return _graph_retrieval_result(
                     provider=self.provider,
                     query=query,
@@ -989,6 +1001,30 @@ class Neo4jGraphStore:
             reason_codes=tuple(_dedupe(reason_list or ["graph_search_completed"])),
             elapsed_ms=_elapsed_ms(started_at),
         )
+
+    def _has_projected_entities(self, filters: RetrievalFilters) -> bool:
+        filter_params = _neo4j_filter_params(filters)
+        rows = self.client.execute(
+            """
+            MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)
+            WHERE chunk.modality = $modality
+              AND chunk.document_version_status = "ready"
+              AND coalesce(chunk.document_version_is_active, false) = true
+              AND chunk.logical_document_status = "active"
+              AND (
+                  size($logical_document_ids) = 0
+                  OR chunk.logical_document_id IN $logical_document_ids
+              )
+            RETURN count(DISTINCT entity) AS entity_count
+            """,
+            filter_params,
+        )
+        if not rows:
+            return False
+        try:
+            return int(str(rows[0].get("entity_count", 0))) > 0
+        except (TypeError, ValueError):
+            return False
 
     def _lookup_entities(
         self,
@@ -1525,13 +1561,35 @@ class GraphRetrievalStrategy:
     ) -> GraphRetrievalResult:
         bounded_settings = settings.bounded()
         store = self.graph_store or self.resolver.resolve(bounded_settings.provider)
-        return store.search(
+        result = store.search(
             db,
             query=query,
             top_k=top_k,
             filters=filters,
             settings=bounded_settings,
         )
+        if (
+            store.provider == GraphStoreProvider.NEO4J
+            and result.no_context
+            and _neo4j_result_allows_postgres_fallback(result)
+            and self.graph_store is None
+        ):
+            postgres_store = self.resolver.resolve(GraphStoreProvider.POSTGRES)
+            if postgres_store.provider != GraphStoreProvider.POSTGRES:
+                return result
+            postgres_result = postgres_store.search(
+                db,
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                settings=replace(bounded_settings, provider=GraphStoreProvider.POSTGRES),
+            )
+            if postgres_result.graph_candidates:
+                return _neo4j_to_postgres_fallback_result(
+                    neo4j_result=result,
+                    postgres_result=postgres_result,
+                )
+        return result
 
     def path_records(
         self,
@@ -1658,6 +1716,53 @@ def _graph_retrieval_result(
         reason_codes=reason_codes,
         elapsed_ms=elapsed_ms,
     )
+
+
+def _neo4j_to_postgres_fallback_result(
+    *,
+    neo4j_result: GraphRetrievalResult,
+    postgres_result: GraphRetrievalResult,
+) -> GraphRetrievalResult:
+    elapsed_ms = neo4j_result.elapsed_ms + postgres_result.elapsed_ms
+    reason_codes = tuple(
+        _dedupe(
+            [
+                "neo4j_to_postgres_fallback",
+                *postgres_result.reason_codes,
+            ]
+        )
+    )
+    score_breakdown = validate_safe_graph_metadata(
+        {
+            **postgres_result.score_breakdown,
+            "fallback_from_provider": GraphStoreProvider.NEO4J.value,
+            "fallback_to_provider": GraphStoreProvider.POSTGRES.value,
+            "fallback_reason_codes": list(neo4j_result.reason_codes),
+        }
+    )
+    return replace(
+        postgres_result,
+        score_breakdown=score_breakdown,
+        latency_ms=elapsed_ms,
+        fallback_used=True,
+        metadata=replace(
+            postgres_result.metadata,
+            reason_codes=reason_codes,
+            elapsed_ms=elapsed_ms,
+        ),
+        reason_codes=reason_codes,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _neo4j_result_allows_postgres_fallback(result: GraphRetrievalResult) -> bool:
+    setup_reason_codes = {
+        "neo4j_not_configured",
+        "neo4j_driver_unavailable",
+        "neo4j_connection_failed",
+        "neo4j_projection_empty",
+    }
+    return any(reason_code in setup_reason_codes for reason_code in result.reason_codes)
 
 
 def _source_candidates(

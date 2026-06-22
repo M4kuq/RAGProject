@@ -197,8 +197,10 @@ Expected result:
    back to dense or hybrid depending on settings.
 
 9. Open Admin Evaluations. Select or import `phase3_graph_multi_hop` if needed.
-   Run a small comparison with `dense`, `hybrid`, `agentic_router`, and
-   `graph_postgres`. Add `graph_neo4j` only if Neo4j is configured.
+   Run a small comparison with `dense`, `hybrid`, `agentic_router`,
+   `graph_postgres`, and `graph_neo4j` after starting the optional Neo4j demo
+   profile. If Neo4j is unavailable or unprojected, the graph reason codes show
+   whether PostgreSQL graph fallback was used.
 
 10. Open the evaluation detail. Show graph path relevance, graph citation
     coverage, multi-hop answerability, cache metrics, provider comparison, and

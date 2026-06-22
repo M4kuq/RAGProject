@@ -246,8 +246,11 @@ Graph metrics are safe summaries:
 - `cache_saved_latency`
 - `entity_relation_quality_summary`
 
-When Neo4j is not configured, `graph_neo4j` records a safe not-applicable reason
-instead of failing the full evaluation.
+When Neo4j is not configured, unavailable, or unprojected, `graph_neo4j` uses
+PostgreSQL graph as a visible fallback when PostgreSQL graph sources can answer
+and records `neo4j_to_postgres_fallback`. If neither graph provider has usable
+sources, the run records safe reason codes instead of failing the full
+evaluation.
 
 ## Verification
 
@@ -300,9 +303,10 @@ runs. Explicit graph does not silently fall back.
 If router does not select graph, confirm both `GRAPH_RETRIEVAL_ENABLED=true` and
 `GRAPH_ROUTER_ENABLED=true`, then use a relation or multi-hop synthetic query.
 
-If Neo4j comparison is unavailable, confirm the `neo4j` profile is running,
-the backend image was built with `BACKEND_UV_EXTRA_ARGS="--extra neo4j"`, and
-projection is enabled. PostgreSQL GraphRAG is still valid when Neo4j is absent.
+If Neo4j comparison falls back or is unavailable, confirm the `neo4j` profile is
+running, the backend image was built with `BACKEND_UV_EXTRA_ARGS="--extra
+neo4j"`, and projection is enabled. PostgreSQL GraphRAG is still valid when
+Neo4j is absent.
 
 If cache does not hit, confirm `RETRIEVAL_CACHE_ENABLED=true`, avoid
 `cache_bypass=true`, and use the same strategy/provider/settings against the
