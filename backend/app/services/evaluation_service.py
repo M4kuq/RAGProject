@@ -932,7 +932,9 @@ class EvaluationService:
             base.summary,
             candidate.summary,
             base.items,
+            base.results_by_item,
             candidate.items,
+            candidate.results_by_item,
         )
         cases = _compare_run_cases(
             base.items,
@@ -3323,21 +3325,29 @@ def _compare_generation_summaries(
     base: EvaluationRunSummary,
     candidate: EvaluationRunSummary,
     base_items: list[EvaluationRunItem],
+    base_results_by_item: dict[int, list[EvaluationResult]],
     candidate_items: list[EvaluationRunItem],
+    candidate_results_by_item: dict[int, list[EvaluationResult]],
 ) -> EvaluationGenerationComparison:
     comparable_cost_coverage = _has_matching_successful_generation_items(
         base_items,
+        base_results_by_item,
         candidate_items,
+        candidate_results_by_item,
         metadata_predicate=_has_generation_cost_metadata,
     )
     comparable_tokens_coverage = _has_matching_successful_generation_items(
         base_items,
+        base_results_by_item,
         candidate_items,
+        candidate_results_by_item,
         metadata_predicate=_has_generation_token_metadata,
     )
     comparable_latency_coverage = _has_matching_successful_generation_items(
         base_items,
+        base_results_by_item,
         candidate_items,
+        candidate_results_by_item,
         metadata_predicate=_has_generation_latency_metadata,
     )
     cost_delta = (
@@ -3385,16 +3395,20 @@ def _compare_generation_summaries(
 
 def _has_matching_successful_generation_items(
     base_items: list[EvaluationRunItem],
+    base_results_by_item: dict[int, list[EvaluationResult]],
     candidate_items: list[EvaluationRunItem],
+    candidate_results_by_item: dict[int, list[EvaluationResult]],
     *,
     metadata_predicate: Callable[[EvaluationRunItem], bool],
 ) -> bool:
     base_keys = _successful_generation_item_keys(
         base_items,
+        base_results_by_item,
         metadata_predicate=metadata_predicate,
     )
     candidate_keys = _successful_generation_item_keys(
         candidate_items,
+        candidate_results_by_item,
         metadata_predicate=metadata_predicate,
     )
     return bool(base_keys) and base_keys == candidate_keys
@@ -3402,10 +3416,11 @@ def _has_matching_successful_generation_items(
 
 def _successful_generation_item_keys(
     items: list[EvaluationRunItem],
+    results_by_item: dict[int, list[EvaluationResult]],
     *,
     metadata_predicate: Callable[[EvaluationRunItem], bool],
-) -> set[tuple[str, str]] | None:
-    keys: set[tuple[str, str]] = set()
+) -> set[tuple[str, str, str, str]] | None:
+    keys: set[tuple[str, str, str, str]] = set()
     for item in items:
         if item.strategy_type not in ASK_ONLY_EVALUATION_STRATEGY_VALUES:
             continue
@@ -3413,17 +3428,35 @@ def _successful_generation_item_keys(
             continue
         if not metadata_predicate(item):
             return None
-        keys.add(_generation_item_key(item))
+        item_key = _generation_item_key(
+            item,
+            results_by_item.get(item.evaluation_run_item_id, []),
+        )
+        if item_key is None:
+            return None
+        keys.add(item_key)
     return keys
 
 
-def _generation_item_key(item: EvaluationRunItem) -> tuple[str, str]:
-    case_key = item.case_key or (
-        f"id:{item.evaluation_case_id}"
-        if item.evaluation_case_id is not None
-        else f"item:{item.evaluation_run_item_id}"
+def _generation_item_key(
+    item: EvaluationRunItem,
+    results: list[EvaluationResult],
+) -> tuple[str, str, str, str] | None:
+    details = _case_metadata_payload(results)
+    question_hash = _safe_hash_value(details.get("question_hash")) or _safe_hash_value(
+        _item_case_snapshot(item).get("question_hash")
     )
-    return case_key, item.strategy_type
+    case_snapshot_hash = _safe_hash_value(details.get("case_snapshot_hash")) or _safe_hash_value(
+        _item_case_snapshot(item).get("case_snapshot_hash")
+    )
+    if question_hash is None or case_snapshot_hash is None:
+        return None
+    case_key = (
+        _safe_case_identifier(details.get("case_id"))
+        or _safe_case_identifier(item.case_key)
+        or (f"id:{item.evaluation_case_id}" if item.evaluation_case_id is not None else "snapshot")
+    )
+    return case_key, item.strategy_type, question_hash, case_snapshot_hash
 
 
 def _has_generation_cost_metadata(item: EvaluationRunItem) -> bool:

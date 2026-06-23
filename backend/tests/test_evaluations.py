@@ -1587,6 +1587,80 @@ def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
         engine.dispose()
 
 
+def test_compare_runs_generation_deltas_require_matching_snapshot_hashes() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_snapshot_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_snapshot_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+            db.commit()
+
+            matching = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+            _replace_case_hashes_for_item(
+                db,
+                candidate_items[0],
+                question_hash="c" * 64,
+                case_snapshot_hash="d" * 64,
+            )
+            db.commit()
+
+            mismatched = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert matching.generation.cost_delta == pytest.approx(-0.1)
+        assert matching.generation.tokens_delta == -300
+        assert matching.generation.latency_delta == pytest.approx(-75.0)
+        assert mismatched.generation.cost_delta is None
+        assert mismatched.generation.cost_direction == "not_applicable"
+        assert mismatched.generation.tokens_delta is None
+        assert mismatched.generation.tokens_direction == "not_applicable"
+        assert mismatched.generation.latency_delta is None
+        assert mismatched.generation.latency_direction == "not_applicable"
+    finally:
+        engine.dispose()
+
+
 def test_compare_runs_generation_deltas_are_not_applicable_when_successful_items_differ() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -4955,6 +5029,37 @@ def _set_generation_for_run(
         item.estimated_cost_usd = cost
         item.generation_latency_ms = latency_ms
     return list(items)
+
+
+def _replace_case_hashes_for_item(
+    db: Session,
+    item: EvaluationRunItem,
+    *,
+    question_hash: str,
+    case_snapshot_hash: str,
+) -> None:
+    summary = dict(item.metric_summary_json) if isinstance(item.metric_summary_json, dict) else {}
+    raw_snapshot = summary.get("case_snapshot")
+    snapshot = dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
+    snapshot["question_hash"] = question_hash
+    snapshot["case_snapshot_hash"] = case_snapshot_hash
+    summary["case_snapshot"] = snapshot
+    item.metric_summary_json = summary
+
+    results = db.scalars(
+        select(EvaluationResult).where(
+            EvaluationResult.evaluation_run_item_id == item.evaluation_run_item_id
+        )
+    ).all()
+    for result in results:
+        if result.metric_name != "case_metadata":
+            continue
+        for attribute in ("details_json", "metric_detail_json"):
+            raw_payload = getattr(result, attribute)
+            payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+            payload["question_hash"] = question_hash
+            payload["case_snapshot_hash"] = case_snapshot_hash
+            setattr(result, attribute, payload)
 
 
 def _session_factory() -> tuple[Any, sessionmaker[Session]]:
