@@ -1947,9 +1947,11 @@ test("document detail renders version compare summary and bounded previews", asy
   expect(screen.getByText("版ごとのメタデータと短い出典プレビューだけを比較します。本文全体は表示しません。")).toBeInTheDocument();
   expect(await screen.findByText("比較する版を選び、「比較する」を押すと差分を読み込みます。")).toBeInTheDocument();
   expect(compareRequests).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "比較する" }));
+  const compareButton = screen.getByRole("button", { name: "比較する" });
+  await waitFor(() => expect(compareButton).not.toBeDisabled());
+  fireEvent.click(compareButton);
+  await waitFor(() => expect(compareRequests).toHaveLength(1));
   expect(await screen.findByText("New bounded preview")).toBeInTheDocument();
-  expect(compareRequests).toHaveLength(1);
   expect(screen.getByText("file_name")).toBeInTheDocument();
   expect(screen.getByText("Guide > Setup")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent("raw chunk text");
