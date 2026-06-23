@@ -95,8 +95,16 @@ class GenerationRequest:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+
+@dataclass(frozen=True)
 class GenerationResult:
     content: str
+    usage: TokenUsage | None = None
 
 
 class AnswerGenerator(Protocol):
@@ -115,7 +123,11 @@ class FakeAnswerGenerator:
             "the user message. "
             f"Sources considered: {labels}."
         )
-        return GenerationResult(content=_truncate_output(content, request.max_output_chars))
+        final_content = _truncate_output(content, request.max_output_chars)
+        return GenerationResult(
+            content=final_content,
+            usage=_synthetic_usage(request, final_content),
+        )
 
 
 class OllamaAnswerGenerator:
@@ -147,6 +159,7 @@ class OllamaAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            usage=_extract_ollama_usage(payload),
         )
 
 
@@ -198,6 +211,7 @@ class OpenAIResponsesAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            usage=_extract_openai_responses_usage(payload),
         )
 
 
@@ -261,7 +275,8 @@ class OpenAICompatibleChatAnswerGenerator:
             content=_truncate_output(
                 final_content,
                 request.max_output_chars,
-            )
+            ),
+            usage=_extract_chat_completion_usage(payload),
         )
 
 
@@ -315,6 +330,7 @@ class AnthropicMessagesAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            usage=_extract_anthropic_usage(payload),
         )
 
 
@@ -374,6 +390,7 @@ class GeminiAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            usage=_extract_gemini_usage(payload),
         )
 
 
@@ -566,6 +583,110 @@ def _extract_gemini_output_text(payload: dict[str, Any]) -> str:
                 if isinstance(text, str) and text.strip():
                     parts.append(text.strip())
     return "\n".join(parts).strip()
+
+
+def _extract_openai_responses_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _usage_from_values(
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        derive_total=False,
+    )
+
+
+def _extract_chat_completion_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _usage_from_values(
+        input_tokens=usage.get("prompt_tokens"),
+        output_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        derive_total=False,
+    )
+
+
+def _extract_anthropic_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _usage_from_values(
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=None,
+        derive_total=True,
+    )
+
+
+def _extract_gemini_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    usage = payload.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return None
+    return _usage_from_values(
+        input_tokens=usage.get("promptTokenCount"),
+        output_tokens=usage.get("candidatesTokenCount"),
+        total_tokens=usage.get("totalTokenCount"),
+        derive_total=False,
+    )
+
+
+def _extract_ollama_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    return _usage_from_values(
+        input_tokens=payload.get("prompt_eval_count"),
+        output_tokens=payload.get("eval_count"),
+        total_tokens=None,
+        derive_total=True,
+    )
+
+
+def _usage_from_values(
+    *,
+    input_tokens: object,
+    output_tokens: object,
+    total_tokens: object,
+    derive_total: bool,
+) -> TokenUsage | None:
+    input_count = _non_negative_int(input_tokens)
+    output_count = _non_negative_int(output_tokens)
+    total_count = _non_negative_int(total_tokens)
+    if input_count is None or output_count is None:
+        return None
+    if total_count is None and derive_total:
+        total_count = input_count + output_count
+    if total_count is None:
+        return None
+    return TokenUsage(
+        input_tokens=input_count,
+        output_tokens=output_count,
+        total_tokens=total_count,
+    )
+
+
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _synthetic_usage(request: GenerationRequest, content: str) -> TokenUsage:
+    input_tokens = _estimate_usage_tokens(_ollama_prompt(request))
+    output_tokens = _estimate_usage_tokens(content)
+    return TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
+def _estimate_usage_tokens(value: str) -> int:
+    if not value:
+        return 0
+    return max(1, (len(value) + 3) // 4)
 
 
 def _max_output_tokens(max_output_tokens: int) -> int:

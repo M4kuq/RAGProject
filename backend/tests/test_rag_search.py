@@ -2260,7 +2260,12 @@ def test_rag_ask_viewer_and_admin_success_persists_messages_run_items_with_citat
         not in data["assistant_message"]["content"]
     )
     assert len(data["citations"][0]["snippet"]) <= 240
-    assert "token" not in str(body).lower()
+    assert data["generation"]["provider"] == "fake"
+    assert data["generation"]["input_tokens"] > 0
+    generation_dump = str(data["generation"])
+    assert "alpha policy summary" not in generation_dump
+    assert "full active chunk text should not be returned whole" not in generation_dump
+    assert "raw_prompt" not in generation_dump
     assert "storage_key" not in str(body).lower()
     assert len(vector_client.query_vectors) == 1
 

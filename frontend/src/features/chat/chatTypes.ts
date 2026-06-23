@@ -72,6 +72,16 @@ export type RagAskRetrievalSummary = {
   no_context: boolean | null;
 };
 
+export type RagAskGeneration = {
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  latency_ms: number | null;
+};
+
 export type RagAskRequest = {
   chat_session_id: number;
   client_message_id: string;
@@ -90,6 +100,7 @@ export type RagAskResponse = {
   confidence: RagAskConfidence | null;
   retrieval_summary: RagAskRetrievalSummary;
   retrieval_run_id: number;
+  generation?: RagAskGeneration | null;
 };
 
 export type RagAskResult = {

@@ -4,6 +4,7 @@ import hashlib
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -73,6 +74,8 @@ from app.rag.generation import (
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
+    GenerationResult,
+    _lmstudio_model_name,
     create_answer_generator,
 )
 from app.rag.hybrid import HybridRetrievalStrategy
@@ -92,6 +95,7 @@ from app.rag.llm_orchestrator import (
     LLMToolCallingRetrievalOrchestrator,
     LLMToolOrchestratorExecutionResult,
 )
+from app.rag.pricing import estimate_cost_usd
 from app.rag.query_planner import QueryPlanBuilder
 from app.rag.rerank import (
     RerankCandidate,
@@ -157,6 +161,7 @@ from app.schemas.rag import (
     RagAskAssistantMessage,
     RagAskCitation,
     RagAskConfidence,
+    RagAskGeneration,
     RagAskRequest,
     RagAskResponse,
     RagAskRetrievalSummary,
@@ -177,6 +182,9 @@ SCORE_QUANT = Decimal("0.000001")
 SENSITIVE_OUTPUT_RE = re.compile(
     r"(?i)\b(api[_-]?key|secret|password|token)\b\s*[:=]\s*\S{8,}"
     r"|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
+)
+GENERATION_LABEL_SECRET_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|password|token|credential|bearer|sk-[A-Za-z0-9_-]{8,})"
 )
 CITATION_MARKER_RE = re.compile(r"\[(\d{1,6})\]")
 MODEL_KEY_SEPARATOR = ":"
@@ -220,6 +228,12 @@ class ContextCandidateRef:
     rerank_score: float | None
     rerank_order: int | None
     citation_candidate: bool
+
+
+@dataclass(frozen=True)
+class GenerationSelection:
+    provider: str
+    model_name: str
 
 
 class RagService:
@@ -555,7 +569,8 @@ class RagService:
         )
         if existing is not None:
             return self._classify_duplicate(db, payload=payload, existing=existing)
-        answer_generator = self._answer_generator_for_request(payload)
+        generation_selection = self._generation_selection_for_request(payload)
+        answer_generator = self._answer_generator_for_selection(generation_selection)
 
         top_k = self._effective_ask_top_k(payload.top_k)
         rerank_top_n = self._effective_ask_rerank_top_n(payload.rerank_top_n)
@@ -864,6 +879,7 @@ class RagService:
                     result.summary,
                     prompt_context_refs,
                 )
+            generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
                 generation = answer_generator.generate(
                     GenerationRequest(
@@ -872,6 +888,11 @@ class RagService:
                         max_output_chars=self.settings.generation_max_output_chars,
                     )
                 )
+            generation_metadata = self._generation_metadata(
+                selection=generation_selection,
+                generation=generation,
+                latency_ms=_elapsed_ms(generation_started),
+            )
             with latency_tracker.span("citation_build_ms"):
                 parsed_generation, cited_sources = _validated_generation_or_fallback(
                     generation.content,
@@ -945,6 +966,7 @@ class RagService:
                 run=run,
                 retrieval_run_id=run_id,
                 replayed=False,
+                generation=generation_metadata,
             )
         except InsufficientEvidenceAnswerError:
             self._mark_failed_safely(
@@ -2746,9 +2768,16 @@ class RagService:
         except Exception:
             return
 
-    def _answer_generator_for_request(self, payload: RagAskRequest) -> AnswerGenerator:
+    def _generation_selection_for_request(self, payload: RagAskRequest) -> GenerationSelection:
         if payload.model_key is None:
-            return self.answer_generator
+            provider = self.settings.generation_provider.lower()
+            return GenerationSelection(
+                provider=provider,
+                model_name=_resolved_generation_model_name(
+                    provider,
+                    self.settings.generation_model_name,
+                ),
+            )
         provider, separator, model_name = payload.model_key.partition(MODEL_KEY_SEPARATOR)
         provider = provider.lower()
         model_name = model_name.strip()
@@ -2761,15 +2790,62 @@ class RagService:
         ):
             raise RagAskPipelineError("unsupported_model", 422)
         if provider == "lmstudio" and self.settings.generation_provider == "fake":
+            return GenerationSelection(
+                provider=self.settings.generation_provider.lower(),
+                model_name=_resolved_generation_model_name(
+                    self.settings.generation_provider,
+                    self.settings.generation_model_name,
+                ),
+            )
+        return GenerationSelection(
+            provider=provider,
+            model_name=_resolved_generation_model_name(provider, model_name),
+        )
+
+    def _answer_generator_for_selection(self, selection: GenerationSelection) -> AnswerGenerator:
+        default_selection = GenerationSelection(
+            provider=self.settings.generation_provider.lower(),
+            model_name=_resolved_generation_model_name(
+                self.settings.generation_provider,
+                self.settings.generation_model_name,
+            ),
+        )
+        if selection == default_selection:
             return self.answer_generator
         try:
             return create_answer_generator(
                 self.settings,
-                provider=provider,
-                model_name=model_name,
+                provider=selection.provider,
+                model_name=selection.model_name,
             )
         except AnswerGenerationError as exc:
             raise RagAskPipelineError("unsupported_model", 422) from exc
+
+    def _answer_generator_for_request(self, payload: RagAskRequest) -> AnswerGenerator:
+        return self._answer_generator_for_selection(self._generation_selection_for_request(payload))
+
+    def _generation_metadata(
+        self,
+        *,
+        selection: GenerationSelection,
+        generation: GenerationResult,
+        latency_ms: int,
+    ) -> RagAskGeneration:
+        usage = generation.usage
+        return RagAskGeneration(
+            provider=_safe_generation_label(selection.provider, max_length=100),
+            model=_safe_generation_label(selection.model_name, max_length=128),
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            total_tokens=usage.total_tokens if usage is not None else None,
+            estimated_cost_usd=estimate_cost_usd(
+                selection.provider,
+                selection.model_name,
+                usage,
+                pricing_overrides=self.settings.generation_pricing_overrides,
+            ),
+            latency_ms=latency_ms,
+        )
 
 
 def create_rag_service(settings: Settings) -> RagService:
@@ -2792,6 +2868,27 @@ def _retrieval_filters(payload: RagSearchRequest | RagAskRequest) -> RetrievalFi
         logical_document_ids=tuple(payload.filters.logical_document_ids or ()),
         modality=payload.filters.modality,
     )
+
+
+def _resolved_generation_model_name(provider: str, model_name: str) -> str:
+    normalized_provider = provider.lower()
+    if normalized_provider == "lmstudio":
+        return _lmstudio_model_name(model_name)
+    return model_name.strip()
+
+
+def _elapsed_ms(started_at: float) -> int:
+    elapsed = int(round((time.perf_counter() - started_at) * 1000))
+    return max(0, elapsed)
+
+
+def _safe_generation_label(value: str, *, max_length: int) -> str:
+    safe = TraceRedactor.safe_string(value, max_length=max_length)
+    if not safe:
+        return "unknown"
+    if GENERATION_LABEL_SECRET_RE.search(safe):
+        return "redacted"
+    return safe
 
 
 def _retrieval_execution_strategy(strategy: RetrievalStrategy) -> RetrievalStrategy:
@@ -4395,6 +4492,7 @@ def _ask_response(
     run: RetrievalRun,
     retrieval_run_id: int,
     replayed: bool,
+    generation: RagAskGeneration | None = None,
 ) -> RagAskResponse:
     return RagAskResponse(
         chat_session_id=user_message.chat_session_id,
@@ -4419,6 +4517,7 @@ def _ask_response(
         retrieval_run_id=retrieval_run_id,
         retrieval_summary=_retrieval_summary_response(run),
         replayed=replayed,
+        generation=generation,
     )
 
 

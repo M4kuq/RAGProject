@@ -4,7 +4,7 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -270,6 +270,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    generation_pricing_overrides: dict[str, Any] = Field(default_factory=dict)
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
     lmstudio_timeout_seconds: float = Field(default=180.0, gt=0)
@@ -343,6 +344,23 @@ class Settings(BaseSettings):
     def blank_string_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("generation_pricing_overrides", mode="before")
+    @classmethod
+    def parse_generation_pricing_overrides(cls, value: object) -> object:
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                logger.warning("Ignoring invalid GENERATION_PRICING_OVERRIDES JSON.")
+                return {}
+            return parsed
         return value
 
     @model_validator(mode="after")

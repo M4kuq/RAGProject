@@ -6,6 +6,7 @@ from app.rag.generation import (
     GenerationRequest,
     OllamaAnswerGenerator,
     OpenAICompatibleChatAnswerGenerator,
+    TokenUsage,
     _openai_input,
     create_answer_generator,
 )
@@ -50,7 +51,10 @@ class DummyResponse:
     status_code = 200
 
     def json(self) -> dict[str, object]:
-        return {"choices": [{"message": {"content": ANSWER_TEXT}}]}
+        return {
+            "choices": [{"message": {"content": ANSWER_TEXT}}],
+            "usage": {"prompt_tokens": 41, "completion_tokens": 17, "total_tokens": 58},
+        }
 
 
 class DraftResponse:
@@ -120,6 +124,7 @@ def test_lmstudio_generator_uses_openai_compatible_chat_api(monkeypatch) -> None
     assert "Return the final answer only." in messages[1]["content"]
     assert "十分な根拠がありません" in messages[1]["content"]
     assert result.content == "Phase1 は Qdrant をベクトル検索に使用しています [1]。"
+    assert result.usage == TokenUsage(input_tokens=41, output_tokens=17, total_tokens=58)
 
 
 def test_create_answer_generator_supports_lmstudio() -> None:
@@ -255,3 +260,101 @@ def test_lmstudio_generator_drops_incomplete_tail_after_final_answer(monkeypatch
     )
 
     assert result.content == "Phase1 は FastAPI と React を使います [1]。"
+
+
+def test_chat_completion_missing_usage_degrades_to_none(monkeypatch) -> None:
+    def fake_post(url: str, **kwargs: object) -> LegitimateWillResponse:
+        return LegitimateWillResponse()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAICompatibleChatAnswerGenerator(
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen3.5-9b",
+        timeout_seconds=180,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Explain the Phase1 stack.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    text="Phase1 uses Qdrant for retrieval.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=2000,
+        )
+    )
+
+    assert result.usage is None
+
+
+def test_ollama_generator_extracts_usage(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "response": "Ollama cites alpha [1].",
+                "prompt_eval_count": 31,
+                "eval_count": 9,
+            }
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", lambda *args, **kwargs: Response())
+    generator = OllamaAnswerGenerator(
+        url="http://ollama:11434",
+        model_name="llama3.1",
+        timeout_seconds=123,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Explain alpha.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    text="Alpha is approved.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=2000,
+        )
+    )
+
+    assert result.usage == TokenUsage(input_tokens=31, output_tokens=9, total_tokens=40)
+
+
+def test_ollama_missing_usage_degrades_to_none(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"response": "Ollama cites alpha [1]."}
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", lambda *args, **kwargs: Response())
+    generator = OllamaAnswerGenerator(
+        url="http://ollama:11434",
+        model_name="llama3.1",
+        timeout_seconds=123,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Explain alpha.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    text="Alpha is approved.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=2000,
+        )
+    )
+
+    assert result.usage is None
