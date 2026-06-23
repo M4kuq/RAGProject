@@ -26,6 +26,7 @@ DEFAULT_PRICING: Mapping[str, Mapping[str, float]] = {
     "openai:gpt-5.5": {"input_per_1m": 1.25, "output_per_1m": 10.0},
     "openai:gpt-5.4": {"input_per_1m": 1.25, "output_per_1m": 10.0},
     "anthropic:claude-sonnet-4-*": {"input_per_1m": 3.0, "output_per_1m": 15.0},
+    "gemini:gemini-2.5-flash-lite*": {"input_per_1m": 0.10, "output_per_1m": 0.40},
     "gemini:gemini-2.5-flash*": {"input_per_1m": 0.30, "output_per_1m": 2.50},
 }
 

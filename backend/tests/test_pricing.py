@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.core.config import Settings
 from app.rag.generation import TokenUsage
 from app.rag.pricing import estimate_cost_usd
@@ -42,6 +44,16 @@ def test_estimate_cost_usd_uses_pricing_override() -> None:
     assert cost == 10.0
 
 
+def test_estimate_cost_usd_uses_specific_gemini_flash_lite_rate() -> None:
+    cost = estimate_cost_usd(
+        "gemini",
+        "gemini-2.5-flash-lite",
+        TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000),
+    )
+
+    assert cost == 0.5
+
+
 def test_settings_parses_generation_pricing_overrides_json() -> None:
     settings = Settings(
         _env_file=None,
@@ -62,5 +74,15 @@ def test_settings_parses_generation_pricing_overrides_json() -> None:
 
 def test_settings_invalid_generation_pricing_overrides_degrades_to_empty() -> None:
     settings = Settings(_env_file=None, generation_pricing_overrides="{not-json")
+
+    assert settings.generation_pricing_overrides == {}
+
+
+def test_settings_empty_generation_pricing_overrides_env_degrades_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GENERATION_PRICING_OVERRIDES", "")
+
+    settings = Settings(_env_file=None)
 
     assert settings.generation_pricing_overrides == {}

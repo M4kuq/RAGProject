@@ -316,7 +316,8 @@ def test_gemini_generator_calls_generate_content_api(monkeypatch: pytest.MonkeyP
                 "usageMetadata": {
                     "promptTokenCount": 91,
                     "candidatesTokenCount": 19,
-                    "totalTokenCount": 110,
+                    "thoughtsTokenCount": 7,
+                    "totalTokenCount": 117,
                 },
             }
 
@@ -351,7 +352,7 @@ def test_gemini_generator_calls_generate_content_api(monkeypatch: pytest.MonkeyP
     assert captured["headers"]["x-goog-api-key"] == "test-gemini-key"
     assert captured["json"]["generationConfig"]["maxOutputTokens"] == 125
     assert "test-gemini-key" not in str(captured["json"])
-    assert result.usage == TokenUsage(input_tokens=91, output_tokens=19, total_tokens=110)
+    assert result.usage == TokenUsage(input_tokens=91, output_tokens=26, total_tokens=117)
 
 
 def test_gemini_missing_usage_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:

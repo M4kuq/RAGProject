@@ -625,11 +625,21 @@ def _extract_gemini_usage(payload: dict[str, Any]) -> TokenUsage | None:
     usage = payload.get("usageMetadata")
     if not isinstance(usage, dict):
         return None
-    return _usage_from_values(
-        input_tokens=usage.get("promptTokenCount"),
-        output_tokens=usage.get("candidatesTokenCount"),
-        total_tokens=usage.get("totalTokenCount"),
-        derive_total=False,
+    input_count = _non_negative_int(usage.get("promptTokenCount"))
+    candidate_count = _non_negative_int(usage.get("candidatesTokenCount"))
+    total_count = _non_negative_int(usage.get("totalTokenCount"))
+    thoughts_count = _non_negative_int(usage.get("thoughtsTokenCount", 0))
+    if (
+        input_count is None
+        or candidate_count is None
+        or total_count is None
+        or thoughts_count is None
+    ):
+        return None
+    return TokenUsage(
+        input_tokens=input_count,
+        output_tokens=candidate_count + thoughts_count,
+        total_tokens=total_count,
     )
 
 

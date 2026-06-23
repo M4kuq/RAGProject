@@ -4,10 +4,10 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +270,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
-    generation_pricing_overrides: dict[str, Any] = Field(default_factory=dict)
+    generation_pricing_overrides: Annotated[dict[str, Any], NoDecode] = Field(default_factory=dict)
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
     lmstudio_timeout_seconds: float = Field(default=180.0, gt=0)
