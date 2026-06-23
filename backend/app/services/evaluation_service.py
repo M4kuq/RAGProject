@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -89,6 +90,7 @@ from app.schemas.evaluations import (
     MetricSpec,
     StrategyComparisonMetric,
 )
+from app.services.rag_service import _safe_generation_label
 
 SCORE_QUANT = Decimal("0.000001")
 METRIC_DELTA_EPSILON = 1e-6
@@ -380,6 +382,17 @@ class EvaluationStrategyTarget:
         if self.cache_mode == EvaluationCacheMode.DEFAULT:
             return None
         return self.cache_mode.value
+
+
+@dataclass(frozen=True)
+class EvaluationGenerationSummary:
+    total_estimated_cost_usd: float | None
+    total_input_tokens: int | None
+    total_output_tokens: int | None
+    total_tokens: int | None
+    avg_generation_latency_ms: float | None
+    generation_providers: list[str]
+    generation_models: list[str]
 
 
 class EvaluationRagService(Protocol):
@@ -1424,6 +1437,39 @@ class EvaluationService:
         if not isinstance(latency_ms, int):
             raise RuntimeError("invalid_evaluation_case_result")
         status = str(case_result["status"])
+        generation_provider = (
+            _safe_optional_generation_label(
+                rag_result.generation_provider,
+                max_length=50,
+            )
+            if status == "succeeded"
+            else None
+        )
+        generation_model = (
+            _safe_optional_generation_label(
+                rag_result.generation_model,
+                max_length=128,
+            )
+            if status == "succeeded"
+            else None
+        )
+        input_tokens = (
+            _non_negative_int_or_none(rag_result.input_tokens) if status == "succeeded" else None
+        )
+        output_tokens = (
+            _non_negative_int_or_none(rag_result.output_tokens) if status == "succeeded" else None
+        )
+        total_tokens = (
+            _non_negative_int_or_none(rag_result.total_tokens) if status == "succeeded" else None
+        )
+        estimated_cost_usd = (
+            _decimal_cost_usd(rag_result.estimated_cost_usd) if status == "succeeded" else None
+        )
+        generation_latency_ms = (
+            _non_negative_int_or_none(rag_result.generation_latency_ms)
+            if status == "succeeded"
+            else None
+        )
         metric_by_name = {
             metric.metric_name: metric for metric in metrics if isinstance(metric, MetricValue)
         }
@@ -1437,6 +1483,13 @@ class EvaluationService:
             groundedness_score=_metric_decimal(metric_by_name.get("groundedness")),
             citation_coverage=_metric_decimal(metric_by_name.get("citation_coverage")),
             latency_ms=latency_ms,
+            generation_provider=generation_provider,
+            generation_model=generation_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            generation_latency_ms=generation_latency_ms,
             latency_breakdown_json=_latency_breakdown_json(latency_ms),
             metric_summary_json=metric_summary_json,
             error_code=rag_result.error_code if status == "failed" else None,
@@ -1477,6 +1530,13 @@ class EvaluationService:
             groundedness_score=_metric_decimal(_find_metric(metrics, "groundedness")),
             citation_coverage=_metric_decimal(_find_metric(metrics, "citation_coverage")),
             latency_ms=None,
+            generation_provider=None,
+            generation_model=None,
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            estimated_cost_usd=None,
+            generation_latency_ms=None,
             latency_breakdown_json=_latency_breakdown_json(None),
             metric_summary_json=_metric_summary_json(metrics, case=case, target=target),
             error_code="internal_error",
@@ -1509,6 +1569,7 @@ class EvaluationService:
         config = _config(run)
         metric_summary = _metric_summary(results_by_item)
         strategy_comparison = _strategy_comparison(items, results_by_item)
+        generation_summary = _generation_summary(items)
         job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
         planned_item_count = (
             self._planned_item_count(db, run) if run.status in {"queued", "running"} else 0
@@ -1530,6 +1591,13 @@ class EvaluationService:
             metric_summary=metric_summary,
             strategy_comparison=strategy_comparison,
             strategy_metrics_summary_json=run.strategy_metrics_summary_json,
+            total_estimated_cost_usd=generation_summary.total_estimated_cost_usd,
+            total_input_tokens=generation_summary.total_input_tokens,
+            total_output_tokens=generation_summary.total_output_tokens,
+            total_tokens=generation_summary.total_tokens,
+            avg_generation_latency_ms=generation_summary.avg_generation_latency_ms,
+            generation_providers=generation_summary.generation_providers,
+            generation_models=generation_summary.generation_models,
             error_code=run.error_code,
             error_message=redact_error_message(run.error_message) if run.error_message else None,
             started_at=run.started_at,
@@ -1576,6 +1644,19 @@ class EvaluationService:
             citation_coverage=_decimal_float(item.citation_coverage),
             context_precision=_decimal_float(context_precision),
             latency_ms=item.latency_ms,
+            generation_provider=_safe_optional_generation_label(
+                item.generation_provider,
+                max_length=50,
+            ),
+            generation_model=_safe_optional_generation_label(
+                item.generation_model,
+                max_length=128,
+            ),
+            input_tokens=item.input_tokens,
+            output_tokens=item.output_tokens,
+            total_tokens=item.total_tokens,
+            estimated_cost_usd=_decimal_float(item.estimated_cost_usd),
+            generation_latency_ms=item.generation_latency_ms,
             latency_breakdown_json=item.latency_breakdown_json,
             metric_summary_json=item.metric_summary_json,
             error_code=item.error_code,
@@ -2246,6 +2327,15 @@ def _decimal_score(value: float | None) -> Decimal | None:
     return Decimal(str(round(float(value), 6))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
 
 
+def _decimal_cost_usd(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        return None
+    return Decimal(str(round(number, 6))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
+
+
 def _decimal_metric_value(value: float | None) -> Decimal | None:
     if value is None:
         return None
@@ -2254,6 +2344,68 @@ def _decimal_metric_value(value: float | None) -> Decimal | None:
 
 def _decimal_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
+
+
+def _non_negative_int_or_none(value: int | None) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 0 else None
+
+
+def _safe_optional_generation_label(value: str | None, *, max_length: int) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return _safe_generation_label(value, max_length=max_length)
+
+
+def _generation_summary(items: list[EvaluationRunItem]) -> EvaluationGenerationSummary:
+    succeeded_items = [item for item in items if item.status == "succeeded"]
+    cost_values = [
+        item.estimated_cost_usd for item in succeeded_items if item.estimated_cost_usd is not None
+    ]
+    input_tokens = [item.input_tokens for item in succeeded_items if item.input_tokens is not None]
+    output_tokens = [
+        item.output_tokens for item in succeeded_items if item.output_tokens is not None
+    ]
+    total_tokens = [item.total_tokens for item in succeeded_items if item.total_tokens is not None]
+    generation_latencies = [
+        item.generation_latency_ms
+        for item in succeeded_items
+        if item.generation_latency_ms is not None
+    ]
+    return EvaluationGenerationSummary(
+        total_estimated_cost_usd=round(float(sum(cost_values, Decimal("0"))), 6)
+        if cost_values
+        else None,
+        total_input_tokens=sum(input_tokens) if input_tokens else None,
+        total_output_tokens=sum(output_tokens) if output_tokens else None,
+        total_tokens=sum(total_tokens) if total_tokens else None,
+        avg_generation_latency_ms=round(
+            sum(generation_latencies) / len(generation_latencies),
+            3,
+        )
+        if generation_latencies
+        else None,
+        generation_providers=_distinct_generation_labels(
+            (item.generation_provider for item in succeeded_items),
+            max_length=50,
+        ),
+        generation_models=_distinct_generation_labels(
+            (item.generation_model for item in succeeded_items),
+            max_length=128,
+        ),
+    )
+
+
+def _distinct_generation_labels(values: Iterable[str | None], *, max_length: int) -> list[str]:
+    labels = {
+        label
+        for value in values
+        if isinstance(value, str)
+        for label in [_safe_optional_generation_label(value, max_length=max_length)]
+        if label is not None
+    }
+    return sorted(labels)
 
 
 def _metric_response(result: EvaluationResult) -> EvaluationMetricResult:

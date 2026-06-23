@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Sequence
+import time
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,8 +32,10 @@ from app.rag.generation import (
     AnswerGenerationError,
     GenerationContextItem,
     GenerationRequest,
+    GenerationResult,
     create_answer_generator,
 )
+from app.rag.pricing import estimate_cost_usd
 from app.rag.rerank import RerankError, create_reranker
 from app.rag.retrieval import (
     RetrievalError,
@@ -65,7 +68,9 @@ from app.services.rag_service import (
     _optional_decimal_score,
     _prompt_citation_sources,
     _query_hash,
+    _resolved_generation_model_name,
     _retrieval_settings_snapshot,
+    _safe_generation_label,
     _selected_context_refs,
     _summary_with_final_context_refs,
     _validate_generation_output_safety,
@@ -100,6 +105,24 @@ class RagEvaluationResult:
     retrieved_items: list[RetrievedEvaluationItem]
     context_sources_for_safety: list[str]
     error_code: str | None = None
+    generation_provider: str | None = None
+    generation_model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    generation_latency_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationGenerationMetadata:
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    estimated_cost_usd: float | None
+    latency_ms: int | None
 
 
 def create_evaluation_rag_service(
@@ -120,6 +143,51 @@ class EvaluationRagQuestionService:
     def __init__(self, service: RagService, graph_service: GraphRagService | None = None) -> None:
         self.service = service
         self.graph_service = graph_service or GraphRagService(service)
+
+    def _generate_answer(
+        self,
+        request: GenerationRequest,
+    ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
+        started_at = time.perf_counter()
+        generation = self.service.answer_generator.generate(request)
+        latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
+        return generation, self._generation_metadata(generation, latency_ms=latency_ms)
+
+    def _generation_metadata(
+        self,
+        generation: GenerationResult,
+        *,
+        latency_ms: int,
+    ) -> EvaluationGenerationMetadata:
+        provider = self.service.settings.generation_provider.lower()
+        model = _resolved_generation_model_name(
+            provider,
+            self.service.settings.generation_model_name,
+        )
+        usage = generation.usage
+        estimated_cost_usd: float | None = None
+        try:
+            pricing_overrides = self.service.settings.generation_pricing_overrides
+            estimated_cost_usd = estimate_cost_usd(
+                provider,
+                model,
+                usage,
+                pricing_overrides=cast(
+                    Mapping[str, Any] | None,
+                    pricing_overrides if isinstance(pricing_overrides, Mapping) else None,
+                ),
+            )
+        except Exception:
+            estimated_cost_usd = None
+        return EvaluationGenerationMetadata(
+            provider=_safe_generation_label(provider, max_length=50),
+            model=_safe_generation_label(model, max_length=128),
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            total_tokens=usage.total_tokens if usage is not None else None,
+            estimated_cost_usd=estimated_cost_usd,
+            latency_ms=latency_ms,
+        )
 
     def evaluate_strategy_target(
         self,
@@ -257,7 +325,7 @@ class EvaluationRagQuestionService:
                 context_items=context_items,
                 citation_sources=result.citation_sources,
             )
-            generation = self.service.answer_generator.generate(
+            generation, generation_metadata = self._generate_answer(
                 GenerationRequest(
                     message=question,
                     context_items=context_items,
@@ -321,6 +389,13 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=result.summary,
                 retrieved_items=[],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             self.service._mark_failed_safely(
@@ -451,7 +526,7 @@ class EvaluationRagQuestionService:
                     "no_context_found",
                     retrieval_score_summary=response.retrieval_score_summary,
                 )
-            generation = self.service.answer_generator.generate(
+            generation, generation_metadata = self._generate_answer(
                 GenerationRequest(
                     message=question,
                     context_items=context_items,
@@ -518,6 +593,13 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=response.retrieval_score_summary,
                 retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             _mark_latest_failed_safely(
@@ -608,7 +690,7 @@ class EvaluationRagQuestionService:
                     "no_context_found",
                     retrieval_score_summary=response.retrieval_score_summary,
                 )
-            generation = self.service.answer_generator.generate(
+            generation, generation_metadata = self._generate_answer(
                 GenerationRequest(
                     message=question,
                     context_items=context_items,
@@ -675,6 +757,13 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=response.retrieval_score_summary,
                 retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             _mark_latest_failed_safely(
@@ -818,7 +907,7 @@ class EvaluationRagQuestionService:
                     prompt_context_refs,
                 )
             with latency_tracker.span("generation_ms"):
-                generation = self.service.answer_generator.generate(
+                generation, generation_metadata = self._generate_answer(
                     GenerationRequest(
                         message=question,
                         context_items=context_items,
@@ -896,6 +985,13 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             self.service._mark_failed_safely(
@@ -1096,7 +1192,7 @@ class EvaluationRagQuestionService:
                     prompt_context_refs,
                 )
             with latency_tracker.span("generation_ms"):
-                generation = self.service.answer_generator.generate(
+                generation, generation_metadata = self._generate_answer(
                     GenerationRequest(
                         message=question,
                         context_items=context_items,
@@ -1174,6 +1270,13 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             self.service._mark_failed_safely(
@@ -1334,7 +1437,7 @@ class EvaluationRagQuestionService:
                     prompt_context_refs,
                 )
             with latency_tracker.span("generation_ms"):
-                generation = self.service.answer_generator.generate(
+                generation, generation_metadata = self._generate_answer(
                     GenerationRequest(
                         message=question,
                         context_items=context_items,
@@ -1412,6 +1515,13 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                generation_provider=generation_metadata.provider,
+                generation_model=generation_metadata.model,
+                input_tokens=generation_metadata.input_tokens,
+                output_tokens=generation_metadata.output_tokens,
+                total_tokens=generation_metadata.total_tokens,
+                estimated_cost_usd=generation_metadata.estimated_cost_usd,
+                generation_latency_ms=generation_metadata.latency_ms,
             )
         except CitationBuildError:
             self.service._mark_failed_safely(

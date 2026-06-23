@@ -71,6 +71,13 @@ export type EvaluationRunItem = {
   citation_coverage: number | null;
   context_precision: number | null;
   latency_ms: number | null;
+  generation_provider: string | null;
+  generation_model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  generation_latency_ms: number | null;
   latency_breakdown_json: Record<string, unknown> | null;
   metric_summary_json: Record<string, unknown> | null;
   error_code: string | null;
@@ -96,6 +103,13 @@ export type EvaluationRunSummary = {
   metric_summary: Record<string, number>;
   strategy_comparison: StrategyComparisonMetric[];
   strategy_metrics_summary_json: Record<string, unknown> | null;
+  total_estimated_cost_usd: number | null;
+  total_input_tokens: number | null;
+  total_output_tokens: number | null;
+  total_tokens: number | null;
+  avg_generation_latency_ms: number | null;
+  generation_providers: string[];
+  generation_models: string[];
   error_code: string | null;
   error_message: string | null;
   started_at: string | null;

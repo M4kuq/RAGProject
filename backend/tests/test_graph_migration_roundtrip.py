@@ -21,7 +21,7 @@ GRAPH_TABLES = {
     "graph_retrieval_paths",
 }
 CACHE_TABLES = {"retrieval_cache_entries"}
-HEAD_REVISION = "0017_retrieval_cache_foundation"
+HEAD_REVISION = "0018_evaluation_generation_usage"
 PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
 CORPUS_MARKER_SETTING_KEY = "rag.retrieval_cache.corpus_marker"
 

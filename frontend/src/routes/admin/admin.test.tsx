@@ -31,6 +31,13 @@ function evaluationRunSummary(evaluationRunId: number, datasetName: string) {
     metric_summary: { recall_at_k: 0.8, p95_latency: 200 },
     strategy_comparison: [],
     strategy_metrics_summary_json: null,
+    total_estimated_cost_usd: 0.123456,
+    total_input_tokens: 100,
+    total_output_tokens: 40,
+    total_tokens: 140,
+    avg_generation_latency_ms: 80,
+    generation_providers: ["fake"],
+    generation_models: ["fake-rag-answer"],
     error_code: null,
     error_message: null,
     started_at: "2026-06-01T00:00:00Z",
@@ -615,6 +622,13 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
               }
             ],
             strategy_metrics_summary_json: null,
+            total_estimated_cost_usd: 0.123456,
+            total_input_tokens: 100,
+            total_output_tokens: 50,
+            total_tokens: 150,
+            avg_generation_latency_ms: 42,
+            generation_providers: ["fake"],
+            generation_models: ["fake-rag-answer"],
             error_code: null,
             error_message: null,
             started_at: "2026-05-01T00:00:00Z",
@@ -633,6 +647,13 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
                 citation_coverage: 0.6,
                 context_precision: 0.5,
                 latency_ms: 120,
+                generation_provider: "fake",
+                generation_model: "fake-rag-answer",
+                input_tokens: 100,
+                output_tokens: 50,
+                total_tokens: 150,
+                estimated_cost_usd: 0.123456,
+                generation_latency_ms: 42,
                 latency_breakdown_json: null,
                 metric_summary_json: null,
                 error_code: null,
@@ -739,6 +760,9 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
 
   expect(await screen.findByRole("heading", { name: "評価 #77" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "recall_at_k の説明" }).length).toBeGreaterThan(1);
+  expect(screen.getAllByText("$0.123456").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("fake-rag-answer").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("入力 100 / 出力 50 / 合計 150").length).toBeGreaterThan(0);
   const metricDetailList = document.querySelector(".metric-detail-list");
   expect(metricDetailList).toBeInTheDocument();
   expect(metricDetailList?.querySelectorAll(".metric-detail-item")).toHaveLength(2);

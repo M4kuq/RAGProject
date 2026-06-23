@@ -919,6 +919,14 @@ class EvaluationRunItem(Base, TimestampMixin):
             "latency_ms IS NULL OR latency_ms >= 0", name="ck_evaluation_run_items_latency"
         ),
         CheckConstraint(
+            "(input_tokens IS NULL OR input_tokens >= 0) "
+            "AND (output_tokens IS NULL OR output_tokens >= 0) "
+            "AND (total_tokens IS NULL OR total_tokens >= 0) "
+            "AND (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0) "
+            "AND (generation_latency_ms IS NULL OR generation_latency_ms >= 0)",
+            name="ck_evaluation_run_items_generation_non_negative",
+        ),
+        CheckConstraint(
             "status <> 'failed' OR error_code IS NOT NULL",
             name="ck_evaluation_run_items_failed_error_code",
         ),
@@ -946,6 +954,13 @@ class EvaluationRunItem(Base, TimestampMixin):
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     citation_coverage: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
+    generation_provider: Mapped[str | None] = mapped_column(String(50))
+    generation_model: Mapped[str | None] = mapped_column(String(128))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    generation_latency_ms: Mapped[int | None] = mapped_column(Integer)
     latency_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     metric_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     error_code: Mapped[str | None] = mapped_column(String(100))

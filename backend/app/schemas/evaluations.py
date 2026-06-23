@@ -465,6 +465,13 @@ class EvaluationRunItemResponse(BaseModel):
     citation_coverage: float | None = None
     context_precision: float | None = None
     latency_ms: int | None = None
+    generation_provider: str | None = None
+    generation_model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    generation_latency_ms: int | None = None
     latency_breakdown_json: dict[str, object] | None = None
     metric_summary_json: dict[str, object] | None = None
     error_code: str | None = None
@@ -490,6 +497,13 @@ class EvaluationRunSummary(BaseModel):
     metric_summary: dict[str, float]
     strategy_comparison: list[StrategyComparisonMetric] = Field(default_factory=list)
     strategy_metrics_summary_json: dict[str, object] | None = None
+    total_estimated_cost_usd: float | None = None
+    total_input_tokens: int | None = None
+    total_output_tokens: int | None = None
+    total_tokens: int | None = None
+    avg_generation_latency_ms: float | None = None
+    generation_providers: list[str] = Field(default_factory=list)
+    generation_models: list[str] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
     started_at: datetime | None = None

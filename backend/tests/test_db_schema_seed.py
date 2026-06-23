@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0017_retrieval_cache_foundation"
+    assert version == "0018_evaluation_generation_usage"
 
     expected_tables = {
         "roles",
@@ -131,6 +131,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "uq_evaluation_cases_dataset_key",
         "ck_evaluation_runs_strategy_type",
         "ck_evaluation_run_items_strategy_type",
+        "ck_evaluation_run_items_generation_non_negative",
         "ck_evaluation_results_strategy_type",
     }
     actual_constraints = scalar_set(
@@ -593,6 +594,13 @@ def test_phase2_evaluation_dataset_strategy_orm_fields() -> None:
         "evaluation_case_id",
         "strategy_type",
         "case_key",
+        "generation_provider",
+        "generation_model",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "estimated_cost_usd",
+        "generation_latency_ms",
         "latency_breakdown_json",
         "metric_summary_json",
     } <= set(item_columns.keys())

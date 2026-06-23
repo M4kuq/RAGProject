@@ -452,6 +452,13 @@ class EvaluationRepository:
         groundedness_score: Decimal | None,
         citation_coverage: Decimal | None,
         latency_ms: int | None,
+        generation_provider: str | None,
+        generation_model: str | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+        estimated_cost_usd: Decimal | None,
+        generation_latency_ms: int | None,
         latency_breakdown_json: dict[str, object] | None,
         metric_summary_json: dict[str, object] | None,
         error_code: str | None,
@@ -463,6 +470,13 @@ class EvaluationRepository:
         item.groundedness_score = groundedness_score
         item.citation_coverage = citation_coverage
         item.latency_ms = latency_ms
+        item.generation_provider = generation_provider
+        item.generation_model = generation_model
+        item.input_tokens = input_tokens
+        item.output_tokens = output_tokens
+        item.total_tokens = total_tokens
+        item.estimated_cost_usd = estimated_cost_usd
+        item.generation_latency_ms = generation_latency_ms
         item.latency_breakdown_json = latency_breakdown_json
         item.metric_summary_json = metric_summary_json
         item.error_code = error_code
