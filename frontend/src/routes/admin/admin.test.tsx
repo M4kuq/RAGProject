@@ -404,6 +404,7 @@ test("evaluation create form submits requested generation provider and model", a
   fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
     target: { value: "gpt-4.1-mini" }
   });
+  fireEvent.click(screen.getByRole("checkbox", { name: "llm_tool_orchestrator" }));
   fireEvent.click(screen.getByRole("button", { name: "評価を実行" }));
 
   await waitFor(() => expect(createPayloads).toHaveLength(1));
@@ -412,6 +413,52 @@ test("evaluation create form submits requested generation provider and model", a
     generation_model: "gpt-4.1-mini"
   });
   expect(JSON.stringify(createPayloads[0]).toLowerCase()).not.toContain("api_key");
+});
+
+test("evaluation create form blocks generation selection without answer strategy", async () => {
+  const createPayloads: Array<Record<string, unknown>> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
+        createPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } }, 202);
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
+    target: { value: "gpt-4.1-mini" }
+  });
+
+  expect(
+    screen.getByText(/provider\/model 比較には llm_tool_orchestrator/)
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeDisabled();
+  expect(createPayloads).toHaveLength(0);
 });
 
 test("evaluation list opens comparison for two selected runs", async () => {

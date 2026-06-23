@@ -3308,16 +3308,32 @@ def _compare_generation_summaries(
     base: EvaluationRunSummary,
     candidate: EvaluationRunSummary,
 ) -> EvaluationGenerationComparison:
-    cost_delta = _float_delta(
-        base.total_estimated_cost_usd,
-        candidate.total_estimated_cost_usd,
-        digits=6,
+    comparable_generation_coverage = (
+        base.case_count == candidate.case_count
+        and base.succeeded_count == candidate.succeeded_count
     )
-    tokens_delta = _int_delta(base.total_tokens, candidate.total_tokens)
-    latency_delta = _float_delta(
-        base.avg_generation_latency_ms,
-        candidate.avg_generation_latency_ms,
-        digits=3,
+    cost_delta = (
+        _float_delta(
+            base.total_estimated_cost_usd,
+            candidate.total_estimated_cost_usd,
+            digits=6,
+        )
+        if comparable_generation_coverage
+        else None
+    )
+    tokens_delta = (
+        _int_delta(base.total_tokens, candidate.total_tokens)
+        if comparable_generation_coverage
+        else None
+    )
+    latency_delta = (
+        _float_delta(
+            base.avg_generation_latency_ms,
+            candidate.avg_generation_latency_ms,
+            digits=3,
+        )
+        if comparable_generation_coverage
+        else None
     )
     return EvaluationGenerationComparison(
         base_estimated_cost_usd=base.total_estimated_cost_usd,

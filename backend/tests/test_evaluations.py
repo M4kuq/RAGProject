@@ -74,6 +74,7 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionRequest,
     EvaluationFailureSeverity,
     EvaluationRunCreateRequest,
+    EvaluationRunRequestStrategy,
     StrategyComparisonMetric,
 )
 from app.schemas.rag import (
@@ -995,6 +996,7 @@ def test_evaluation_create_persists_requested_generation_config_and_summary() ->
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
+                    strategies=[EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR],
                     generation_provider="OpenAI",
                     generation_model="gpt-4.1-mini",
                 ),
@@ -1042,6 +1044,7 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
+                    strategies=[EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR],
                     generation_provider="fake",
                     generation_model="eval-model-a",
                 ),
@@ -1128,6 +1131,15 @@ def test_evaluation_rag_service_defers_unavailable_requested_provider_to_generat
             with pytest.raises(AnswerGenerationError):
                 service.service.answer_generator.generate(
                     # The request body is intentionally generic and contains no raw fixture text.
+                    request=cast(Any, object()),
+                )
+            provider_only_service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="openai",
+            )
+            with pytest.raises(AnswerGenerationError):
+                provider_only_service.service.answer_generator.generate(
                     request=cast(Any, object()),
                 )
     finally:
@@ -1516,6 +1528,71 @@ def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
         assert generation.candidate_models == ["claude-3-5-sonnet"]
         assert unchanged_cost_comparison.generation.cost_delta == 0.0
         assert unchanged_cost_comparison.generation.cost_direction == "unchanged"
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_generation_deltas_are_not_applicable_when_success_coverage_differs() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_coverage_base",
+                items=[
+                    _comparison_item("shared_generation_a", "succeeded"),
+                    _comparison_item("shared_generation_b", "succeeded"),
+                ],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_coverage_candidate",
+                items=[
+                    _comparison_item("shared_generation_a", "succeeded"),
+                    _comparison_item("shared_generation_b", "succeeded"),
+                ],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            candidate_items[1].status = "failed"
+            candidate_items[1].error_code = "generation_failed"
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert comparison.generation.base_estimated_cost_usd == 0.4
+        assert comparison.generation.candidate_estimated_cost_usd == 0.1
+        assert comparison.generation.cost_delta is None
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_delta is None
+        assert comparison.generation.tokens_direction == "not_applicable"
+        assert comparison.generation.latency_delta is None
+        assert comparison.generation.latency_direction == "not_applicable"
     finally:
         engine.dispose()
 
@@ -3575,11 +3652,38 @@ def test_evaluation_api_rejects_unknown_provider_and_secret_like_generation_mode
     assert unknown_provider.status_code == 422
     assert unknown_provider.json()["error"]["code"] == "validation_error"
 
+    provider_without_model = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["llm_tool_orchestrator"],
+            "generation_provider": "openai",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert provider_without_model.status_code == 422
+    assert provider_without_model.json()["error"]["code"] == "validation_error"
+
+    retrieval_only_generation_selection = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["dense"],
+            "generation_model": "gpt-4.1-mini",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert retrieval_only_generation_selection.status_code == 422
+    assert retrieval_only_generation_selection.json()["error"]["code"] == "validation_error"
+
     secret_model = client.post(
         "/api/v1/evaluations/runs",
         json={
             "dataset_name": "phase1_smoke",
             "case_limit": 1,
+            "strategies": ["llm_tool_orchestrator"],
             "generation_provider": "openai",
             "generation_model": "sk-test-secret-token-1234567890",
         },

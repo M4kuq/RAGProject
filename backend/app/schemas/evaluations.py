@@ -79,6 +79,15 @@ class EvaluationRunRequestStrategy(StrEnum):
     LANGGRAPH_AGENTIC = "langgraph_agentic"
 
 
+GENERATION_COMPARISON_STRATEGIES = frozenset(
+    {
+        EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR,
+        EvaluationRunRequestStrategy.LANGCHAIN_AGENTIC,
+        EvaluationRunRequestStrategy.LANGGRAPH_AGENTIC,
+    }
+)
+
+
 class EvaluationCacheMode(StrEnum):
     DEFAULT = "default"
     DISABLED = "disabled"
@@ -459,6 +468,14 @@ class EvaluationRunCreateRequest(BaseModel):
                 raise ValueError("strategy is not enabled for PR-25 evaluation runner")
             if strategy not in deduped:
                 deduped.append(strategy)
+        if self.generation_provider is not None and self.generation_model is None:
+            raise ValueError("generation_model is required when generation_provider is set")
+        if (self.generation_provider is not None or self.generation_model is not None) and not any(
+            strategy in GENERATION_COMPARISON_STRATEGIES for strategy in deduped
+        ):
+            raise ValueError(
+                "generation selection requires an answer-generating evaluation strategy"
+            )
         self.strategies = deduped
         self.strategy_type = deduped[0]
         self.metrics = list(dict.fromkeys(self.metrics))

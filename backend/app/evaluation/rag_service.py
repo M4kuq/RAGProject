@@ -139,6 +139,8 @@ def create_evaluation_rag_service(
         generation_model=generation_model,
     )
     try:
+        if generation_provider is not None and generation_model is None:
+            raise AnswerGenerationError()
         answer_generator: AnswerGenerator = create_answer_generator(
             selected_settings,
             provider=generation_provider,

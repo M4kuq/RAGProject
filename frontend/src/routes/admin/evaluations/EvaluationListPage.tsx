@@ -29,6 +29,11 @@ const GENERATION_PROVIDERS: EvaluationGenerationProvider[] = [
   "anthropic",
   "gemini"
 ];
+const ANSWER_GENERATION_STRATEGIES: EvaluationRunnableStrategy[] = [
+  "llm_tool_orchestrator",
+  "langchain_agentic",
+  "langgraph_agentic"
+];
 
 export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -54,6 +59,19 @@ export function EvaluationListPage() {
   const runs = useEvaluationRuns(params);
   const datasets = useEvaluationDatasets({ page: 1, page_size: 50 });
   const createRun = useCreateEvaluationRun();
+  const trimmedGenerationModel = generationModel.trim();
+  const generationSelectionRequested = Boolean(generationProvider || trimmedGenerationModel);
+  const hasAnswerGenerationStrategy = strategies.some((strategy) =>
+    ANSWER_GENERATION_STRATEGIES.includes(strategy)
+  );
+  const providerWithoutModel = Boolean(generationProvider && !trimmedGenerationModel);
+  const generationSelectionBlocked =
+    generationSelectionRequested && !hasAnswerGenerationStrategy;
+  const generationGuardMessage = providerWithoutModel
+    ? "生成 provider を指定する場合は生成 model も入力してください。"
+    : generationSelectionBlocked
+      ? "provider/model 比較には llm_tool_orchestrator、langchain_agentic、langgraph_agentic のいずれかを選択してください。"
+      : null;
 
   function updatePage(page: number) {
     const next = new URLSearchParams(searchParams);
@@ -63,6 +81,9 @@ export function EvaluationListPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (generationGuardMessage) {
+      return;
+    }
     const safeCaseLimit = Number.isFinite(caseLimit) ? Math.min(50, Math.max(1, caseLimit)) : 10;
     const selectedDataset = datasets.data?.items.find(
       (dataset) => dataset.evaluation_dataset_id === evaluationDatasetId
@@ -75,7 +96,7 @@ export function EvaluationListPage() {
       strategies,
       cache_modes: cacheModes,
       generation_provider: generationProvider || undefined,
-      generation_model: generationModel.trim() || undefined,
+      generation_model: trimmedGenerationModel || undefined,
       trigger_type: "manual"
     });
     setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
@@ -112,6 +133,9 @@ export function EvaluationListPage() {
         </div>
       </header>
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
+      {generationGuardMessage ? (
+        <InlineAlert tone="error">{generationGuardMessage}</InlineAlert>
+      ) : null}
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
         <label>
@@ -189,7 +213,7 @@ export function EvaluationListPage() {
             生成 provider
             <HelpTooltip
               description="未指定ならサーバの既定 provider を使います。"
-              direction="評価 run 単位で生成 provider を固定して、別 run と比較できます。"
+              direction="provider を指定する場合は model も入力してください。"
               title="生成 provider"
             />
           </span>
@@ -212,7 +236,7 @@ export function EvaluationListPage() {
           <span className="metric-heading">
             生成 model
             <HelpTooltip
-              description="任意です。未指定ならサーバ既定モデルを使います。"
+              description="provider/model とも未指定ならサーバ既定モデルを使います。"
               direction="API key や token ではなく model 名だけを入力してください。"
               title="生成 model"
             />
@@ -235,7 +259,10 @@ export function EvaluationListPage() {
             onChange={(event) => setCaseLimit(Number(event.target.value))}
           />
         </label>
-        <button type="submit" disabled={createRun.isPending}>
+        <button
+          type="submit"
+          disabled={createRun.isPending || providerWithoutModel || generationSelectionBlocked}
+        >
           評価を実行
         </button>
         <button type="button" onClick={() => void runs.refetch()}>
