@@ -451,6 +451,8 @@ class EvaluationRunCreateRequest(BaseModel):
             )
         if _GENERATION_MODEL_SECRET_RE.search(model):
             raise ValueError("generation_model must not contain secret-like text")
+        if model.lower() in {"redacted", "unknown"}:
+            raise ValueError("generation_model must not use a reserved label")
         return model
 
     @model_validator(mode="after")

@@ -1656,6 +1656,66 @@ def test_compare_runs_generation_deltas_are_not_applicable_when_successful_items
         engine.dispose()
 
 
+def test_compare_runs_generation_token_latency_deltas_do_not_require_cost() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_unpriced_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_unpriced_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="fake",
+                model="custom-fake-model",
+                cost=Decimal("0.000000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="fake",
+                model="custom-fake-model-v2",
+                cost=Decimal("0.000000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+                item.estimated_cost_usd = None
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert comparison.generation.base_estimated_cost_usd is None
+        assert comparison.generation.candidate_estimated_cost_usd is None
+        assert comparison.generation.cost_delta is None
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_delta == -300
+        assert comparison.generation.tokens_direction == "improved"
+        assert comparison.generation.latency_delta == pytest.approx(-75.0)
+        assert comparison.generation.latency_direction == "improved"
+    finally:
+        engine.dispose()
+
+
 def test_compare_runs_identical_run_is_unchanged() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -3752,6 +3812,21 @@ def test_evaluation_api_rejects_unknown_provider_and_secret_like_generation_mode
     serialized = secret_model.text.lower()
     assert "sk-test-secret-token" not in serialized
     assert "1234567890" not in serialized
+
+    for reserved_label in ("redacted", "unknown"):
+        reserved_model = client.post(
+            "/api/v1/evaluations/runs",
+            json={
+                "dataset_name": "phase1_smoke",
+                "case_limit": 1,
+                "strategies": ["llm_tool_orchestrator"],
+                "generation_provider": "openai",
+                "generation_model": reserved_label,
+            },
+            headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+        )
+        assert reserved_model.status_code == 422
+        assert reserved_model.json()["error"]["code"] == "validation_error"
 
 
 def test_evaluation_failure_candidate_and_promotion_api(

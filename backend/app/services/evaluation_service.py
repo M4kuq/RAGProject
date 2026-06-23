@@ -3325,9 +3325,20 @@ def _compare_generation_summaries(
     base_items: list[EvaluationRunItem],
     candidate_items: list[EvaluationRunItem],
 ) -> EvaluationGenerationComparison:
-    comparable_generation_coverage = _has_matching_successful_generation_items(
+    comparable_cost_coverage = _has_matching_successful_generation_items(
         base_items,
         candidate_items,
+        metadata_predicate=_has_generation_cost_metadata,
+    )
+    comparable_tokens_coverage = _has_matching_successful_generation_items(
+        base_items,
+        candidate_items,
+        metadata_predicate=_has_generation_token_metadata,
+    )
+    comparable_latency_coverage = _has_matching_successful_generation_items(
+        base_items,
+        candidate_items,
+        metadata_predicate=_has_generation_latency_metadata,
     )
     cost_delta = (
         _float_delta(
@@ -3335,12 +3346,12 @@ def _compare_generation_summaries(
             candidate.total_estimated_cost_usd,
             digits=6,
         )
-        if comparable_generation_coverage
+        if comparable_cost_coverage
         else None
     )
     tokens_delta = (
         _int_delta(base.total_tokens, candidate.total_tokens)
-        if comparable_generation_coverage
+        if comparable_tokens_coverage
         else None
     )
     latency_delta = (
@@ -3349,7 +3360,7 @@ def _compare_generation_summaries(
             candidate.avg_generation_latency_ms,
             digits=3,
         )
-        if comparable_generation_coverage
+        if comparable_latency_coverage
         else None
     )
     return EvaluationGenerationComparison(
@@ -3375,14 +3386,24 @@ def _compare_generation_summaries(
 def _has_matching_successful_generation_items(
     base_items: list[EvaluationRunItem],
     candidate_items: list[EvaluationRunItem],
+    *,
+    metadata_predicate: Callable[[EvaluationRunItem], bool],
 ) -> bool:
-    base_keys = _complete_successful_generation_item_keys(base_items)
-    candidate_keys = _complete_successful_generation_item_keys(candidate_items)
+    base_keys = _successful_generation_item_keys(
+        base_items,
+        metadata_predicate=metadata_predicate,
+    )
+    candidate_keys = _successful_generation_item_keys(
+        candidate_items,
+        metadata_predicate=metadata_predicate,
+    )
     return bool(base_keys) and base_keys == candidate_keys
 
 
-def _complete_successful_generation_item_keys(
+def _successful_generation_item_keys(
     items: list[EvaluationRunItem],
+    *,
+    metadata_predicate: Callable[[EvaluationRunItem], bool],
 ) -> set[tuple[str, str]] | None:
     keys: set[tuple[str, str]] = set()
     for item in items:
@@ -3390,7 +3411,7 @@ def _complete_successful_generation_item_keys(
             continue
         if item.status != "succeeded":
             continue
-        if not _has_complete_generation_metadata(item):
+        if not metadata_predicate(item):
             return None
         keys.add(_generation_item_key(item))
     return keys
@@ -3405,14 +3426,16 @@ def _generation_item_key(item: EvaluationRunItem) -> tuple[str, str]:
     return case_key, item.strategy_type
 
 
-def _has_complete_generation_metadata(item: EvaluationRunItem) -> bool:
-    return (
-        item.generation_provider is not None
-        and item.generation_model is not None
-        and item.total_tokens is not None
-        and item.estimated_cost_usd is not None
-        and item.generation_latency_ms is not None
-    )
+def _has_generation_cost_metadata(item: EvaluationRunItem) -> bool:
+    return item.estimated_cost_usd is not None
+
+
+def _has_generation_token_metadata(item: EvaluationRunItem) -> bool:
+    return item.total_tokens is not None
+
+
+def _has_generation_latency_metadata(item: EvaluationRunItem) -> bool:
+    return item.generation_latency_ms is not None
 
 
 def _float_delta(
