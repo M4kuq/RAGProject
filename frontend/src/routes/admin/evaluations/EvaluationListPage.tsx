@@ -1,6 +1,10 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { MetricHelp, orderedMetricEntries } from "../../../components/admin/MetricHelp";
+import {
+  HelpTooltip,
+  MetricHelp,
+  orderedMetricEntries
+} from "../../../components/admin/MetricHelp";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
@@ -219,6 +223,16 @@ export function EvaluationListPage() {
                     <MetricHelp metricName="metric_summary" />
                   </span>
                 </th>
+                <th>
+                  <span className="metric-heading">
+                    推定コスト
+                    <HelpTooltip
+                      description="評価 run の成功ケースで記録された LLM 生成コストの概算合計です。"
+                      direction="usage や pricing が取得できない場合は - になります。"
+                      title="推定コスト（概算）"
+                    />
+                  </span>
+                </th>
                 <th>ジョブ</th>
                 <th>開始日時</th>
                 <th>終了日時</th>
@@ -254,6 +268,7 @@ export function EvaluationListPage() {
                     {run.failed_count ? ` / 失敗 ${run.failed_count}` : ""}
                   </td>
                   <td>{formatMetricSummary(run.metric_summary)}</td>
+                  <td>{formatCost(run.total_estimated_cost_usd)}</td>
                   <td>{run.job_id ? <Link to={`/admin/jobs/${run.job_id}`}>#{run.job_id}</Link> : "-"}</td>
                   <td>{formatDate(run.started_at)}</td>
                   <td>{formatDate(run.finished_at)}</td>
@@ -319,6 +334,10 @@ function formatMetricSummary(summary: Record<string, number>) {
       ))}
     </span>
   );
+}
+
+function formatCost(value: number | null | undefined) {
+  return value === null || value === undefined ? "-" : `$${value.toFixed(6)}`;
 }
 
 function nextCacheModes(

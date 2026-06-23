@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -54,7 +55,7 @@ from app.evaluation.rag_service import (
 )
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
-from app.rag.generation import FakeAnswerGenerator
+from app.rag.generation import FakeAnswerGenerator, GenerationResult, TokenUsage
 from app.rag.rerank import FakeRerankerClient
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
@@ -712,7 +713,8 @@ def test_evaluation_api_admin_create_list_detail_and_rbac(
     assert comparison.status_code == 200
     assert comparison.json()["data"]["strategies"] == ["dense"]
     assert missing.status_code == 404
-    assert "token" not in listing.text.lower()
+    assert viewer_csrf_token.lower() not in listing.text.lower()
+    assert csrf_token.lower() not in listing.text.lower()
     assert "secret" not in detail.text.lower()
 
     invalid_dataset = client.post(
@@ -1035,6 +1037,149 @@ def test_evaluation_service_runner_persists_items_results_and_safe_details() -> 
             assert "full context" not in response.model_dump_json().lower()
     finally:
         engine.dispose()
+
+
+def test_evaluation_service_persists_generation_usage_cost_latency_and_summary() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _UsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _UsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval-generation-usage",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert len(items) == 2
+            assert items[0].generation_provider == "lmstudio"
+            assert items[0].generation_model == "qwen3.5-9b"
+            assert items[0].input_tokens == 100
+            assert items[0].output_tokens == 50
+            assert items[0].total_tokens == 150
+            assert items[0].estimated_cost_usd == Decimal("0.123456")
+            assert items[0].generation_latency_ms == 40
+            assert items[1].generation_provider == "openai"
+            assert items[1].generation_model == "redacted"
+            assert items[1].input_tokens == 200
+            assert items[1].output_tokens == 25
+            assert items[1].total_tokens == 225
+            assert items[1].estimated_cost_usd == Decimal("0.654321")
+            assert items[1].generation_latency_ms == 80
+
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.total_estimated_cost_usd == 0.777777
+            assert detail.total_input_tokens == 300
+            assert detail.total_output_tokens == 75
+            assert detail.total_tokens == 375
+            assert detail.avg_generation_latency_ms == 60.0
+            assert detail.generation_providers == ["lmstudio", "openai"]
+            assert detail.generation_models == ["qwen3.5-9b", "redacted"]
+            assert detail.items[1].generation_model == "redacted"
+            dumped = detail.model_dump_json()
+            assert "sk-test-secret-token" not in dumped
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_generation_usage_missing_keeps_case_successful_with_nulls() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _MissingUsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=1),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _MissingUsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval-generation-usage-missing",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            item = db.scalar(select(EvaluationRunItem))
+            assert item is not None
+            assert item.status == "succeeded"
+            assert item.generation_provider == "fake"
+            assert item.generation_model == "unknown-model"
+            assert item.input_tokens is None
+            assert item.output_tokens is None
+            assert item.total_tokens is None
+            assert item.estimated_cost_usd is None
+            assert item.generation_latency_ms is None
+
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.total_estimated_cost_usd is None
+            assert detail.total_input_tokens is None
+            assert detail.total_output_tokens is None
+            assert detail.total_tokens is None
+            assert detail.avg_generation_latency_ms is None
+            assert detail.generation_providers == ["fake"]
+            assert detail.generation_models == ["unknown-model"]
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_generation_metadata_unknown_model_cost_is_null() -> None:
+    service = RagService(
+        settings=Settings(
+            app_env="test",
+            generation_provider="fake",
+            generation_model_name="unknown-model",
+        ),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=_FakeVectorClient(),
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    evaluator = EvaluationRagQuestionService(service)
+
+    metadata = evaluator._generation_metadata(
+        GenerationResult(content="answer", usage=TokenUsage(10, 5, 15)),
+        latency_ms=7,
+    )
+
+    assert metadata.provider == "fake"
+    assert metadata.model == "unknown-model"
+    assert metadata.input_tokens == 10
+    assert metadata.output_tokens == 5
+    assert metadata.total_tokens == 15
+    assert metadata.estimated_cost_usd is None
+    assert metadata.latency_ms == 7
 
 
 def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
@@ -2552,6 +2697,13 @@ def test_evaluation_handler_processes_job_and_case_failure() -> None:
             assert [item.status for item in items] == ["succeeded", "failed"]
             assert items[1].error_code == "no_context_found"
             assert items[1].case_key == "phase1_seed_ci"
+            assert items[1].generation_provider is None
+            assert items[1].generation_model is None
+            assert items[1].input_tokens is None
+            assert items[1].output_tokens is None
+            assert items[1].total_tokens is None
+            assert items[1].estimated_cost_usd is None
+            assert items[1].generation_latency_ms is None
             assert run.strategy_metrics_summary_json is not None
             dense_summary = run.strategy_metrics_summary_json["strategy_metrics"]["dense"]
             assert dense_summary["case_count"] == 2
@@ -3377,6 +3529,83 @@ class _FakeEvaluationRagService:
         )
 
 
+class _UsageEvaluationRagService(_FakeEvaluationRagService):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def evaluate_question(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        self.calls += 1
+        result = super().evaluate_question(
+            db,
+            question=question,
+            request_id=request_id,
+            strategy_type=strategy_type,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+        )
+        if self.calls == 1:
+            return replace(
+                result,
+                generation_provider="lmstudio",
+                generation_model="qwen3.5-9b",
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                estimated_cost_usd=0.123456,
+                generation_latency_ms=40,
+            )
+        return replace(
+            result,
+            generation_provider="openai",
+            generation_model="sk-test-secret-token-1234567890",
+            input_tokens=200,
+            output_tokens=25,
+            total_tokens=225,
+            estimated_cost_usd=0.654321,
+            generation_latency_ms=80,
+        )
+
+
+class _MissingUsageEvaluationRagService(_FakeEvaluationRagService):
+    def evaluate_question(
+        self,
+        db: Session,
+        *,
+        question: str,
+        request_id: str | None,
+        strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+        top_k: int | None = None,
+        rerank_top_n: int | None = None,
+    ) -> RagEvaluationResult:
+        result = super().evaluate_question(
+            db,
+            question=question,
+            request_id=request_id,
+            strategy_type=strategy_type,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+        )
+        return replace(
+            result,
+            generation_provider="fake",
+            generation_model="unknown-model",
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            estimated_cost_usd=None,
+            generation_latency_ms=None,
+        )
+
+
 class _PartiallyFailingRagService(_FakeEvaluationRagService):
     def __init__(self) -> None:
         self.calls = 0
@@ -3411,6 +3640,13 @@ class _PartiallyFailingRagService(_FakeEvaluationRagService):
                 retrieved_items=[],
                 context_sources_for_safety=[],
                 error_code="no_context_found",
+                generation_provider="openai",
+                generation_model="sk-failed-secret-token",
+                input_tokens=999,
+                output_tokens=999,
+                total_tokens=1998,
+                estimated_cost_usd=9.99,
+                generation_latency_ms=999,
             )
         return super().evaluate_question(
             db,

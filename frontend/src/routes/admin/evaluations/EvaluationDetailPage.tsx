@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   compareMetricNames,
+  HelpTooltip,
   MetricHelp,
   orderedMetricEntries
 } from "../../../components/admin/MetricHelp";
@@ -99,6 +100,50 @@ export function EvaluationDetailPage() {
           <div>
             <dt>strategy</dt>
             <dd>{run.data.strategies.length ? run.data.strategies.join(", ") : run.data.strategy_type}</dd>
+          </div>
+          <div>
+            <dt>
+              <span className="metric-heading">
+                推定コスト
+                <HelpTooltip
+                  description="評価 run の成功ケースで記録された LLM 生成コストの概算合計です。"
+                  direction="料金表や provider の実請求とは一致しない場合があります。"
+                  title="推定コスト（概算）"
+                />
+              </span>
+            </dt>
+            <dd>{formatCost(run.data.total_estimated_cost_usd)}</dd>
+          </div>
+          <div>
+            <dt>
+              <span className="metric-heading">
+                トークン
+                <HelpTooltip
+                  description="評価 run の成功ケースで記録された入力、出力、合計 token 数です。"
+                  direction="provider から usage が返らない場合は - になります。"
+                  title="トークン数"
+                />
+              </span>
+            </dt>
+            <dd>
+              {formatTokenBreakdown(
+                run.data.total_input_tokens,
+                run.data.total_output_tokens,
+                run.data.total_tokens
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>生成 latency</dt>
+            <dd>{formatLatency(run.data.avg_generation_latency_ms)}</dd>
+          </div>
+          <div>
+            <dt>provider</dt>
+            <dd>{formatList(run.data.generation_providers)}</dd>
+          </div>
+          <div>
+            <dt>model</dt>
+            <dd>{formatList(run.data.generation_models)}</dd>
           </div>
           <div>
             <dt>起動元</dt>
@@ -453,6 +498,28 @@ export function EvaluationDetailPage() {
               <th>case</th>
               <th>strategy</th>
               <th>状態</th>
+              <th>provider</th>
+              <th>model</th>
+              <th>
+                <span className="metric-heading">
+                  Tokens
+                  <HelpTooltip
+                    description="このケースの LLM 生成で記録された入力、出力、合計 token 数です。"
+                    direction="usage が取得できない provider では - になります。"
+                    title="トークン数"
+                  />
+                </span>
+              </th>
+              <th>
+                <span className="metric-heading">
+                  Cost
+                  <HelpTooltip
+                    description="このケースの LLM 生成 token 数から計算した概算コストです。"
+                    direction="未知モデルや usage 欠落では - になります。"
+                    title="推定コスト（概算）"
+                  />
+                </span>
+              </th>
               <th>Faithfulness</th>
               <th>Groundedness</th>
               <th>Citation</th>
@@ -474,6 +541,12 @@ export function EvaluationDetailPage() {
                 <td>
                   <StatusBadge status={item.status} />
                 </td>
+                <td>{item.generation_provider ?? "-"}</td>
+                <td>{item.generation_model ?? "-"}</td>
+                <td>
+                  {formatTokenBreakdown(item.input_tokens, item.output_tokens, item.total_tokens)}
+                </td>
+                <td>{formatCost(item.estimated_cost_usd)}</td>
                 <td>{formatScore(item.faithfulness_score)}</td>
                 <td>{formatScore(item.groundedness_score)}</td>
                 <td>{formatScore(item.citation_coverage)}</td>
@@ -484,7 +557,7 @@ export function EvaluationDetailPage() {
             ))}
             {run.data.items.length === 0 ? (
               <tr>
-                <td colSpan={9}>まだケース結果はありません。</td>
+                <td colSpan={13}>まだケース結果はありません。</td>
               </tr>
             ) : null}
           </tbody>
@@ -500,6 +573,39 @@ export function EvaluationDetailPage() {
 
 function formatScore(value: number | null) {
   return value === null ? "-" : value.toFixed(3);
+}
+
+function formatCost(value: number | null | undefined) {
+  return value === null || value === undefined ? "-" : `$${value.toFixed(6)}`;
+}
+
+function formatInteger(value: number | null | undefined) {
+  return value === null || value === undefined ? "-" : value.toLocaleString();
+}
+
+function formatTokenBreakdown(
+  inputTokens: number | null | undefined,
+  outputTokens: number | null | undefined,
+  totalTokens: number | null | undefined
+) {
+  if (inputTokens === null && outputTokens === null && totalTokens === null) {
+    return "-";
+  }
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return "-";
+  }
+  return `入力 ${formatInteger(inputTokens)} / 出力 ${formatInteger(outputTokens)} / 合計 ${formatInteger(totalTokens)}`;
+}
+
+function formatLatency(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)} ms`;
+}
+
+function formatList(values: string[] | undefined) {
+  return values?.length ? values.join(", ") : "-";
 }
 
 function mergeDatasets(
