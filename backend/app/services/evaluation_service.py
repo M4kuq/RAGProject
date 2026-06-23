@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -114,6 +115,9 @@ ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
         RetrievalStrategy.LANGGRAPH_AGENTIC,
     }
 )
+ASK_ONLY_EVALUATION_STRATEGY_VALUES = frozenset(
+    strategy.value for strategy in ASK_ONLY_EVALUATION_STRATEGIES
+)
 CACHEABLE_EVALUATION_STRATEGIES = frozenset(
     {
         RetrievalStrategy.DENSE,
@@ -152,6 +156,10 @@ GRAPH_PROMOTION_HINT_FORBIDDEN_PARTS = (
     "password",
     "secret",
     "token",
+)
+_REQUESTED_GENERATION_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$")
+_REQUESTED_GENERATION_MODEL_SECRET_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|password|token|credential|bearer|sk-[A-Za-z0-9_-]{8,})"
 )
 
 STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
@@ -920,7 +928,12 @@ class EvaluationService:
             else self._load_run_comparison(db, evaluation_run_id=candidate_run_id)
         )
         metrics = _compare_metric_summaries(base.summary, candidate.summary)
-        generation = _compare_generation_summaries(base.summary, candidate.summary)
+        generation = _compare_generation_summaries(
+            base.summary,
+            candidate.summary,
+            base.items,
+            candidate.items,
+        )
         cases = _compare_run_cases(
             base.items,
             base.results_by_item,
@@ -2340,12 +2353,14 @@ def _requested_generation_provider(value: object) -> str | None:
 def _requested_generation_model(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    model = _safe_optional_generation_label(value, max_length=128)
-    if model is None or model in {"redacted", "unknown"}:
+    model = value.strip()
+    if not model or model in {"redacted", "unknown"}:
         return None
-    if not model[0].isalnum() or any(
-        not (character.isalnum() or character in "_.:/@+-") for character in model
-    ):
+    if len(model) > 128:
+        return None
+    if not _REQUESTED_GENERATION_MODEL_RE.fullmatch(model):
+        return None
+    if _REQUESTED_GENERATION_MODEL_SECRET_RE.search(model):
         return None
     return model
 
@@ -3307,10 +3322,12 @@ def _compare_metric_summaries(
 def _compare_generation_summaries(
     base: EvaluationRunSummary,
     candidate: EvaluationRunSummary,
+    base_items: list[EvaluationRunItem],
+    candidate_items: list[EvaluationRunItem],
 ) -> EvaluationGenerationComparison:
-    comparable_generation_coverage = (
-        base.case_count == candidate.case_count
-        and base.succeeded_count == candidate.succeeded_count
+    comparable_generation_coverage = _has_matching_successful_generation_items(
+        base_items,
+        candidate_items,
     )
     cost_delta = (
         _float_delta(
@@ -3352,6 +3369,49 @@ def _compare_generation_summaries(
         base_models=base.generation_models,
         candidate_providers=candidate.generation_providers,
         candidate_models=candidate.generation_models,
+    )
+
+
+def _has_matching_successful_generation_items(
+    base_items: list[EvaluationRunItem],
+    candidate_items: list[EvaluationRunItem],
+) -> bool:
+    base_keys = _complete_successful_generation_item_keys(base_items)
+    candidate_keys = _complete_successful_generation_item_keys(candidate_items)
+    return bool(base_keys) and base_keys == candidate_keys
+
+
+def _complete_successful_generation_item_keys(
+    items: list[EvaluationRunItem],
+) -> set[tuple[str, str]] | None:
+    keys: set[tuple[str, str]] = set()
+    for item in items:
+        if item.strategy_type not in ASK_ONLY_EVALUATION_STRATEGY_VALUES:
+            continue
+        if item.status != "succeeded":
+            continue
+        if not _has_complete_generation_metadata(item):
+            return None
+        keys.add(_generation_item_key(item))
+    return keys
+
+
+def _generation_item_key(item: EvaluationRunItem) -> tuple[str, str]:
+    case_key = item.case_key or (
+        f"id:{item.evaluation_case_id}"
+        if item.evaluation_case_id is not None
+        else f"item:{item.evaluation_run_item_id}"
+    )
+    return case_key, item.strategy_type
+
+
+def _has_complete_generation_metadata(item: EvaluationRunItem) -> bool:
+    return (
+        item.generation_provider is not None
+        and item.generation_model is not None
+        and item.total_tokens is not None
+        and item.estimated_cost_usd is not None
+        and item.generation_latency_ms is not None
     )
 
 

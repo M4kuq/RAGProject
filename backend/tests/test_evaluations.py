@@ -1070,6 +1070,59 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
         engine.dispose()
 
 
+def test_evaluation_run_job_preserves_lmstudio_url_generation_model() -> None:
+    engine, session_factory = _session_factory()
+    recorded: list[tuple[str | None, str | None]] = []
+    model_url = "https://huggingface.co/lmstudio-community/qwen3.5-9b-gguf"
+
+    def factory(
+        settings: Settings,
+        db: Session,
+        *,
+        generation_provider: str | None = None,
+        generation_model: str | None = None,
+    ) -> _FakeEvaluationRagService:
+        del settings, db
+        recorded.append((generation_provider, generation_model))
+        return _FakeEvaluationRagService()
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    strategies=[EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR],
+                    generation_provider="lmstudio",
+                    generation_model=model_url,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-lmstudio-url-generation",
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert result["status"] == "succeeded"
+        assert recorded == [("lmstudio", model_url)]
+        assert detail.requested_generation_provider == "lmstudio"
+        assert detail.requested_generation_model == model_url
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_run_job_uses_default_generation_selection_when_unspecified() -> None:
     engine, session_factory = _session_factory()
     recorded: list[tuple[str | None, str | None]] = []
@@ -1473,7 +1526,7 @@ def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
                 items=[_comparison_item("shared_generation_case", "succeeded")],
                 metrics={"recall_at_k": Decimal("0.8")},
             )
-            _set_generation_for_run(
+            base_items = _set_generation_for_run(
                 db,
                 base,
                 provider="openai",
@@ -1491,6 +1544,8 @@ def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
                 total_tokens=700,
                 latency_ms=175,
             )
+            for item in [*base_items, *candidate_generation_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
             db.commit()
 
             comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
@@ -1532,7 +1587,7 @@ def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
         engine.dispose()
 
 
-def test_compare_runs_generation_deltas_are_not_applicable_when_success_coverage_differs() -> None:
+def test_compare_runs_generation_deltas_are_not_applicable_when_successful_items_differ() -> None:
     engine, session_factory = _session_factory()
     try:
         with session_factory() as db:
@@ -1557,7 +1612,7 @@ def test_compare_runs_generation_deltas_are_not_applicable_when_success_coverage
                 ],
                 metrics={"recall_at_k": Decimal("0.8")},
             )
-            _set_generation_for_run(
+            base_items = _set_generation_for_run(
                 db,
                 base,
                 provider="openai",
@@ -1575,8 +1630,12 @@ def test_compare_runs_generation_deltas_are_not_applicable_when_success_coverage
                 total_tokens=700,
                 latency_ms=175,
             )
-            candidate_items[1].status = "failed"
-            candidate_items[1].error_code = "generation_failed"
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+            base_items[1].status = "failed"
+            base_items[1].error_code = "generation_failed"
+            candidate_items[0].status = "failed"
+            candidate_items[0].error_code = "generation_failed"
             db.commit()
 
             comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
@@ -1585,7 +1644,7 @@ def test_compare_runs_generation_deltas_are_not_applicable_when_success_coverage
                 candidate_run_id=candidate.evaluation_run_id,
             )
 
-        assert comparison.generation.base_estimated_cost_usd == 0.4
+        assert comparison.generation.base_estimated_cost_usd == 0.2
         assert comparison.generation.candidate_estimated_cost_usd == 0.1
         assert comparison.generation.cost_delta is None
         assert comparison.generation.cost_direction == "not_applicable"
