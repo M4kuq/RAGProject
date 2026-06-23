@@ -38,9 +38,26 @@ class EvaluationRepository:
         metrics: list[str],
         top_k: int | None,
         rerank_top_n: int | None,
+        generation_provider: str | None,
+        generation_model: str | None,
         trigger_type: str,
         retrieval_settings_json: dict[str, object] | None,
     ) -> EvaluationRun:
+        metrics_config: dict[str, object] = {
+            "dataset_name": dataset_name,
+            "evaluation_dataset_id": evaluation_dataset_id,
+            "case_limit": case_limit,
+            "strategy_type": strategy_type,
+            "strategies": strategies,
+            "trigger_type": trigger_type,
+            "metrics": metrics,
+            "top_k": top_k,
+            "rerank_top_n": rerank_top_n,
+        }
+        if generation_provider is not None:
+            metrics_config["generation_provider"] = generation_provider
+        if generation_model is not None:
+            metrics_config["generation_model"] = generation_model
         run = EvaluationRun(
             created_by=created_by,
             status="queued",
@@ -50,17 +67,7 @@ class EvaluationRepository:
             strategy_type=strategy_type,
             trigger_type=trigger_type,
             retrieval_settings_json=retrieval_settings_json,
-            metrics_config={
-                "dataset_name": dataset_name,
-                "evaluation_dataset_id": evaluation_dataset_id,
-                "case_limit": case_limit,
-                "strategy_type": strategy_type,
-                "strategies": strategies,
-                "trigger_type": trigger_type,
-                "metrics": metrics,
-                "top_k": top_k,
-                "rerank_top_n": rerank_top_n,
-            },
+            metrics_config=metrics_config,
         )
         db.add(run)
         db.flush()

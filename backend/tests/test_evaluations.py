@@ -52,10 +52,16 @@ from app.evaluation.rag_service import (
     EvaluationRagQuestionService,
     RagEvaluationResult,
     _evaluation_cache_namespace,
+    create_evaluation_rag_service,
 )
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.main import create_app
-from app.rag.generation import FakeAnswerGenerator, GenerationResult, TokenUsage
+from app.rag.generation import (
+    AnswerGenerationError,
+    FakeAnswerGenerator,
+    GenerationResult,
+    TokenUsage,
+)
 from app.rag.rerank import FakeRerankerClient
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
@@ -978,6 +984,184 @@ def test_evaluation_summary_uses_planned_case_count_while_running() -> None:
         engine.dispose()
 
 
+def test_evaluation_create_persists_requested_generation_config_and_summary() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    generation_provider="OpenAI",
+                    generation_model="gpt-4.1-mini",
+                ),
+                user=user,
+            )
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.metrics_config is not None
+            assert run.metrics_config["generation_provider"] == "openai"
+            assert run.metrics_config["generation_model"] == "gpt-4.1-mini"
+
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert detail.requested_generation_provider == "openai"
+        assert detail.requested_generation_model == "gpt-4.1-mini"
+        assert detail.generation_providers == []
+        assert detail.generation_models == []
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -> None:
+    engine, session_factory = _session_factory()
+    recorded: list[tuple[str | None, str | None]] = []
+
+    def factory(
+        settings: Settings,
+        db: Session,
+        *,
+        generation_provider: str | None = None,
+        generation_model: str | None = None,
+    ) -> _FakeEvaluationRagService:
+        del settings, db
+        recorded.append((generation_provider, generation_model))
+        return _FakeEvaluationRagService()
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    dataset_name="phase1_smoke",
+                    case_limit=1,
+                    generation_provider="fake",
+                    generation_model="eval-model-a",
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-requested-generation",
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert result["status"] == "succeeded"
+        assert recorded == [("fake", "eval-model-a")]
+        assert detail.requested_generation_provider == "fake"
+        assert detail.requested_generation_model == "eval-model-a"
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_run_job_uses_default_generation_selection_when_unspecified() -> None:
+    engine, session_factory = _session_factory()
+    recorded: list[tuple[str | None, str | None]] = []
+
+    def factory(
+        settings: Settings,
+        db: Session,
+        *,
+        generation_provider: str | None = None,
+        generation_model: str | None = None,
+    ) -> _FakeEvaluationRagService:
+        del settings, db
+        recorded.append((generation_provider, generation_model))
+        return _FakeEvaluationRagService()
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=1),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-default-generation",
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert result["status"] == "succeeded"
+        assert recorded == [(None, None)]
+        assert detail.requested_generation_provider is None
+        assert detail.requested_generation_model is None
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_rag_service_defers_unavailable_requested_provider_to_generation_failure() -> (
+    None
+):
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="openai",
+                generation_model="gpt-4.1-mini",
+            )
+            with pytest.raises(AnswerGenerationError):
+                service.service.answer_generator.generate(
+                    # The request body is intentionally generic and contains no raw fixture text.
+                    request=cast(Any, object()),
+                )
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_rag_service_applies_requested_fake_model_to_generation_metadata() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="fake",
+                generation_model="eval-model-a",
+            )
+            metadata = service._generation_metadata(
+                GenerationResult(
+                    content="answer [1]",
+                    usage=TokenUsage(input_tokens=3, output_tokens=2, total_tokens=5),
+                ),
+                latency_ms=9,
+            )
+
+        assert service.service.settings.generation_provider == "fake"
+        assert service.service.settings.generation_model_name == "eval-model-a"
+        assert metadata.provider == "fake"
+        assert metadata.model == "eval-model-a"
+        assert metadata.total_tokens == 5
+        assert metadata.latency_ms == 9
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_service_runner_persists_items_results_and_safe_details() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -1258,6 +1442,84 @@ def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
         engine.dispose()
 
 
+def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_generation_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+            for item in candidate_generation_items:
+                item.estimated_cost_usd = Decimal("0.200000")
+            db.commit()
+            unchanged_cost_comparison = EvaluationService(
+                settings=Settings(app_env="test")
+            ).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        generation = comparison.generation
+        assert generation.base_estimated_cost_usd == 0.2
+        assert generation.candidate_estimated_cost_usd == 0.1
+        assert generation.cost_delta == pytest.approx(-0.1)
+        assert generation.cost_direction == "improved"
+        assert generation.cost_lower_is_better is True
+        assert generation.tokens_delta == -300
+        assert generation.tokens_direction == "improved"
+        assert generation.tokens_lower_is_better is True
+        assert generation.latency_delta == pytest.approx(-75.0)
+        assert generation.latency_direction == "improved"
+        assert generation.latency_lower_is_better is True
+        assert generation.base_providers == ["openai"]
+        assert generation.base_models == ["gpt-4.1-mini"]
+        assert generation.candidate_providers == ["anthropic"]
+        assert generation.candidate_models == ["claude-3-5-sonnet"]
+        assert unchanged_cost_comparison.generation.cost_delta == 0.0
+        assert unchanged_cost_comparison.generation.cost_direction == "unchanged"
+    finally:
+        engine.dispose()
+
+
 def test_compare_runs_identical_run_is_unchanged() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -1286,6 +1548,9 @@ def test_compare_runs_identical_run_is_unchanged() -> None:
 
         assert {metric.direction for metric in comparison.metrics} == {"unchanged"}
         assert {case.transition for case in comparison.cases} == {"unchanged"}
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_direction == "not_applicable"
+        assert comparison.generation.latency_direction == "not_applicable"
         assert comparison.summary.common_case_count == 2
         assert comparison.summary.base_only_case_count == 0
         assert comparison.summary.candidate_only_case_count == 0
@@ -3291,6 +3556,41 @@ def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_str
         assert response.json()["error"]["code"] == "validation_error"
 
 
+def test_evaluation_api_rejects_unknown_provider_and_secret_like_generation_model(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = evaluation_client
+    _login_as(client, "admin@example.com")
+    csrf_token = _session_csrf(client)
+
+    unknown_provider = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "generation_provider": "remote",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert unknown_provider.status_code == 422
+    assert unknown_provider.json()["error"]["code"] == "validation_error"
+
+    secret_model = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "generation_provider": "openai",
+            "generation_model": "sk-test-secret-token-1234567890",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert secret_model.status_code == 422
+    serialized = secret_model.text.lower()
+    assert "sk-test-secret-token" not in serialized
+    assert "1234567890" not in serialized
+
+
 def test_evaluation_failure_candidate_and_promotion_api(
     evaluation_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
@@ -4391,6 +4691,32 @@ def _seed_comparison_run(
             )
     db.flush()
     return run
+
+
+def _set_generation_for_run(
+    db: Session,
+    run: EvaluationRun,
+    *,
+    provider: str,
+    model: str,
+    cost: Decimal,
+    total_tokens: int,
+    latency_ms: int,
+) -> list[EvaluationRunItem]:
+    items = db.scalars(
+        select(EvaluationRunItem)
+        .where(EvaluationRunItem.evaluation_run_id == run.evaluation_run_id)
+        .order_by(EvaluationRunItem.evaluation_run_item_id)
+    ).all()
+    for item in items:
+        item.generation_provider = provider
+        item.generation_model = model
+        item.input_tokens = total_tokens // 2
+        item.output_tokens = total_tokens - item.input_tokens
+        item.total_tokens = total_tokens
+        item.estimated_cost_usd = cost
+        item.generation_latency_ms = latency_ms
+    return list(items)
 
 
 def _session_factory() -> tuple[Any, sessionmaker[Session]]:

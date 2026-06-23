@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import math
 import time
 from collections.abc import Callable, Iterable
@@ -55,6 +56,7 @@ from app.schemas.evaluations import (
     DATASET_MANIFEST_SCHEMA_VERSION,
     DEFAULT_EVALUATION_METRICS,
     EVALUATION_SCHEMA_VERSION,
+    KNOWN_GENERATION_PROVIDERS,
     EvaluationCacheMode,
     EvaluationCaseComparison,
     EvaluationCaseCreateRequest,
@@ -75,6 +77,7 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionRequest,
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
+    EvaluationGenerationComparison,
     EvaluationMetricComparison,
     EvaluationMetricResult,
     EvaluationRunComparison,
@@ -414,10 +417,7 @@ class EvaluationService:
         *,
         repository: EvaluationRepository | None = None,
         job_repository: JobRepository | None = None,
-        rag_service_factory: Callable[
-            [Settings, Session],
-            EvaluationRagService,
-        ] = create_evaluation_rag_service,
+        rag_service_factory: Callable[..., EvaluationRagService] = create_evaluation_rag_service,
         settings: Settings | None = None,
         trace_export_service: TraceExportService | None = None,
     ) -> None:
@@ -470,6 +470,8 @@ class EvaluationService:
             metrics=metrics,
             top_k=payload.top_k,
             rerank_top_n=payload.rerank_top_n,
+            generation_provider=payload.generation_provider,
+            generation_model=payload.generation_model,
             trigger_type=trigger_type,
             retrieval_settings_json=_retrieval_settings_snapshot(
                 strategy_type=strategy_type,
@@ -499,6 +501,8 @@ class EvaluationService:
                 "strategy_targets": [_target_metadata_json(target) for target in strategy_targets],
                 "top_k": payload.top_k,
                 "rerank_top_n": payload.rerank_top_n,
+                "generation_provider": payload.generation_provider,
+                "generation_model": payload.generation_model,
                 "trigger_type": trigger_type,
             },
             created_by=user.user_id,
@@ -916,6 +920,7 @@ class EvaluationService:
             else self._load_run_comparison(db, evaluation_run_id=candidate_run_id)
         )
         metrics = _compare_metric_summaries(base.summary, candidate.summary)
+        generation = _compare_generation_summaries(base.summary, candidate.summary)
         cases = _compare_run_cases(
             base.items,
             base.results_by_item,
@@ -925,6 +930,7 @@ class EvaluationService:
         return EvaluationRunComparison(
             base_run=base.summary,
             candidate_run=candidate.summary,
+            generation=generation,
             metrics=metrics,
             cases=cases,
             summary=EvaluationRunComparisonSummary(
@@ -1162,7 +1168,13 @@ class EvaluationService:
         succeeded_count = 0
         failed_count = 0
         try:
-            rag_service = self.rag_service_factory(self.settings, db)
+            generation_provider = cast(str | None, config["generation_provider"])
+            generation_model = cast(str | None, config["generation_model"])
+            rag_service = self._create_rag_service(
+                db,
+                generation_provider=generation_provider,
+                generation_model=generation_model,
+            )
             strategy_targets = _strategy_targets_from_config(config)
             requested_metrics = set(cast(list[str], config["metrics"]))
             top_k = cast(int | None, config["top_k"])
@@ -1291,6 +1303,22 @@ class EvaluationService:
             self.trace_export_service.export_evaluation_summary(summary)
         except Exception:
             return
+
+    def _create_rag_service(
+        self,
+        db: Session,
+        *,
+        generation_provider: str | None,
+        generation_model: str | None,
+    ) -> EvaluationRagService:
+        if _factory_accepts_generation_selection(self.rag_service_factory):
+            return self.rag_service_factory(
+                self.settings,
+                db,
+                generation_provider=generation_provider,
+                generation_model=generation_model,
+            )
+        return self.rag_service_factory(self.settings, db)
 
     def _run_case(
         self,
@@ -1598,6 +1626,8 @@ class EvaluationService:
             avg_generation_latency_ms=generation_summary.avg_generation_latency_ms,
             generation_providers=generation_summary.generation_providers,
             generation_models=generation_summary.generation_models,
+            requested_generation_provider=cast(str | None, config["generation_provider"]),
+            requested_generation_model=cast(str | None, config["generation_model"]),
             error_code=run.error_code,
             error_message=redact_error_message(run.error_message) if run.error_message else None,
             started_at=run.started_at,
@@ -2242,6 +2272,8 @@ def _config(run: EvaluationRun) -> dict[str, object]:
     raw_strategy_targets = config.get("strategy_targets")
     top_k = config.get("top_k")
     rerank_top_n = config.get("rerank_top_n")
+    generation_provider = _requested_generation_provider(config.get("generation_provider"))
+    generation_model = _requested_generation_model(config.get("generation_model"))
     trigger_type = config.get("trigger_type") or run.trigger_type
     strategies = (
         [str(strategy) for strategy in raw_strategies if isinstance(strategy, str)]
@@ -2278,8 +2310,44 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "strategy_targets": strategy_targets,
         "top_k": top_k if isinstance(top_k, int) else None,
         "rerank_top_n": rerank_top_n if isinstance(rerank_top_n, int) else None,
+        "generation_provider": generation_provider,
+        "generation_model": generation_model,
         "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
     }
+
+
+def _factory_accepts_generation_selection(
+    factory: Callable[..., EvaluationRagService],
+) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return "generation_provider" in parameters and "generation_model" in parameters
+
+
+def _requested_generation_provider(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    provider = _safe_optional_generation_label(value.lower(), max_length=50)
+    if provider is None or provider not in KNOWN_GENERATION_PROVIDERS:
+        return None
+    return provider
+
+
+def _requested_generation_model(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    model = _safe_optional_generation_label(value, max_length=128)
+    if model is None or model in {"redacted", "unknown"}:
+        return None
+    if not model[0].isalnum() or any(
+        not (character.isalnum() or character in "_.:/@+-") for character in model
+    ):
+        return None
+    return model
 
 
 def _fixture_planned_case_count(run: EvaluationRun) -> int:
@@ -3234,6 +3302,58 @@ def _compare_metric_summaries(
             )
         )
     return comparisons
+
+
+def _compare_generation_summaries(
+    base: EvaluationRunSummary,
+    candidate: EvaluationRunSummary,
+) -> EvaluationGenerationComparison:
+    cost_delta = _float_delta(
+        base.total_estimated_cost_usd,
+        candidate.total_estimated_cost_usd,
+        digits=6,
+    )
+    tokens_delta = _int_delta(base.total_tokens, candidate.total_tokens)
+    latency_delta = _float_delta(
+        base.avg_generation_latency_ms,
+        candidate.avg_generation_latency_ms,
+        digits=3,
+    )
+    return EvaluationGenerationComparison(
+        base_estimated_cost_usd=base.total_estimated_cost_usd,
+        candidate_estimated_cost_usd=candidate.total_estimated_cost_usd,
+        cost_delta=cost_delta,
+        cost_direction=_metric_comparison_direction(cost_delta, lower_is_better=True),
+        base_total_tokens=base.total_tokens,
+        candidate_total_tokens=candidate.total_tokens,
+        tokens_delta=tokens_delta,
+        tokens_direction=_metric_comparison_direction(tokens_delta, lower_is_better=True),
+        base_avg_generation_latency_ms=base.avg_generation_latency_ms,
+        candidate_avg_generation_latency_ms=candidate.avg_generation_latency_ms,
+        latency_delta=latency_delta,
+        latency_direction=_metric_comparison_direction(latency_delta, lower_is_better=True),
+        base_providers=base.generation_providers,
+        base_models=base.generation_models,
+        candidate_providers=candidate.generation_providers,
+        candidate_models=candidate.generation_models,
+    )
+
+
+def _float_delta(
+    base_value: float | None,
+    candidate_value: float | None,
+    *,
+    digits: int,
+) -> float | None:
+    if base_value is None or candidate_value is None:
+        return None
+    return round(candidate_value - base_value, digits)
+
+
+def _int_delta(base_value: int | None, candidate_value: int | None) -> int | None:
+    if base_value is None or candidate_value is None:
+        return None
+    return candidate_value - base_value
 
 
 def _metric_comparison_direction(

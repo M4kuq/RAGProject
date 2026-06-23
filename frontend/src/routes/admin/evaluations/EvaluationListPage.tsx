@@ -15,11 +15,20 @@ import {
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationCacheMode,
+  EvaluationGenerationProvider,
   EvaluationRunnableStrategy
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
 
 const PAGE_SIZE = 20;
+const GENERATION_PROVIDERS: EvaluationGenerationProvider[] = [
+  "fake",
+  "ollama",
+  "lmstudio",
+  "openai",
+  "anthropic",
+  "gemini"
+];
 
 export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,6 +37,10 @@ export function EvaluationListPage() {
   const [caseLimit, setCaseLimit] = useState(10);
   const [strategies, setStrategies] = useState<EvaluationRunnableStrategy[]>(["dense"]);
   const [cacheModes, setCacheModes] = useState<EvaluationCacheMode[]>(["default"]);
+  const [generationProvider, setGenerationProvider] = useState<EvaluationGenerationProvider | "">(
+    ""
+  );
+  const [generationModel, setGenerationModel] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [selectedRunIds, setSelectedRunIds] = useState<number[]>([]);
   const navigate = useNavigate();
@@ -61,6 +74,8 @@ export function EvaluationListPage() {
       strategy_type: strategies[0] ?? "dense",
       strategies,
       cache_modes: cacheModes,
+      generation_provider: generationProvider || undefined,
+      generation_model: generationModel.trim() || undefined,
       trigger_type: "manual"
     });
     setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
@@ -169,6 +184,47 @@ export function EvaluationListPage() {
             ))}
           </span>
         </div>
+        <label>
+          <span className="metric-heading">
+            生成 provider
+            <HelpTooltip
+              description="未指定ならサーバの既定 provider を使います。"
+              direction="評価 run 単位で生成 provider を固定して、別 run と比較できます。"
+              title="生成 provider"
+            />
+          </span>
+          <select
+            aria-label="生成 provider"
+            value={generationProvider}
+            onChange={(event) =>
+              setGenerationProvider(event.target.value as EvaluationGenerationProvider | "")
+            }
+          >
+            <option value="">システム既定</option>
+            {GENERATION_PROVIDERS.map((provider) => (
+              <option key={provider} value={provider}>
+                {provider}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="metric-heading">
+            生成 model
+            <HelpTooltip
+              description="任意です。未指定ならサーバ既定モデルを使います。"
+              direction="API key や token ではなく model 名だけを入力してください。"
+              title="生成 model"
+            />
+          </span>
+          <input
+            aria-label="生成 model"
+            maxLength={128}
+            placeholder="例: gpt-4.1-mini"
+            value={generationModel}
+            onChange={(event) => setGenerationModel(event.target.value)}
+          />
+        </label>
         <label>
           ケース上限
           <input
