@@ -1026,6 +1026,106 @@ textarea {
   max-width: 860px;
 }
 
+.comparison-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin: 0 0 12px;
+}
+
+.comparison-toolbar .muted {
+  margin-right: auto;
+}
+
+.comparison-run-pair {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.comparison-run-panel {
+  min-width: 0;
+}
+
+.comparison-run-panel h2 {
+  margin-bottom: 12px;
+}
+
+.comparison-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 14px 0 0;
+}
+
+.comparison-summary-grid div {
+  background: var(--admin-surface-soft);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius);
+  padding: 12px;
+}
+
+.comparison-summary-grid dt {
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.comparison-summary-grid dd {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 4px 0 0;
+}
+
+.comparison-direction-badge {
+  background: var(--admin-surface-soft);
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  color: var(--admin-muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.comparison-direction-improved td:first-child,
+.comparison-direction-added td:first-child {
+  border-left: 4px solid var(--admin-success);
+}
+
+.comparison-direction-regressed td:first-child,
+.comparison-direction-removed td:first-child {
+  border-left: 4px solid var(--admin-danger);
+}
+
+.comparison-direction-improved .comparison-direction-badge,
+.comparison-direction-added .comparison-direction-badge {
+  background: var(--admin-success-soft);
+  border-color: var(--admin-success);
+  color: var(--admin-success);
+}
+
+.comparison-direction-regressed .comparison-direction-badge,
+.comparison-direction-removed .comparison-direction-badge {
+  background: var(--admin-danger-soft);
+  border-color: var(--admin-danger);
+  color: var(--admin-danger);
+}
+
+.comparison-direction-unchanged .comparison-direction-badge,
+.comparison-direction-not_applicable .comparison-direction-badge {
+  background: var(--admin-surface-soft);
+  color: var(--admin-muted);
+}
+
+.case-identifier {
+  overflow-wrap: anywhere;
+}
+
 .metric-heading,
 .metric-name-cell,
 .metric-detail-item {

@@ -55,10 +55,13 @@ from app.schemas.evaluations import (
     DEFAULT_EVALUATION_METRICS,
     EVALUATION_SCHEMA_VERSION,
     EvaluationCacheMode,
+    EvaluationCaseComparison,
     EvaluationCaseCreateRequest,
     EvaluationCaseResponse,
     EvaluationCaseSpec,
+    EvaluationCaseTransition,
     EvaluationCaseUpdateRequest,
+    EvaluationComparisonDirection,
     EvaluationDatasetCreateRequest,
     EvaluationDatasetImportResponse,
     EvaluationDatasetManifest,
@@ -71,7 +74,10 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionRequest,
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
+    EvaluationMetricComparison,
     EvaluationMetricResult,
+    EvaluationRunComparison,
+    EvaluationRunComparisonSummary,
     EvaluationRunCreateRequest,
     EvaluationRunCreateResponse,
     EvaluationRunDetail,
@@ -85,6 +91,16 @@ from app.schemas.evaluations import (
 )
 
 SCORE_QUANT = Decimal("0.000001")
+METRIC_DELTA_EPSILON = 1e-6
+LOWER_IS_BETTER_METRICS = frozenset(
+    {
+        "budget_exhausted_rate",
+        "fallback_rate",
+        "no_context_rate",
+        "p95_latency",
+        "retrieval_call_count_avg",
+    }
+)
 RETRIEVAL_RUN_REQUEST_ID_MAX_LENGTH = 100
 ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
     {
@@ -320,6 +336,25 @@ class PromotionSourceCase:
     required_citation: bool
     tags: list[str]
     metadata_json: dict[str, object] | None
+
+
+@dataclass(frozen=True)
+class LoadedEvaluationRunComparison:
+    run: EvaluationRun
+    summary: EvaluationRunSummary
+    items: list[EvaluationRunItem]
+    results_by_item: dict[int, list[EvaluationResult]]
+
+
+@dataclass(frozen=True)
+class EvaluationCaseComparisonSource:
+    evaluation_run_item_id: int
+    case_id: str
+    question_hash: str | None
+    case_snapshot_hash: str | None
+    comparison_label: str | None
+    status: EvaluationStatus
+    metric_values: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -818,23 +853,87 @@ class EvaluationService:
         )
         return [self._summary(db, run) for run in runs], pagination_meta(pagination, total)
 
-    def get_run_detail(self, db: Session, *, evaluation_run_id: int) -> EvaluationRunDetail:
+    def _load_run_comparison(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> LoadedEvaluationRunComparison:
         run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
         if run is None:
             raise ResourceNotFound()
-        summary = self._summary(db, run)
         items = self.repository.list_items(db, evaluation_run_id=evaluation_run_id)
         results_by_item = self.repository.list_results(
             db,
             evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
         )
+        summary = self._summary_from_loaded(db, run, items, results_by_item)
+        return LoadedEvaluationRunComparison(
+            run=run,
+            summary=summary,
+            items=items,
+            results_by_item=results_by_item,
+        )
+
+    def get_run_detail(self, db: Session, *, evaluation_run_id: int) -> EvaluationRunDetail:
+        loaded = self._load_run_comparison(db, evaluation_run_id=evaluation_run_id)
         return EvaluationRunDetail(
-            **summary.model_dump(),
+            **loaded.summary.model_dump(),
             items=[
-                self._item_response(item, results_by_item.get(item.evaluation_run_item_id, []))
-                for item in items
+                self._item_response(
+                    item,
+                    loaded.results_by_item.get(item.evaluation_run_item_id, []),
+                )
+                for item in loaded.items
             ],
-            failure_candidates=self._failure_candidates(db, run=run),
+            failure_candidates=self._failure_candidates(db, run=loaded.run),
+        )
+
+    def compare_runs(
+        self,
+        db: Session,
+        *,
+        base_run_id: int,
+        candidate_run_id: int,
+    ) -> EvaluationRunComparison:
+        base = self._load_run_comparison(db, evaluation_run_id=base_run_id)
+        candidate = (
+            base
+            if base_run_id == candidate_run_id
+            else self._load_run_comparison(db, evaluation_run_id=candidate_run_id)
+        )
+        metrics = _compare_metric_summaries(base.summary, candidate.summary)
+        cases = _compare_run_cases(
+            base.items,
+            base.results_by_item,
+            candidate.items,
+            candidate.results_by_item,
+        )
+        return EvaluationRunComparison(
+            base_run=base.summary,
+            candidate_run=candidate.summary,
+            metrics=metrics,
+            cases=cases,
+            summary=EvaluationRunComparisonSummary(
+                improved_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "improved"
+                ),
+                regressed_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "regressed"
+                ),
+                unchanged_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "unchanged"
+                ),
+                regressed_case_count=sum(1 for case in cases if case.transition == "regressed"),
+                improved_case_count=sum(1 for case in cases if case.transition == "improved"),
+                common_case_count=sum(
+                    1
+                    for case in cases
+                    if case.base_status is not None and case.candidate_status is not None
+                ),
+                base_only_case_count=sum(1 for case in cases if case.transition == "removed"),
+                candidate_only_case_count=sum(1 for case in cases if case.transition == "added"),
+            ),
         )
 
     def get_strategy_comparison(
@@ -1398,6 +1497,15 @@ class EvaluationService:
             db,
             evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
         )
+        return self._summary_from_loaded(db, run, items, results_by_item)
+
+    def _summary_from_loaded(
+        self,
+        db: Session,
+        run: EvaluationRun,
+        items: list[EvaluationRunItem],
+        results_by_item: dict[int, list[EvaluationResult]],
+    ) -> EvaluationRunSummary:
         config = _config(run)
         metric_summary = _metric_summary(results_by_item)
         strategy_comparison = _strategy_comparison(items, results_by_item)
@@ -2941,6 +3049,239 @@ def _unique_case_count(items: list[EvaluationRunItem]) -> int:
         if item.case_key or item.evaluation_case_id is not None
     }
     return len(keys) if keys else len(items)
+
+
+def _compare_metric_summaries(
+    base: EvaluationRunSummary,
+    candidate: EvaluationRunSummary,
+) -> list[EvaluationMetricComparison]:
+    metric_names = sorted(
+        set(base.metric_names)
+        | set(candidate.metric_names)
+        | set(base.metric_summary)
+        | set(candidate.metric_summary)
+    )
+    comparisons: list[EvaluationMetricComparison] = []
+    for metric_name in metric_names:
+        base_score = base.metric_summary.get(metric_name)
+        candidate_score = candidate.metric_summary.get(metric_name)
+        lower_is_better = metric_name in LOWER_IS_BETTER_METRICS
+        delta = (
+            round(candidate_score - base_score, 6)
+            if base_score is not None and candidate_score is not None
+            else None
+        )
+        comparisons.append(
+            EvaluationMetricComparison(
+                metric_name=metric_name,
+                base_score=base_score,
+                candidate_score=candidate_score,
+                delta=delta,
+                direction=_metric_comparison_direction(delta, lower_is_better),
+                lower_is_better=lower_is_better,
+            )
+        )
+    return comparisons
+
+
+def _metric_comparison_direction(
+    delta: float | None,
+    lower_is_better: bool,
+) -> EvaluationComparisonDirection:
+    if delta is None:
+        return "not_applicable"
+    if abs(delta) <= METRIC_DELTA_EPSILON:
+        return "unchanged"
+    effective_delta = -delta if lower_is_better else delta
+    return "improved" if effective_delta > 0 else "regressed"
+
+
+def _compare_run_cases(
+    base_items: list[EvaluationRunItem],
+    base_results_by_item: dict[int, list[EvaluationResult]],
+    candidate_items: list[EvaluationRunItem],
+    candidate_results_by_item: dict[int, list[EvaluationResult]],
+) -> list[EvaluationCaseComparison]:
+    base_sources = _case_comparison_sources(base_items, base_results_by_item)
+    candidate_sources = _case_comparison_sources(candidate_items, candidate_results_by_item)
+    duplicate_case_ids = _duplicated_case_ids(base_sources, candidate_sources)
+    base_by_key = _case_sources_by_match_key(base_sources, duplicate_case_ids)
+    candidate_by_key = _case_sources_by_match_key(candidate_sources, duplicate_case_ids)
+
+    comparisons: list[EvaluationCaseComparison] = []
+    for match_key in sorted(set(base_by_key) | set(candidate_by_key)):
+        base = base_by_key.get(match_key)
+        candidate = candidate_by_key.get(match_key)
+        source = base if base is not None else candidate
+        case_id = source.case_id if source is not None else match_key
+        transition = _case_transition(
+            base.status if base is not None else None,
+            candidate.status if candidate is not None else None,
+        )
+        comparisons.append(
+            EvaluationCaseComparison(
+                case_id=case_id,
+                question_hash=_first_non_empty(
+                    base.question_hash if base is not None else None,
+                    candidate.question_hash if candidate is not None else None,
+                ),
+                case_snapshot_hash=_first_non_empty(
+                    base.case_snapshot_hash if base is not None else None,
+                    candidate.case_snapshot_hash if candidate is not None else None,
+                ),
+                comparison_label=_first_non_empty(
+                    base.comparison_label if base is not None else None,
+                    candidate.comparison_label if candidate is not None else None,
+                ),
+                base_status=base.status if base is not None else None,
+                candidate_status=candidate.status if candidate is not None else None,
+                transition=transition,
+                metric_deltas=(
+                    _case_metric_deltas(base.metric_values, candidate.metric_values)
+                    if base is not None and candidate is not None
+                    else {}
+                ),
+            )
+        )
+    return comparisons
+
+
+def _case_comparison_sources(
+    items: list[EvaluationRunItem],
+    results_by_item: dict[int, list[EvaluationResult]],
+) -> list[EvaluationCaseComparisonSource]:
+    sources: list[EvaluationCaseComparisonSource] = []
+    for item in items:
+        results = results_by_item.get(item.evaluation_run_item_id, [])
+        details = _case_metadata_payload(results)
+        question_hash = _safe_hash_value(details.get("question_hash")) or _safe_hash_value(
+            _item_case_snapshot(item).get("question_hash")
+        )
+        case_snapshot_hash = _safe_hash_value(
+            details.get("case_snapshot_hash")
+        ) or _safe_hash_value(_item_case_snapshot(item).get("case_snapshot_hash"))
+        case_id = (
+            _safe_case_identifier(details.get("case_id"))
+            or _safe_case_identifier(item.case_key)
+            or question_hash
+            or case_snapshot_hash
+            or (
+                f"evaluation_case:{item.evaluation_case_id}"
+                if item.evaluation_case_id is not None
+                else None
+            )
+            or f"item:{item.evaluation_run_item_id}"
+        )
+        sources.append(
+            EvaluationCaseComparisonSource(
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                case_id=case_id,
+                question_hash=question_hash,
+                case_snapshot_hash=case_snapshot_hash,
+                comparison_label=_item_comparison_label(item),
+                status=cast(EvaluationStatus, item.status),
+                metric_values=_result_metric_values(results),
+            )
+        )
+    return sources
+
+
+def _case_metadata_payload(results: list[EvaluationResult]) -> dict[str, object]:
+    for result in results:
+        if result.metric_name != "case_metadata":
+            continue
+        for payload in (result.metric_detail_json, result.details_json):
+            if isinstance(payload, dict):
+                return payload
+    return {}
+
+
+def _result_metric_values(results: list[EvaluationResult]) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for result in results:
+        if result.metric_name == "case_metadata":
+            continue
+        value = _result_numeric_value(result)
+        if value is not None:
+            values[result.metric_name] = value
+    return values
+
+
+def _duplicated_case_ids(
+    *source_groups: list[EvaluationCaseComparisonSource],
+) -> set[str]:
+    duplicated: set[str] = set()
+    for sources in source_groups:
+        counts: dict[str, int] = {}
+        for source in sources:
+            counts[source.case_id] = counts.get(source.case_id, 0) + 1
+        duplicated.update(case_id for case_id, count in counts.items() if count > 1)
+    return duplicated
+
+
+def _case_sources_by_match_key(
+    sources: list[EvaluationCaseComparisonSource],
+    duplicated_case_ids: set[str],
+) -> dict[str, EvaluationCaseComparisonSource]:
+    by_key: dict[str, EvaluationCaseComparisonSource] = {}
+    for source in sources:
+        match_key = source.case_id
+        if source.case_id in duplicated_case_ids:
+            match_key = f"{source.case_id}::{source.comparison_label or 'default'}"
+        if match_key in by_key:
+            match_key = f"{match_key}::item:{source.evaluation_run_item_id}"
+        by_key[match_key] = source
+    return by_key
+
+
+def _case_metric_deltas(
+    base_values: dict[str, float],
+    candidate_values: dict[str, float],
+) -> dict[str, float | None]:
+    deltas: dict[str, float | None] = {}
+    for metric_name in sorted(set(base_values) | set(candidate_values)):
+        base_value = base_values.get(metric_name)
+        candidate_value = candidate_values.get(metric_name)
+        deltas[metric_name] = (
+            round(candidate_value - base_value, 6)
+            if base_value is not None and candidate_value is not None
+            else None
+        )
+    return deltas
+
+
+def _case_transition(
+    base_status: EvaluationStatus | None,
+    candidate_status: EvaluationStatus | None,
+) -> EvaluationCaseTransition:
+    if base_status is None:
+        return "added"
+    if candidate_status is None:
+        return "removed"
+    if base_status == candidate_status:
+        return "unchanged"
+    if base_status == "succeeded" and candidate_status != "succeeded":
+        return "regressed"
+    if base_status != "succeeded" and candidate_status == "succeeded":
+        return "improved"
+    return "unchanged"
+
+
+def _first_non_empty(left: str | None, right: str | None) -> str | None:
+    return left or right
+
+
+def _safe_case_identifier(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.replace("\x00", " ").split())
+    if not text or len(text) > 200:
+        return None
+    lowered = text.lower()
+    forbidden = ("api_key", "bearer", "credential", "password", "secret", "token")
+    if any(part in lowered for part in forbidden) or "@" in text:
+        return None
+    return text
 
 
 def _metric_summary(results_by_item: dict[int, list[EvaluationResult]]) -> dict[str, float]:

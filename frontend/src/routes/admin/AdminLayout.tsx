@@ -10,6 +10,7 @@ import { DocumentListPage } from "./documents/DocumentListPage";
 import { DocumentReviewPage } from "./documents/DocumentReviewPage";
 import { VersionDetailPage } from "./documents/VersionDetailPage";
 import { EvaluationDatasetDetailPage } from "./evaluations/EvaluationDatasetDetailPage";
+import { EvaluationComparePage } from "./evaluations/EvaluationComparePage";
 import { EvaluationDetailPage } from "./evaluations/EvaluationDetailPage";
 import { EvaluationListPage } from "./evaluations/EvaluationListPage";
 import { JobDetailPage } from "./jobs/JobDetailPage";
@@ -47,6 +48,7 @@ function AdminShell() {
           <Routes>
             <Route index element={<AdminPage />} />
             <Route path="evaluations" element={<EvaluationListPage />} />
+            <Route path="evaluations/compare" element={<EvaluationComparePage />} />
             <Route
               path="evaluations/datasets/:evaluationDatasetId"
               element={<EvaluationDatasetDetailPage />}

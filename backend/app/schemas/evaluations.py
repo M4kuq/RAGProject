@@ -586,6 +586,60 @@ class EvaluationRunDetail(EvaluationRunSummary):
     failure_candidates: list[EvaluationFailureCandidate] = Field(default_factory=list)
 
 
+EvaluationComparisonDirection = Literal[
+    "improved",
+    "regressed",
+    "unchanged",
+    "not_applicable",
+]
+EvaluationCaseTransition = Literal[
+    "improved",
+    "regressed",
+    "unchanged",
+    "added",
+    "removed",
+]
+
+
+class EvaluationMetricComparison(BaseModel):
+    metric_name: EvaluationMetricName | str
+    base_score: float | None = None
+    candidate_score: float | None = None
+    delta: float | None = None
+    direction: EvaluationComparisonDirection
+    lower_is_better: bool = False
+
+
+class EvaluationCaseComparison(BaseModel):
+    case_id: str = Field(min_length=1, max_length=200)
+    question_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    case_snapshot_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    comparison_label: str | None = Field(default=None, max_length=120)
+    base_status: EvaluationStatus | None = None
+    candidate_status: EvaluationStatus | None = None
+    transition: EvaluationCaseTransition
+    metric_deltas: dict[str, float | None] = Field(default_factory=dict)
+
+
+class EvaluationRunComparisonSummary(BaseModel):
+    improved_metric_count: int = Field(default=0, ge=0)
+    regressed_metric_count: int = Field(default=0, ge=0)
+    unchanged_metric_count: int = Field(default=0, ge=0)
+    regressed_case_count: int = Field(default=0, ge=0)
+    improved_case_count: int = Field(default=0, ge=0)
+    common_case_count: int = Field(default=0, ge=0)
+    base_only_case_count: int = Field(default=0, ge=0)
+    candidate_only_case_count: int = Field(default=0, ge=0)
+
+
+class EvaluationRunComparison(BaseModel):
+    base_run: EvaluationRunSummary
+    candidate_run: EvaluationRunSummary
+    metrics: list[EvaluationMetricComparison] = Field(default_factory=list)
+    cases: list[EvaluationCaseComparison] = Field(default_factory=list)
+    summary: EvaluationRunComparisonSummary
+
+
 class EvaluationStrategyComparisonResponse(BaseModel):
     evaluation_run_id: int
     strategies: list[str]

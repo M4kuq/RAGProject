@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { MetricHelp, orderedMetricEntries } from "../../../components/admin/MetricHelp";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
@@ -25,6 +25,8 @@ export function EvaluationListPage() {
   const [strategies, setStrategies] = useState<EvaluationRunnableStrategy[]>(["dense"]);
   const [cacheModes, setCacheModes] = useState<EvaluationCacheMode[]>(["default"]);
   const [message, setMessage] = useState<string | null>(null);
+  const [selectedRunIds, setSelectedRunIds] = useState<number[]>([]);
+  const navigate = useNavigate();
   const params = useMemo(
     () => ({
       page: Number(searchParams.get("page") ?? 1),
@@ -58,6 +60,26 @@ export function EvaluationListPage() {
       trigger_type: "manual"
     });
     setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
+  }
+
+  function toggleSelectedRun(evaluationRunId: number, checked: boolean) {
+    setSelectedRunIds((current) => {
+      if (!checked) {
+        return current.filter((runId) => runId !== evaluationRunId);
+      }
+      if (current.includes(evaluationRunId) || current.length >= 2) {
+        return current;
+      }
+      return [...current, evaluationRunId];
+    });
+  }
+
+  function openComparison() {
+    if (selectedRunIds.length !== 2) {
+      return;
+    }
+    const [base, candidate] = selectedRunIds;
+    navigate(`/admin/evaluations/compare?base=${base}&candidate=${candidate}`);
   }
 
   return (
@@ -167,10 +189,26 @@ export function EvaluationListPage() {
       ) : null}
       {runs.data && runs.data.items.length > 0 ? (
         <>
+          <div className="comparison-toolbar">
+            <span className="muted">
+              比較する run を 2 件選択してください。選択順に base / candidate として扱います。
+            </span>
+            <button type="button" disabled={selectedRunIds.length !== 2} onClick={openComparison}>
+              比較
+            </button>
+            <button
+              type="button"
+              disabled={selectedRunIds.length === 0}
+              onClick={() => setSelectedRunIds([])}
+            >
+              選択解除
+            </button>
+          </div>
           <table className="admin-table">
             <thead>
               <tr>
                 <th>評価 run</th>
+                <th>比較</th>
                 <th>dataset</th>
                 <th>strategy</th>
                 <th>状態</th>
@@ -191,6 +229,20 @@ export function EvaluationListPage() {
                 <tr key={run.evaluation_run_id}>
                   <td>
                     <Link to={`/admin/evaluations/${run.evaluation_run_id}`}>#{run.evaluation_run_id}</Link>
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`比較対象 run #${run.evaluation_run_id} を選択`}
+                      checked={selectedRunIds.includes(run.evaluation_run_id)}
+                      disabled={
+                        !selectedRunIds.includes(run.evaluation_run_id) &&
+                        selectedRunIds.length >= 2
+                      }
+                      onChange={(event) =>
+                        toggleSelectedRun(run.evaluation_run_id, event.target.checked)
+                      }
+                      type="checkbox"
+                    />
                   </td>
                   <td>{truncateText(run.dataset_name, 32)}</td>
                   <td>{run.strategies.length ? run.strategies.join(", ") : run.strategy_type}</td>

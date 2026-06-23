@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queryKeys";
 import {
+  compareEvaluationRuns,
   createEvaluationDataset,
   createEvaluationRun,
   exportEvaluationDataset,
@@ -34,6 +35,24 @@ export function useEvaluationRunDetail(evaluationRunId: number) {
     queryKey: queryKeys.evaluations.detail(evaluationRunId),
     queryFn: () => getEvaluationRunDetail(evaluationRunId),
     enabled: Number.isFinite(evaluationRunId)
+  });
+}
+
+export function useEvaluationRunComparison(
+  baseRunId: number | null,
+  candidateRunId: number | null
+) {
+  const enabled =
+    baseRunId !== null &&
+    candidateRunId !== null &&
+    Number.isSafeInteger(baseRunId) &&
+    Number.isSafeInteger(candidateRunId) &&
+    baseRunId > 0 &&
+    candidateRunId > 0;
+  return useQuery({
+    queryKey: queryKeys.evaluations.compare(baseRunId, candidateRunId),
+    queryFn: () => compareEvaluationRuns(baseRunId ?? 0, candidateRunId ?? 0),
+    enabled
   });
 }
 

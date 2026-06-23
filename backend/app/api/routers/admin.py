@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Request, status
+from fastapi import APIRouter, Body, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -224,6 +224,22 @@ def evaluation_runs(
 ) -> dict[str, object]:
     rows, page_meta = EvaluationService().list_runs(db, pagination=pagination)
     return success_response([row.model_dump(mode="json") for row in rows], request, page_meta)
+
+
+@router.get("/evaluations/runs/compare")
+def compare_evaluation_runs(
+    request: Request,
+    base: int = Query(ge=1),
+    candidate: int = Query(ge=1),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().compare_runs(
+        db,
+        base_run_id=base,
+        candidate_run_id=candidate,
+    )
+    return success_response(result.model_dump(mode="json"), request)
 
 
 @router.get("/evaluations/runs/{evaluation_run_id}")

@@ -109,6 +109,53 @@ export type EvaluationRunDetail = EvaluationRunSummary & {
   failure_candidates: EvaluationFailureCandidate[];
 };
 
+export type EvaluationComparisonDirection =
+  | "improved"
+  | "regressed"
+  | "unchanged"
+  | "not_applicable";
+
+export type EvaluationCaseTransition = "improved" | "regressed" | "unchanged" | "added" | "removed";
+
+export type EvaluationMetricComparison = {
+  metric_name: string;
+  base_score: number | null;
+  candidate_score: number | null;
+  delta: number | null;
+  direction: EvaluationComparisonDirection;
+  lower_is_better: boolean;
+};
+
+export type EvaluationCaseComparison = {
+  case_id: string;
+  question_hash: string | null;
+  case_snapshot_hash: string | null;
+  comparison_label: string | null;
+  base_status: EvaluationStatus | null;
+  candidate_status: EvaluationStatus | null;
+  transition: EvaluationCaseTransition;
+  metric_deltas: Record<string, number | null>;
+};
+
+export type EvaluationRunComparisonSummary = {
+  improved_metric_count: number;
+  regressed_metric_count: number;
+  unchanged_metric_count: number;
+  regressed_case_count: number;
+  improved_case_count: number;
+  common_case_count: number;
+  base_only_case_count: number;
+  candidate_only_case_count: number;
+};
+
+export type EvaluationRunComparison = {
+  base_run: EvaluationRunSummary;
+  candidate_run: EvaluationRunSummary;
+  metrics: EvaluationMetricComparison[];
+  cases: EvaluationCaseComparison[];
+  summary: EvaluationRunComparisonSummary;
+};
+
 export type EvaluationFailureSeverity = "low" | "medium" | "high";
 
 export type EvaluationFailureCandidate = {

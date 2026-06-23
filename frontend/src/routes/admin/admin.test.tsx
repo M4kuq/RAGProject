@@ -1,5 +1,5 @@
 ﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AdminSidebar } from "../../components/admin/AdminSidebar";
@@ -12,6 +12,100 @@ import { queryClient } from "../../lib/queryClient";
 
 function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }));
+}
+
+function evaluationRunSummary(evaluationRunId: number, datasetName: string) {
+  return {
+    evaluation_run_id: evaluationRunId,
+    job_id: evaluationRunId + 100,
+    evaluation_dataset_id: null,
+    dataset_name: datasetName,
+    strategy_type: "dense",
+    strategies: ["dense"],
+    metric_names: ["recall_at_k", "p95_latency"],
+    trigger_type: "manual",
+    status: "succeeded",
+    case_count: 2,
+    succeeded_count: 2,
+    failed_count: 0,
+    metric_summary: { recall_at_k: 0.8, p95_latency: 200 },
+    strategy_comparison: [],
+    strategy_metrics_summary_json: null,
+    error_code: null,
+    error_message: null,
+    started_at: "2026-06-01T00:00:00Z",
+    finished_at: "2026-06-01T00:00:01Z",
+    created_at: "2026-06-01T00:00:00Z",
+    updated_at: "2026-06-01T00:00:01Z"
+  };
+}
+
+function evaluationComparisonPayload() {
+  return {
+    base_run: evaluationRunSummary(10, "base_dataset"),
+    candidate_run: {
+      ...evaluationRunSummary(11, "candidate_dataset"),
+      metric_summary: { recall_at_k: 0.7, p95_latency: 100 }
+    },
+    metrics: [
+      {
+        metric_name: "recall_at_k",
+        base_score: 0.8,
+        candidate_score: 0.7,
+        delta: -0.1,
+        direction: "regressed",
+        lower_is_better: false
+      },
+      {
+        metric_name: "p95_latency",
+        base_score: 200,
+        candidate_score: 100,
+        delta: -100,
+        direction: "improved",
+        lower_is_better: true
+      },
+      {
+        metric_name: "mrr",
+        base_score: 0.5,
+        candidate_score: 0.5,
+        delta: 0,
+        direction: "unchanged",
+        lower_is_better: false
+      }
+    ],
+    cases: [
+      {
+        case_id: "shared_pass",
+        question_hash: "a".repeat(64),
+        case_snapshot_hash: "b".repeat(64),
+        comparison_label: "dense",
+        base_status: "succeeded",
+        candidate_status: "failed",
+        transition: "regressed",
+        metric_deltas: { recall_at_k: -0.1, p95_latency: -100 }
+      },
+      {
+        case_id: "candidate_only",
+        question_hash: "c".repeat(64),
+        case_snapshot_hash: "d".repeat(64),
+        comparison_label: "dense",
+        base_status: null,
+        candidate_status: "succeeded",
+        transition: "added",
+        metric_deltas: {}
+      }
+    ],
+    summary: {
+      improved_metric_count: 1,
+      regressed_metric_count: 1,
+      unchanged_metric_count: 1,
+      regressed_case_count: 1,
+      improved_case_count: 0,
+      common_case_count: 1,
+      base_only_case_count: 0,
+      candidate_only_case_count: 1
+    }
+  };
 }
 
 beforeEach(() => {
@@ -232,6 +326,100 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
 
   expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "評価を実行" })).toBeInTheDocument();
+});
+
+test("evaluation list opens comparison for two selected runs", async () => {
+  const comparisonRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/runs/compare")) {
+        comparisonRequests.push(url);
+        return jsonResponse({ data: evaluationComparisonPayload() });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({
+          data: [evaluationRunSummary(10, "base_dataset"), evaluationRunSummary(11, "candidate_dataset")],
+          meta: { pagination: { page: 1, page_size: 20, total: 2, has_next: false } }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  fireEvent.click(await screen.findByLabelText("比較対象 run #10 を選択"));
+  fireEvent.click(await screen.findByLabelText("比較対象 run #11 を選択"));
+  fireEvent.click(screen.getByRole("button", { name: "比較" }));
+
+  expect(await screen.findByRole("heading", { name: "評価 run 比較" })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(comparisonRequests.some((url) => url.includes("base=10") && url.includes("candidate=11"))).toBe(true)
+  );
+});
+
+test("evaluation comparison page shows direction colors and lower-is-better hints", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/runs/compare")) {
+        return jsonResponse({ data: evaluationComparisonPayload() });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations/compare?base=10&candidate=11");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価 run 比較" })).toBeInTheDocument();
+  const metricTable = await screen.findByRole("table", { name: "metric 差分" });
+  const p95Row = within(metricTable).getByText("p95_latency").closest("tr");
+  expect(p95Row).toHaveClass("comparison-direction-improved");
+  expect(within(p95Row as HTMLElement).getByText("改善")).toBeInTheDocument();
+  expect(within(p95Row as HTMLElement).getByText("低いほど良い")).toBeInTheDocument();
+
+  const recallRow = within(metricTable).getByText("recall_at_k").closest("tr");
+  expect(recallRow).toHaveClass("comparison-direction-regressed");
+  expect(within(recallRow as HTMLElement).getByText("悪化")).toBeInTheDocument();
+
+  const caseTable = screen.getByRole("table", { name: "case 差分" });
+  const regressedCaseRow = within(caseTable).getByText("shared_pass").closest("tr");
+  expect(regressedCaseRow).toHaveClass("comparison-direction-regressed");
+  expect(within(regressedCaseRow as HTMLElement).getByText("回帰")).toBeInTheDocument();
+  expect(within(caseTable).getByText("candidate_only")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("raw question");
+  expect(document.body).not.toHaveTextContent("token=secret");
 });
 
 test("admin evaluation dataset detail shows cases and export", async () => {
