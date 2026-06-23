@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -53,6 +54,7 @@ from app.services.rag_service import (
     _context_citation_sources,
     _context_refs_for_citation_sources,
     _decimal_score,
+    _elapsed_ms,
     _is_insufficient_evidence_answer,
     _optional_decimal_score,
     _payload_snapshot,
@@ -275,7 +277,8 @@ class GraphRagService:
         # dense/hybrid execution when the graph yields no evidence; an explicit
         # strategy=graph request keeps the no_context_found contract.
         allow_base_fallback = requested_strategy == RetrievalStrategy.AGENTIC_ROUTER
-        answer_generator = self.base._answer_generator_for_request(payload)
+        generation_selection = self.base._generation_selection_for_request(payload)
+        answer_generator = self.base._answer_generator_for_selection(generation_selection)
 
         top_k = self.base._effective_ask_top_k(payload.top_k)
         rerank_top_n = self.base._effective_ask_rerank_top_n(payload.rerank_top_n)
@@ -413,6 +416,7 @@ class GraphRagService:
                     result.summary,
                     prompt_context_refs,
                 )
+            generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
                 generation = answer_generator.generate(
                     GenerationRequest(
@@ -421,6 +425,11 @@ class GraphRagService:
                         max_output_chars=self.base.settings.generation_max_output_chars,
                     )
                 )
+            generation_metadata = self.base._generation_metadata(
+                selection=generation_selection,
+                generation=generation,
+                latency_ms=_elapsed_ms(generation_started),
+            )
             with latency_tracker.span("citation_build_ms"):
                 parsed_generation, cited_sources = _validated_generation_or_fallback(
                     generation.content,
@@ -491,6 +500,7 @@ class GraphRagService:
                 run=run,
                 retrieval_run_id=run_id,
                 replayed=False,
+                generation=generation_metadata,
             )
         except InsufficientEvidenceAnswerError:
             self.base._mark_failed_safely(

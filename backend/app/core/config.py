@@ -270,6 +270,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
     lmstudio_timeout_seconds: float = Field(default=180.0, gt=0)
@@ -344,6 +345,28 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("generation_pricing_overrides", mode="before")
+    @classmethod
+    def parse_generation_pricing_overrides(cls, value: object) -> object:
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                logger.warning("Ignoring invalid GENERATION_PRICING_OVERRIDES JSON.")
+                return {}
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning("Ignoring non-object GENERATION_PRICING_OVERRIDES JSON.")
+            return {}
+        if isinstance(value, dict):
+            return value
+        return {}
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> Self:

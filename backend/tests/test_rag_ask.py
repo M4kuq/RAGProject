@@ -55,7 +55,7 @@ from app.rag.rerank import FakeRerankerClient, NoopRerankerClient, RerankCandida
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, _safe_generation_label
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -119,6 +119,13 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
     second = generator.generate(request)
 
     assert first == second
+    assert first.usage is not None
+    assert first.usage == second.usage
+    assert first.usage.input_tokens is not None
+    assert first.usage.input_tokens > 0
+    assert first.usage.output_tokens is not None
+    assert first.usage.output_tokens > 0
+    assert first.usage.total_tokens == first.usage.input_tokens + first.usage.output_tokens
     truncated = generator.generate(
         GenerationRequest(
             message="alpha policy",
@@ -137,6 +144,11 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
     assert "[1]" in truncated.content
     assert "raw context text" not in first.content
     assert "policy) secret.md p.1 chunk:100" in first.content
+
+
+def test_generation_label_redacts_secret_like_values() -> None:
+    assert _safe_generation_label("sk-test-secret-token-1234567890", max_length=128) == "redacted"
+    assert _safe_generation_label("qwen3.5-9b", max_length=128) == "qwen3.5-9b"
 
 
 def test_rag_ask_success_replay_and_duplicate_state_handling(
@@ -183,12 +195,27 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         "fallback_used": False,
         "no_context": None,
     }
+    generation = data["generation"]
+    assert generation["provider"] == "fake"
+    assert generation["model"] == "fake-rag-answer"
+    assert generation["input_tokens"] > 0
+    assert generation["output_tokens"] > 0
+    assert generation["total_tokens"] == generation["input_tokens"] + generation["output_tokens"]
+    assert generation["estimated_cost_usd"] == 0.0
+    assert isinstance(generation["latency_ms"], int)
+    assert generation["latency_ms"] >= 0
     assert (
         "full active chunk text should not be returned whole"
         not in data["assistant_message"]["content"]
     )
     assert len(data["citations"][0]["snippet"]) <= 240
-    assert "token" not in str(body).lower()
+    generation_dump = str(generation)
+    assert "alpha policy summary" not in generation_dump
+    assert "full active chunk text should not be returned whole" not in generation_dump
+    assert "raw_prompt" not in generation_dump
+    assert "raw_answer" not in generation_dump
+    assert "raw_context" not in generation_dump
+    assert "lm-studio" not in str(body).lower()
     assert "storage_key" not in str(body).lower()
     assert len(vector_client.query_vectors) == 1
 
@@ -284,6 +311,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert replay.json()["meta"]["replayed"] is True
     assert replay.json()["data"]["citations"] == data["citations"]
     assert replay.json()["data"]["confidence"] == data["confidence"]
+    assert replay.json()["data"]["generation"] is None
     assert (
         replay.json()["data"]["user_message"]["chat_message_id"]
         == data["user_message"]["chat_message_id"]

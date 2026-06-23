@@ -306,6 +306,16 @@ class RagAskRetrievalSummary(BaseModel):
     no_context: bool | None = None
 
 
+class RagAskGeneration(BaseModel):
+    provider: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    latency_ms: int | None = None
+
+
 class RagAskResponse(BaseModel):
     chat_session_id: int
     user_message: RagAskUserMessage
@@ -315,3 +325,4 @@ class RagAskResponse(BaseModel):
     retrieval_run_id: int
     retrieval_summary: RagAskRetrievalSummary
     replayed: bool = False
+    generation: RagAskGeneration | None = None

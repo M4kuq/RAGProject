@@ -15,6 +15,7 @@ from app.rag.generation import (
     GenerationContextItem,
     GenerationRequest,
     OpenAIResponsesAnswerGenerator,
+    TokenUsage,
     create_answer_generator,
 )
 
@@ -35,7 +36,10 @@ def test_openai_generator_calls_responses_api_without_leaking_key(
         status_code = 200
 
         def json(self) -> dict[str, Any]:
-            return {"output_text": "The retrieved context says alpha is approved [1]."}
+            return {
+                "output_text": "The retrieved context says alpha is approved [1].",
+                "usage": {"input_tokens": 123, "output_tokens": 45, "total_tokens": 168},
+            }
 
     def fake_post(
         url: str,
@@ -71,6 +75,7 @@ def test_openai_generator_calls_responses_api_without_leaking_key(
     assert "alpha policy text" in captured["json"]["input"]
     assert "test-openai-key" not in str(captured["json"])
     assert captured["timeout"] == 12.0
+    assert result.usage == TokenUsage(input_tokens=123, output_tokens=45, total_tokens=168)
 
 
 def test_openai_generator_extracts_nested_response_text(
@@ -105,6 +110,7 @@ def test_openai_generator_extracts_nested_response_text(
     result = generator.generate(_request())
 
     assert result.content == "Nested output cites the context [1]."
+    assert result.usage is None
 
 
 def test_openai_generator_maps_api_error_to_generation_error(
@@ -232,7 +238,10 @@ def test_anthropic_generator_calls_messages_api(monkeypatch: pytest.MonkeyPatch)
         status_code = 200
 
         def json(self) -> dict[str, Any]:
-            return {"content": [{"type": "text", "text": "Claude cites alpha [1]."}]}
+            return {
+                "content": [{"type": "text", "text": "Claude cites alpha [1]."}],
+                "usage": {"input_tokens": 111, "output_tokens": 22},
+            }
 
     def fake_post(
         url: str,
@@ -265,6 +274,28 @@ def test_anthropic_generator_calls_messages_api(monkeypatch: pytest.MonkeyPatch)
     assert captured["json"]["model"] == "claude-sonnet-4-20250514"
     assert captured["json"]["max_tokens"] == 125
     assert "test-anthropic-key" not in str(captured["json"])
+    assert result.usage == TokenUsage(input_tokens=111, output_tokens=22, total_tokens=133)
+
+
+def test_anthropic_missing_usage_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"content": [{"type": "text", "text": "Claude cites alpha [1]."}]}
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", lambda *args, **kwargs: Response())
+    generator = AnthropicMessagesAnswerGenerator(
+        api_key="test-anthropic-key",
+        base_url="https://api.anthropic.com",
+        api_version="2023-06-01",
+        model_name="claude-sonnet-4-20250514",
+        timeout_seconds=12.0,
+    )
+
+    result = generator.generate(_request())
+
+    assert result.usage is None
 
 
 def test_gemini_generator_calls_generate_content_api(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -281,7 +312,13 @@ def test_gemini_generator_calls_generate_content_api(monkeypatch: pytest.MonkeyP
                             "parts": [{"text": "Gemini cites alpha [1]."}],
                         }
                     }
-                ]
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 91,
+                    "candidatesTokenCount": 19,
+                    "thoughtsTokenCount": 7,
+                    "totalTokenCount": 117,
+                },
             }
 
     def fake_post(
@@ -315,6 +352,35 @@ def test_gemini_generator_calls_generate_content_api(monkeypatch: pytest.MonkeyP
     assert captured["headers"]["x-goog-api-key"] == "test-gemini-key"
     assert captured["json"]["generationConfig"]["maxOutputTokens"] == 125
     assert "test-gemini-key" not in str(captured["json"])
+    assert result.usage == TokenUsage(input_tokens=91, output_tokens=26, total_tokens=117)
+
+
+def test_gemini_missing_usage_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": "Gemini cites alpha [1]."}],
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", lambda *args, **kwargs: Response())
+    generator = GeminiAnswerGenerator(
+        api_key="test-gemini-key",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model_name="gemini-2.5-flash",
+        timeout_seconds=12.0,
+    )
+
+    result = generator.generate(_request())
+
+    assert result.usage is None
 
 
 def test_openai_generation_with_real_api_key_when_enabled() -> None:
