@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from app.core.config import Settings
@@ -66,7 +68,7 @@ def test_settings_parses_generation_pricing_overrides_json() -> None:
         "openai",
         "custom-model",
         TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000),
-        pricing_overrides=settings.generation_pricing_overrides,
+        pricing_overrides=cast("dict[str, Any]", settings.generation_pricing_overrides),
     )
 
     assert cost == 10.0
@@ -74,6 +76,12 @@ def test_settings_parses_generation_pricing_overrides_json() -> None:
 
 def test_settings_invalid_generation_pricing_overrides_degrades_to_empty() -> None:
     settings = Settings(_env_file=None, generation_pricing_overrides="{not-json")
+
+    assert settings.generation_pricing_overrides == {}
+
+
+def test_settings_non_object_generation_pricing_overrides_degrades_to_empty() -> None:
+    settings = Settings(_env_file=None, generation_pricing_overrides='["not-an-object"]')
 
     assert settings.generation_pricing_overrides == {}
 

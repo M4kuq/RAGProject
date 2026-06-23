@@ -2842,7 +2842,10 @@ class RagService:
                 selection.provider,
                 selection.model_name,
                 usage,
-                pricing_overrides=self.settings.generation_pricing_overrides,
+                pricing_overrides=cast(
+                    "dict[str, Any]",
+                    self.settings.generation_pricing_overrides,
+                ),
             ),
             latency_ms=latency_ms,
         )
