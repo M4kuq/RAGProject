@@ -13,7 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 FIXTURE_PATH = BACKEND_ROOT / "app" / "evaluation" / "fixtures" / f"{DATASET_NAME}.json"
 CORPUS_PATHS = (
-    REPO_ROOT / "backend" / "app" / "seed_data" / "llm_paper_corpus.md",
+    BACKEND_ROOT / "app" / "seed_data" / "llm_paper_corpus.md",
     REPO_ROOT / "docs" / "demo" / "llm_paper_corpus.md",
     REPO_ROOT / "docs" / "demo" / "corpus_manifest.json",
     REPO_ROOT / "docs" / "demo" / "corpus_neo4j_demo.md",
