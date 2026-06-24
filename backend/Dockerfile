@@ -39,7 +39,7 @@ FROM base AS test
 # Install dev dependencies while still root (before dropping to the app user),
 # then switch to the unprivileged app user once for the rest of the stage.
 USER root
-RUN uv sync --frozen --no-install-project --extra dev
+RUN uv sync --frozen --no-install-project --extra dev $BACKEND_UV_EXTRA_ARGS
 COPY backend/Dockerfile /backend/Dockerfile
 COPY docker-compose.yml /docker-compose.yml
 COPY README.md /README.md

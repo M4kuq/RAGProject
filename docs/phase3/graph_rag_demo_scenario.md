@@ -12,29 +12,23 @@ demo notes.
 - The repository is checked out locally.
 - `.env.example` has been copied to `.env` for local development, but the demo
   must not show `.env` contents.
-- The default PostgreSQL/Qdrant/backend/worker/frontend stack can start.
+- The default PostgreSQL/Qdrant/Neo4j/backend/worker/frontend stack can start.
 - The presenter has local admin credentials available in the shell or browser
   session. Do not display those values.
-- Graph retrieval is explicitly enabled for the demo.
-- Optional Neo4j comparison is prepared only if the presenter chooses that path.
+- Graph retrieval and Neo4j projection are enabled by the default Compose
+  configuration.
 
 ## Safe Startup
 
-PostgreSQL GraphRAG only:
+Default Neo4j-backed GraphRAG:
 
 ```powershell
-$env:GRAPH_RETRIEVAL_ENABLED = "true"
-$env:GRAPH_ROUTER_ENABLED = "true"
-$env:GRAPH_STORE_PROVIDER = "postgres"
 $env:RETRIEVAL_CACHE_ENABLED = "true"
 docker compose config --quiet
 docker compose up --build
 ```
 
 ```sh
-export GRAPH_RETRIEVAL_ENABLED=true
-export GRAPH_ROUTER_ENABLED=true
-export GRAPH_STORE_PROVIDER=postgres
 export RETRIEVAL_CACHE_ENABLED=true
 docker compose config --quiet
 docker compose up --build
@@ -144,7 +138,7 @@ csrf_token=$(printf '%s' "$login_json" |
 curl -fsS -b "$cookie_file" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: $csrf_token" \
-  -d '{"query":"How does FastAPI relate to PostgreSQL?","strategy":"graph","top_k":5,"rerank_top_n":2}' \
+  -d '{"query":"How does FastAPI relate to PostgreSQL?","strategy":"graph_neo4j","top_k":5,"rerank_top_n":2}' \
   http://localhost:8000/api/v1/rag/search
 rm -f "$cookie_file"
 ```
@@ -161,7 +155,8 @@ Expected result:
 ## Demo Flow
 
 1. Start with the root README and open `docs/phase3/graph_rag_final_readme.md`.
-   Explain that PostgreSQL is the source of truth and Neo4j is optional.
+   Explain that PostgreSQL is the source of truth and Neo4j is the default
+   read model.
 
 2. Open `http://localhost:5173` and sign in with the local demo admin account
    without showing credentials.
@@ -174,9 +169,9 @@ Expected result:
    - `How does FastAPI connect to PostgreSQL in the demo architecture?`
    - `Which storage components support retrieval in RAGProject?`
 
-5. Use the CSRF-authenticated API example above, or an existing local test
-   client, to run explicit `strategy=graph` with a safe synthetic query. The UI
-   may not expose `graph` as a form option; this is expected for PR-54.
+5. Use the Chat GraphRAG option or the CSRF-authenticated API example above to
+   run explicit `strategy=graph_neo4j` with a safe synthetic query. Use
+   `graph_postgres` to compare the PostgreSQL source-of-truth graph path.
 
 6. Return to Retrieval Debug and refresh the trace. Select the newest graph run.
    Show:
@@ -198,9 +193,8 @@ Expected result:
 
 9. Open Admin Evaluations. Select or import `phase3_graph_multi_hop` if needed.
    Run a small comparison with `dense`, `hybrid`, `agentic_router`,
-   `graph_postgres`, and `graph_neo4j` after starting the optional Neo4j demo
-   profile. If Neo4j is unavailable or unprojected, the graph reason codes show
-   whether PostgreSQL graph fallback was used.
+   `graph_postgres`, and `graph_neo4j`. If Neo4j is unavailable or unprojected,
+   the graph reason codes show whether PostgreSQL graph fallback was used.
 
 10. Open the evaluation detail. Show graph path relevance, graph citation
     coverage, multi-hop answerability, cache metrics, provider comparison, and
@@ -209,63 +203,35 @@ Expected result:
 11. Finish with `graph_rag_acceptance_checklist.md`,
     `graph_rag_known_limitations.md`, and `graph_rag_next_phase_handoff.md`.
 
-## Optional Neo4j Demo
+## Neo4j Read Model Demo
 
-Neo4j is not required for the default demo.
+Neo4j is part of the default demo stack. Use the local non-secret default
+password only for local development, and override it for shared environments.
 
 ```powershell
-$env:NEO4J_USER = "neo4j"
-$secureNeo4jPassword = Read-Host "Local Neo4j password" -AsSecureString
-$neo4jPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
-  $secureNeo4jPassword
-)
-try {
-  $plainNeo4jPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($neo4jPasswordPtr)
-  $env:NEO4J_PASSWORD = $plainNeo4jPassword
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($neo4jPasswordPtr)
-}
-docker compose --profile neo4j up -d neo4j
-docker compose --profile neo4j config --services
+docker compose up -d neo4j
+docker compose config --services
 ```
 
 ```sh
-printf "Local Neo4j password: "
-stty -echo
-read -r NEO4J_PASSWORD
-stty echo
-printf "\n"
-export NEO4J_USER=neo4j
-export NEO4J_PASSWORD
-docker compose --profile neo4j up -d neo4j
-docker compose --profile neo4j config --services
+docker compose up -d neo4j
+docker compose config --services
 ```
 
-Then enable Neo4j as the read model:
+Then rebuild or restart backend and worker if local env overrides changed:
 
 ```powershell
-$env:GRAPH_STORE_PROVIDER = "neo4j"
-$env:GRAPH_RETRIEVAL_ENABLED = "true"
-$env:NEO4J_URI = "bolt://neo4j:7687"
-$env:NEO4J_PROJECTION_ENABLED = "true"
-$env:BACKEND_UV_EXTRA_ARGS = "--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+docker compose up --build backend worker frontend
 ```
 
 ```sh
-export GRAPH_STORE_PROVIDER=neo4j
-export GRAPH_RETRIEVAL_ENABLED=true
-export NEO4J_URI=bolt://neo4j:7687
-export NEO4J_PROJECTION_ENABLED=true
-export BACKEND_UV_EXTRA_ARGS="--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+docker compose up --build backend worker frontend
 ```
 
 Expected result:
 
-- default `docker compose config --services` does not require Neo4j
-- `docker compose --profile neo4j config --services` lists Neo4j
-- PostgreSQL graph retrieval still works when Neo4j is off
+- default `docker compose config --services` lists Neo4j
+- PostgreSQL graph retrieval still works through `strategy=graph_postgres`
 - Neo4j graph retrieval maps results through `source_chunk_ids`
 - citations still come from retrieval run items, not directly from graph nodes
 

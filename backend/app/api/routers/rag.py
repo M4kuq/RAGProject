@@ -167,6 +167,8 @@ def _graph_capable_service(
 ) -> RagService | GraphRagService:
     if strategy_value in {
         RetrievalStrategy.GRAPH.value,
+        "graph_postgres",
+        "graph_neo4j",
         RetrievalStrategy.AGENTIC_ROUTER.value,
     }:
         return GraphRagService(service)

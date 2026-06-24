@@ -26,6 +26,8 @@ class RagSearchRequestStrategy(StrEnum):
     SPARSE = "sparse"
     HYBRID = "hybrid"
     GRAPH = "graph"
+    GRAPH_POSTGRES = "graph_postgres"
+    GRAPH_NEO4J = "graph_neo4j"
     AGENTIC_ROUTER = "agentic_router"
 
 
@@ -33,6 +35,8 @@ class RagAskRequestStrategy(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
     GRAPH = "graph"
+    GRAPH_POSTGRES = "graph_postgres"
+    GRAPH_NEO4J = "graph_neo4j"
     AGENTIC_ROUTER = "agentic_router"
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"

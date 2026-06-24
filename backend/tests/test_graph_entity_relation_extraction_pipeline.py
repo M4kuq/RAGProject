@@ -568,7 +568,7 @@ def test_graph_index_service_closes_temporary_neo4j_projection_service(
     assert closed_instance.closed is True
 
 
-def test_neo4j_docker_path_installs_optional_extra() -> None:
+def test_neo4j_docker_path_installs_default_extra() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8")
     compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
@@ -576,7 +576,7 @@ def test_neo4j_docker_path_installs_optional_extra() -> None:
 
     assert 'ARG BACKEND_UV_EXTRA_ARGS=""' in dockerfile
     assert "uv sync --frozen --no-install-project --no-dev $BACKEND_UV_EXTRA_ARGS" in dockerfile
-    assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}" in compose
+    assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:---extra neo4j}" in compose
     assert 'BACKEND_UV_EXTRA_ARGS="--extra neo4j"' in docs
 
 

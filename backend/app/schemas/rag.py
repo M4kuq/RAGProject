@@ -303,6 +303,10 @@ class RagAskRetrievalSummary(BaseModel):
     execution_strategy: str | None = None
     tools_used: list[str] = Field(default_factory=list)
     fallback_used: bool | None = None
+    fallback_reason: str | None = Field(default=None, max_length=100)
+    graph_store_provider: str | None = Field(default=None, max_length=50)
+    graph_requested_provider: str | None = Field(default=None, max_length=50)
+    graph_fallback_reason_codes: list[str] = Field(default_factory=list)
     no_context: bool | None = None
 
 

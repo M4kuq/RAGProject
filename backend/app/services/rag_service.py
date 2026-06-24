@@ -2328,7 +2328,9 @@ class RagService:
         bypass: bool,
         latency_tracker: LatencyTracker,
         retrieve: Any,
+        cache_settings: Settings | None = None,
     ) -> RetrievalPipelineResult:
+        effective_settings = cache_settings or self.settings
         cache_context = RetrievalCacheContext(
             query_hash=query_hash,
             strategy_type=requested_strategy,
@@ -2340,7 +2342,7 @@ class RagService:
         )
         execution = self.retrieval_cache_service.execute(
             db,
-            settings=self.settings,
+            settings=effective_settings,
             context=cache_context,
             bypass=bypass,
             cacheable=_is_cacheable_retrieval_strategy(requested_strategy),
@@ -4557,11 +4559,16 @@ def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
 
 def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
     decision = _safe_json_object(run.strategy_decision_json) or {}
+    score_summary = _safe_json_object(run.retrieval_score_summary) or {}
     tools_used_value = decision.get("tools_used")
     tools_used = (
         [str(item) for item in tools_used_value if isinstance(item, str)]
         if isinstance(tools_used_value, list)
         else []
+    )
+    graph_fallback_reason_codes = _safe_string_list(
+        decision.get("graph_fallback_reason_codes")
+        or score_summary.get("graph_fallback_reason_codes")
     )
     return RagAskRetrievalSummary(
         retrieval_run_id=run.retrieval_run_id,
@@ -4572,10 +4579,32 @@ def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
         fallback_used=decision.get("fallback_used")
         if isinstance(decision.get("fallback_used"), bool)
         else None,
+        fallback_reason=_optional_safe_string(
+            decision.get("fallback_reason")
+            or (graph_fallback_reason_codes[0] if graph_fallback_reason_codes else None)
+        ),
+        graph_store_provider=_optional_safe_string(
+            decision.get("graph_store_provider") or score_summary.get("graph_store_provider")
+        ),
+        graph_requested_provider=_optional_safe_string(decision.get("graph_requested_provider")),
+        graph_fallback_reason_codes=graph_fallback_reason_codes,
         no_context=decision.get("no_context")
         if isinstance(decision.get("no_context"), bool)
         else None,
     )
+
+
+def _safe_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    safe_values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        safe = _optional_safe_string(item)
+        if safe:
+            safe_values.append(safe)
+    return safe_values
 
 
 def _optional_safe_string(value: object) -> str | None:

@@ -302,6 +302,8 @@ class Settings(BaseSettings):
             "dense",
             "sparse",
             "hybrid",
+            "graph_postgres",
+            "graph_neo4j",
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
@@ -576,6 +578,8 @@ class Settings(BaseSettings):
             "dense",
             "sparse",
             "hybrid",
+            "graph_postgres",
+            "graph_neo4j",
             "agentic_router",
             "llm_tool_orchestrator",
             "langchain_agentic",
@@ -586,8 +590,8 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "MCP_ALLOWED_STRATEGIES must only include dense, sparse, hybrid, "
-                "agentic_router, llm_tool_orchestrator, langchain_agentic, "
-                "langgraph_agentic"
+                "graph_postgres, graph_neo4j, agentic_router, "
+                "llm_tool_orchestrator, langchain_agentic, langgraph_agentic"
             )
         if self.mcp_allow_evaluation_run_create:
             raise ValueError("MCP_ALLOW_EVALUATION_RUN_CREATE must be false in PR-38")

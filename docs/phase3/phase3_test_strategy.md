@@ -3,7 +3,7 @@
 PR-46 added the first executable GraphRAG foundation tests. PR-47 added the
 first executable extraction pipeline and worker tests. PR-48 through PR-54
 extend the same safety pattern into retrieval, routing, citation/debug, cache,
-evaluation, optional Neo4j, demo docs, and smoke.
+evaluation, default Neo4j projection, demo docs, and smoke.
 
 ## PR-46 Tests
 
@@ -53,7 +53,7 @@ Added/expected coverage:
 - graph traversal is bounded by max depth, path count, relation count, source
   chunk count, and timeout settings.
 - graph-aware router selects graph only when enabled and falls back safely.
-- GraphStore DTOs keep PostgreSQL and optional Neo4j provider behavior
+- GraphStore DTOs keep PostgreSQL and Neo4j provider behavior
   compatible.
 - Neo4j unavailable paths return safe reason codes without breaking default
   PostgreSQL GraphRAG.
@@ -71,7 +71,7 @@ PR-54 adds non-destructive smoke scripts and docs acceptance checks rather than
 new retrieval behavior:
 
 - `docker compose config --quiet`
-- `docker compose --profile neo4j config --quiet`
+- `docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --quiet`
 - final GraphRAG docs and helper scripts exist
 - docs include PostgreSQL source-of-truth / Neo4j read-model language
 - docs include cache and evaluation summary language

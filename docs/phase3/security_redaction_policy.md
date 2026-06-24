@@ -93,7 +93,7 @@ Safe evidence examples:
   `strategy_not_cacheable`
 - metric names and aggregate scores
 - safe synthetic entity labels and relation types
-- not-applicable reason codes for optional Neo4j evaluation
+- fallback or not-applicable reason codes for Neo4j evaluation
 
 ## deploy/aws Boundary
 

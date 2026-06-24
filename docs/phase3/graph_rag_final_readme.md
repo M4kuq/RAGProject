@@ -1,8 +1,9 @@
 # GraphRAG Final README
 
 This is the operator-facing GraphRAG entry point for PR-54. It explains the
-implemented local GraphRAG path, the default PostgreSQL graph store, optional
-Neo4j projection, retrieval cache behavior, evaluation, demo checks, security
+implemented local GraphRAG path, the default Neo4j graph read model,
+PostgreSQL source-of-truth graph store, retrieval cache behavior, evaluation,
+demo checks, security
 constraints, and the PR-55+ handoff.
 
 ## Current Status
@@ -16,12 +17,12 @@ Implemented GraphRAG scope:
 - rule-based entity/relation extraction through `graph_index_build`
 - explicit `/api/v1/rag/search` and `/api/v1/rag/ask` `strategy=graph`
 - graph-aware `agentic_router` shortcut when graph retrieval and router flags are enabled
-- PostgreSQL-backed `GraphStore` as the default provider
-- optional Neo4j read-model projection behind the same `GraphStore` DTOs
+- Neo4j-backed `GraphStore` as the default read-model provider
+- PostgreSQL-backed `GraphStore` as the source-of-truth fallback provider
 - chunk-backed graph citation bridge and admin-safe graph trace endpoint
 - retrieval result cache for dense, sparse, hybrid, and graph paths
 - evaluation comparison targets for `dense`, `hybrid`, `agentic_router`,
-  `graph_postgres`, and optional `graph_neo4j`
+  `graph_postgres`, and `graph_neo4j`
 
 Not implemented in PR-54:
 
@@ -33,7 +34,7 @@ Not implemented in PR-54:
 
 ## Architecture
 
-PostgreSQL is the source of truth. Neo4j, when enabled, is only a read model.
+PostgreSQL is the source of truth. Neo4j is only a read model.
 
 ```text
 document_versions / document_chunks
@@ -44,7 +45,7 @@ document_versions / document_chunks
   -> citations
 ```
 
-Optional Neo4j projection:
+Default Neo4j projection:
 
 ```text
 PostgreSQL graph tables
@@ -76,7 +77,7 @@ ingest
   -> graph_index_build
   -> entity / relation extraction
   -> PostgreSQL graph index
-  -> optional Neo4j projection
+  -> Neo4j projection
   -> graph retrieval
   -> source_chunk_ids final check
   -> retrieval_run_items
@@ -102,10 +103,11 @@ strong relation or multi-hop signals can route to graph. If graph produces no
 chunk-backed evidence, router-selected graph may fall back to configured dense
 or hybrid retrieval.
 
-Use explicit `graph` only for relation, dependency, ownership, "how A relates to
-B", and multi-hop checks where graph index data is expected to exist. Explicit
-`graph` preserves the no-context contract when no chunk-backed graph evidence is
-found.
+Use explicit `graph_neo4j` for relation, dependency, ownership, "how A relates
+to B", and multi-hop checks where graph index data is expected to exist.
+`graph` remains available and follows the configured graph provider. If graph
+cannot produce chunk-backed evidence, the response records the provider and
+reason codes before falling back to the configured safe base strategy.
 
 `graph_hybrid` remains a PR-55+ candidate. Current GraphRAG can fall back to
 hybrid but does not expose full graph/vector fusion as a separate public
@@ -113,18 +115,18 @@ strategy.
 
 ## Local Settings
 
-Defaults preserve existing behavior:
+Default Compose settings:
 
 ```text
-GRAPH_RETRIEVAL_ENABLED=false
-GRAPH_STORE_PROVIDER=postgres
-GRAPH_ROUTER_ENABLED=false
+GRAPH_RETRIEVAL_ENABLED=true
+GRAPH_STORE_PROVIDER=neo4j
+GRAPH_ROUTER_ENABLED=true
 RETRIEVAL_CACHE_ENABLED=false
-NEO4J_PROJECTION_ENABLED=false
-NEO4J_HEALTH_CHECK_ENABLED=false
+NEO4J_PROJECTION_ENABLED=true
+NEO4J_HEALTH_CHECK_ENABLED=true
 ```
 
-PostgreSQL GraphRAG demo profile:
+PostgreSQL GraphRAG provider override:
 
 ```powershell
 $env:GRAPH_RETRIEVAL_ENABLED = "true"
@@ -156,61 +158,44 @@ The queue helper emits only document version IDs, job IDs, and counts. It does
 not print chunk text, document text, prompts, graph evidence, credentials, or
 `.env` values.
 
-## Neo4j Optional Backend
+## Neo4j Read Model
 
-Neo4j is optional and disabled by default. Start the default stack first, then
-opt in to the `neo4j` profile only when you want to compare providers.
+Neo4j is part of the default Compose stack. The local default password is the
+non-secret development value `change-me-local`; override it for shared
+environments. Neo4j startup is not a hard application dependency: if it is
+temporarily unavailable, `graph_neo4j` records visible reason codes and falls
+back to PostgreSQL graph, then to the configured safe base retrieval path if no
+graph evidence exists.
 
 Do not paste real Neo4j credentials into docs, logs, PR comments, or shell
-transcripts. Set the local password in your shell without committing it.
+transcripts. Set any shared-environment password in your shell without
+committing it.
 
 ```powershell
-$env:NEO4J_USER = "neo4j"
-$secureNeo4jPassword = Read-Host "Local Neo4j password" -AsSecureString
-$neo4jPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
-  $secureNeo4jPassword
-)
-try {
-  $plainNeo4jPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($neo4jPasswordPtr)
-  $env:NEO4J_PASSWORD = $plainNeo4jPassword
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($neo4jPasswordPtr)
-}
-docker compose --profile neo4j up -d neo4j
+$env:NEO4J_PASSWORD = "<local override>"
+docker compose up -d --build
 ```
 
 ```sh
-printf "Local Neo4j password: "
-stty -echo
-read -r NEO4J_PASSWORD
-stty echo
-printf "\n"
-export NEO4J_USER=neo4j
-export NEO4J_PASSWORD
-docker compose --profile neo4j up -d neo4j
+export NEO4J_PASSWORD="<local override>"
+docker compose up -d --build
 ```
 
-Then restart backend and worker with Neo4j projection and provider selection:
+The default stack already sets Neo4j projection and provider selection:
 
 ```powershell
-$env:GRAPH_STORE_PROVIDER = "neo4j"
-$env:GRAPH_RETRIEVAL_ENABLED = "true"
-$env:NEO4J_URI = "bolt://neo4j:7687"
-$env:NEO4J_PROJECTION_ENABLED = "true"
-$env:BACKEND_UV_EXTRA_ARGS = "--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+docker compose config --services
+docker compose ps neo4j
 ```
 
 ```sh
-export GRAPH_STORE_PROVIDER=neo4j
-export GRAPH_RETRIEVAL_ENABLED=true
-export NEO4J_URI=bolt://neo4j:7687
-export NEO4J_PROJECTION_ENABLED=true
-export BACKEND_UV_EXTRA_ARGS="--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+docker compose config --services
+docker compose ps neo4j
 ```
 
-If Neo4j is not configured, the default PostgreSQL provider remains usable.
+If Neo4j is not configured, the driver is absent, the server is down, or the
+projection has no matching paths, the fallback reason is surfaced in the
+retrieval response and graph trace.
 
 ## Cache Behavior
 

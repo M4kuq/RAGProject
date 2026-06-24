@@ -60,7 +60,7 @@ Required evidence:
 - explicit `graph` retrieval resolves graph paths back to source chunks.
 - graph-aware routing can select graph only when graph is enabled and signals
   are strong enough.
-- provider-neutral GraphStore DTOs support PostgreSQL and optional Neo4j.
+- provider-neutral GraphStore DTOs support PostgreSQL and Neo4j.
 - graph citations remain `retrieval_run_item -> document_chunk` backed.
 - admin graph debug exposes safe refs, counts, reason codes, and scores only.
 - retrieval cache keys include graph fingerprint and graph store provider.
@@ -79,7 +79,7 @@ Required evidence:
 - [`graph_rag_final_readme.md`](graph_rag_final_readme.md) is the operator
   entry point.
 - [`graph_rag_demo_scenario.md`](graph_rag_demo_scenario.md) contains concrete
-  local and optional Neo4j demo steps.
+  local and Neo4j demo steps.
 - [`graph_rag_manual_test_cases.md`](graph_rag_manual_test_cases.md) and
   [`graph_rag_acceptance_checklist.md`](graph_rag_acceptance_checklist.md)
   define the acceptance surface.

@@ -193,6 +193,10 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         "execution_strategy": "dense",
         "tools_used": [],
         "fallback_used": False,
+        "fallback_reason": None,
+        "graph_store_provider": None,
+        "graph_requested_provider": None,
+        "graph_fallback_reason_codes": [],
         "no_context": None,
     }
     generation = data["generation"]

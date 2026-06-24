@@ -326,6 +326,93 @@ def test_graph_ask_records_injection_pattern_reason_code(
         assert "injection_pattern_detected" in reason_codes
 
 
+def test_explicit_graph_runs_when_global_flag_disabled(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+
+        service = GraphRagService(
+            _service(
+                _settings(graph_retrieval_enabled=False),
+                [_vector_candidate(min(seed.chunk_ids))],
+            )
+        )
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="explicit-graph-disabled-1",
+                message="How does FastAPI use PostgreSQL?",
+                strategy=RagAskRequestStrategy.GRAPH_POSTGRES,
+            ),
+            user=user,
+            request_id="req-explicit-disabled",
+        )
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "graph_postgres"
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["graph_retrieval_enabled"] is False
+        assert run.retrieval_settings_json["graph_retrieval_effective_enabled"] is True
+
+
+def test_explicit_graph_neo4j_falls_back_to_postgres_graph_with_response_summary(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+
+        service = GraphRagService(
+            _service(
+                _settings(
+                    graph_retrieval_enabled=False,
+                    graph_store_provider="postgres",
+                    neo4j_uri=None,
+                    neo4j_user=None,
+                    neo4j_password=None,
+                ),
+                [_vector_candidate(min(seed.chunk_ids))],
+            )
+        )
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="explicit-neo4j-fallback-1",
+                message="How does FastAPI use PostgreSQL?",
+                strategy=RagAskRequestStrategy.GRAPH_NEO4J,
+            ),
+            user=user,
+            request_id="req-neo4j-fallback",
+        )
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "graph_neo4j"
+        assert run.strategy_decision_json["graph_requested_provider"] == "neo4j"
+        assert run.strategy_decision_json["graph_store_provider"] == "postgres"
+        assert run.strategy_decision_json["fallback_used"] is True
+        assert run.strategy_decision_json["fallback_reason"] == "neo4j_not_configured"
+        assert response.retrieval_summary.graph_requested_provider == "neo4j"
+        assert response.retrieval_summary.graph_store_provider == "postgres"
+        assert response.retrieval_summary.fallback_reason == "neo4j_not_configured"
+        assert "neo4j_not_configured" in response.retrieval_summary.graph_fallback_reason_codes
+
+
 def test_router_graph_no_evidence_falls_back_to_base(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
@@ -425,10 +512,9 @@ def test_graph_fallback_maps_base_retrieval_failures_to_error_contract(
         assert exc_info.value.status_code == 503
 
 
-def test_explicit_graph_no_evidence_does_not_fall_back(
+def test_explicit_graph_no_evidence_falls_back_to_base(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
-    # 2-1 boundary: explicit strategy=graph keeps the no_context_found contract.
     with graph_session_factory() as db:
         seed = _seed_graph(db)
         chat_session_id = _seed_chat_session(db, seed.user_id)
@@ -440,20 +526,26 @@ def test_explicit_graph_no_evidence_does_not_fall_back(
 
         service = GraphRagService(_service(_settings(), [_vector_candidate(min(seed.chunk_ids))]))
 
-        with pytest.raises(RagAskPipelineError) as exc_info:
-            service.ask(
-                db,
-                payload=RagAskRequest(
-                    chat_session_id=chat_session_id,
-                    client_message_id="explicit-graph-1",
-                    message="How does FastAPI use PostgreSQL?",
-                    strategy=RagAskRequestStrategy.GRAPH,
-                ),
-                user=user,
-                request_id="req-explicit",
-            )
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="explicit-graph-1",
+                message="How does FastAPI use PostgreSQL?",
+                strategy=RagAskRequestStrategy.GRAPH,
+            ),
+            user=user,
+            request_id="req-explicit",
+        )
 
-        assert exc_info.value.error_code == "no_context_found"
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["fallback_used"] is True
+        assert (
+            run.strategy_decision_json["fallback_reason"] == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
+        )
 
 
 def test_graph_search_router_no_evidence_falls_back_to_base(
@@ -483,6 +575,11 @@ def test_graph_search_router_no_evidence_falls_back_to_base(
 
         assert response.status == "succeeded"
         assert response.items
+        summary = response.retrieval_score_summary.model_dump(mode="json")
+        assert summary["fallback_used"] is True
+        assert summary["fallback_reason"] == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
+        assert summary["graph_store_provider"] == "postgres"
+        assert GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE in summary["graph_reason_codes"]
 
 
 def test_graph_no_evidence_fallback_uses_hybrid_when_configured(

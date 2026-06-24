@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.graph_models import (
     GraphEntity,
@@ -50,6 +51,7 @@ from app.repositories.graph_retrieval_repository import (
     GraphEntityLookupResult,
     GraphRetrievalRepository,
 )
+from app.services.neo4j_projection_service import Neo4jProjectionService
 
 
 @dataclass(frozen=True)
@@ -1418,6 +1420,76 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
         assert "prompt" not in payload_dump
 
 
+def test_graph_neo4j_provider_retrieves_projected_paths_with_real_neo4j(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    config = Neo4jConnectionConfig.from_settings(get_settings())
+    if not config.is_configured:
+        pytest.skip("Neo4j integration smoke requires NEO4J_URI/USER/PASSWORD")
+    client = Neo4jClient(config=config)
+    reason = client.verify_connectivity()
+    if reason is not None:
+        client.close()
+        pytest.skip(f"Neo4j integration smoke unavailable: {reason}")
+
+    graph_index_run_id = 987654321
+    try:
+        _cleanup_neo4j_projection(client, graph_index_run_id=graph_index_run_id)
+        with graph_retrieval_session_factory() as db:
+            seed = _seed_graph(db)
+            projection = Neo4jProjectionService(
+                client=client,
+                projection_enabled=True,
+            ).project_document_version(
+                db,
+                document_version_id=seed.document_version_id,
+                graph_index_run_id=graph_index_run_id,
+            )
+            assert projection.reason_codes == ("neo4j_projection_completed",)
+            assert projection.projected_entities >= 3
+            assert projection.projected_chunks >= 2
+
+            strategy = GraphRetrievalStrategy(
+                resolver=GraphStoreResolver(
+                    provider=GraphStoreProvider.NEO4J,
+                    neo4j_store=Neo4jGraphStore(client=client),
+                )
+            )
+            result = strategy.search(
+                db,
+                query="How does FastAPI use PostgreSQL in the RAGProject architecture?",
+                top_k=3,
+                filters=RetrievalFilters(),
+                settings=GraphRetrievalSettings(
+                    enabled=True,
+                    provider=GraphStoreProvider.NEO4J,
+                    min_entity_match_score=0.2,
+                ),
+            )
+
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.graph_candidates
+        assert result.paths
+        assert "graph_store_provider_unavailable" not in result.reason_codes
+        assert result.summary_fields()["graph_store_provider"] == "neo4j"
+        key_rows = client.execute(
+            """
+            MATCH (chunk:RAGGraphChunk)
+            WHERE chunk.last_graph_index_run_id = $graph_index_run_id
+            RETURN keys(chunk) AS keys
+            LIMIT 5
+            """,
+            {"graph_index_run_id": graph_index_run_id},
+        )
+        keys = {key for row in key_rows for key in row.get("keys", [])}
+        assert "content_text" not in keys
+        assert "raw_text" not in keys
+        assert "snippet" not in keys
+    finally:
+        _cleanup_neo4j_projection(client, graph_index_run_id=graph_index_run_id)
+        client.close()
+
+
 def test_graph_path_relation_refs_preserve_actual_direction_for_incoming_edges(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -1481,6 +1553,29 @@ def test_graph_query_signal_score_detects_japanese_relation_queries() -> None:
     assert graph_query_signal_score("FastAPI は PostgreSQL に依存していますか") >= threshold
     # An unrelated Japanese question stays below the threshold.
     assert graph_query_signal_score("今日の天気は?") < threshold
+
+
+def _cleanup_neo4j_projection(client: Neo4jClient, *, graph_index_run_id: int) -> None:
+    client.execute_write(
+        [
+            (
+                """
+                MATCH (chunk:RAGGraphChunk)
+                WHERE chunk.last_graph_index_run_id = $graph_index_run_id
+                DETACH DELETE chunk
+                """,
+                {"graph_index_run_id": graph_index_run_id},
+            ),
+            (
+                """
+                MATCH (entity:RAGGraphEntity)
+                WHERE entity.last_graph_index_run_id = $graph_index_run_id
+                DETACH DELETE entity
+                """,
+                {"graph_index_run_id": graph_index_run_id},
+            ),
+        ]
+    )
 
 
 def _seed_graph(db: Session) -> SeedGraph:

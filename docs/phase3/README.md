@@ -48,7 +48,7 @@ handoff with:
 
 - root README and Phase3 README links that route directly to GraphRAG usage
 - local PostgreSQL GraphRAG demo steps
-- optional Neo4j read-model/projection demo steps
+- default Neo4j read-model/projection demo steps
 - manual tests and acceptance checklist
 - PostgreSQL source-of-truth versus Neo4j read-model architecture explanation
 - retrieval cache and evaluation summaries for PR-52/PR-53

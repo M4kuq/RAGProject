@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.job_utils import LeaseLostError
 from app.db.models import DocumentChunk
 from app.db.session import SessionLocal
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.ingest.chunking import (
     Chunk,
     ChunkingConfig,
@@ -31,6 +32,7 @@ from app.ingest.qdrant import (
 )
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
+from app.services.graph_index_service import GraphIndexService
 from app.storage.file_storage import LocalFileStorage
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
 
@@ -113,6 +115,7 @@ class DocumentIngestHandler:
         dispatcher: ExtractorDispatcher | None = None,
         settings: Settings | None = None,
         indexing_service: DocumentIndexingService | None = None,
+        graph_index_service: GraphIndexService | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.repository = repository or DocumentRepository()
@@ -121,6 +124,7 @@ class DocumentIngestHandler:
         self.dispatcher = dispatcher or ExtractorDispatcher()
         self.settings = settings or get_settings()
         self.indexing_service = indexing_service or create_document_indexing_service(self.settings)
+        self.graph_index_service = graph_index_service or GraphIndexService()
 
     def handle(self, context: JobExecutionContext) -> JobHandlerResult:
         document_version_id = context.payload.get("document_version_id")
@@ -542,6 +546,16 @@ class DocumentIngestHandler:
             if stored_count != expected_chunk_count:
                 raise RuntimeError("chunk count mismatch during ready update")
             self.repository.mark_version_ready(db, version=version, updated_at=_now())
+            self.job_repository.create_job(
+                db,
+                job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+                target_type="document_version",
+                target_id=document_version_id,
+                payload_json=self.graph_index_service.build_graph_index_job_payload(
+                    document_version_id=document_version_id,
+                ),
+                priority=80,
+            )
             db.commit()
         except Exception:
             db.rollback()

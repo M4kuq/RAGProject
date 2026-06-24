@@ -33,7 +33,7 @@ cd "$REPO_ROOT"
 
 say "validate compose files without reading .env"
 COMPOSE_DISABLE_ENV_FILE=1 docker compose config --quiet
-COMPOSE_DISABLE_ENV_FILE=1 docker compose --profile neo4j config --quiet
+COMPOSE_DISABLE_ENV_FILE=1 docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --quiet
 
 say "verify GraphRAG final docs and helper artifacts"
 for path in \
@@ -61,13 +61,13 @@ done
 
 say "verify key GraphRAG handoff statements"
 assert_contains docs/phase3/graph_rag_final_readme.md "PostgreSQL is the source of truth"
-assert_contains docs/phase3/graph_rag_final_readme.md "Neo4j, when enabled, is only a read model"
+assert_contains docs/phase3/graph_rag_final_readme.md "Neo4j is only a read model"
 assert_contains docs/phase3/graph_rag_final_readme.md "RETRIEVAL_CACHE_ENABLED=false"
 assert_contains docs/phase3/graph_rag_final_readme.md "phase3_graph_multi_hop"
 assert_contains docs/phase3/graph_rag_acceptance_checklist.md "Raw text and secret non-storage"
 assert_contains docs/phase3/graph_rag_known_limitations.md "graph_hybrid"
 assert_contains docker-compose.yml "GRAPH_RETRIEVAL_ENABLED"
-assert_contains .env.example "GRAPH_RETRIEVAL_ENABLED=false"
+assert_contains .env.example "GRAPH_RETRIEVAL_ENABLED=true"
 
 say "check running backend/frontend if available"
 if check_url "$BACKEND_URL/health"; then

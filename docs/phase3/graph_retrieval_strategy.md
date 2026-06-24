@@ -113,11 +113,12 @@ PR-49 keeps the PR-48 PostgreSQL traversal behavior but wraps it behind the
 - `GraphRetrievalStrategy` only resolves and calls a `GraphStore`.
 - `PostgresGraphStore` owns PostgreSQL-backed entity lookup, bounded path search,
   mention-only fallback, graph scoring, and source chunk mapping.
-- `Neo4jGraphStore` is an optional PR-50 backend. It lazily imports the Neo4j
+- `Neo4jGraphStore` is the default Compose read-model backend. It lazily imports the Neo4j
   driver only when configured, keeps PostgreSQL as the source of truth, and
   returns a safe unavailable result when Neo4j is not configured or reachable.
-- `GRAPH_STORE_PROVIDER` defaults to `postgres`; setting it to `neo4j` must not
-  break application startup or non-graph retrieval paths.
+- `GRAPH_STORE_PROVIDER` defaults to `neo4j` in Compose; setting it to
+  `postgres` remains supported and neither setting may break application
+  startup or non-graph retrieval paths.
 
 The common DTO surface is provider-neutral:
 
