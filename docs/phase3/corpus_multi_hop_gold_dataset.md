@@ -42,7 +42,12 @@ Paper cases intentionally use an empty `expected_relation_types` list because
 the rule-based extractor emits no relations for the current paper seed corpus.
 Those cases are still multi-hop: a single canonical entity is extracted from
 multiple paper blocks and acts as the graph hub. Self-doc cases use relation
-types only when the extractor actually emits the relation.
+types only when the extractor actually emits the relation. The only relation
+types expected by this fixture are the rule-based extractor outputs:
+`supports`, `uses`, `depends_on`, `includes`, and `connects`.
+
+All `required_hop_count` values are 1 or 2, matching the default
+`GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
 
 ## Extracted Graph Grounding
 
@@ -126,45 +131,78 @@ corpus and can be matched with case-insensitive substring checks.
 
 These steps use only repository-owned demo material and existing scripts.
 
-1. Start the local stack with graph retrieval enabled.
+1. Create a temporary untracked compose override so the running backend
+   container can read the repository self-doc files at `/workspace`.
+
+   ```powershell
+   Set-Content .\docker-compose.selfdocs.override.yml -Encoding utf8 -Value @(
+     "services:",
+     "  backend:",
+     "    volumes:",
+     "      - ./:/workspace:ro"
+   )
+   ```
+
+   This file is for local reproduction only. Do not commit it.
+
+2. Start the local stack with graph retrieval enabled and the temporary
+   override.
 
    ```powershell
    $env:GRAPH_RETRIEVAL_ENABLED = "true"
    $env:GRAPH_ROUTER_ENABLED = "true"
    $env:GRAPH_STORE_PROVIDER = "postgres"
-   docker compose up -d --build
+   docker compose `
+     -f docker-compose.yml `
+     -f docker-compose.selfdocs.override.yml `
+     up -d --build
    ```
 
    If your local setup uses a demo compose profile, enable that profile before
    starting the stack.
 
-2. Load the LLM paper seed corpus.
+3. Load the LLM paper seed corpus.
 
    ```powershell
-   docker compose run --rm seed
+   docker compose `
+     -f docker-compose.yml `
+     -f docker-compose.selfdocs.override.yml `
+     run --rm seed
    ```
 
-3. Ingest the self-doc corpus from the committed manifest.
+4. Ingest the self-doc corpus from the committed manifest.
+
+   The plain compose backend image does not contain the repository root, so the
+   override above is required before using `/workspace` here.
 
    ```powershell
-   docker compose exec -T backend python -m app.scripts.ingest_demo_corpus `
+   docker compose `
+     -f docker-compose.yml `
+     -f docker-compose.selfdocs.override.yml `
+     exec -T backend python -m app.scripts.ingest_demo_corpus `
      --repo-root /workspace `
      --manifest docs/demo/corpus_manifest.json `
      --base-url http://127.0.0.1:8000
    ```
 
-4. Build graph indexes for active ready document versions.
+5. Build graph indexes for active ready document versions.
 
    ```powershell
-   docker compose exec -T backend python -m app.scripts.queue_graph_index_builds --dry-run
-   docker compose exec -T backend python -m app.scripts.queue_graph_index_builds
+   docker compose `
+     -f docker-compose.yml `
+     -f docker-compose.selfdocs.override.yml `
+     exec -T backend python -m app.scripts.queue_graph_index_builds --dry-run
+   docker compose `
+     -f docker-compose.yml `
+     -f docker-compose.selfdocs.override.yml `
+     exec -T backend python -m app.scripts.queue_graph_index_builds
    ```
 
    Wait for `graph_index_build` jobs to finish in the worker/admin job view. For
    a one-shot local demo that also runs optional Neo4j projection, use the
    existing `scripts\neo4j_demo.ps1` runbook instead.
 
-5. Run the strategy comparison against this fixture.
+6. Run the strategy comparison against this fixture.
 
    ```powershell
    .\scripts\run_retrieval_eval_smoke.ps1 `
@@ -184,7 +222,7 @@ These steps use only repository-owned demo material and existing scripts.
      -ThresholdMode warn
    ```
 
-6. Review results in the admin UI.
+7. Review results in the admin UI.
 
    - Open `/admin/evaluations`.
    - Select two completed runs, for example dense as base and graph as

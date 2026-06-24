@@ -18,6 +18,7 @@ DATASET_NAME = "phase3_corpus_multi_hop"
 EXPECTED_CASE_COUNT = 12
 EXPECTED_PAPER_CASES = 4
 EXPECTED_SYSTEM_DOC_CASES = 8
+EMITTED_RELATION_TYPES = frozenset({"supports", "uses", "depends_on", "includes", "connects"})
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 FIXTURE_PATH = BACKEND_ROOT / "app" / "evaluation" / "fixtures" / f"{DATASET_NAME}.json"
@@ -51,10 +52,14 @@ def test_phase3_corpus_multi_hop_fixture_loads_with_required_metadata() -> None:
         assert case.metadata_json.get("expected_strategy") == "graph"
         assert _non_empty_string_list(case.metadata_json.get("acceptable_strategies"))
         assert _non_empty_string_list(case.metadata_json.get("expected_entity_labels"))
-        assert _string_list(case.metadata_json.get("expected_relation_types"))
+        raw_relation_types = case.metadata_json.get("expected_relation_types")
+        assert _string_list(raw_relation_types)
+        assert isinstance(raw_relation_types, list)
+        assert set(raw_relation_types).issubset(EMITTED_RELATION_TYPES)
         required_hop_count = case.metadata_json.get("required_hop_count")
         assert isinstance(required_hop_count, int)
         assert required_hop_count >= 1
+        assert required_hop_count <= 2
 
         assert not _contains_sensitive_word(case.case_id)
         assert not _contains_sensitive_word(case.question)
@@ -118,12 +123,13 @@ def test_phase3_corpus_multi_hop_entities_match_rule_based_extraction() -> None:
                 f"{case.case_key} label was not extracted from committed corpora: {label}"
             )
 
+        assert set(relation_types).issubset(EMITTED_RELATION_TYPES)
         assert set(relation_types).issubset(extracted.relation_types)
         if relation_types:
             label_set = set(labels)
             for relation_type in relation_types:
                 assert any(
-                    edge_type == relation_type and (source in label_set or target in label_set)
+                    edge_type == relation_type and source in label_set and target in label_set
                     for source, edge_type, target in extracted.relation_edges
                 ), f"{case.case_key} relation is not attached to expected labels: {relation_type}"
         else:
