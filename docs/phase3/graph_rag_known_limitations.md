@@ -24,6 +24,12 @@ These limitations are intentional at the PR-54 boundary.
 - Graph debug output is admin-only and limited to safe refs, labels, counts,
   scores, coverage, and reason codes.
 
+## MCP
+
+- MCP RAG tools intentionally allow only the strategies they can execute through
+  their current safe schemas. Direct `graph_postgres` and `graph_neo4j` MCP
+  strategies are reserved for a follow-up dedicated graph adapter.
+
 ## Neo4j
 
 - Neo4j is part of the default Compose and CI stacks.

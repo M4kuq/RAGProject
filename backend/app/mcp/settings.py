@@ -56,8 +56,6 @@ def validate_mcp_settings(settings: McpSettings) -> None:
         "dense",
         "sparse",
         "hybrid",
-        "graph_postgres",
-        "graph_neo4j",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",

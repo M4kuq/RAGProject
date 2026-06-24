@@ -139,6 +139,8 @@ def test_mcp_settings_phase1_guardrails() -> None:
     assert mcp_settings.transport == "stdio"
     assert mcp_settings.local_only is True
     assert mcp_settings.allow_write_tools is False
+    assert "graph_postgres" not in mcp_settings.allowed_strategies
+    assert "graph_neo4j" not in mcp_settings.allowed_strategies
     with pytest.raises(ValueError, match="MCP_ALLOW_WRITE_TOOLS"):
         Settings(_env_file=None, app_env="test", mcp_allow_write_tools=True)
     with pytest.raises(ValueError, match="MCP_LOCAL_ONLY"):
@@ -153,6 +155,12 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_snippet_max_chars=19)
     with pytest.raises(ValueError):
         Settings(_env_file=None, app_env="test", mcp_snippet_max_chars=2001)
+    with pytest.raises(ValueError, match="MCP_ALLOWED_STRATEGIES"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            mcp_allowed_strategies=["dense", "graph_neo4j"],
+        )
 
 
 def test_mcp_adapter_injects_storage_without_global_settings(
@@ -204,6 +212,12 @@ def test_tool_registry_exposes_read_mostly_phase2_tools(
     }
     forbidden = {"upload", "approve", "archive", "retry", "create_evaluation_run"}
     assert forbidden.isdisjoint(registry)
+    search_strategies = registry["rag_search"].input_schema["properties"]["strategy"]["enum"]
+    ask_strategies = registry["rag_ask"].input_schema["properties"]["strategy"]["enum"]
+    assert "graph_postgres" not in search_strategies
+    assert "graph_neo4j" not in search_strategies
+    assert "graph_postgres" not in ask_strategies
+    assert "graph_neo4j" not in ask_strategies
 
 
 def test_rag_search_and_ask_return_safe_truncated_output(

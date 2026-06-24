@@ -161,6 +161,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
       ollama:
         condition: service_healthy
       migrate:
@@ -187,6 +189,8 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -220,6 +224,8 @@ services:
       migrate:
         condition: service_completed_successfully
       qdrant:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     restart: "no"
 

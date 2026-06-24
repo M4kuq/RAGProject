@@ -2923,10 +2923,27 @@ def _is_cacheable_retrieval_strategy(strategy: RetrievalStrategy) -> bool:
 
 
 def _has_transient_graph_reason(summary: dict[str, object]) -> bool:
-    reason_codes = summary.get("graph_reason_codes")
-    if not isinstance(reason_codes, list):
+    reason_codes: list[object] = []
+    for field_name in ("graph_reason_codes", "graph_fallback_reason_codes"):
+        field_value = summary.get(field_name)
+        if isinstance(field_value, list):
+            reason_codes.extend(field_value)
+    for field_name in ("fallback_reason", "graph_fallback_reason"):
+        field_value = summary.get(field_name)
+        if isinstance(field_value, str):
+            reason_codes.append(field_value)
+    if not reason_codes:
         return False
-    non_cacheable_codes = {"neo4j_to_postgres_fallback"}
+    non_cacheable_codes = {
+        "graph_store_provider_unavailable",
+        "neo4j_connection_failed",
+        "neo4j_driver_unavailable",
+        "neo4j_not_configured",
+        "neo4j_projection_empty",
+        "neo4j_query_failed",
+        "neo4j_to_postgres_fallback",
+        "neo4j_unavailable",
+    }
     if any(str(code) in non_cacheable_codes for code in reason_codes):
         return True
     transient_markers = ("timeout", "error", "failed", "failure")
@@ -4570,17 +4587,31 @@ def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
         decision.get("graph_fallback_reason_codes")
         or score_summary.get("graph_fallback_reason_codes")
     )
+    decision_fallback_used = decision.get("fallback_used")
+    score_fallback_used = score_summary.get("fallback_used")
+    fallback_used: bool | None
+    if score_fallback_used is True and decision_fallback_used is not True:
+        fallback_used = True
+    elif isinstance(decision_fallback_used, bool):
+        fallback_used = decision_fallback_used
+    elif isinstance(score_fallback_used, bool):
+        fallback_used = score_fallback_used
+    else:
+        fallback_used = None
+    fallback_reason = (
+        score_summary.get("fallback_reason")
+        if score_fallback_used is True and decision_fallback_used is not True
+        else decision.get("fallback_reason") or score_summary.get("fallback_reason")
+    )
     return RagAskRetrievalSummary(
         retrieval_run_id=run.retrieval_run_id,
         strategy_type=RetrievalStrategy(run.strategy_type),
         selected_strategy=_optional_safe_string(decision.get("selected_strategy")),
         execution_strategy=_optional_safe_string(decision.get("execution_strategy")),
         tools_used=tools_used,
-        fallback_used=decision.get("fallback_used")
-        if isinstance(decision.get("fallback_used"), bool)
-        else None,
+        fallback_used=fallback_used,
         fallback_reason=_optional_safe_string(
-            decision.get("fallback_reason")
+            fallback_reason
             or (graph_fallback_reason_codes[0] if graph_fallback_reason_codes else None)
         ),
         graph_store_provider=_optional_safe_string(

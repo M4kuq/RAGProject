@@ -600,8 +600,18 @@ def test_graph_timeout_results_are_not_cache_payloads(
     assert payload is None
 
 
-def test_graph_provider_fallback_results_are_not_cache_payloads(
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "graph_store_provider_unavailable",
+        "neo4j_not_configured",
+        "neo4j_projection_empty",
+        "neo4j_to_postgres_fallback",
+    ],
+)
+def test_graph_provider_unavailable_results_are_not_cache_payloads(
     session_factory: sessionmaker[Session],
+    reason_code: str,
 ) -> None:
     service = _service(
         store=InMemoryCacheStore(),
@@ -611,7 +621,7 @@ def test_graph_provider_fallback_results_are_not_cache_payloads(
     result = RetrievalPipelineResult(
         summary=RetrievalScoreSummary(
             **_summary_json(),
-            graph_reason_codes=["neo4j_to_postgres_fallback"],
+            graph_fallback_reason_codes=[reason_code],
             graph_no_context=False,
         ),
         items=[],
@@ -626,6 +636,39 @@ def test_graph_provider_fallback_results_are_not_cache_payloads(
             db,
             result=result,
             query_hash=hashlib.sha256(b"graph provider fallback").hexdigest(),
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            retrieval_run_id=1,
+        )
+
+    assert payload is None
+
+
+def test_graph_provider_unavailable_fallback_reason_is_not_cache_payload(
+    session_factory: sessionmaker[Session],
+) -> None:
+    service = _service(
+        store=InMemoryCacheStore(),
+        vector_client=_CountingVectorClient([]),
+        settings=_settings(retrieval_cache_enabled=True),
+    )
+    result = RetrievalPipelineResult(
+        summary=RetrievalScoreSummary(
+            **_summary_json(),
+            fallback_reason="neo4j_not_configured",
+            graph_no_context=False,
+        ),
+        items=[],
+        selected_candidates=[],
+        citation_sources=[],
+        context_candidates=[],
+        no_context=False,
+    )
+
+    with session_factory() as db:
+        payload = service._cache_payload_from_result(
+            db,
+            result=result,
+            query_hash=hashlib.sha256(b"graph provider unavailable").hexdigest(),
             strategy_type=RetrievalStrategy.GRAPH.value,
             retrieval_run_id=1,
         )

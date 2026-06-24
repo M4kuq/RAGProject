@@ -533,7 +533,7 @@ def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commi
         assert stored_job.result_json["neo4j_projected_entity_count"] == 1
 
 
-def test_graph_index_build_worker_fails_job_when_projection_is_unavailable_then_retries(
+def test_graph_index_build_worker_records_projection_failure_metadata_then_retries(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     projection_service = _SequenceNeo4jProjectionService(
@@ -601,9 +601,12 @@ def test_graph_index_build_worker_fails_job_when_projection_is_unavailable_then_
         stored_run = db.get(GraphIndexRun, run_id)
         assert stored_first_job is not None
         assert stored_run is not None
-        assert stored_first_job.status == "failed"
-        assert stored_first_job.error_code == "neo4j_connection_failed"
-        assert stored_first_job.result_json is None
+        assert stored_first_job.status == "succeeded"
+        assert stored_first_job.error_code is None
+        assert stored_first_job.result_json is not None
+        assert stored_first_job.result_json["neo4j_projection_result_code"] == (
+            "neo4j_connection_failed"
+        )
         assert stored_run.status == "succeeded"
         retry_job = job_repository.create_job(
             db,
@@ -749,11 +752,14 @@ def test_neo4j_docker_path_installs_default_extra() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8")
     compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    ci_compose = (repo_root / "docker-compose.ci.yml").read_text(encoding="utf-8")
     docs = (repo_root / "docs" / "phase3" / "neo4j_optional_backend.md").read_text(encoding="utf-8")
 
     assert 'ARG BACKEND_UV_EXTRA_ARGS=""' in dockerfile
     assert "uv sync --frozen --no-install-project --no-dev $BACKEND_UV_EXTRA_ARGS" in dockerfile
     assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:---extra neo4j}" in compose
+    assert compose.count("neo4j:\n        condition: service_healthy") >= 3
+    assert ci_compose.count("neo4j:\n        condition: service_healthy") >= 4
     assert 'BACKEND_UV_EXTRA_ARGS="--extra neo4j"' in docs
 
 

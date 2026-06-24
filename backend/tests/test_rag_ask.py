@@ -55,7 +55,7 @@ from app.rag.rerank import FakeRerankerClient, NoopRerankerClient, RerankCandida
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
-from app.services.rag_service import RagService, _safe_generation_label
+from app.services.rag_service import RagService, _retrieval_summary_response, _safe_generation_label
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -149,6 +149,32 @@ def test_fake_answer_generator_is_deterministic_and_redacts_context_text() -> No
 def test_generation_label_redacts_secret_like_values() -> None:
     assert _safe_generation_label("sk-test-secret-token-1234567890", max_length=128) == "redacted"
     assert _safe_generation_label("qwen3.5-9b", max_length=128) == "qwen3.5-9b"
+
+
+def test_retrieval_summary_prefers_cached_graph_fallback_score_summary() -> None:
+    run = RetrievalRun(
+        retrieval_run_id=7,
+        strategy_type=RetrievalStrategy.GRAPH.value,
+        strategy_decision_json={
+            "selected_strategy": "graph_neo4j",
+            "execution_strategy": "hybrid",
+            "fallback_used": False,
+            "graph_requested_provider": "neo4j",
+        },
+        retrieval_score_summary={
+            "fallback_used": True,
+            "fallback_reason": "graph_no_evidence_fallback",
+            "graph_store_provider": "neo4j",
+            "graph_fallback_reason_codes": ["graph_no_evidence_fallback"],
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.fallback_used is True
+    assert summary.fallback_reason == "graph_no_evidence_fallback"
+    assert summary.graph_store_provider == "neo4j"
+    assert summary.graph_fallback_reason_codes == ["graph_no_evidence_fallback"]
 
 
 def test_rag_ask_success_replay_and_duplicate_state_handling(
