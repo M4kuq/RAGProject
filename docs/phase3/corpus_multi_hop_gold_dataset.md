@@ -36,7 +36,6 @@ Every case includes:
 - `metadata_json.acceptable_strategies`
 - `metadata_json.expected_entity_labels`
 - `metadata_json.expected_relation_types`
-- `metadata_json.required_hop_count`
 
 Paper cases intentionally use an empty `expected_relation_types` list because
 the rule-based extractor emits no relations for the current paper seed corpus.
@@ -46,8 +45,10 @@ types only when the extractor actually emits the relation. The only relation
 types expected by this fixture are the rule-based extractor outputs:
 `supports`, `uses`, `depends_on`, `includes`, and `connects`.
 
-All `required_hop_count` values are 1 or 2, matching the default
-`GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
+Only relation-backed cases set `metadata_json.required_hop_count`. Hub-only
+cases omit it because the current multi-hop answerability metric measures
+relation path depth, not same-entity hub fanout. All present `required_hop_count`
+values are 1, within the default `GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
 
 ## Extracted Graph Grounding
 
@@ -143,10 +144,13 @@ These steps use only repository-owned demo material and existing scripts.
    )
    ```
 
-   This file is for local reproduction only. Do not commit it.
+   This file is for local reproduction only. Do not commit it. The plain
+   `docker compose up -d --build` path is not enough for this runbook because
+   the default backend container has no repository checkout at `/workspace`.
 
 2. Start the local stack with graph retrieval enabled and the temporary
-   override.
+   override. Keep the same `-f docker-compose.selfdocs.override.yml` argument on
+   every later compose command in this runbook.
 
    ```powershell
    $env:GRAPH_RETRIEVAL_ENABLED = "true"
@@ -225,13 +229,29 @@ These steps use only repository-owned demo material and existing scripts.
 7. Review results in the admin UI.
 
    - Open `/admin/evaluations`.
-   - Select two completed runs, for example dense as base and graph as
-     candidate.
-   - Open the comparison page, or navigate directly to
-     `/admin/evaluations/compare?base=<dense_run_id>&candidate=<graph_run_id>`.
+   - Open the completed `phase3_corpus_multi_hop` run created by the smoke
+     command above.
+   - Use the run detail strategy comparison table to compare `dense`, `hybrid`,
+     and `graph_postgres` inside that single run.
    - Compare `faithfulness`, `context_precision`, `citation_coverage`,
      `graph_path_relevance`, `graph_citation_coverage`, and
      `multi_hop_answerability`.
+
+For the separate two-run comparison page, create separate single-strategy runs
+instead of using the multi-strategy smoke command:
+
+   ```powershell
+   .\scripts\run_retrieval_eval_smoke.ps1 `
+     -Dataset phase3_corpus_multi_hop `
+     -Strategies dense `
+     -CaseLimit 12 `
+     -ThresholdMode warn
+   .\scripts\run_retrieval_eval_smoke.ps1 `
+     -Dataset phase3_corpus_multi_hop `
+     -Strategies graph_postgres `
+     -CaseLimit 12 `
+     -ThresholdMode warn
+   ```
 
 Direction A for this dataset is dense or hybrid as base and `graph_postgres` as
 candidate. A healthy demo should show graph gains most clearly on the self-doc

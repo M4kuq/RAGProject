@@ -57,9 +57,12 @@ def test_phase3_corpus_multi_hop_fixture_loads_with_required_metadata() -> None:
         assert isinstance(raw_relation_types, list)
         assert set(raw_relation_types).issubset(EMITTED_RELATION_TYPES)
         required_hop_count = case.metadata_json.get("required_hop_count")
-        assert isinstance(required_hop_count, int)
-        assert required_hop_count >= 1
-        assert required_hop_count <= 2
+        if raw_relation_types:
+            assert isinstance(required_hop_count, int)
+            assert required_hop_count >= 1
+            assert required_hop_count <= 2
+        else:
+            assert required_hop_count is None
 
         assert not _contains_sensitive_word(case.case_id)
         assert not _contains_sensitive_word(case.question)

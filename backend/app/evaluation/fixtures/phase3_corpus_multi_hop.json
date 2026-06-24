@@ -32,8 +32,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["RAG", "Retrieval"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -56,8 +55,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["LoRA", "LLM"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -80,8 +78,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["DeepSeek", "LLM"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -104,8 +101,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["API", "ToolBench"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -222,8 +218,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphStore", "PostgresGraphStore", "Neo4jGraphStore", "GraphPath", "PostgreSQL"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -245,8 +240,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphIndexService", "GraphRepository", "graph index build", "document version id"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -268,8 +262,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRAG", "graph path relevance", "graph citation coverage", "Evaluation"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     },
@@ -292,8 +285,7 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRetrievalStrategy", "retrieval run items", "source chunk ids", "document chunk id", "document version id"],
-        "expected_relation_types": [],
-        "required_hop_count": 2
+        "expected_relation_types": []
       },
       "status": "active"
     }
