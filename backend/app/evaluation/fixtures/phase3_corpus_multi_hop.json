@@ -13,342 +13,286 @@
   },
   "cases": [
     {
-      "case_key": "paper_cot_tot_react_reasoning_actions",
-      "question": "How do Chain-of-Thought, Tree of Thoughts, and ReAct connect reasoning text, search, and grounded actions?",
-      "expected_answer": "Chain-of-Thought uses intermediate reasoning, Tree of Thoughts turns reasoning into search, and ReAct links reasoning with actions and observations.",
+      "case_key": "paper_rag_retrieval_hub",
+      "question": "Which RAG-family paper entries connect classic retrieval augmentation with self-reflective, corrective, recursive, graph, and evaluation-focused retrieval work?",
+      "expected_answer": "The RAG and Retrieval hubs connect the original retrieval-augmented generation entry with Self-RAG, CRAG, RAPTOR, GraphRAG, and later RAG evaluation or architecture entries.",
       "expected_keywords": [
-        "Chain-of-thought",
-        "Tree of Thoughts",
-        "ReAct",
-        "search over intermediate thoughts",
-        "thought, action, observation"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "reasoning"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["Chain-of-Thought", "Tree of Thoughts", "ReAct"],
-        "expected_relation_types": ["extends", "contrasts", "grounds"],
-        "required_hop_count": 2
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_decomposition_sampling_reasoning",
-      "question": "Which reasoning methods combine ordered decomposition with sampling and answer aggregation?",
-      "expected_answer": "Least-to-Most decomposes hard problems into ordered subproblems, while Self-Consistency samples multiple reasoning paths and aggregates answers.",
-      "expected_keywords": [
-        "Least-to-most prompting",
-        "ordered subproblems",
-        "Self-consistency",
-        "multiple reasoning paths",
-        "answer aggregation"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "reasoning"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["Least-to-Most Prompting", "Self-Consistency"],
-        "expected_relation_types": ["decomposes", "samples", "aggregates"],
-        "required_hop_count": 2
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_tool_use_api_chain",
-      "question": "Which tool-use papers connect self-supervised API calls, documentation-grounded API selection, and tool-chain evaluation?",
-      "expected_answer": "Toolformer covers self-supervised tool calls, Gorilla grounds API selection in documentation, and ToolBench evaluates tool-using chains.",
-      "expected_keywords": [
-        "Toolformer",
-        "self-supervised data generation",
-        "Gorilla",
-        "API documentation",
-        "ToolBench",
-        "successful tool chains"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "tool_use"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["Toolformer", "Gorilla", "ToolBench"],
-        "expected_relation_types": ["teaches", "grounds", "evaluates"],
-        "required_hop_count": 3
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_agent_eval_interfaces",
-      "question": "Which agent papers tie interactive environments to software issue-solving interfaces?",
-      "expected_answer": "WebArena and AgentBench evaluate interactive environments, while SWE-agent focuses on a dedicated agent-computer interface for software tasks.",
-      "expected_keywords": [
-        "WebArena",
-        "browser-based environments",
-        "AgentBench",
-        "interactive environments",
-        "SWE-agent",
-        "agent-computer interface"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "agents"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["WebArena", "AgentBench", "SWE-agent"],
-        "expected_relation_types": ["evaluates", "structures", "improves"],
-        "required_hop_count": 3
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_rag_reliability_structure",
-      "question": "Which RAG papers connect deciding when evidence is needed, correcting weak evidence, and using relational structure?",
-      "expected_answer": "Self-RAG decides when to retrieve, CRAG handles weak or wrong retrieved evidence, and GraphRAG adds relational structure over document collections.",
-      "expected_keywords": [
+        "RAG",
+        "Retrieval-Augmented Generation",
         "Self-RAG",
-        "when to retrieve",
-        "CRAG",
-        "retrieved evidence is weak or wrong",
-        "GraphRAG",
-        "relational structure"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "rag"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["Self-RAG", "CRAG", "GraphRAG"],
-        "expected_relation_types": ["decides", "corrects", "organizes"],
-        "required_hop_count": 3
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_global_multiscale_retrieval",
-      "question": "Which retrieval papers use broad summaries and relational organization for questions needing wider context?",
-      "expected_answer": "RAPTOR builds tree summaries for multi-scale retrieval, while GraphRAG builds graph indexes and community summaries for relational questions.",
-      "expected_keywords": [
+        "Corrective Retrieval Augmented Generation",
         "RAPTOR",
-        "tree of summaries",
-        "Multi-scale summaries",
-        "GraphRAG",
-        "community summaries",
-        "document collections"
+        "GraphRAG"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["paper", "multi_hop", "rag"],
+      "tags": ["paper", "multi_hop", "hub", "rag"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["RAPTOR", "GraphRAG"],
-        "expected_relation_types": ["summarizes", "clusters", "organizes"],
+        "expected_entity_labels": ["RAG", "Retrieval"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"
     },
     {
-      "case_key": "paper_prompt_adaptation_data",
-      "question": "How do GPT-3, Many-Shot ICL, and Self-Instruct show prompting and generated data as adaptation paths?",
-      "expected_answer": "GPT-3 frames prompting as an adaptation interface, Many-Shot ICL uses long context with many examples, and Self-Instruct generates instruction-following data.",
+      "case_key": "paper_lora_quantization_hub",
+      "question": "Which paper entries connect parameter-efficient LoRA adaptation with quantized LLM finetuning?",
+      "expected_answer": "The LoRA hub links Low-Rank Adaptation with QLoRA, and the LLM hub connects the quantized finetuning entry back to the broader language-model corpus.",
       "expected_keywords": [
-        "GPT-3",
-        "Prompting can become an interface for adaptation",
-        "Many-shot ICL",
-        "Long context",
-        "Self-Instruct",
-        "Synthetic data"
+        "LoRA",
+        "Low-Rank Adaptation",
+        "QLoRA",
+        "Quantized LLMs",
+        "LLM"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["paper", "multi_hop", "prompting"],
+      "tags": ["paper", "multi_hop", "hub", "adaptation"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GPT-3", "Many-Shot ICL", "Self-Instruct"],
-        "expected_relation_types": ["adapts", "extends", "generates"],
-        "required_hop_count": 3
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "paper_program_tool_reasoning",
-      "question": "Which papers connect reasoning with executable code, Python execution, and grounded acting?",
-      "expected_answer": "Program of Thoughts uses executable code, PAL writes Python snippets, and ReAct connects acting and reasoning in grounded tasks.",
-      "expected_keywords": [
-        "Program of Thoughts",
-        "executable code",
-        "PAL",
-        "Python snippets",
-        "ReAct",
-        "Acting and reasoning"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["paper", "multi_hop", "tool_use"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["Program of Thoughts", "PAL", "ReAct"],
-        "expected_relation_types": ["delegates", "executes", "grounds"],
-        "required_hop_count": 3
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "system_graph_source_truth_neo4j",
-      "question": "How do the system docs relate PostgreSQL source-of-truth graph storage to the optional Neo4j read model?",
-      "expected_answer": "PostgreSQL owns graph and retrieval records, while Neo4j is an optional traversal read model mapped back through source chunk references.",
-      "expected_keywords": [
-        "PostgreSQL",
-        "source of truth",
-        "Neo4j",
-        "traversal-oriented read model",
-        "source_chunk_ids"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "graph_store"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["PostgreSQL", "Neo4j", "GraphStore"],
-        "expected_relation_types": ["stores", "projects", "maps"],
+        "expected_entity_labels": ["LoRA", "LLM"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"
     },
     {
-      "case_key": "system_graph_retrieval_citation_bridge",
-      "question": "How does graph retrieval stay connected to the normal citation flow?",
-      "expected_answer": "Graph retrieval resolves paths to source chunks, writes retrieval run items and graph path refs, and citations still come from selected retrieval run items.",
+      "case_key": "paper_deepseek_llm_hub",
+      "question": "Which DeepSeek paper entries should be cited together when comparing open-source scaling, V3, reasoning, and code-focused LLM work?",
+      "expected_answer": "The DeepSeek and LLM hubs connect DeepSeek LLM, DeepSeek-V3, DeepSeek-R1, and DeepSeek-Coder across scaling, reasoning, and programming-focused entries.",
+      "expected_keywords": [
+        "DeepSeek LLM",
+        "DeepSeek-V3",
+        "DeepSeek-R1",
+        "DeepSeek-Coder",
+        "LLM"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "llm"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["DeepSeek", "LLM"],
+        "expected_relation_types": [],
+        "required_hop_count": 2
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_api_tool_hub",
+      "question": "Which API-centered paper entries connect a large language model with massive APIs and a tool-use benchmark platform?",
+      "expected_answer": "The API hub connects Gorilla's massive API focus with ToolBench's tool-use platform; ToolBench is also an extracted endpoint label.",
+      "expected_keywords": [
+        "API",
+        "Gorilla",
+        "Massive APIs",
+        "ToolBench",
+        "tool-using LLMs"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "tool_use"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["API", "ToolBench"],
+        "expected_relation_types": [],
+        "required_hop_count": 2
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_score_version_relation",
+      "question": "Which graph retrieval metadata links the Graph traversal output to the persisted graph score schema version?",
+      "expected_answer": "The graph retrieval strategy exposes Graph path metadata and uses the phase3 graph score schema version for persisted scoring evidence.",
       "expected_keywords": [
         "GraphRetrievalStrategy",
-        "source chunk mapping",
+        "Graph",
+        "phase3.graph_score.v1",
+        "graph_path_relevance"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "retrieval"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphRetrievalStrategy", "Graph", "phase3.graph score.v1"],
+        "expected_relation_types": ["uses"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_citation_relation",
+      "question": "How does the self-doc corpus connect Graph evidence to the normal citation pipeline?",
+      "expected_answer": "The Graph and Citation relation is grounded in the citation design, while retrieval run items and source chunk ids keep the answer citation path attached to stored chunks.",
+      "expected_keywords": [
+        "Graph",
+        "Citation",
         "retrieval_run_items",
-        "graph_retrieval_paths",
-        "answer citation",
-        "document_chunk"
+        "source_chunk_ids",
+        "answer citation"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "citations"],
+      "tags": ["system_docs", "multi_hop", "relation", "citations"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GraphRetrievalStrategy", "retrieval_run_items", "citations"],
-        "expected_relation_types": ["resolves", "backs", "cites"],
+        "expected_entity_labels": ["Graph", "Citation", "retrieval run items", "source chunk ids"],
+        "expected_relation_types": ["connects"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_demo_fastapi_postgresql_relation",
+      "question": "Which demo path links the FastAPI app, GraphRAG scenario, and PostgreSQL graph persistence?",
+      "expected_answer": "The GraphRAG demo scenario connects FastAPI with PostgreSQL, and the wider docs keep PostgreSQL as the persistent graph and retrieval store.",
+      "expected_keywords": [
+        "FastAPI",
+        "GraphRAG",
+        "PostgreSQL",
+        "graph retrieval",
+        "demo scenario"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "demo"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["FastAPI", "GraphRAG", "PostgreSQL"],
+        "expected_relation_types": ["connects"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_phase2_langsmith_dependency_relation",
+      "question": "Which Phase 2 self-doc dependency ties GitHub-side reporting to LangSmith traces and CI-oriented validation?",
+      "expected_answer": "The Phase 2 docs include a GitHub dependency on LangSmith, and the same self-doc corpus links that validation story to CI.",
+      "expected_keywords": [
+        "GitHub",
+        "LangSmith",
+        "CI",
+        "GitHub Actions"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "phase2"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GitHub", "LangSmith", "CI"],
+        "expected_relation_types": ["depends_on"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graphstore_provider_hub",
+      "question": "Which extracted graph-store labels explain how the PostgreSQL source store and optional Neo4j projection share path evidence?",
+      "expected_answer": "GraphStore is the provider hub; PostgresGraphStore and Neo4jGraphStore share GraphPath-style evidence while PostgreSQL remains the durable system store.",
+      "expected_keywords": [
+        "GraphStore",
+        "PostgresGraphStore",
+        "Neo4jGraphStore",
+        "GraphPath",
+        "PostgreSQL"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "hub", "graph_store"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphStore", "PostgresGraphStore", "Neo4jGraphStore", "GraphPath", "PostgreSQL"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"
     },
     {
-      "case_key": "system_graph_index_worker_counts",
-      "question": "Which graph indexing components record counts and safe failure information without storing extracted text?",
-      "expected_answer": "GraphIndexService drives graph_index_build work, record_index_summary stores counts, and error paths persist safe codes only.",
+      "case_key": "system_graph_index_service_hub",
+      "question": "Which indexing docs connect GraphIndexService, GraphRepository, graph index build records, and document version identifiers?",
+      "expected_answer": "GraphIndexService and GraphRepository are the extracted indexing hubs, and the graph index build path is tied to document version id tracking.",
       "expected_keywords": [
-        "graph_index_build",
         "GraphIndexService",
-        "record_index_summary",
-        "entity, relation, and mention counts",
-        "safe error code"
+        "GraphRepository",
+        "graph_index_build",
+        "document_version_id"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "indexing"],
+      "tags": ["system_docs", "multi_hop", "hub", "indexing"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GraphIndexService", "graph_index_build", "GraphRepository"],
-        "expected_relation_types": ["queues", "records", "redacts"],
+        "expected_entity_labels": ["GraphIndexService", "GraphRepository", "graph index build", "document version id"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"
     },
     {
-      "case_key": "system_graph_evaluation_metadata",
-      "question": "Which evaluation metadata links strategy selection with graph path relevance metrics?",
-      "expected_answer": "Strategy selection reads expected strategy metadata, while graph metrics use expected entity labels, relation types, and hop counts.",
+      "case_key": "system_graph_evaluation_metric_hub",
+      "question": "Which evaluation docs connect GraphRAG strategy comparison to graph path relevance and citation coverage?",
+      "expected_answer": "The GraphRAG evaluation docs connect strategy comparison with graph path relevance and graph citation coverage as graph-specific evidence checks.",
       "expected_keywords": [
-        "strategy_selection_accuracy",
-        "metadata_json.expected_strategy",
+        "GraphRAG",
         "graph_path_relevance",
-        "safe expected entity labels",
-        "hop counts"
+        "graph_citation_coverage",
+        "strategy comparison"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "evaluation"],
+      "tags": ["system_docs", "multi_hop", "hub", "evaluation"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["EvaluationCase", "graph_path_relevance", "strategy_selection_accuracy"],
-        "expected_relation_types": ["evaluates", "matches", "scores"],
+        "expected_entity_labels": ["GraphRAG", "graph path relevance", "graph citation coverage", "Evaluation"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"
     },
     {
-      "case_key": "system_cache_provider_fingerprint",
-      "question": "How do graph cache keys and provider fallback keep PostgreSQL and Neo4j comparisons separate?",
-      "expected_answer": "Graph cache keys include graph index and provider data, so PostgreSQL and Neo4j entries do not mix, and Neo4j fallback is visible.",
+      "case_key": "system_retrieval_trace_source_hub",
+      "question": "Which retrieval-trace labels connect graph path evidence to persisted retrieval items and source chunk identifiers?",
+      "expected_answer": "GraphRetrievalStrategy, retrieval run items, source chunk ids, document chunk id, and document version id form the extracted hub around persisted retrieval trace evidence.",
       "expected_keywords": [
-        "graph_index_fingerprint",
-        "graph_store_provider",
-        "PostgreSQL and Neo4j results do not share cache entries",
-        "neo4j_to_postgres_fallback"
+        "GraphRetrievalStrategy",
+        "retrieval_run_items",
+        "source_chunk_ids",
+        "document_chunk_id",
+        "document_version_id"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "cache"],
+      "tags": ["system_docs", "multi_hop", "hub", "retrieval_trace"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["retrieval cache", "PostgreSQL", "Neo4j"],
-        "expected_relation_types": ["keys", "separates", "falls_back"],
-        "required_hop_count": 2
-      },
-      "status": "active"
-    },
-    {
-      "case_key": "system_corpus_runbook_manifest",
-      "question": "Which self-doc runbook path rebuilds the manifest corpus and then compares graph providers?",
-      "expected_answer": "The manifest points at repository self docs, and the Neo4j demo runbook rebuilds that corpus before provider comparison.",
-      "expected_keywords": [
-        "corpus_manifest.json",
-        "repository_self_docs",
-        "neo4j_demo.ps1",
-        "provider comparison runbook"
-      ],
-      "expected_document_ids": [],
-      "expected_chunk_ids": [],
-      "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "runbook"],
-      "metadata_json": {
-        "expected_strategy": "graph",
-        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["corpus_manifest.json", "repository_self_docs", "neo4j_demo.ps1"],
-        "expected_relation_types": ["lists", "rebuilds", "compares"],
+        "expected_entity_labels": ["GraphRetrievalStrategy", "retrieval run items", "source chunk ids", "document chunk id", "document version id"],
+        "expected_relation_types": [],
         "required_hop_count": 2
       },
       "status": "active"

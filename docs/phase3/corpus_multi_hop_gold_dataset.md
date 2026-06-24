@@ -1,17 +1,17 @@
 # Corpus-Grounded Multi-Hop Gold Dataset
 
 This document describes `phase3_corpus_multi_hop`, a fixture-only evaluation
-dataset for showing where GraphRAG should beat single-hop dense retrieval. It is
-grounded in the committed demo corpora only:
+dataset for GraphRAG strategy comparisons. It is grounded in repository-owned
+demo material only:
 
 - LLM paper seed corpus: `backend/app/seed_data/llm_paper_corpus.md`
-- LLM corpus guide: `docs/demo/llm_paper_corpus.md`
 - RAGProject self-doc manifest: `docs/demo/corpus_manifest.json`
-- RAGProject GraphRAG and evaluation docs under `docs/phase3/`
-- supporting Phase2 evaluation docs and `docs/DDL.md`
+- RAGProject GraphRAG, evaluation, retrieval, and storage docs under `docs/phase3/`
+- supporting Phase2 docs plus `README.md`, `docs/DDL.md`, and design docs listed
+  by the manifest
 
 `data/demo/llm-research/*.md` is not present in this `origin/main` checkout. The
-paper demo content currently lives in the seed corpus above and is loaded as the
+paper demo content currently lives in the seed corpus and is loaded as the
 `LLM Paper Corpus for RAG Demo` logical document.
 
 ## Scope
@@ -22,12 +22,12 @@ corpus text. `expected_document_ids` and `expected_chunk_ids` are intentionally
 empty because ingest-time IDs are local database state. Use the runbook below to
 create the live IDs for a local comparison.
 
-The fixture has 14 active cases:
+The fixture has 12 active cases:
 
-| Domain | Count | Tags |
+| Domain | Count | Support shape |
 |---|---:|---|
-| LLM paper corpus | 8 | `paper`, `multi_hop` |
-| RAGProject self docs | 6 | `system_docs`, `multi_hop` |
+| LLM paper corpus | 4 | extracted canonical entity hubs |
+| RAGProject self docs | 8 | extracted relations plus canonical entity hubs |
 
 Every case includes:
 
@@ -38,39 +38,95 @@ Every case includes:
 - `metadata_json.expected_relation_types`
 - `metadata_json.required_hop_count`
 
-## Design Intent
+Paper cases intentionally use an empty `expected_relation_types` list because
+the rule-based extractor emits no relations for the current paper seed corpus.
+Those cases are still multi-hop: a single canonical entity is extracted from
+multiple paper blocks and acts as the graph hub. Self-doc cases use relation
+types only when the extractor actually emits the relation.
 
-The cases are written so a single lexical or vector-nearest chunk is not enough
-to collect every gold signal. A good GraphRAG run should follow shared entities,
-themes, relation labels, or source-chunk-backed paths across at least two
-documents or chunks.
+## Extracted Graph Grounding
 
-| Case | Why it is multi-hop | Link axis | Dense miss pattern |
+The fixture was aligned against the deterministic rule-based graph extractor:
+`EntityExtractionService`, `RelationExtractionService`, and
+`GraphEntityNormalizer`.
+
+Extraction summary, without source text:
+
+| Corpus | Chunks | Mentions | Canonical labels | Relations |
+|---|---:|---:|---:|---:|
+| Paper seed corpus | 110 | 121 | 32 | 0 |
+| Self-doc manifest corpus | 24 | 1162 | 318 | 4 |
+
+Paper multi-source hubs used by the fixture:
+
+| Canonical label | Source count | Mention count |
+|---|---:|---:|
+| `RAG` | 8 | 17 |
+| `Retrieval` | 11 | 13 |
+| `LoRA` | 2 | 3 |
+| `LLM` | 18 | 25 |
+| `API` | 2 | 4 |
+| `DeepSeek` | 4 | 8 |
+
+Self-doc relation edges used by the fixture:
+
+| Source | Relation | Target |
+|---|---|---|
+| `Graph` | `uses` | `phase3.graph score.v1` |
+| `Graph` | `connects` | `Citation` |
+| `FastAPI` | `connects` | `PostgreSQL` |
+| `GitHub` | `depends_on` | `LangSmith` |
+
+Self-doc multi-source hubs used by the fixture:
+
+| Canonical label | Source count | Mention count |
+|---|---:|---:|
+| `GraphRAG` | 8 | 42 |
+| `GraphStore` | 4 | 10 |
+| `GraphRetrievalStrategy` | 2 | 4 |
+| `GraphIndexService` | 3 | 3 |
+| `GraphRepository` | 2 | 2 |
+| `GraphPath` | 3 | 4 |
+| `PostgreSQL` | 13 | 61 |
+| `retrieval run items` | 9 | 17 |
+| `source chunk ids` | 4 | 5 |
+| `document chunk id` | 6 | 17 |
+| `document version id` | 5 | 26 |
+| `graph index build` | 4 | 8 |
+| `graph path relevance` | 2 | 2 |
+| `graph citation coverage` | 2 | 2 |
+
+Graph advantage is clearest in technical and structural content where extracted
+entities and relation edges reflect implementation boundaries. The paper corpus
+is useful for hub traversal, but not for relation-based graph scoring in its
+current one-paragraph-per-entry shape.
+
+## Case Design
+
+| Case | Domain | Actual graph support | Why dense can miss |
 |---|---|---|---|
-| `paper_cot_tot_react_reasoning_actions` | Requires CoT, ToT, and ReAct together. | reasoning method -> search -> action loop | One paper chunk can answer only part of the progression. |
-| `paper_decomposition_sampling_reasoning` | Connects decomposition and voting. | reasoning decomposition -> diverse chains -> answer aggregation | Query terms may rank either Least-to-Most or Self-Consistency, not both. |
-| `paper_tool_use_api_chain` | Needs Toolformer, Gorilla, and ToolBench. | tool use -> API grounding -> evaluation chains | API terms alone can overfocus on Gorilla. |
-| `paper_agent_eval_interfaces` | Connects agent benchmarks and SWE-agent interface design. | interactive environments -> software interface | Software issue terms can miss WebArena and AgentBench. |
-| `paper_rag_reliability_structure` | Joins Self-RAG, CRAG, and GraphRAG. | evidence need -> correction -> relational structure | RAG keyword overlap can retrieve one family member without the bridge. |
-| `paper_global_multiscale_retrieval` | Contrasts RAPTOR summaries with GraphRAG relational summaries. | broad context -> tree/community summaries | Summary terms can miss the graph relation requirement. |
-| `paper_prompt_adaptation_data` | Connects GPT-3 prompting, Many-Shot ICL, and Self-Instruct. | adaptation interface -> long context -> generated instruction data | Prompting terms may rank GPT-3 and miss synthetic data. |
-| `paper_program_tool_reasoning` | Links executable reasoning, Python execution, and ReAct. | program execution -> tool use -> grounded acting | Code terms can miss action/observation loops. |
-| `system_graph_source_truth_neo4j` | Needs architecture and Neo4j docs. | PostgreSQL source of truth -> optional read model -> source chunk IDs | Provider terms alone can miss the source-of-truth boundary. |
-| `system_graph_retrieval_citation_bridge` | Needs retrieval strategy and citation validation docs. | graph path -> retrieval run item -> citation | Citation terms can miss graph path resolution. |
-| `system_graph_index_worker_counts` | Needs graph indexing and redaction policy. | graph job -> count summary -> safe error handling | Worker terms can miss reporting safety. |
-| `system_graph_evaluation_metadata` | Needs Phase2 strategy metadata plus Phase3 graph metrics. | expected strategy -> graph labels/types/hops | Metric terms can retrieve only one design doc. |
-| `system_cache_provider_fingerprint` | Needs cache and provider fallback docs. | graph fingerprint -> provider key -> fallback reason | Cache terms can miss provider behavior. |
-| `system_corpus_runbook_manifest` | Needs corpus manifest, README, and Neo4j runbook. | manifest -> self-doc corpus -> provider comparison | Runbook terms can miss the manifest source. |
+| `paper_rag_retrieval_hub` | paper | `RAG` and `Retrieval` hubs span multiple paper blocks. | A lexical hit can stop at one RAG entry and miss later Self-RAG, CRAG, RAPTOR, or GraphRAG entries. |
+| `paper_lora_quantization_hub` | paper | `LoRA` spans LoRA and QLoRA entries; `LLM` links the broader model corpus. | Quantization terms can rank QLoRA without bringing the earlier LoRA adaptation entry. |
+| `paper_deepseek_llm_hub` | paper | `DeepSeek` and `LLM` span scaling, V3, reasoning, and code-focused entries. | A query about one DeepSeek variant can miss the adjacent DeepSeek entries. |
+| `paper_api_tool_hub` | paper | `API` spans Gorilla and ToolBench; `ToolBench` is an extracted endpoint label. | API terms can overfocus on Gorilla and miss the tool-use benchmark entry. |
+| `system_graph_score_version_relation` | system docs | `Graph uses phase3.graph score.v1`; `GraphRetrievalStrategy` is also extracted. | Dense retrieval can find the strategy doc while missing the score-schema edge. |
+| `system_graph_citation_relation` | system docs | `Graph connects Citation`; retrieval trace hubs attach citation evidence to source chunks. | Citation terms can miss graph path and retrieval-run evidence. |
+| `system_demo_fastapi_postgresql_relation` | system docs | `FastAPI connects PostgreSQL`; `GraphRAG` and `PostgreSQL` are multi-source hubs. | Demo terms can retrieve the scenario without the persistence boundary. |
+| `system_phase2_langsmith_dependency_relation` | system docs | `GitHub depends_on LangSmith`; `CI` is a multi-source hub. | Validation terms can retrieve CI docs without the trace dependency. |
+| `system_graphstore_provider_hub` | system docs | `GraphStore`, `PostgresGraphStore`, `Neo4jGraphStore`, and `GraphPath` are extracted hubs/endpoints. | Provider terms can retrieve one backend doc without the shared path-evidence contract. |
+| `system_graph_index_service_hub` | system docs | `GraphIndexService`, `GraphRepository`, `graph index build`, and `document version id` are extracted hubs. | Indexing terms can retrieve worker behavior without version tracking. |
+| `system_graph_evaluation_metric_hub` | system docs | `GraphRAG`, `graph path relevance`, `graph citation coverage`, and `Evaluation` are extracted hubs. | Metric terms can retrieve only the evaluation design and miss strategy comparison docs. |
+| `system_retrieval_trace_source_hub` | system docs | `GraphRetrievalStrategy`, `retrieval run items`, `source chunk ids`, `document chunk id`, and `document version id` are extracted hubs. | Trace terms can retrieve the SQL/API record without the graph path source mapping. |
 
-The expected answers are short summaries. They do not copy full source passages
-or generated context. The keyword list is made of short terms that exist in the
-committed corpus and can be matched with case-insensitive substring checks.
+Expected answers are short summaries. They do not copy full source passages or
+generated context. Expected keywords are short terms that exist in the committed
+corpus and can be matched with case-insensitive substring checks.
 
 ## Reproduction Runbook
 
 These steps use only repository-owned demo material and existing scripts.
 
-1. Start the local stack.
+1. Start the local stack with graph retrieval enabled.
 
    ```powershell
    $env:GRAPH_RETRIEVAL_ENABLED = "true"
@@ -78,6 +134,9 @@ These steps use only repository-owned demo material and existing scripts.
    $env:GRAPH_STORE_PROVIDER = "postgres"
    docker compose up -d --build
    ```
+
+   If your local setup uses a demo compose profile, enable that profile before
+   starting the stack.
 
 2. Load the LLM paper seed corpus.
 
@@ -111,7 +170,7 @@ These steps use only repository-owned demo material and existing scripts.
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies dense,hybrid,graph_postgres `
-     -CaseLimit 14 `
+     -CaseLimit 12 `
      -ThresholdMode warn
    ```
 
@@ -121,7 +180,7 @@ These steps use only repository-owned demo material and existing scripts.
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies graph_postgres,graph_neo4j `
-     -CaseLimit 14 `
+     -CaseLimit 12 `
      -ThresholdMode warn
    ```
 
@@ -137,10 +196,10 @@ These steps use only repository-owned demo material and existing scripts.
      `multi_hop_answerability`.
 
 Direction A for this dataset is dense or hybrid as base and `graph_postgres` as
-candidate. A healthy demo should show graph gains on cases where the gold
-signals span multiple paper entries or multiple self-docs. If graph indexing is
-missing, unavailable, or unprojected, graph runs may show safe no-context or
-fallback reason codes instead of quality gains.
+candidate. A healthy demo should show graph gains most clearly on the self-doc
+cases where entity and relation extraction matches implementation structure. If
+graph indexing is missing, unavailable, or unprojected, graph runs may show safe
+no-context or fallback reason codes instead of quality gains.
 
 ## Safety Notes
 
