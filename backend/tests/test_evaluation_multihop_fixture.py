@@ -97,6 +97,7 @@ def test_phase3_corpus_multi_hop_manifest_is_safe_and_corpus_grounded() -> None:
 
     corpus_text = _combined_corpus_text()
     for case in manifest.cases:
+        _assert_keywords_do_not_overlap(case.case_key, case.expected_keywords)
         for keyword in case.expected_keywords:
             assert _normalized_text(keyword) in corpus_text, (
                 f"{case.case_key} keyword is not grounded in the committed corpus: {keyword}"
@@ -165,6 +166,17 @@ def _string_values(value: Any) -> Iterator[str]:
 
 def _normalized_text(value: str) -> str:
     return " ".join(value.split()).casefold()
+
+
+def _assert_keywords_do_not_overlap(case_key: str, keywords: list[str]) -> None:
+    normalized = [_normalized_text(keyword) for keyword in keywords]
+    for index, keyword in enumerate(normalized):
+        for other_index, other_keyword in enumerate(normalized):
+            if index != other_index and keyword in other_keyword:
+                raise AssertionError(
+                    f"{case_key} keyword overlaps another expected keyword: "
+                    f"{keywords[index]} -> {keywords[other_index]}"
+                )
 
 
 def _combined_corpus_text() -> str:

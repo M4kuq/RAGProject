@@ -17,7 +17,6 @@
       "question": "Which RAG-family paper entries connect classic retrieval augmentation with self-reflective, corrective, recursive, graph, and evaluation-focused retrieval work?",
       "expected_answer": "The RAG and Retrieval hubs connect the original retrieval-augmented generation entry with Self-RAG, CRAG, RAPTOR, GraphRAG, and later RAG evaluation or architecture entries.",
       "expected_keywords": [
-        "RAG",
         "Retrieval-Augmented Generation",
         "Self-RAG",
         "Corrective Retrieval Augmented Generation",
@@ -41,11 +40,10 @@
       "question": "Which paper entries connect parameter-efficient LoRA adaptation with quantized LLM finetuning?",
       "expected_answer": "The LoRA hub links Low-Rank Adaptation with QLoRA, and the LLM hub connects the quantized finetuning entry back to the broader language-model corpus.",
       "expected_keywords": [
-        "LoRA",
         "Low-Rank Adaptation",
         "QLoRA",
         "Quantized LLMs",
-        "LLM"
+        "Efficient Finetuning"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -67,8 +65,7 @@
         "DeepSeek LLM",
         "DeepSeek-V3",
         "DeepSeek-R1",
-        "DeepSeek-Coder",
-        "LLM"
+        "DeepSeek-Coder"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -87,7 +84,6 @@
       "question": "Which API-centered paper entries connect a large language model with massive APIs and a tool-use benchmark platform?",
       "expected_answer": "The API hub connects Gorilla's massive API focus with ToolBench's tool-use platform; ToolBench is also an extracted endpoint label.",
       "expected_keywords": [
-        "API",
         "Gorilla",
         "Massive APIs",
         "ToolBench",
@@ -110,7 +106,6 @@
       "question": "Which graph evaluation metrics are connected by the extracted Graph metric chain?",
       "expected_answer": "The extracted Graph metric chain links Graph to graph path relevance and graph citation coverage for graph-specific evaluation evidence.",
       "expected_keywords": [
-        "Graph",
         "graph_path_relevance",
         "graph_citation_coverage",
         "entity_relation_quality_summary"
@@ -133,11 +128,10 @@
       "question": "How does the self-doc corpus connect Graph evidence to the normal citation pipeline?",
       "expected_answer": "The Graph and Citation relation is grounded in the citation design, while retrieval run items and source chunk ids keep the answer citation path attached to stored chunks.",
       "expected_keywords": [
-        "Graph",
-        "Citation",
+        "Graph Citation",
+        "graph nodes",
         "retrieval_run_items",
-        "source_chunk_ids",
-        "answer citation"
+        "source_chunk_ids"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -157,10 +151,9 @@
       "question": "Which Phase 3 docs connect GraphRAG to PostgreSQL as the local graph retrieval store?",
       "expected_answer": "The Phase 3 docs connect GraphRAG with PostgreSQL and describe PostgreSQL as the local graph retrieval source of truth.",
       "expected_keywords": [
-        "GraphRAG",
-        "PostgreSQL",
         "PostgreSQL GraphRAG",
-        "source-of-truth"
+        "source-of-truth",
+        "read-model architecture explanation"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -203,7 +196,6 @@
       "question": "Which extracted graph-store labels explain how the PostgreSQL source store and optional Neo4j projection share path evidence?",
       "expected_answer": "GraphStore is the provider hub; PostgresGraphStore and Neo4jGraphStore share GraphPath-style evidence while PostgreSQL remains the durable system store.",
       "expected_keywords": [
-        "GraphStore",
         "PostgresGraphStore",
         "Neo4jGraphStore",
         "GraphPath",
