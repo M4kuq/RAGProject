@@ -54,14 +54,15 @@ values are 1, within the default `GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
 
 The fixture was aligned against the deterministic rule-based graph extractor:
 `EntityExtractionService`, `RelationExtractionService`, and
-`GraphEntityNormalizer`.
+`GraphEntityNormalizer`. Validation uses the same `FixedTokenChunker`
+configuration as document ingest: 512-unit windows with 128-unit overlap.
 
 Extraction summary, without source text:
 
 | Corpus | Chunks | Mentions | Canonical labels | Relations |
 |---|---:|---:|---:|---:|
 | Paper seed corpus | 110 | 121 | 32 | 0 |
-| Self-doc manifest corpus | 24 | 1162 | 318 | 4 |
+| Self-doc manifest corpus | 113 | 1567 | 322 | 72 |
 
 Paper multi-source hubs used by the fixture:
 
@@ -78,26 +79,27 @@ Self-doc relation edges used by the fixture:
 
 | Source | Relation | Target |
 |---|---|---|
-| `Graph` | `uses` | `phase3.graph score.v1` |
+| `Graph` | `uses` | `graph path relevance` |
+| `graph path relevance` | `uses` | `graph citation coverage` |
 | `Graph` | `connects` | `Citation` |
-| `FastAPI` | `connects` | `PostgreSQL` |
-| `GitHub` | `depends_on` | `LangSmith` |
+| `GraphRAG` | `connects` | `PostgreSQL` |
+| `GraphIndexService` | `connects` | `graph index build` |
 
 Self-doc multi-source hubs used by the fixture:
 
 | Canonical label | Source count | Mention count |
 |---|---:|---:|
-| `GraphRAG` | 8 | 42 |
+| `GraphRAG` | 7 | 44 |
 | `GraphStore` | 4 | 10 |
 | `GraphRetrievalStrategy` | 2 | 4 |
 | `GraphIndexService` | 3 | 3 |
 | `GraphRepository` | 2 | 2 |
 | `GraphPath` | 3 | 4 |
-| `PostgreSQL` | 13 | 61 |
-| `retrieval run items` | 9 | 17 |
-| `source chunk ids` | 4 | 5 |
-| `document chunk id` | 6 | 17 |
-| `document version id` | 5 | 26 |
+| `PostgreSQL` | 13 | 57 |
+| `retrieval run items` | 9 | 23 |
+| `source chunk ids` | 4 | 6 |
+| `document chunk id` | 6 | 20 |
+| `document version id` | 5 | 44 |
 | `graph index build` | 4 | 8 |
 | `graph path relevance` | 2 | 2 |
 | `graph citation coverage` | 2 | 2 |
@@ -115,12 +117,12 @@ current one-paragraph-per-entry shape.
 | `paper_lora_quantization_hub` | paper | `LoRA` spans LoRA and QLoRA entries; `LLM` links the broader model corpus. | Quantization terms can rank QLoRA without bringing the earlier LoRA adaptation entry. |
 | `paper_deepseek_llm_hub` | paper | `DeepSeek` and `LLM` span scaling, V3, reasoning, and code-focused entries. | A query about one DeepSeek variant can miss the adjacent DeepSeek entries. |
 | `paper_api_tool_hub` | paper | `API` spans Gorilla and ToolBench; `ToolBench` is an extracted endpoint label. | API terms can overfocus on Gorilla and miss the tool-use benchmark entry. |
-| `system_graph_score_version_relation` | system docs | `Graph uses phase3.graph score.v1`; `GraphRetrievalStrategy` is also extracted. | Dense retrieval can find the strategy doc while missing the score-schema edge. |
+| `system_graph_metric_chain_relation` | system docs | `Graph uses graph path relevance`; `graph path relevance uses graph citation coverage`. | Dense retrieval can find one metric term while missing the metric chain. |
 | `system_graph_citation_relation` | system docs | `Graph connects Citation`; retrieval trace hubs attach citation evidence to source chunks. | Citation terms can miss graph path and retrieval-run evidence. |
-| `system_demo_fastapi_postgresql_relation` | system docs | `FastAPI connects PostgreSQL`; `GraphRAG` and `PostgreSQL` are multi-source hubs. | Demo terms can retrieve the scenario without the persistence boundary. |
-| `system_phase2_langsmith_dependency_relation` | system docs | `GitHub depends_on LangSmith`; `CI` is a multi-source hub. | Validation terms can retrieve CI docs without the trace dependency. |
+| `system_graphrag_postgresql_relation` | system docs | `GraphRAG connects PostgreSQL`; both labels are multi-source hubs. | GraphRAG terms can retrieve user-facing docs without the storage boundary. |
+| `system_graph_index_service_relation` | system docs | `GraphIndexService connects graph index build`; GraphRepository and document version id remain adjacent hubs. | Indexing terms can retrieve worker behavior without the service/job link. |
 | `system_graphstore_provider_hub` | system docs | `GraphStore`, `PostgresGraphStore`, `Neo4jGraphStore`, and `GraphPath` are extracted hubs/endpoints. | Provider terms can retrieve one backend doc without the shared path-evidence contract. |
-| `system_graph_index_service_hub` | system docs | `GraphIndexService`, `GraphRepository`, `graph index build`, and `document version id` are extracted hubs. | Indexing terms can retrieve worker behavior without version tracking. |
+| `system_mcp_langchain_langgraph_hub` | system docs | `MCP`, `LangChain`, `LangGraph`, and `Qdrant` are extracted hubs across Phase2 self docs. | Tooling terms can retrieve one strategy doc without the cross-tool boundary. |
 | `system_graph_evaluation_metric_hub` | system docs | `GraphRAG`, `graph path relevance`, `graph citation coverage`, and `Evaluation` are extracted hubs. | Metric terms can retrieve only the evaluation design and miss strategy comparison docs. |
 | `system_retrieval_trace_source_hub` | system docs | `GraphRetrievalStrategy`, `retrieval run items`, `source chunk ids`, `document chunk id`, and `document version id` are extracted hubs. | Trace terms can retrieve the SQL/API record without the graph path source mapping. |
 

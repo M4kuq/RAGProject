@@ -12,6 +12,8 @@ from typing import Any
 from app.evaluation.fixtures import _contains_sensitive_word, load_evaluation_cases
 from app.graph.extraction import EntityExtractionService, GraphChunkRef, RelationExtractionService
 from app.graph.normalization import GraphEntityNormalizer
+from app.ingest.chunking import ChunkingConfig, FixedTokenChunker
+from app.ingest.extractors.base import ExtractedDocument, ExtractedPage, ExtractionMetadata
 from app.schemas.evaluations import EvaluationDatasetManifest
 
 DATASET_NAME = "phase3_corpus_multi_hop"
@@ -175,17 +177,30 @@ def _extract_committed_graph_summary() -> _ExtractedGraphSummary:
     chunks: list[GraphChunkRef] = []
     source_ids: list[str] = []
 
+    document_version_id = 1
     for source_id, text in _iter_paper_blocks():
-        chunks.append(_graph_chunk(len(chunks), text))
-        source_ids.append(source_id)
+        _extend_graph_chunks(
+            chunks,
+            source_ids,
+            source_id=source_id,
+            text=text,
+            document_version_id=document_version_id,
+        )
+        document_version_id += 1
 
     for source_id, text in _iter_manifest_texts():
-        chunks.append(_graph_chunk(len(chunks), text))
-        source_ids.append(source_id)
+        _extend_graph_chunks(
+            chunks,
+            source_ids,
+            source_id=source_id,
+            text=text,
+            document_version_id=document_version_id,
+        )
+        document_version_id += 1
 
-    entity_service = EntityExtractionService(max_entities_per_chunk=100)
+    entity_service = EntityExtractionService()
     mentions = entity_service.extract(tuple(chunks))
-    relation_service = RelationExtractionService(max_relations_per_chunk=200)
+    relation_service = RelationExtractionService()
     relations = relation_service.extract(tuple(chunks), mentions)
 
     sources_by_label: dict[str, set[str]] = defaultdict(set)
@@ -209,14 +224,31 @@ def _extract_committed_graph_summary() -> _ExtractedGraphSummary:
     )
 
 
-def _graph_chunk(index: int, text: str) -> GraphChunkRef:
-    return GraphChunkRef(
-        document_chunk_id=100000 + index,
-        document_version_id=1,
-        chunk_index=index,
-        chunk_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        content_text=text,
+def _extend_graph_chunks(
+    chunks: list[GraphChunkRef],
+    source_ids: list[str],
+    *,
+    source_id: str,
+    text: str,
+    document_version_id: int,
+) -> None:
+    chunker = FixedTokenChunker(ChunkingConfig())
+    document = ExtractedDocument(
+        pages=[ExtractedPage(text=text, page_number=1)],
+        metadata=ExtractionMetadata(extractor_name="fixture", extractor_version="test"),
     )
+    for chunk in chunker.chunk(document, document_version_id=document_version_id):
+        chunk_index = len(chunks)
+        chunks.append(
+            GraphChunkRef(
+                document_chunk_id=100000 + chunk_index,
+                document_version_id=document_version_id,
+                chunk_index=chunk_index,
+                chunk_hash=hashlib.sha256(chunk.content_text.encode("utf-8")).hexdigest(),
+                content_text=chunk.content_text,
+            )
+        )
+        source_ids.append(source_id)
 
 
 def _iter_paper_blocks() -> Iterator[tuple[str, str]]:

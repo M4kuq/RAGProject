@@ -106,14 +106,14 @@
       "status": "active"
     },
     {
-      "case_key": "system_graph_score_version_relation",
-      "question": "Which graph retrieval metadata links the Graph traversal output to the persisted graph score schema version?",
-      "expected_answer": "The graph retrieval strategy exposes Graph path metadata and uses the phase3 graph score schema version for persisted scoring evidence.",
+      "case_key": "system_graph_metric_chain_relation",
+      "question": "Which graph evaluation metrics are connected by the extracted Graph metric chain?",
+      "expected_answer": "The extracted Graph metric chain links Graph to graph path relevance and graph citation coverage for graph-specific evaluation evidence.",
       "expected_keywords": [
-        "GraphRetrievalStrategy",
         "Graph",
-        "phase3.graph_score.v1",
-        "graph_path_relevance"
+        "graph_path_relevance",
+        "graph_citation_coverage",
+        "entity_relation_quality_summary"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -122,7 +122,7 @@
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GraphRetrievalStrategy", "Graph", "phase3.graph score.v1"],
+        "expected_entity_labels": ["Graph", "graph path relevance", "graph citation coverage"],
         "expected_relation_types": ["uses"],
         "required_hop_count": 1
       },
@@ -153,15 +153,14 @@
       "status": "active"
     },
     {
-      "case_key": "system_demo_fastapi_postgresql_relation",
-      "question": "Which demo path links the FastAPI app, GraphRAG scenario, and PostgreSQL graph persistence?",
-      "expected_answer": "The GraphRAG demo scenario connects FastAPI with PostgreSQL, and the wider docs keep PostgreSQL as the persistent graph and retrieval store.",
+      "case_key": "system_graphrag_postgresql_relation",
+      "question": "Which Phase 3 docs connect GraphRAG to PostgreSQL as the local graph retrieval store?",
+      "expected_answer": "The Phase 3 docs connect GraphRAG with PostgreSQL and describe PostgreSQL as the local graph retrieval source of truth.",
       "expected_keywords": [
-        "FastAPI",
         "GraphRAG",
         "PostgreSQL",
-        "graph retrieval",
-        "demo scenario"
+        "PostgreSQL GraphRAG",
+        "source-of-truth"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
@@ -170,31 +169,31 @@
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["FastAPI", "GraphRAG", "PostgreSQL"],
+        "expected_entity_labels": ["GraphRAG", "PostgreSQL"],
         "expected_relation_types": ["connects"],
         "required_hop_count": 1
       },
       "status": "active"
     },
     {
-      "case_key": "system_phase2_langsmith_dependency_relation",
-      "question": "Which Phase 2 self-doc dependency ties GitHub-side reporting to LangSmith traces and CI-oriented validation?",
-      "expected_answer": "The Phase 2 docs include a GitHub dependency on LangSmith, and the same self-doc corpus links that validation story to CI.",
+      "case_key": "system_graph_index_service_relation",
+      "question": "Which graph indexing relation connects GraphIndexService to the graph index build worker path?",
+      "expected_answer": "The architecture docs connect GraphIndexService to graph_index_build, with GraphRepository and document version tracking around the indexing path.",
       "expected_keywords": [
-        "GitHub",
-        "LangSmith",
-        "CI",
-        "GitHub Actions"
+        "GraphIndexService",
+        "graph_index_build",
+        "GraphRepository",
+        "document_version_id"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "relation", "phase2"],
+      "tags": ["system_docs", "multi_hop", "relation", "indexing"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GitHub", "LangSmith", "CI"],
-        "expected_relation_types": ["depends_on"],
+        "expected_entity_labels": ["GraphIndexService", "graph index build", "GraphRepository", "document version id"],
+        "expected_relation_types": ["connects"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -223,23 +222,24 @@
       "status": "active"
     },
     {
-      "case_key": "system_graph_index_service_hub",
-      "question": "Which indexing docs connect GraphIndexService, GraphRepository, graph index build records, and document version identifiers?",
-      "expected_answer": "GraphIndexService and GraphRepository are the extracted indexing hubs, and the graph index build path is tied to document version id tracking.",
+      "case_key": "system_mcp_langchain_langgraph_hub",
+      "question": "Which MCP self-doc labels connect advanced RAG tools with LangChain, LangGraph, Qdrant, and bounded tool orchestration?",
+      "expected_answer": "The MCP hub links advanced RAG tools with LangChain, LangGraph, Qdrant, and the bounded tool orchestration path.",
       "expected_keywords": [
-        "GraphIndexService",
-        "GraphRepository",
-        "graph_index_build",
-        "document_version_id"
+        "MCP",
+        "LangChain",
+        "LangGraph",
+        "Qdrant",
+        "retrieval-only tool boundary"
       ],
       "expected_document_ids": [],
       "expected_chunk_ids": [],
       "required_citation": true,
-      "tags": ["system_docs", "multi_hop", "hub", "indexing"],
+      "tags": ["system_docs", "multi_hop", "hub", "mcp"],
       "metadata_json": {
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
-        "expected_entity_labels": ["GraphIndexService", "GraphRepository", "graph index build", "document version id"],
+        "expected_entity_labels": ["MCP", "LangChain", "LangGraph", "Qdrant"],
         "expected_relation_types": []
       },
       "status": "active"
