@@ -1,0 +1,286 @@
+{
+  "schema_version": "phase2.evaluation_dataset.v1",
+  "dataset": {
+    "dataset_name": "phase3_corpus_multi_hop",
+    "description": "Corpus-grounded multi-hop GraphRAG gold fixture for LLM paper and RAGProject self-doc comparisons.",
+    "version": "v1",
+    "source_type": "fixture",
+    "status": "active",
+    "metadata_json": {
+      "owner": "phase3_graph_evaluation",
+      "corpus_scope": "llm_papers_and_self_docs"
+    }
+  },
+  "cases": [
+    {
+      "case_key": "paper_rag_retrieval_hub",
+      "question": "Which RAG-family paper entries connect classic retrieval augmentation with self-reflective, corrective, recursive, graph, and evaluation-focused retrieval work?",
+      "expected_answer": "The RAG and Retrieval hubs connect the original retrieval-augmented generation entry with Self-RAG, CRAG, RAPTOR, GraphRAG, and later RAG evaluation or architecture entries.",
+      "expected_keywords": [
+        "Retrieval-Augmented Generation",
+        "Self-RAG",
+        "Corrective Retrieval Augmented Generation",
+        "RAPTOR",
+        "GraphRAG"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "rag"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["RAG", "Retrieval"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_lora_quantization_hub",
+      "question": "Which paper entries connect parameter-efficient LoRA adaptation with quantized LLM finetuning?",
+      "expected_answer": "The LoRA hub links Low-Rank Adaptation with QLoRA, and the LLM hub connects the quantized finetuning entry back to the broader language-model corpus.",
+      "expected_keywords": [
+        "Low-Rank Adaptation",
+        "QLoRA",
+        "Quantized LLMs",
+        "Efficient Finetuning"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "adaptation"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["LoRA", "LLM"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_deepseek_llm_hub",
+      "question": "Which DeepSeek paper entries should be cited together when comparing open-source scaling, V3, reasoning, and code-focused LLM work?",
+      "expected_answer": "The DeepSeek and LLM hubs connect DeepSeek LLM, DeepSeek-V3, DeepSeek-R1, and DeepSeek-Coder across scaling, reasoning, and programming-focused entries.",
+      "expected_keywords": [
+        "DeepSeek LLM",
+        "DeepSeek-V3",
+        "DeepSeek-R1",
+        "DeepSeek-Coder"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "llm"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["DeepSeek", "LLM"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_api_tool_hub",
+      "question": "Which API-centered paper entries connect a large language model with massive APIs and a tool-use benchmark platform?",
+      "expected_answer": "The API hub connects Gorilla's massive API focus with ToolBench's tool-use platform; ToolBench is also an extracted endpoint label.",
+      "expected_keywords": [
+        "Gorilla",
+        "Massive APIs",
+        "ToolBench",
+        "tool-using LLMs"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "hub", "tool_use"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["API", "ToolBench"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_metric_chain_relation",
+      "question": "Which graph evaluation metrics are connected by the extracted Graph metric chain?",
+      "expected_answer": "The extracted Graph metric chain links Graph to graph path relevance and graph citation coverage for graph-specific evaluation evidence.",
+      "expected_keywords": [
+        "graph_path_relevance",
+        "graph_citation_coverage",
+        "entity_relation_quality_summary"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "retrieval"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["Graph", "graph path relevance", "graph citation coverage"],
+        "expected_relation_types": ["uses"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_citation_relation",
+      "question": "How does the self-doc corpus connect Graph evidence to the normal citation pipeline?",
+      "expected_answer": "The Graph and Citation relation is grounded in the citation design, while retrieval run items and source chunk ids keep the answer citation path attached to stored chunks.",
+      "expected_keywords": [
+        "Graph Citation",
+        "graph nodes",
+        "retrieval_run_items",
+        "source_chunk_ids"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "citations"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["Graph", "Citation", "retrieval run items", "source chunk ids"],
+        "expected_relation_types": ["connects"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graphrag_postgresql_relation",
+      "question": "Which Phase 3 docs connect GraphRAG to PostgreSQL as the local graph retrieval store?",
+      "expected_answer": "The Phase 3 docs connect GraphRAG with PostgreSQL and describe PostgreSQL as the local graph retrieval source of truth.",
+      "expected_keywords": [
+        "PostgreSQL GraphRAG",
+        "source-of-truth",
+        "read-model architecture explanation"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "demo"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphRAG", "PostgreSQL"],
+        "expected_relation_types": ["connects"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_index_service_relation",
+      "question": "Which graph indexing relation connects GraphIndexService to the graph index build worker path?",
+      "expected_answer": "The architecture docs connect GraphIndexService to graph_index_build, with GraphRepository and document version tracking around the indexing path.",
+      "expected_keywords": [
+        "GraphIndexService",
+        "graph_index_build",
+        "GraphRepository",
+        "document_version_id"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "relation", "indexing"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphIndexService", "graph index build", "GraphRepository", "document version id"],
+        "expected_relation_types": ["connects"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graphstore_provider_hub",
+      "question": "Which extracted graph-store labels explain how the PostgreSQL source store and optional Neo4j projection share path evidence?",
+      "expected_answer": "GraphStore is the provider hub; PostgresGraphStore and Neo4jGraphStore share GraphPath-style evidence while PostgreSQL remains the durable system store.",
+      "expected_keywords": [
+        "PostgresGraphStore",
+        "Neo4jGraphStore",
+        "GraphPath",
+        "PostgreSQL"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "hub", "graph_store"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphStore", "PostgresGraphStore", "Neo4jGraphStore", "GraphPath", "PostgreSQL"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_mcp_langchain_langgraph_hub",
+      "question": "Which MCP self-doc labels connect advanced RAG tools with LangChain, LangGraph, Qdrant, and bounded tool orchestration?",
+      "expected_answer": "The MCP hub links advanced RAG tools with LangChain, LangGraph, Qdrant, and the bounded tool orchestration path.",
+      "expected_keywords": [
+        "MCP",
+        "LangChain",
+        "LangGraph",
+        "Qdrant",
+        "retrieval-only tool boundary"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "hub", "mcp"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["MCP", "LangChain", "LangGraph", "Qdrant"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_graph_evaluation_metric_hub",
+      "question": "Which evaluation docs connect GraphRAG strategy comparison to graph path relevance and citation coverage?",
+      "expected_answer": "The GraphRAG evaluation docs connect strategy comparison with graph path relevance and graph citation coverage as graph-specific evidence checks.",
+      "expected_keywords": [
+        "GraphRAG",
+        "graph_path_relevance",
+        "graph_citation_coverage",
+        "strategy comparison"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "hub", "evaluation"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphRAG", "graph path relevance", "graph citation coverage", "Evaluation"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "system_retrieval_trace_source_hub",
+      "question": "Which retrieval-trace labels connect graph path evidence to persisted retrieval items and source chunk identifiers?",
+      "expected_answer": "GraphRetrievalStrategy, retrieval run items, source chunk ids, document chunk id, and document version id form the extracted hub around persisted retrieval trace evidence.",
+      "expected_keywords": [
+        "GraphRetrievalStrategy",
+        "retrieval_run_items",
+        "source_chunk_ids",
+        "document_chunk_id",
+        "document_version_id"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["system_docs", "multi_hop", "hub", "retrieval_trace"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphRetrievalStrategy", "retrieval run items", "source chunk ids", "document chunk id", "document version id"],
+        "expected_relation_types": []
+      },
+      "status": "active"
+    }
+  ],
+  "metric_specs": []
+}

@@ -31,6 +31,7 @@ acceptance work.
 | PR-52 Retrieval result cache foundation | [retrieval_cache_foundation.md](retrieval_cache_foundation.md) |
 | Graph Debug UI | [graph_debug_ui_design.md](graph_debug_ui_design.md) |
 | Graph Evaluation | [graph_evaluation_design.md](graph_evaluation_design.md) |
+| Corpus-grounded multi-hop gold dataset | [corpus_multi_hop_gold_dataset.md](corpus_multi_hop_gold_dataset.md) |
 | OCR / Multimodal boundary | [ocr_multimodal_boundary.md](ocr_multimodal_boundary.md) |
 | Production / deploy boundary | [production_expansion_boundary.md](production_expansion_boundary.md) |
 | API design delta | [api_design_delta.md](api_design_delta.md) |
