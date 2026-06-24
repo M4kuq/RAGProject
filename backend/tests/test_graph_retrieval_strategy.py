@@ -234,7 +234,7 @@ def test_graph_strategy_provider_default_is_honored_without_settings_override(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -256,9 +256,7 @@ def test_graph_resolver_provider_default_is_honored_without_settings_override(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        strategy = GraphRetrievalStrategy(
-            resolver=GraphStoreResolver(provider=GraphStoreProvider.NEO4J)
-        )
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -281,7 +279,7 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_unavailable_with_graph
 ) -> None:
     with graph_retrieval_session_factory() as db:
         _seed_graph(db)
-        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -437,7 +435,7 @@ def test_neo4j_graph_store_is_safe_without_config(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        store = Neo4jGraphStore()
+        store = Neo4jGraphStore(config=Neo4jConnectionConfig())
 
         result = store.search(
             db,
@@ -1575,6 +1573,13 @@ def _cleanup_neo4j_projection(client: Neo4jClient, *, graph_index_run_id: int) -
                 {"graph_index_run_id": graph_index_run_id},
             ),
         ]
+    )
+
+
+def _resolver_with_unconfigured_neo4j() -> GraphStoreResolver:
+    return GraphStoreResolver(
+        provider=GraphStoreProvider.NEO4J,
+        neo4j_store=Neo4jGraphStore(config=Neo4jConnectionConfig()),
     )
 
 

@@ -23,7 +23,14 @@ from app.db.models import (
     Role,
     User,
 )
+from app.graph.neo4j_backend import Neo4jConnectionConfig
 from app.ingest.embedding import EmbeddingAdapterError, FakeEmbeddingAdapter
+from app.rag.graph_retrieval import (
+    GraphRetrievalStrategy,
+    GraphStoreProvider,
+    GraphStoreResolver,
+    Neo4jGraphStore,
+)
 from app.rag.rerank import FakeRerankerClient, RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import (
@@ -133,6 +140,7 @@ def test_graph_strategy_decision_suppressed_when_trace_storage_disabled() -> Non
 def test_graph_settings_snapshot_includes_traversal_controls() -> None:
     # 3-4: retrieval_settings_json carries graph-specific traversal controls.
     settings = _settings(
+        graph_store_provider="postgres",
         graph_retrieval_max_depth=3,
         graph_retrieval_max_paths=15,
         graph_retrieval_max_relations_per_entity=7,
@@ -378,12 +386,15 @@ def test_explicit_graph_neo4j_falls_back_to_postgres_graph_with_response_summary
                 _settings(
                     graph_retrieval_enabled=False,
                     graph_store_provider="postgres",
-                    neo4j_uri=None,
-                    neo4j_user=None,
-                    neo4j_password=None,
                 ),
                 [_vector_candidate(min(seed.chunk_ids))],
-            )
+            ),
+            graph_strategy=GraphRetrievalStrategy(
+                resolver=GraphStoreResolver(
+                    provider=GraphStoreProvider.NEO4J,
+                    neo4j_store=Neo4jGraphStore(config=Neo4jConnectionConfig()),
+                )
+            ),
         )
 
         response = service.ask(
@@ -429,6 +440,7 @@ def test_router_graph_no_evidence_falls_back_to_base(
         db.commit()
 
         settings = _settings(
+            graph_store_provider="postgres",
             graph_router_enabled=True,
             router_enabled=True,
             graph_router_min_signal_score=0.1,
@@ -482,6 +494,7 @@ def test_graph_fallback_maps_base_retrieval_failures_to_error_contract(
         db.commit()
 
         settings = _settings(
+            graph_store_provider="postgres",
             graph_router_enabled=True,
             router_enabled=True,
             graph_router_min_signal_score=0.1,
@@ -558,6 +571,7 @@ def test_graph_search_router_no_evidence_falls_back_to_base(
         db.commit()
 
         settings = _settings(
+            graph_store_provider="postgres",
             graph_router_enabled=True,
             router_enabled=True,
             graph_router_min_signal_score=0.1,

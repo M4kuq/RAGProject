@@ -724,6 +724,7 @@ def test_rag_ask_agentic_router_uses_llm_planner_after_insufficient_context(
     client, session_factory, _ = rag_ask_client
     vector_client = StepVectorClient()
     settings = _settings(
+        graph_retrieval_enabled=False,
         router_mode="llm",
         generation_provider="lmstudio",
         generation_model_name="qwen3.5-9b",
