@@ -42,6 +42,7 @@ USER root
 RUN uv sync --frozen --no-install-project --extra dev $BACKEND_UV_EXTRA_ARGS
 COPY backend/Dockerfile /backend/Dockerfile
 COPY docker-compose.yml /docker-compose.yml
+COPY docker-compose.ci.yml /docker-compose.ci.yml
 COPY README.md /README.md
 COPY docs/ /docs/
 USER app
