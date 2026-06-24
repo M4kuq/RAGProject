@@ -27,6 +27,10 @@ _SAFE_MESSAGES = {
     "graph_normalization_failed": "Graph normalization failed.",
     "graph_relation_validation_failed": "Graph relation validation failed.",
     "graph_index_write_failed": "Graph index write failed.",
+    "neo4j_connection_failed": "Neo4j projection failed.",
+    "neo4j_driver_unavailable": "Neo4j projection failed.",
+    "neo4j_not_configured": "Neo4j projection failed.",
+    "neo4j_projection_failed": "Neo4j projection failed.",
     "internal_error": "Graph index build failed.",
 }
 
@@ -114,14 +118,15 @@ class GraphIndexBuildHandler:
                     relation_count = run.relation_count
                     mention_count = run.mention_count
                     db.commit()
-                    projection_payload = _projection_payload(
-                        self._project_neo4j_after_commit(
-                            db,
-                            service,
-                            document_version_id=document_version_id,
-                            graph_index_run_id=graph_index_run_id,
-                        )
+                    projection_result = self._project_neo4j_after_commit(
+                        db,
+                        service,
+                        document_version_id=document_version_id,
+                        graph_index_run_id=graph_index_run_id,
                     )
+                    projection_error_code = _projection_error_code(projection_result)
+                    if projection_error_code is not None:
+                        return _failed(projection_error_code)
                     return JobHandlerResult.succeeded(
                         {
                             "document_version_id": document_version_id,
@@ -131,7 +136,7 @@ class GraphIndexBuildHandler:
                             "mention_count": mention_count,
                             "status": "already_succeeded",
                             "result_code": "no_op",
-                            **projection_payload,
+                            **_projection_payload(projection_result),
                         }
                     )
                 if run.status == "failed":
@@ -214,16 +219,16 @@ class GraphIndexBuildHandler:
                 "result_code": "indexed",
             }
             db.commit()
-            result_payload.update(
-                _projection_payload(
-                    self._project_neo4j_after_commit(
-                        db,
-                        service,
-                        document_version_id=snapshot.document_version_id,
-                        graph_index_run_id=run.graph_index_run_id,
-                    )
-                )
+            projection_result = self._project_neo4j_after_commit(
+                db,
+                service,
+                document_version_id=snapshot.document_version_id,
+                graph_index_run_id=run.graph_index_run_id,
             )
+            projection_error_code = _projection_error_code(projection_result)
+            if projection_error_code is not None:
+                return _failed(projection_error_code)
+            result_payload.update(_projection_payload(projection_result))
             return JobHandlerResult.succeeded(result_payload)
         except LeaseLostError:
             db.rollback()
@@ -355,3 +360,17 @@ def _projection_payload(result: object | None) -> dict[str, object]:
         "neo4j_projected_mention_count": int(getattr(result, "projected_mentions", 0)),
         "neo4j_projected_chunk_count": int(getattr(result, "projected_chunks", 0)),
     }
+
+
+def _projection_error_code(result: object | None) -> str | None:
+    if result is None:
+        return "neo4j_projection_failed"
+    if not bool(getattr(result, "enabled", False)):
+        return None
+    reason_codes = list(getattr(result, "reason_codes", ()))
+    primary_code = str(reason_codes[0] if reason_codes else "neo4j_projection_failed")
+    if primary_code == "neo4j_projection_completed":
+        return None
+    if primary_code in _SAFE_MESSAGES:
+        return primary_code
+    return "neo4j_projection_failed"

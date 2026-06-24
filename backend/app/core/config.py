@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     neo4j_connect_timeout_seconds: float = Field(default=3.0, gt=0.0, le=30.0)
     neo4j_health_check_enabled: bool = False
     neo4j_projection_enabled: bool = False
+    neo4j_projection_connect_retry_attempts: int = Field(default=1, ge=1, le=60)
+    neo4j_projection_connect_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
     graph_router_enabled: bool = False
     graph_router_min_signal_score: float = Field(default=0.5, ge=0.0, le=1.0)
     sparse_enabled: bool = True

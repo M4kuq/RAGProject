@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -30,12 +31,30 @@ class Neo4jProjectionService:
         client: Neo4jClient | None = None,
         config: Neo4jConnectionConfig | None = None,
         projection_enabled: bool | None = None,
+        connect_retry_attempts: int | None = None,
+        connect_retry_delay_seconds: float | None = None,
     ) -> None:
         settings = get_settings()
         self.projection_enabled = (
             bool(getattr(settings, "neo4j_projection_enabled", False))
             if projection_enabled is None
             else projection_enabled
+        )
+        self.connect_retry_attempts = max(
+            1,
+            int(
+                getattr(settings, "neo4j_projection_connect_retry_attempts", 1)
+                if connect_retry_attempts is None
+                else connect_retry_attempts
+            ),
+        )
+        self.connect_retry_delay_seconds = max(
+            0.0,
+            float(
+                getattr(settings, "neo4j_projection_connect_retry_delay_seconds", 1.0)
+                if connect_retry_delay_seconds is None
+                else connect_retry_delay_seconds
+            ),
         )
         self.client = client or Neo4jClient(
             config=config or Neo4jConnectionConfig.from_settings(settings)
@@ -59,18 +78,27 @@ class Neo4jProjectionService:
             document_version_id=document_version_id,
             graph_index_run_id=graph_index_run_id,
         )
-        try:
-            _ensure_constraints(self.client)
-            _replace_document_version_projection(
-                self.client,
-                document_version_id=document_version_id,
-                entities=projection.entities,
-                chunks=projection.chunks,
-                mentions=projection.mentions,
-                relations=projection.relations,
-            )
-        except Neo4jUnavailable as exc:
-            return Neo4jProjectionResult(enabled=True, reason_codes=(exc.reason_code,))
+        for attempt in range(self.connect_retry_attempts):
+            try:
+                _ensure_constraints(self.client)
+                _replace_document_version_projection(
+                    self.client,
+                    document_version_id=document_version_id,
+                    entities=projection.entities,
+                    chunks=projection.chunks,
+                    mentions=projection.mentions,
+                    relations=projection.relations,
+                )
+            except Neo4jUnavailable as exc:
+                if (
+                    exc.reason_code != "neo4j_connection_failed"
+                    or attempt >= self.connect_retry_attempts - 1
+                ):
+                    return Neo4jProjectionResult(enabled=True, reason_codes=(exc.reason_code,))
+                if self.connect_retry_delay_seconds > 0.0:
+                    time.sleep(self.connect_retry_delay_seconds)
+            else:
+                break
         return Neo4jProjectionResult(
             enabled=True,
             projected_entities=len(projection.entities),
