@@ -4583,9 +4583,11 @@ def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
         if isinstance(tools_used_value, list)
         else []
     )
-    graph_fallback_reason_codes = _safe_string_list(
-        decision.get("graph_fallback_reason_codes")
-        or score_summary.get("graph_fallback_reason_codes")
+    graph_fallback_reason_codes = _safe_merged_string_list(
+        decision.get("graph_fallback_reason_codes"),
+        score_summary.get("graph_fallback_reason_codes"),
+        decision.get("graph_reason_codes"),
+        score_summary.get("graph_reason_codes"),
     )
     decision_fallback_used = decision.get("fallback_used")
     score_fallback_used = score_summary.get("fallback_used")
@@ -4636,6 +4638,15 @@ def _safe_string_list(value: object) -> list[str]:
         if safe:
             safe_values.append(safe)
     return safe_values
+
+
+def _safe_merged_string_list(*values: object) -> list[str]:
+    merged: list[str] = []
+    for value in values:
+        for item in _safe_string_list(value):
+            if item not in merged:
+                merged.append(item)
+    return merged
 
 
 def _optional_safe_string(value: object) -> str | None:
