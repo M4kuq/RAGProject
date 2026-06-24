@@ -29,6 +29,13 @@ export type EvaluationRunnableStrategy =
   | "langgraph_agentic";
 export type EvaluationTriggerType = "manual" | "ci" | "scheduled" | "post_deploy" | "online_sampled_trace";
 export type EvaluationCacheMode = "default" | "disabled" | "cold" | "warm";
+export type EvaluationGenerationProvider =
+  | "fake"
+  | "ollama"
+  | "lmstudio"
+  | "openai"
+  | "anthropic"
+  | "gemini";
 
 export type EvaluationRunCreateRequest = {
   dataset_name: string;
@@ -40,6 +47,8 @@ export type EvaluationRunCreateRequest = {
   metrics?: string[];
   top_k?: number | null;
   rerank_top_n?: number | null;
+  generation_provider?: EvaluationGenerationProvider | null;
+  generation_model?: string | null;
   trigger_type?: EvaluationTriggerType;
 };
 
@@ -110,6 +119,8 @@ export type EvaluationRunSummary = {
   avg_generation_latency_ms: number | null;
   generation_providers: string[];
   generation_models: string[];
+  requested_generation_provider: string | null;
+  requested_generation_model: string | null;
   error_code: string | null;
   error_message: string | null;
   started_at: string | null;
@@ -140,6 +151,28 @@ export type EvaluationMetricComparison = {
   lower_is_better: boolean;
 };
 
+export type EvaluationGenerationComparison = {
+  base_estimated_cost_usd: number | null;
+  candidate_estimated_cost_usd: number | null;
+  cost_delta: number | null;
+  cost_direction: EvaluationComparisonDirection;
+  cost_lower_is_better: boolean;
+  base_total_tokens: number | null;
+  candidate_total_tokens: number | null;
+  tokens_delta: number | null;
+  tokens_direction: EvaluationComparisonDirection;
+  tokens_lower_is_better: boolean;
+  base_avg_generation_latency_ms: number | null;
+  candidate_avg_generation_latency_ms: number | null;
+  latency_delta: number | null;
+  latency_direction: EvaluationComparisonDirection;
+  latency_lower_is_better: boolean;
+  base_providers: string[];
+  base_models: string[];
+  candidate_providers: string[];
+  candidate_models: string[];
+};
+
 export type EvaluationCaseComparison = {
   case_id: string;
   question_hash: string | null;
@@ -165,6 +198,7 @@ export type EvaluationRunComparisonSummary = {
 export type EvaluationRunComparison = {
   base_run: EvaluationRunSummary;
   candidate_run: EvaluationRunSummary;
+  generation: EvaluationGenerationComparison;
   metrics: EvaluationMetricComparison[];
   cases: EvaluationCaseComparison[];
   summary: EvaluationRunComparisonSummary;

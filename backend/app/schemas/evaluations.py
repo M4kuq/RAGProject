@@ -18,9 +18,13 @@ DATASET_MANIFEST_SCHEMA_VERSION: Literal["phase2.evaluation_dataset.v1"] = (
 
 _SAFE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
 _SAFE_FIXTURE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,119}$")
+_SAFE_GENERATION_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_VALUE_RE = re.compile(
     r"(?i)(api[_-]?key|secret|password|credential|token)\s*[:=]|bearer\s+|sk-[A-Za-z0-9]"
+)
+_GENERATION_MODEL_SECRET_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|password|token|credential|bearer|sk-[A-Za-z0-9_-]{8,})"
 )
 _FORBIDDEN_KEY_PARTS = (
     "api_key",
@@ -36,6 +40,9 @@ _FORBIDDEN_KEY_PARTS = (
     "raw_text",
     "secret",
     "token",
+)
+KNOWN_GENERATION_PROVIDERS = frozenset(
+    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini"}
 )
 
 
@@ -70,6 +77,15 @@ class EvaluationRunRequestStrategy(StrEnum):
     LLM_TOOL_ORCHESTRATOR = "llm_tool_orchestrator"
     LANGCHAIN_AGENTIC = "langchain_agentic"
     LANGGRAPH_AGENTIC = "langgraph_agentic"
+
+
+GENERATION_COMPARISON_STRATEGIES = frozenset(
+    {
+        EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR,
+        EvaluationRunRequestStrategy.LANGCHAIN_AGENTIC,
+        EvaluationRunRequestStrategy.LANGGRAPH_AGENTIC,
+    }
+)
 
 
 class EvaluationCacheMode(StrEnum):
@@ -401,12 +417,43 @@ class EvaluationRunCreateRequest(BaseModel):
     )
     top_k: int | None = Field(default=None, ge=1, le=20)
     rerank_top_n: int | None = Field(default=None, ge=1, le=20)
+    generation_provider: str | None = Field(default=None, min_length=1, max_length=50)
+    generation_model: str | None = Field(default=None, min_length=1, max_length=128)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
 
     @field_validator("dataset_name")
     @classmethod
     def validate_dataset_name(cls, value: str) -> str:
         return _safe_key(value, field_name="dataset_name")
+
+    @field_validator("generation_provider")
+    @classmethod
+    def validate_generation_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        provider = _safe_key(value, field_name="generation_provider")
+        if provider not in KNOWN_GENERATION_PROVIDERS:
+            raise ValueError("generation_provider is not supported")
+        return provider
+
+    @field_validator("generation_model")
+    @classmethod
+    def validate_generation_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        model = _safe_text(value, max_length=128)
+        if model is None:
+            return None
+        if not _SAFE_GENERATION_MODEL_RE.fullmatch(model):
+            raise ValueError(
+                "generation_model must use letters, digits, dot, dash, underscore, "
+                "slash, colon, at or plus"
+            )
+        if _GENERATION_MODEL_SECRET_RE.search(model):
+            raise ValueError("generation_model must not contain secret-like text")
+        if model.lower() in {"redacted", "unknown"}:
+            raise ValueError("generation_model must not use a reserved label")
+        return model
 
     @model_validator(mode="after")
     def validate_request(self) -> EvaluationRunCreateRequest:
@@ -423,6 +470,14 @@ class EvaluationRunCreateRequest(BaseModel):
                 raise ValueError("strategy is not enabled for PR-25 evaluation runner")
             if strategy not in deduped:
                 deduped.append(strategy)
+        if self.generation_provider is not None and self.generation_model is None:
+            raise ValueError("generation_model is required when generation_provider is set")
+        if (self.generation_provider is not None or self.generation_model is not None) and not any(
+            strategy in GENERATION_COMPARISON_STRATEGIES for strategy in deduped
+        ):
+            raise ValueError(
+                "generation selection requires an answer-generating evaluation strategy"
+            )
         self.strategies = deduped
         self.strategy_type = deduped[0]
         self.metrics = list(dict.fromkeys(self.metrics))
@@ -504,6 +559,8 @@ class EvaluationRunSummary(BaseModel):
     avg_generation_latency_ms: float | None = None
     generation_providers: list[str] = Field(default_factory=list)
     generation_models: list[str] = Field(default_factory=list)
+    requested_generation_provider: str | None = None
+    requested_generation_model: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     started_at: datetime | None = None
@@ -624,6 +681,28 @@ class EvaluationMetricComparison(BaseModel):
     lower_is_better: bool = False
 
 
+class EvaluationGenerationComparison(BaseModel):
+    base_estimated_cost_usd: float | None = None
+    candidate_estimated_cost_usd: float | None = None
+    cost_delta: float | None = None
+    cost_direction: EvaluationComparisonDirection
+    cost_lower_is_better: bool = True
+    base_total_tokens: int | None = None
+    candidate_total_tokens: int | None = None
+    tokens_delta: int | None = None
+    tokens_direction: EvaluationComparisonDirection
+    tokens_lower_is_better: bool = True
+    base_avg_generation_latency_ms: float | None = None
+    candidate_avg_generation_latency_ms: float | None = None
+    latency_delta: float | None = None
+    latency_direction: EvaluationComparisonDirection
+    latency_lower_is_better: bool = True
+    base_providers: list[str] = Field(default_factory=list)
+    base_models: list[str] = Field(default_factory=list)
+    candidate_providers: list[str] = Field(default_factory=list)
+    candidate_models: list[str] = Field(default_factory=list)
+
+
 class EvaluationCaseComparison(BaseModel):
     case_id: str = Field(min_length=1, max_length=200)
     question_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -649,6 +728,7 @@ class EvaluationRunComparisonSummary(BaseModel):
 class EvaluationRunComparison(BaseModel):
     base_run: EvaluationRunSummary
     candidate_run: EvaluationRunSummary
+    generation: EvaluationGenerationComparison
     metrics: list[EvaluationMetricComparison] = Field(default_factory=list)
     cases: list[EvaluationCaseComparison] = Field(default_factory=list)
     summary: EvaluationRunComparisonSummary

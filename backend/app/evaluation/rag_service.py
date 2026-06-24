@@ -30,6 +30,7 @@ from app.rag.confidence import ConfidenceInputs, calculate_confidence
 from app.rag.context_budget import estimate_tokens
 from app.rag.generation import (
     AnswerGenerationError,
+    AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
     GenerationResult,
@@ -128,15 +129,53 @@ class EvaluationGenerationMetadata:
 def create_evaluation_rag_service(
     settings: Settings,
     db: Session,
+    *,
+    generation_provider: str | None = None,
+    generation_model: str | None = None,
 ) -> EvaluationRagQuestionService:
+    selected_settings = _generation_selected_settings(
+        settings,
+        generation_provider=generation_provider,
+        generation_model=generation_model,
+    )
+    try:
+        if generation_provider is not None and generation_model is None:
+            raise AnswerGenerationError()
+        answer_generator: AnswerGenerator = create_answer_generator(
+            selected_settings,
+            provider=generation_provider,
+            model_name=generation_model,
+        )
+    except AnswerGenerationError:
+        answer_generator = _UnavailableEvaluationAnswerGenerator()
     service = RagService(
-        settings=settings,
-        embedding_adapter=create_embedding_adapter(settings),
+        settings=selected_settings,
+        embedding_adapter=create_embedding_adapter(selected_settings),
         vector_client=DatabaseVectorSearchClient(db),
-        reranker=create_reranker(settings),
-        answer_generator=create_answer_generator(settings),
+        reranker=create_reranker(selected_settings),
+        answer_generator=answer_generator,
     )
     return EvaluationRagQuestionService(service, graph_service=GraphRagService(service))
+
+
+def _generation_selected_settings(
+    settings: Settings,
+    *,
+    generation_provider: str | None,
+    generation_model: str | None,
+) -> Settings:
+    updates: dict[str, str] = {}
+    if generation_provider is not None:
+        updates["generation_provider"] = generation_provider
+    if generation_model is not None:
+        updates["generation_model_name"] = generation_model
+    return settings.model_copy(update=updates) if updates else settings
+
+
+class _UnavailableEvaluationAnswerGenerator:
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        del request
+        raise AnswerGenerationError()
 
 
 class EvaluationRagQuestionService:

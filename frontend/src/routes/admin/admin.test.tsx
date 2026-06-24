@@ -38,6 +38,8 @@ function evaluationRunSummary(evaluationRunId: number, datasetName: string) {
     avg_generation_latency_ms: 80,
     generation_providers: ["fake"],
     generation_models: ["fake-rag-answer"],
+    requested_generation_provider: null,
+    requested_generation_model: null,
     error_code: null,
     error_message: null,
     started_at: "2026-06-01T00:00:00Z",
@@ -52,7 +54,33 @@ function evaluationComparisonPayload() {
     base_run: evaluationRunSummary(10, "base_dataset"),
     candidate_run: {
       ...evaluationRunSummary(11, "candidate_dataset"),
-      metric_summary: { recall_at_k: 0.7, p95_latency: 100 }
+      metric_summary: { recall_at_k: 0.7, p95_latency: 100 },
+      total_estimated_cost_usd: 0.073456,
+      total_tokens: 100,
+      avg_generation_latency_ms: 40,
+      generation_models: ["fake-rag-answer-v2"],
+      requested_generation_model: "fake-rag-answer-v2"
+    },
+    generation: {
+      base_estimated_cost_usd: 0.123456,
+      candidate_estimated_cost_usd: 0.073456,
+      cost_delta: -0.05,
+      cost_direction: "improved",
+      cost_lower_is_better: true,
+      base_total_tokens: 140,
+      candidate_total_tokens: 100,
+      tokens_delta: -40,
+      tokens_direction: "improved",
+      tokens_lower_is_better: true,
+      base_avg_generation_latency_ms: 80,
+      candidate_avg_generation_latency_ms: 40,
+      latency_delta: -40,
+      latency_direction: "improved",
+      latency_lower_is_better: true,
+      base_providers: ["fake"],
+      base_models: ["fake-rag-answer"],
+      candidate_providers: ["fake"],
+      candidate_models: ["fake-rag-answer-v2"]
     },
     metrics: [
       {
@@ -335,6 +363,104 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
   expect(screen.getByRole("button", { name: "評価を実行" })).toBeInTheDocument();
 });
 
+test("evaluation create form submits requested generation provider and model", async () => {
+  const createPayloads: Array<Record<string, unknown>> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
+        createPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } }, 202);
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "生成 provider" }), {
+    target: { value: "openai" }
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
+    target: { value: "gpt-4.1-mini" }
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "llm_tool_orchestrator" }));
+  fireEvent.click(screen.getByRole("button", { name: "評価を実行" }));
+
+  await waitFor(() => expect(createPayloads).toHaveLength(1));
+  expect(createPayloads[0]).toMatchObject({
+    generation_provider: "openai",
+    generation_model: "gpt-4.1-mini"
+  });
+  expect(JSON.stringify(createPayloads[0]).toLowerCase()).not.toContain("api_key");
+});
+
+test("evaluation create form blocks generation selection without answer strategy", async () => {
+  const createPayloads: Array<Record<string, unknown>> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
+        createPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } }, 202);
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } } });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
+    target: { value: "gpt-4.1-mini" }
+  });
+
+  expect(
+    screen.getByText(/provider\/model 比較には llm_tool_orchestrator/)
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeDisabled();
+  expect(createPayloads).toHaveLength(0);
+});
+
 test("evaluation list opens comparison for two selected runs", async () => {
   const comparisonRequests: string[] = [];
   vi.stubGlobal(
@@ -410,6 +536,16 @@ test("evaluation comparison page shows direction colors and lower-is-better hint
   );
 
   expect(await screen.findByRole("heading", { name: "評価 run 比較" })).toBeInTheDocument();
+  const generationTable = await screen.findByRole("table", { name: "generation 差分" });
+  const costRow = within(generationTable).getByText("推定コスト").closest("tr");
+  expect(costRow).toHaveClass("comparison-direction-improved");
+  expect(within(costRow as HTMLElement).getByText("-$0.050000")).toBeInTheDocument();
+  expect(within(costRow as HTMLElement).getByText("低いほど良い")).toBeInTheDocument();
+  const tokenRow = within(generationTable).getByText("総トークン").closest("tr");
+  expect(tokenRow).toHaveClass("comparison-direction-improved");
+  expect(within(tokenRow as HTMLElement).getByText("-40")).toBeInTheDocument();
+  expect(screen.getAllByText(/fake-rag-answer-v2/).length).toBeGreaterThan(0);
+
   const metricTable = await screen.findByRole("table", { name: "metric 差分" });
   const p95Row = within(metricTable).getByText("p95_latency").closest("tr");
   expect(p95Row).toHaveClass("comparison-direction-improved");
@@ -629,6 +765,8 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
             avg_generation_latency_ms: 42,
             generation_providers: ["fake"],
             generation_models: ["fake-rag-answer"],
+            requested_generation_provider: null,
+            requested_generation_model: null,
             error_code: null,
             error_message: null,
             started_at: "2026-05-01T00:00:00Z",
@@ -1809,9 +1947,11 @@ test("document detail renders version compare summary and bounded previews", asy
   expect(screen.getByText("版ごとのメタデータと短い出典プレビューだけを比較します。本文全体は表示しません。")).toBeInTheDocument();
   expect(await screen.findByText("比較する版を選び、「比較する」を押すと差分を読み込みます。")).toBeInTheDocument();
   expect(compareRequests).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "比較する" }));
+  const compareButton = screen.getByRole("button", { name: "比較する" });
+  await waitFor(() => expect(compareButton).not.toBeDisabled());
+  fireEvent.click(compareButton);
+  await waitFor(() => expect(compareRequests).toHaveLength(1));
   expect(await screen.findByText("New bounded preview")).toBeInTheDocument();
-  expect(compareRequests).toHaveLength(1);
   expect(screen.getByText("file_name")).toBeInTheDocument();
   expect(screen.getByText("Guide > Setup")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent("raw chunk text");

@@ -1053,6 +1053,16 @@ textarea {
   margin-bottom: 12px;
 }
 
+.comparison-generation-labels {
+  color: var(--admin-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 10px 18px;
+  margin: 12px 0;
+}
+
 .comparison-summary-grid {
   display: grid;
   gap: 12px;
