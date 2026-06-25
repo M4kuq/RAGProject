@@ -19,8 +19,10 @@ branch_labels = None
 depends_on = None
 
 _SETTING_KEY = "rag.graph.store.provider"
-_SETTING_VALUE = "postgres"
-_SETTING_DESCRIPTION = "GraphStore provider. Neo4j remains optional and disabled by default."
+_SETTING_VALUE = "neo4j"
+_SETTING_DESCRIPTION = (
+    "GraphStore provider. Neo4j is the default read model; PostgreSQL remains source of truth."
+)
 
 
 def upgrade() -> None:

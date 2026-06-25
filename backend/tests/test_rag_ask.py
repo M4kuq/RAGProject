@@ -240,6 +240,36 @@ def test_retrieval_summary_includes_graph_provider_failure_reason_codes(
     assert "graph_no_evidence_fallback" in summary.graph_fallback_reason_codes
 
 
+def test_retrieval_summary_reads_graph_strategy_from_score_summary_when_trace_missing() -> None:
+    run = RetrievalRun(
+        retrieval_run_id=10,
+        strategy_type=RetrievalStrategy.HYBRID.value,
+        strategy_decision_json=None,
+        retrieval_score_summary={
+            "selected_strategy": "graph_neo4j",
+            "execution_strategy": "hybrid",
+            "fallback_used": True,
+            "fallback_reason": "graph_no_evidence_fallback",
+            "graph_store_provider": "postgres",
+            "graph_reason_codes": [
+                "neo4j_connection_failed",
+                "graph_no_evidence_fallback",
+                "graph_fallback_hybrid",
+            ],
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.strategy_type == RetrievalStrategy.HYBRID
+    assert summary.selected_strategy == "graph_neo4j"
+    assert summary.execution_strategy == "hybrid"
+    assert summary.graph_requested_provider == "neo4j"
+    assert summary.graph_store_provider == "postgres"
+    assert summary.fallback_used is True
+    assert summary.fallback_reason == "neo4j_connection_failed"
+
+
 def test_rag_ask_success_replay_and_duplicate_state_handling(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

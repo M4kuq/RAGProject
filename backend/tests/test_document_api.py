@@ -33,6 +33,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import get_db
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.ingest.embedding import (
     DocumentEmbeddingService,
     EmbeddingBatchConfig,
@@ -321,6 +322,24 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
     assert approve.json()["data"]["result_code"] == "approved"
     assert approve.json()["data"]["active_version"]["display_status"] == "active"
     assert approve.json()["data"]["qdrant_mirror_job_id"] is not None
+    with session_factory() as db:
+        graph_jobs = list(
+            db.scalars(
+                select(Job)
+                .where(
+                    Job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE,
+                    Job.target_type == "document_version",
+                    Job.target_id == document_version_id,
+                )
+                .order_by(Job.job_id.asc())
+            )
+        )
+        assert len(graph_jobs) == 2
+        assert graph_jobs[-1].payload_json == {
+            "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+            "document_version_id": document_version_id,
+            "reindex_policy": "replace_existing",
+        }
 
     approve_again = client.post(
         f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",

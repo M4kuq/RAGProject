@@ -387,11 +387,21 @@ def build_rag_ask_retrieval_summary(
         if fallback_used is not False
         else None
     )
+    selected_strategy = _summary_strategy_value(
+        decision=decision,
+        score_summary=score_summary,
+        key="selected_strategy",
+    )
+    execution_strategy = _summary_strategy_value(
+        decision=decision,
+        score_summary=score_summary,
+        key="execution_strategy",
+    )
     return RagAskRetrievalSummary(
         retrieval_run_id=retrieval_run_id,
         strategy_type=RetrievalStrategy(strategy_type),
-        selected_strategy=_summary_optional_string(decision.get("selected_strategy")),
-        execution_strategy=_summary_optional_string(decision.get("execution_strategy")),
+        selected_strategy=selected_strategy,
+        execution_strategy=execution_strategy,
         tools_used=tools_used,
         fallback_used=fallback_used,
         fallback_reason=fallback_reason,
@@ -399,9 +409,10 @@ def build_rag_ask_retrieval_summary(
             decision.get("graph_store_provider") or score_summary.get("graph_store_provider"),
             max_length=50,
         ),
-        graph_requested_provider=_summary_optional_string(
-            decision.get("graph_requested_provider"),
-            max_length=50,
+        graph_requested_provider=_summary_graph_requested_provider(
+            decision=decision,
+            score_summary=score_summary,
+            selected_strategy=selected_strategy,
         ),
         graph_fallback_reason_codes=graph_fallback_reason_codes,
         no_context=(
@@ -450,6 +461,34 @@ def _summary_fallback_reason_value(
     if score_fallback_used is True and decision_fallback_used is not True:
         return score_summary.get("fallback_reason")
     return decision.get("fallback_reason") or score_summary.get("fallback_reason")
+
+
+def _summary_strategy_value(
+    *,
+    decision: Mapping[str, object],
+    score_summary: Mapping[str, object],
+    key: str,
+) -> str | None:
+    return _summary_optional_string(decision.get(key) or score_summary.get(key))
+
+
+def _summary_graph_requested_provider(
+    *,
+    decision: Mapping[str, object],
+    score_summary: Mapping[str, object],
+    selected_strategy: str | None,
+) -> str | None:
+    explicit_provider = _summary_optional_string(
+        decision.get("graph_requested_provider") or score_summary.get("graph_requested_provider"),
+        max_length=50,
+    )
+    if explicit_provider is not None:
+        return explicit_provider
+    if selected_strategy == "graph_neo4j":
+        return "neo4j"
+    if selected_strategy == "graph_postgres":
+        return "postgres"
+    return None
 
 
 def _primary_graph_fallback_reason(

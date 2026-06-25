@@ -75,7 +75,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, PRE_CACHE_REVISION)
@@ -84,7 +84,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == PRE_CACHE_REVISION
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -93,7 +93,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == HEAD_REVISION
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "0015_langgraph_agentic")
@@ -109,7 +109,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == HEAD_REVISION
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
@@ -130,7 +130,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
     finally:
         get_settings.cache_clear()
