@@ -182,9 +182,9 @@ class GraphRetrievalRepository:
         db: Session,
         *,
         filters: RetrievalFilters,
-        projected_logical_document_ids: Iterable[int],
+        projected_document_version_ids: Iterable[int],
     ) -> bool:
-        projected_ids = tuple(_ordered_positive_ids(projected_logical_document_ids))
+        projected_ids = tuple(_ordered_positive_ids(projected_document_version_ids))
         statement = (
             select(GraphEntityMention.graph_entity_mention_id)
             .join(
@@ -212,7 +212,7 @@ class GraphRetrievalRepository:
                 LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
             )
         if projected_ids:
-            statement = statement.where(LogicalDocument.logical_document_id.notin_(projected_ids))
+            statement = statement.where(DocumentVersion.document_version_id.notin_(projected_ids))
         return db.scalar(statement) is not None
 
     def list_relations_for_entity_ids(

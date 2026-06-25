@@ -74,7 +74,7 @@ class _FakeNeo4jDriver:
         mention_rows: list[dict[str, object]],
         projected_entity_count: int | None = None,
         projected_entity_count_by_logical_document_id: dict[int, int] | None = None,
-        projected_logical_document_ids: list[int] | None = None,
+        projected_document_version_ids: list[int] | None = None,
     ) -> None:
         self.entity_rows = entity_rows
         self.relation_rows = relation_rows
@@ -85,7 +85,7 @@ class _FakeNeo4jDriver:
         self.projected_entity_count_by_logical_document_id = (
             projected_entity_count_by_logical_document_id
         )
-        self.projected_logical_document_ids = projected_logical_document_ids
+        self.projected_document_version_ids = projected_document_version_ids
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
@@ -95,22 +95,11 @@ class _FakeNeo4jDriver:
             if key not in {"database_", "result_transformer_"}
         }
         self.calls.append((query, parameters))
-        if "RETURN DISTINCT chunk.logical_document_id AS logical_document_id" in query:
-            if self.projected_logical_document_ids is not None:
-                projected_ids = self.projected_logical_document_ids
-            elif self.projected_entity_count_by_logical_document_id is not None:
-                projected_ids = [
-                    logical_document_id
-                    for logical_document_id, count in (
-                        self.projected_entity_count_by_logical_document_id.items()
-                    )
-                    if count > 0
-                ]
-            else:
-                projected_ids = []
+        if "RETURN DISTINCT chunk.document_version_id AS document_version_id" in query:
+            projected_ids = self.projected_document_version_ids or []
             return [
-                {"logical_document_id": logical_document_id}
-                for logical_document_id in projected_ids
+                {"document_version_id": document_version_id}
+                for document_version_id in projected_ids
             ]
         if "RETURN count(DISTINCT entity) AS entity_count" in query:
             logical_document_ids = parameters.get("logical_document_ids")
@@ -382,7 +371,7 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_empty(
             in projection_query
         )
         assert (
-            "RETURN DISTINCT chunk.logical_document_id AS logical_document_id" in projection_query
+            "RETURN DISTINCT chunk.document_version_id AS document_version_id" in projection_query
         )
         assert "chunk.logical_document_id IN $logical_document_ids" in projection_query
         assert projection_parameters["logical_document_ids"] == [seed.logical_document_id]
@@ -398,7 +387,7 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_incomple
             entity_rows=[],
             relation_rows=[],
             mention_rows=[],
-            projected_logical_document_ids=[seed.logical_document_id + 1000],
+            projected_document_version_ids=[seed.document_version_id + 1000],
         )
         strategy = GraphRetrievalStrategy(
             resolver=GraphStoreResolver(
@@ -450,7 +439,7 @@ def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
             entity_rows=[],
             relation_rows=[],
             mention_rows=[],
-            projected_logical_document_ids=[seed.logical_document_id],
+            projected_document_version_ids=[seed.document_version_id],
         )
         strategy = GraphRetrievalStrategy(
             resolver=GraphStoreResolver(

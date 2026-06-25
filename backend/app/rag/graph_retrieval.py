@@ -1004,18 +1004,18 @@ class Neo4jGraphStore:
         )
 
     def _projection_gap_reason(self, db: Session, filters: RetrievalFilters) -> str | None:
-        projected_logical_document_ids = self._projected_logical_document_ids(filters)
-        if not projected_logical_document_ids:
+        projected_document_version_ids = self._projected_document_version_ids(filters)
+        if not projected_document_version_ids:
             return "neo4j_projection_empty"
         if self.repository.has_active_graph_sources_missing_projection(
             db,
             filters=filters,
-            projected_logical_document_ids=projected_logical_document_ids,
+            projected_document_version_ids=projected_document_version_ids,
         ):
             return "neo4j_projection_incomplete"
         return None
 
-    def _projected_logical_document_ids(self, filters: RetrievalFilters) -> set[int]:
+    def _projected_document_version_ids(self, filters: RetrievalFilters) -> set[int]:
         filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
             """
@@ -1028,15 +1028,15 @@ class Neo4jGraphStore:
                   size($logical_document_ids) = 0
                   OR chunk.logical_document_id IN $logical_document_ids
               )
-            RETURN DISTINCT chunk.logical_document_id AS logical_document_id
-            ORDER BY logical_document_id ASC
+            RETURN DISTINCT chunk.document_version_id AS document_version_id
+            ORDER BY document_version_id ASC
             """,
             filter_params,
         )
         return {
-            logical_document_id
+            document_version_id
             for row in rows
-            if (logical_document_id := _positive_int(row.get("logical_document_id"))) is not None
+            if (document_version_id := _positive_int(row.get("document_version_id"))) is not None
         }
 
     def _lookup_entities(
