@@ -620,6 +620,12 @@ class DocumentService:
                     "requested_by_user_id": user.user_id,
                 },
             )
+            if previous_active_id is not None and previous_active_id != version.document_version_id:
+                self._create_graph_index_job(
+                    db,
+                    user=user,
+                    document_version_id=previous_active_id,
+                )
             self._create_graph_index_job(
                 db,
                 user=user,
