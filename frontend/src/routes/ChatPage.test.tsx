@@ -4,6 +4,7 @@ import { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatPage } from "./ChatPage";
+import type { RagAskRetrievalSummary } from "../features/chat/chatTypes";
 
 function renderChat(initialPath = "/chat", mode: "active" | "temporary" = "active") {
   const client = new QueryClient({
@@ -78,7 +79,18 @@ function emptyMessages() {
   return { data: [], meta: { pagination: { page: 1, page_size: 100, total: 0, has_next: false } } };
 }
 
-function persistedMessagesWithCitation(includeSecondCitation = false) {
+function persistedMessagesWithCitation(
+  includeSecondCitation = false,
+  retrievalSummary: RagAskRetrievalSummary = {
+    retrieval_run_id: 999,
+    strategy_type: "hybrid",
+    selected_strategy: "hybrid",
+    execution_strategy: "hybrid",
+    tools_used: [],
+    fallback_used: false,
+    no_context: false
+  }
+) {
   const citations = [
     {
       citation_id: 201,
@@ -128,15 +140,7 @@ function persistedMessagesWithCitation(includeSecondCitation = false) {
         edited_flag: false,
         citations,
         confidence: { answer_confidence: 0.82, groundedness_score: 0.9, confidence_label: "High" },
-        retrieval_summary: {
-          retrieval_run_id: 999,
-          strategy_type: "hybrid",
-          selected_strategy: "hybrid",
-          execution_strategy: "hybrid",
-          tools_used: [],
-          fallback_used: false,
-          no_context: false
-        },
+        retrieval_summary: retrievalSummary,
         created_at: "2026-05-18T00:00:02Z",
         updated_at: "2026-05-18T00:00:02Z"
       }
@@ -388,6 +392,40 @@ test("renders citation filenames for persisted assistant messages", async () => 
   expect(screen.getByText(/\[1\] phase1-seed\.md/)).toBeInTheDocument();
   expect(screen.getByText("Architecture")).toBeInTheDocument();
   expect(screen.getByText("Phase1 validates a local Docker Compose RAG stack.")).toBeInTheDocument();
+});
+
+test("renders canonical graph retrieval summaries from chat history", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+      if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
+      if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+      if (path.includes("/api/v1/chat/sessions/10/messages")) {
+        return jsonResponse(
+          persistedMessagesWithCitation(false, {
+            retrieval_run_id: 999,
+            strategy_type: "graph",
+            selected_strategy: "graph",
+            execution_strategy: "graph",
+            tools_used: [],
+            fallback_used: false,
+            graph_store_provider: "neo4j",
+            graph_requested_provider: "neo4j",
+            graph_fallback_reason_codes: [],
+            no_context: false
+          })
+        );
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+
+  renderChat("/chat/10");
+
+  expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
+  expect(screen.getByText("GraphRAG: provider neo4j")).toBeInTheDocument();
 });
 
 test("opens a bounded citation source preview with admin deep link", async () => {

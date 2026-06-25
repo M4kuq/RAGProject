@@ -5,6 +5,7 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 export type RagStrategy =
   | "dense"
   | "hybrid"
+  | "graph"
   | "graph_postgres"
   | "graph_neo4j"
   | "agentic_router"
