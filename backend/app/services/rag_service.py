@@ -174,6 +174,7 @@ from app.schemas.rag import (
     RetrievalRunDebugResponse,
     RetrievalRunDebugSummary,
     RetrievalScoreSummary,
+    build_rag_ask_retrieval_summary,
 )
 from app.services.chat_service import ChatService
 from app.services.url_fetch_service import redact_url_for_display
@@ -4575,85 +4576,12 @@ def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
 
 
 def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
-    decision = _safe_json_object(run.strategy_decision_json) or {}
-    score_summary = _safe_json_object(run.retrieval_score_summary) or {}
-    tools_used_value = decision.get("tools_used")
-    tools_used = (
-        [str(item) for item in tools_used_value if isinstance(item, str)]
-        if isinstance(tools_used_value, list)
-        else []
-    )
-    graph_fallback_reason_codes = _safe_merged_string_list(
-        decision.get("graph_fallback_reason_codes"),
-        score_summary.get("graph_fallback_reason_codes"),
-        decision.get("graph_reason_codes"),
-        score_summary.get("graph_reason_codes"),
-    )
-    decision_fallback_used = decision.get("fallback_used")
-    score_fallback_used = score_summary.get("fallback_used")
-    fallback_used: bool | None
-    if score_fallback_used is True and decision_fallback_used is not True:
-        fallback_used = True
-    elif isinstance(decision_fallback_used, bool):
-        fallback_used = decision_fallback_used
-    elif isinstance(score_fallback_used, bool):
-        fallback_used = score_fallback_used
-    else:
-        fallback_used = None
-    fallback_reason = (
-        score_summary.get("fallback_reason")
-        if score_fallback_used is True and decision_fallback_used is not True
-        else decision.get("fallback_reason") or score_summary.get("fallback_reason")
-    )
-    return RagAskRetrievalSummary(
+    return build_rag_ask_retrieval_summary(
         retrieval_run_id=run.retrieval_run_id,
-        strategy_type=RetrievalStrategy(run.strategy_type),
-        selected_strategy=_optional_safe_string(decision.get("selected_strategy")),
-        execution_strategy=_optional_safe_string(decision.get("execution_strategy")),
-        tools_used=tools_used,
-        fallback_used=fallback_used,
-        fallback_reason=_optional_safe_string(
-            fallback_reason
-            or (graph_fallback_reason_codes[0] if graph_fallback_reason_codes else None)
-        ),
-        graph_store_provider=_optional_safe_string(
-            decision.get("graph_store_provider") or score_summary.get("graph_store_provider")
-        ),
-        graph_requested_provider=_optional_safe_string(decision.get("graph_requested_provider")),
-        graph_fallback_reason_codes=graph_fallback_reason_codes,
-        no_context=decision.get("no_context")
-        if isinstance(decision.get("no_context"), bool)
-        else None,
+        strategy_type=run.strategy_type,
+        strategy_decision=_safe_json_object(run.strategy_decision_json),
+        retrieval_score_summary=_safe_json_object(run.retrieval_score_summary),
     )
-
-
-def _safe_string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    safe_values: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        safe = _optional_safe_string(item)
-        if safe:
-            safe_values.append(safe)
-    return safe_values
-
-
-def _safe_merged_string_list(*values: object) -> list[str]:
-    merged: list[str] = []
-    for value in values:
-        for item in _safe_string_list(value):
-            if item not in merged:
-                merged.append(item)
-    return merged
-
-
-def _optional_safe_string(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    safe = _safe_display_text(value)
-    return safe or None
 
 
 def _is_insufficient_evidence_answer(answer_text: str) -> bool:
