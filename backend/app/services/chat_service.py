@@ -37,7 +37,7 @@ from app.schemas.rag import (
     RagAskCitation,
     RagAskConfidence,
     RagAskRetrievalSummary,
-    RetrievalStrategy,
+    build_rag_ask_retrieval_summary,
 )
 from app.services.audit_service import audit
 
@@ -518,37 +518,14 @@ class ChatService:
 
     def _retrieval_summary_item(self, run: RetrievalRun) -> RagAskRetrievalSummary | None:
         try:
-            strategy_type = RetrievalStrategy(run.strategy_type)
+            return build_rag_ask_retrieval_summary(
+                retrieval_run_id=run.retrieval_run_id,
+                strategy_type=run.strategy_type,
+                strategy_decision=run.strategy_decision_json,
+                retrieval_score_summary=run.retrieval_score_summary,
+            )
         except ValueError:
             return None
-        decision = run.strategy_decision_json or {}
-        tools_used_value = decision.get("tools_used")
-        tools_used = (
-            [str(item) for item in tools_used_value if isinstance(item, str)]
-            if isinstance(tools_used_value, list)
-            else []
-        )
-        return RagAskRetrievalSummary(
-            retrieval_run_id=run.retrieval_run_id,
-            strategy_type=strategy_type,
-            selected_strategy=self._safe_display_text(
-                decision.get("selected_strategy")
-                if isinstance(decision.get("selected_strategy"), str)
-                else None
-            ),
-            execution_strategy=self._safe_display_text(
-                decision.get("execution_strategy")
-                if isinstance(decision.get("execution_strategy"), str)
-                else None
-            ),
-            tools_used=tools_used,
-            fallback_used=decision.get("fallback_used")
-            if isinstance(decision.get("fallback_used"), bool)
-            else None,
-            no_context=decision.get("no_context")
-            if isinstance(decision.get("no_context"), bool)
-            else None,
-        )
 
     def _old_version_flag(self, record: CitationRecord) -> bool:
         return (
