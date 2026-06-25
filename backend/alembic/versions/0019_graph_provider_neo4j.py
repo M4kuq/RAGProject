@@ -65,7 +65,6 @@ def downgrade() -> None:
               AND setting_value = CAST(:new_setting_value AS jsonb)
               AND description = :new_description
               AND updated_by IS NULL
-              AND updated_at > created_at
             """
         ),
         {

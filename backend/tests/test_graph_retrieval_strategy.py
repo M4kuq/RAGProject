@@ -74,6 +74,7 @@ class _FakeNeo4jDriver:
         mention_rows: list[dict[str, object]],
         projected_entity_count: int | None = None,
         projected_entity_count_by_logical_document_id: dict[int, int] | None = None,
+        projected_logical_document_ids: list[int] | None = None,
     ) -> None:
         self.entity_rows = entity_rows
         self.relation_rows = relation_rows
@@ -84,6 +85,7 @@ class _FakeNeo4jDriver:
         self.projected_entity_count_by_logical_document_id = (
             projected_entity_count_by_logical_document_id
         )
+        self.projected_logical_document_ids = projected_logical_document_ids
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
@@ -93,6 +95,23 @@ class _FakeNeo4jDriver:
             if key not in {"database_", "result_transformer_"}
         }
         self.calls.append((query, parameters))
+        if "RETURN DISTINCT chunk.logical_document_id AS logical_document_id" in query:
+            if self.projected_logical_document_ids is not None:
+                projected_ids = self.projected_logical_document_ids
+            elif self.projected_entity_count_by_logical_document_id is not None:
+                projected_ids = [
+                    logical_document_id
+                    for logical_document_id, count in (
+                        self.projected_entity_count_by_logical_document_id.items()
+                    )
+                    if count > 0
+                ]
+            else:
+                projected_ids = []
+            return [
+                {"logical_document_id": logical_document_id}
+                for logical_document_id in projected_ids
+            ]
         if "RETURN count(DISTINCT entity) AS entity_count" in query:
             logical_document_ids = parameters.get("logical_document_ids")
             if (
@@ -357,23 +376,29 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_empty(
             "graph_store_provider_unavailable",
             "neo4j_projection_empty",
         ]
-        count_query, count_parameters = fake_driver.calls[1]
-        assert "MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)" in count_query
-        assert "chunk.logical_document_id IN $logical_document_ids" in count_query
-        assert count_parameters["logical_document_ids"] == [seed.logical_document_id]
-        assert count_parameters["modality"] == "text"
+        projection_query, projection_parameters = fake_driver.calls[1]
+        assert (
+            "MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)"
+            in projection_query
+        )
+        assert (
+            "RETURN DISTINCT chunk.logical_document_id AS logical_document_id" in projection_query
+        )
+        assert "chunk.logical_document_id IN $logical_document_ids" in projection_query
+        assert projection_parameters["logical_document_ids"] == [seed.logical_document_id]
+        assert projection_parameters["modality"] == "text"
 
 
-def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
+def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_incomplete(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        _seed_graph(db)
+        seed = _seed_graph(db)
         fake_driver = _FakeNeo4jDriver(
             entity_rows=[],
             relation_rows=[],
             mention_rows=[],
-            projected_entity_count=1,
+            projected_logical_document_ids=[seed.logical_document_id + 1000],
         )
         strategy = GraphRetrievalStrategy(
             resolver=GraphStoreResolver(
@@ -394,6 +419,58 @@ def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
         result = strategy.search(
             db,
             query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.fallback_used is True
+        assert result.graph_candidates
+        assert result.reason_codes == ("neo4j_to_postgres_fallback", "graph_search_completed")
+        assert result.score_breakdown["fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+        assert result.summary_fields()["graph_fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+
+
+def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[],
+            relation_rows=[],
+            mention_rows=[],
+            projected_logical_document_ids=[seed.logical_document_id],
+        )
+        strategy = GraphRetrievalStrategy(
+            resolver=GraphStoreResolver(
+                provider=GraphStoreProvider.NEO4J,
+                neo4j_store=Neo4jGraphStore(
+                    client=Neo4jClient(
+                        config=Neo4jConnectionConfig(
+                            uri="bolt://neo4j.local:7687",
+                            user="neo4j",
+                            password="configured-test-password",
+                        ),
+                        driver=fake_driver,
+                    )
+                ),
+            )
+        )
+
+        result = strategy.search(
+            db,
+            query="unmatched entity name",
             top_k=3,
             filters=RetrievalFilters(),
             settings=GraphRetrievalSettings(

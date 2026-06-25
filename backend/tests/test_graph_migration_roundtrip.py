@@ -89,7 +89,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == PRE_PROVIDER_FORWARD_REVISION
-        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_store_provider_value(pg_engine) == "postgres"
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -103,7 +103,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == PRE_CACHE_REVISION
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_store_provider_value(pg_engine) == "postgres"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -156,7 +156,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == PRE_PROVIDER_FORWARD_REVISION
-        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_store_provider_value(pg_engine) == "postgres"
 
         _simulate_old_graph_store_provider_seed(pg_engine)
         command.upgrade(config, "head")
@@ -178,6 +178,15 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == HEAD_REVISION
         assert _graph_store_provider_value(pg_engine) == "neo4j"
+
+        command.downgrade(config, "-1")
+        _simulate_operator_graph_store_provider_override(pg_engine)
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_description(pg_engine) == "Operator provider override"
     finally:
         get_settings.cache_clear()
 
@@ -233,6 +242,22 @@ def _simulate_old_graph_store_provider_seed(engine: Engine) -> None:
                 """
             ),
             {"description": OLD_GRAPH_STORE_PROVIDER_DESCRIPTION},
+        )
+
+
+def _simulate_operator_graph_store_provider_override(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = '"postgres"'::jsonb,
+                    description = 'Operator provider override',
+                    updated_by = NULL,
+                    updated_at = now()
+                WHERE setting_key = 'rag.graph.store.provider'
+                """
+            ),
         )
 
 

@@ -176,6 +176,16 @@ def test_document_service_repository_upload_duplicate_approve_archive(
         assert archived_document.status == "archived"
         assert archived_version.is_active is False
         assert db.query(Job).filter_by(job_type="qdrant_mirror_update").count() == 2
+        graph_jobs = (
+            db.query(Job)
+            .filter_by(job_type=GRAPH_INDEX_BUILD_JOB_TYPE)
+            .order_by(Job.job_id.asc())
+            .all()
+        )
+        assert [job.target_id for job in graph_jobs] == [
+            document_version_id,
+            document_version_id,
+        ]
         assert db.query(AuditLog).filter_by(action_type="document.archived").count() == 1
 
         with pytest.raises(DocumentArchived):

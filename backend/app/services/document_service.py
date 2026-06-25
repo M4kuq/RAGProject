@@ -694,6 +694,12 @@ class DocumentService:
                     display_status="archived",
                     result_code="already_archived",
                 )
+            active_version = self.repository.active_versions_by_document_ids(
+                db, logical_document_ids=[logical_document_id]
+            ).get(logical_document_id)
+            active_version_id = (
+                active_version.document_version_id if active_version is not None else None
+            )
             self.repository.archive_document(db, document=document, archived_at=self._now())
             mirror_job = self._create_qdrant_mirror_job(
                 db,
@@ -706,6 +712,12 @@ class DocumentService:
                     "requested_by_user_id": user.user_id,
                 },
             )
+            if active_version_id is not None:
+                self._create_graph_index_job(
+                    db,
+                    user=user,
+                    document_version_id=active_version_id,
+                )
             audit(
                 db,
                 action="document.archived",
