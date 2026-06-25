@@ -73,6 +73,7 @@ from app.services.rag_service import (
 GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE = "graph_no_evidence_fallback"
 GRAPH_FALLBACK_HYBRID_REASON_CODE = "graph_fallback_hybrid"
 GRAPH_FALLBACK_DENSE_REASON_CODE = "graph_fallback_dense"
+GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE = "graph_fallback_hybrid_disabled"
 GRAPH_POSTGRES_REQUEST_VALUE = "graph_postgres"
 GRAPH_NEO4J_REQUEST_VALUE = "graph_neo4j"
 
@@ -87,6 +88,12 @@ class _GraphRequest:
     @property
     def is_explicit_graph(self) -> bool:
         return self.canonical_strategy == RetrievalStrategy.GRAPH
+
+
+@dataclass(frozen=True)
+class _GraphFallbackSelection:
+    strategy: Literal["dense", "hybrid"]
+    reason_codes: tuple[str, ...] = ()
 
 
 class GraphRagService:
@@ -703,14 +710,17 @@ class GraphRagService:
             # The router forced graph retrieval but it produced no candidates.
             # Fall back to the base execution path (as if graph had not been
             # selected) instead of failing with no_context_found. Honor the
-            # configured fallback strategy: "hybrid" reuses the base hybrid
-            # retrieval path, "dense" keeps the dense-only path.
-            fallback_strategy = self._graph_fallback_strategy()
+            # configured fallback strategy after applying the same enabled
+            # checks as direct retrieval; disabled hybrid downgrades to dense.
+            fallback_selection = self._graph_fallback_selection()
+            fallback_strategy = fallback_selection.strategy
+            graph_summary = result.summary.model_dump(mode="json")
             self._record_graph_fallback_reason(
                 db,
                 retrieval_run_id=retrieval_run_id,
                 fallback_strategy=fallback_strategy,
-                graph_summary=result.summary.model_dump(mode="json"),
+                graph_summary=graph_summary,
+                additional_reason_codes=fallback_selection.reason_codes,
             )
             if fallback_strategy == "hybrid":
                 fallback_result = self.base._retrieve_hybrid(
@@ -735,7 +745,8 @@ class GraphRagService:
             return _result_with_graph_fallback_summary(
                 fallback_result,
                 fallback_strategy=fallback_strategy,
-                graph_summary=result.summary.model_dump(mode="json"),
+                graph_summary=graph_summary,
+                additional_reason_codes=fallback_selection.reason_codes,
             )
         return result
 
@@ -745,6 +756,19 @@ class GraphRagService:
         ).lower()
         return "hybrid" if strategy == "hybrid" else "dense"
 
+    def _graph_fallback_selection(self) -> _GraphFallbackSelection:
+        fallback_strategy = self._graph_fallback_strategy()
+        if fallback_strategy != "hybrid":
+            return _GraphFallbackSelection(strategy="dense")
+        try:
+            self.base._ensure_direct_strategy_enabled(RetrievalStrategy.HYBRID)
+        except RagSearchPipelineError:
+            return _GraphFallbackSelection(
+                strategy="dense",
+                reason_codes=(GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE,),
+            )
+        return _GraphFallbackSelection(strategy="hybrid")
+
     def _record_graph_fallback_reason(
         self,
         db: Session,
@@ -752,6 +776,7 @@ class GraphRagService:
         retrieval_run_id: int,
         fallback_strategy: str,
         graph_summary: dict[str, object],
+        additional_reason_codes: tuple[str, ...] = (),
     ) -> None:
         run = self.base._require_run(db, retrieval_run_id)
         # Preserve trace suppression: when decision-trace storage is disabled the
@@ -771,6 +796,9 @@ class GraphRagService:
             else GRAPH_FALLBACK_DENSE_REASON_CODE
         )
         for code in _safe_string_list(graph_summary.get("graph_reason_codes")):
+            if code not in reason_codes:
+                reason_codes.append(code)
+        for code in additional_reason_codes:
             if code not in reason_codes:
                 reason_codes.append(code)
         for code in (GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE, fallback_reason_code):
@@ -1071,6 +1099,7 @@ def _result_with_graph_fallback_summary(
     *,
     fallback_strategy: str,
     graph_summary: dict[str, object],
+    additional_reason_codes: tuple[str, ...] = (),
 ) -> RetrievalPipelineResult:
     summary_payload = result.summary.model_dump(mode="json")
     fallback_reason_code = (
@@ -1079,6 +1108,9 @@ def _result_with_graph_fallback_summary(
         else GRAPH_FALLBACK_DENSE_REASON_CODE
     )
     graph_reason_codes = _safe_string_list(graph_summary.get("graph_reason_codes"))
+    for code in additional_reason_codes:
+        if code not in graph_reason_codes:
+            graph_reason_codes.append(code)
     for code in (GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE, fallback_reason_code):
         if code not in graph_reason_codes:
             graph_reason_codes.append(code)

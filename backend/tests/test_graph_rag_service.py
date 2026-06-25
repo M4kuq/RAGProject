@@ -41,6 +41,7 @@ from app.rag.strategy import (
 from app.schemas.rag import RagAskRequest, RagSearchRequest
 from app.services.graph_rag_service import (
     GRAPH_FALLBACK_DENSE_REASON_CODE,
+    GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE,
     GRAPH_FALLBACK_HYBRID_REASON_CODE,
     GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE,
     GraphRagService,
@@ -664,6 +665,84 @@ def test_graph_no_evidence_fallback_uses_hybrid_when_configured(
         assert (
             run.strategy_decision_json.get("fallback_reason")
             == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
+        )
+
+
+@pytest.mark.parametrize(
+    ("settings_overrides", "client_message_id"),
+    [
+        ({"hybrid_enabled": False}, "explicit-hybrid-disabled-1"),
+        (
+            {"sparse_enabled": False, "hybrid_sparse_weight": 0.5},
+            "explicit-hybrid-sparse-disabled-1",
+        ),
+    ],
+)
+def test_explicit_graph_no_evidence_fallback_downgrades_disabled_hybrid_to_dense(
+    graph_session_factory: sessionmaker[Session],
+    settings_overrides: dict[str, object],
+    client_message_id: str,
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        settings = _settings(
+            graph_retrieval_fallback_strategy="hybrid",
+            **settings_overrides,
+        )
+        base = _service(settings, [_vector_candidate(min(seed.chunk_ids))])
+        calls: list[str] = []
+        original_hybrid = base._retrieve_hybrid
+        original_dense = base._retrieve_and_rerank
+
+        def _spy_hybrid(*args: Any, **kwargs: Any) -> Any:
+            calls.append("hybrid")
+            return original_hybrid(*args, **kwargs)
+
+        def _spy_dense(*args: Any, **kwargs: Any) -> Any:
+            calls.append("dense")
+            return original_dense(*args, **kwargs)
+
+        base._retrieve_hybrid = _spy_hybrid  # type: ignore[method-assign]
+        base._retrieve_and_rerank = _spy_dense  # type: ignore[method-assign]
+        service = GraphRagService(base)
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id=client_message_id,
+                message="How does FastAPI depend on PostgreSQL in the architecture?",
+                strategy=RagAskRequestStrategy.GRAPH,
+            ),
+            user=user,
+            request_id=f"req-{client_message_id}",
+        )
+
+        assert calls == ["dense"]
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_decision_json is not None
+        reason_codes = run.strategy_decision_json.get("reason_codes")
+        assert isinstance(reason_codes, list)
+        assert GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE in reason_codes
+        assert GRAPH_FALLBACK_DENSE_REASON_CODE in reason_codes
+        assert run.strategy_decision_json.get("fallback_strategy") == "dense"
+        assert response.retrieval_summary.fallback_used is True
+        assert (
+            GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE
+            in response.retrieval_summary.graph_fallback_reason_codes
+        )
+        assert (
+            GRAPH_FALLBACK_DENSE_REASON_CODE
+            in response.retrieval_summary.graph_fallback_reason_codes
         )
 
 
