@@ -131,6 +131,7 @@ class GraphRagService:
                 return self.base.search(db, payload=payload, request_id=request_id)
             retrieval_query, query_plan, strategy_decision = routed
         elif graph_request.is_explicit_graph:
+            self._ensure_graph_enabled_for_search()
             query_plan_build = self.base.query_plan_builder.build(
                 payload.query,
                 filters=filters,
@@ -207,11 +208,21 @@ class GraphRagService:
                     retrieval_run_id=run_id,
                     latency_tracker=latency_tracker,
                     allow_base_fallback=allow_base_fallback,
+                    selected_strategy=(
+                        graph_request.request_label if graph_request.is_explicit_graph else None
+                    ),
                     graph_store_provider=graph_request.provider_override,
                     force_graph_enabled=graph_request.force_enabled,
                 ),
             )
             run = self.base._require_run(db, run_id)
+            if graph_request.is_explicit_graph:
+                self._sync_explicit_graph_base_fallback_run(
+                    db,
+                    retrieval_run_id=run_id,
+                    result=result,
+                )
+                run = self.base._require_run(db, run_id)
             self.base.repository.mark_succeeded(
                 db,
                 run=run,
@@ -298,6 +309,7 @@ class GraphRagService:
             return self.base._classify_duplicate(db, payload=payload, existing=existing)
 
         if graph_request.is_explicit_graph:
+            self._ensure_graph_enabled_for_ask()
             filters = _retrieval_filters(payload)
             query_plan_build = self.base.query_plan_builder.build(
                 payload.message,
@@ -406,10 +418,19 @@ class GraphRagService:
                     retrieval_run_id=run_id,
                     latency_tracker=latency_tracker,
                     allow_base_fallback=allow_base_fallback,
+                    selected_strategy=(
+                        graph_request.request_label if graph_request.is_explicit_graph else None
+                    ),
                     graph_store_provider=graph_request.provider_override,
                     force_graph_enabled=graph_request.force_enabled,
                 ),
             )
+            if graph_request.is_explicit_graph:
+                self._sync_explicit_graph_base_fallback_run(
+                    db,
+                    retrieval_run_id=run_id,
+                    result=result,
+                )
             context_budget_decision = self.base._apply_context_budget(
                 db,
                 retrieval_run_id=run_id,
@@ -692,6 +713,7 @@ class GraphRagService:
         retrieval_run_id: int,
         latency_tracker: LatencyTracker,
         allow_base_fallback: bool,
+        selected_strategy: str | None,
         graph_store_provider: GraphStoreProvider | None,
         force_graph_enabled: bool,
     ) -> RetrievalPipelineResult:
@@ -745,6 +767,8 @@ class GraphRagService:
             return _result_with_graph_fallback_summary(
                 fallback_result,
                 fallback_strategy=fallback_strategy,
+                selected_strategy=selected_strategy,
+                execution_strategy=fallback_strategy,
                 graph_summary=graph_summary,
                 additional_reason_codes=fallback_selection.reason_codes,
             )
@@ -818,6 +842,7 @@ class GraphRagService:
         # Mirror the base StrategyRouter decision key names: ``fallback_used`` and
         # ``fallback_strategy`` (here the actual graph fallback used -- dense or
         # hybrid), plus ``fallback_reason`` for the no-evidence trigger.
+        decision["execution_strategy"] = fallback_strategy
         decision["fallback_used"] = True
         decision["fallback_strategy"] = fallback_strategy
         decision["fallback_reason"] = GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
@@ -826,6 +851,54 @@ class GraphRagService:
             run=run,
             strategy_decision_json=TraceRedactor.safe_dict(decision),
         )
+
+    def _sync_explicit_graph_base_fallback_run(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        result: RetrievalPipelineResult,
+    ) -> None:
+        fallback_strategy = _base_fallback_strategy_from_summary(result.summary)
+        if fallback_strategy is None:
+            return
+        run = self.base._require_run(db, retrieval_run_id)
+        run.strategy_type = fallback_strategy
+        if isinstance(run.retrieval_settings_json, dict):
+            settings_payload = dict(run.retrieval_settings_json)
+            settings_payload["strategy_type"] = fallback_strategy
+            settings_payload["requested_strategy"] = RetrievalStrategy.GRAPH.value
+            run.retrieval_settings_json = TraceRedactor.safe_dict(settings_payload)
+        if self.base.settings.router_store_decision_trace and isinstance(
+            run.strategy_decision_json,
+            dict,
+        ):
+            summary_payload = result.summary.model_dump(mode="json")
+            decision = dict(run.strategy_decision_json)
+            decision["execution_strategy"] = fallback_strategy
+            decision["fallback_used"] = True
+            decision["fallback_strategy"] = fallback_strategy
+            fallback_reason = _safe_optional_string(summary_payload.get("fallback_reason"))
+            if fallback_reason is not None:
+                decision["fallback_reason"] = fallback_reason
+            reason_codes = _safe_string_list(decision.get("reason_codes"))
+            for field_name in ("graph_reason_codes", "graph_fallback_reason_codes"):
+                for code in _safe_string_list(summary_payload.get(field_name)):
+                    if code not in reason_codes:
+                        reason_codes.append(code)
+            decision["reason_codes"] = reason_codes
+            for field_name in (
+                "graph_store_provider",
+                "graph_requested_provider",
+                "graph_fallback_reason_codes",
+            ):
+                value = summary_payload.get(field_name)
+                if isinstance(value, list):
+                    decision[field_name] = _safe_string_list(value)
+                elif (safe_value := _safe_optional_string(value)) is not None:
+                    decision[field_name] = safe_value
+            run.strategy_decision_json = TraceRedactor.safe_dict(decision)
+        db.flush()
 
     def _record_graph_execution_summary(
         self,
@@ -1039,20 +1112,17 @@ def _graph_request_from_value(strategy_value: str) -> _GraphRequest:
             canonical_strategy=RetrievalStrategy.GRAPH,
             request_label=strategy_value,
             provider_override=GraphStoreProvider.POSTGRES,
-            force_enabled=True,
         )
     if strategy_value == GRAPH_NEO4J_REQUEST_VALUE:
         return _GraphRequest(
             canonical_strategy=RetrievalStrategy.GRAPH,
             request_label=strategy_value,
             provider_override=GraphStoreProvider.NEO4J,
-            force_enabled=True,
         )
     if strategy_value == RetrievalStrategy.GRAPH.value:
         return _GraphRequest(
             canonical_strategy=RetrievalStrategy.GRAPH,
             request_label=strategy_value,
-            force_enabled=True,
         )
     return _GraphRequest(
         canonical_strategy=RetrievalStrategy(strategy_value),
@@ -1098,6 +1168,8 @@ def _result_with_graph_fallback_summary(
     result: RetrievalPipelineResult,
     *,
     fallback_strategy: str,
+    selected_strategy: str | None = None,
+    execution_strategy: str | None = None,
     graph_summary: dict[str, object],
     additional_reason_codes: tuple[str, ...] = (),
 ) -> RetrievalPipelineResult:
@@ -1119,12 +1191,17 @@ def _result_with_graph_fallback_summary(
             "fallback_used": True,
             "fallback_strategy": fallback_strategy,
             "fallback_reason": GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE,
+            "execution_strategy": execution_strategy or fallback_strategy,
             "graph_reason_codes": graph_reason_codes,
             "graph_fallback_reason_codes": _safe_string_list(
                 graph_summary.get("graph_fallback_reason_codes")
             ),
         }
     )
+    if selected_strategy is not None:
+        summary_payload["selected_strategy"] = selected_strategy
+    if fallback_strategy in {"dense", "hybrid"}:
+        summary_payload["strategy_type"] = fallback_strategy
     graph_store_provider = _safe_optional_string(graph_summary.get("graph_store_provider"))
     if graph_store_provider is not None:
         summary_payload["graph_store_provider"] = graph_store_provider
@@ -1136,6 +1213,16 @@ def _result_with_graph_fallback_summary(
         context_candidates=result.context_candidates,
         no_context=result.no_context,
     )
+
+
+def _base_fallback_strategy_from_summary(summary: RetrievalScoreSummary) -> str | None:
+    payload = summary.model_dump(mode="json")
+    if payload.get("fallback_used") is not True:
+        return None
+    strategy = _safe_optional_string(payload.get("execution_strategy")) or _safe_optional_string(
+        payload.get("fallback_strategy")
+    )
+    return strategy if strategy in {"dense", "hybrid"} else None
 
 
 def _graph_retrieval_settings(

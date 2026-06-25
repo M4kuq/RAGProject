@@ -127,8 +127,8 @@ class Settings(BaseSettings):
     hybrid_dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     hybrid_sparse_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=2, ge=1, le=5)
-    graph_retrieval_enabled: bool = False
-    graph_store_provider: str = "postgres"
+    graph_retrieval_enabled: bool = True
+    graph_store_provider: str = "neo4j"
     graph_retrieval_max_start_entities: int = Field(default=5, ge=1, le=20)
     graph_retrieval_max_depth: int = Field(default=2, ge=1, le=4)
     graph_retrieval_max_paths: int = Field(default=20, ge=1, le=100)

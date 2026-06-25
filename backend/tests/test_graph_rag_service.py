@@ -48,7 +48,7 @@ from app.services.graph_rag_service import (
     _build_graph_strategy_decision,
     _graph_settings_snapshot,
 )
-from app.services.rag_service import RagAskPipelineError, RagService
+from app.services.rag_service import RagAskPipelineError, RagSearchPipelineError, RagService
 
 
 @dataclass(frozen=True)
@@ -109,6 +109,7 @@ def _settings(**overrides: Any) -> Settings:
             "search_snippet_max_chars": 64,
             "generation_provider": "fake",
             "graph_retrieval_enabled": True,
+            "graph_store_provider": "postgres",
             **overrides,
         }
     )
@@ -196,6 +197,30 @@ def test_neo4j_connection_settings_are_optional_and_normalized() -> None:
     assert configured.neo4j_password == "configured-test-password"
     assert configured.neo4j_database == "graph"
     assert configured.neo4j_projection_enabled is True
+
+
+def test_settings_default_graph_retrieval_uses_neo4j(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRAPH_RETRIEVAL_ENABLED", raising=False)
+    monkeypatch.delenv("GRAPH_STORE_PROVIDER", raising=False)
+
+    settings = Settings(_env_file=None, app_env="test")
+
+    assert settings.graph_retrieval_enabled is True
+    assert settings.graph_store_provider == "neo4j"
+
+
+def test_agentic_router_default_graph_flag_does_not_select_graph_without_router_flag() -> None:
+    settings = _settings(graph_retrieval_enabled=True, graph_router_enabled=False)
+    service = GraphRagService(_service(settings, []))
+
+    routed = service._graph_router_selection(
+        query="How does FastAPI depend on PostgreSQL in the architecture?",
+        filters=RetrievalFilters(),
+        requested_strategy=RetrievalStrategy.AGENTIC_ROUTER,
+        request_kind="ask",
+    )
+
+    assert routed is None
 
 
 def test_graph_router_selection_skipped_when_router_disabled(
@@ -335,7 +360,7 @@ def test_graph_ask_records_injection_pattern_reason_code(
         assert "injection_pattern_detected" in reason_codes
 
 
-def test_explicit_graph_runs_when_global_flag_disabled(
+def test_explicit_graph_ask_respects_disabled_global_flag(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_session_factory() as db:
@@ -351,26 +376,46 @@ def test_explicit_graph_runs_when_global_flag_disabled(
             )
         )
 
-        response = service.ask(
-            db,
-            payload=RagAskRequest(
-                chat_session_id=chat_session_id,
-                client_message_id="explicit-graph-disabled-1",
-                message="How does FastAPI use PostgreSQL?",
-                strategy=RagAskRequestStrategy.GRAPH_POSTGRES,
-            ),
-            user=user,
-            request_id="req-explicit-disabled",
+        with pytest.raises(RagAskPipelineError) as exc_info:
+            service.ask(
+                db,
+                payload=RagAskRequest(
+                    chat_session_id=chat_session_id,
+                    client_message_id="explicit-graph-disabled-1",
+                    message="How does FastAPI use PostgreSQL?",
+                    strategy=RagAskRequestStrategy.GRAPH_POSTGRES,
+                ),
+                user=user,
+                request_id="req-explicit-disabled",
+            )
+
+        assert exc_info.value.error_code == "strategy_not_enabled"
+        assert exc_info.value.status_code == 409
+
+
+def test_explicit_graph_search_respects_disabled_global_flag(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        service = GraphRagService(
+            _service(
+                _settings(graph_retrieval_enabled=False),
+                [],
+            )
         )
 
-        run = db.get(RetrievalRun, response.retrieval_run_id)
-        assert run is not None
-        assert run.status == "succeeded"
-        assert run.strategy_decision_json is not None
-        assert run.strategy_decision_json["selected_strategy"] == "graph_postgres"
-        assert run.retrieval_settings_json is not None
-        assert run.retrieval_settings_json["graph_retrieval_enabled"] is False
-        assert run.retrieval_settings_json["graph_retrieval_effective_enabled"] is True
+        with pytest.raises(RagSearchPipelineError) as exc_info:
+            service.search(
+                db,
+                payload=RagSearchRequest(
+                    query="How does FastAPI use PostgreSQL?",
+                    strategy=RagSearchRequestStrategy.GRAPH_NEO4J,
+                ),
+                request_id="req-explicit-search-disabled",
+            )
+
+        assert exc_info.value.error_code == "strategy_not_enabled"
+        assert exc_info.value.status_code == 409
 
 
 def test_explicit_graph_neo4j_falls_back_to_postgres_graph_with_response_summary(
@@ -385,7 +430,6 @@ def test_explicit_graph_neo4j_falls_back_to_postgres_graph_with_response_summary
         service = GraphRagService(
             _service(
                 _settings(
-                    graph_retrieval_enabled=False,
                     graph_store_provider="postgres",
                 ),
                 [_vector_candidate(min(seed.chunk_ids))],
@@ -538,7 +582,12 @@ def test_explicit_graph_no_evidence_falls_back_to_base(
         db.execute(delete(GraphEntityMention))
         db.commit()
 
-        service = GraphRagService(_service(_settings(), [_vector_candidate(min(seed.chunk_ids))]))
+        service = GraphRagService(
+            _service(
+                _settings(graph_retrieval_fallback_strategy="dense"),
+                [_vector_candidate(min(seed.chunk_ids))],
+            )
+        )
 
         response = service.ask(
             db,
@@ -555,11 +604,19 @@ def test_explicit_graph_no_evidence_falls_back_to_base(
         run = db.get(RetrievalRun, response.retrieval_run_id)
         assert run is not None
         assert run.status == "succeeded"
+        assert run.strategy_type == "dense"
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["strategy_type"] == "dense"
+        assert run.retrieval_settings_json["requested_strategy"] == "graph"
         assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["execution_strategy"] == "dense"
         assert run.strategy_decision_json["fallback_used"] is True
         assert (
             run.strategy_decision_json["fallback_reason"] == GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE
         )
+        assert response.retrieval_summary.strategy_type == RetrievalStrategy.DENSE
+        assert response.retrieval_summary.selected_strategy == "graph"
+        assert response.retrieval_summary.execution_strategy == "dense"
 
 
 def test_graph_search_router_no_evidence_falls_back_to_base(

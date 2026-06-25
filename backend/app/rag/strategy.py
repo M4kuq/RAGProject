@@ -136,12 +136,12 @@ PHASE2_RETRIEVAL_SYSTEM_SETTINGS: Final[dict[str, tuple[object, str]]] = {
         "Retrieval cache TTL in seconds. Versioned keys and fingerprints invalidate entries.",
     ),
     "rag.graph.retrieval.enabled": (
-        False,
-        "Enable explicit strategy=graph graph retrieval requests for PR-48.",
+        True,
+        "Enable explicit strategy=graph graph retrieval requests by default.",
     ),
     "rag.graph.store.provider": (
-        "postgres",
-        "GraphStore provider. PR-49 defaults to PostgreSQL; Neo4j remains optional.",
+        "neo4j",
+        "GraphStore provider. Neo4j is the default read model; PostgreSQL remains source of truth.",
     ),
     "rag.graph.retrieval.max_start_entities": (
         5,

@@ -107,7 +107,10 @@ Use explicit `graph_neo4j` for relation, dependency, ownership, "how A relates
 to B", and multi-hop checks where graph index data is expected to exist.
 `graph` remains available and follows the configured graph provider. If graph
 cannot produce chunk-backed evidence, the response records the provider and
-reason codes before falling back to the configured safe base strategy.
+reason codes before falling back to the configured safe base strategy. That
+safe fallback is reported as the actual base retriever (`dense` or `hybrid`) in
+the run's effective `strategy_type` and `execution_strategy`, so provider
+comparison does not count a base-retrieved answer as a GraphRAG success.
 
 `graph_hybrid` remains a PR-55+ candidate. Current GraphRAG can fall back to
 hybrid but does not expose full graph/vector fusion as a separate public
@@ -125,6 +128,11 @@ RETRIEVAL_CACHE_ENABLED=false
 NEO4J_PROJECTION_ENABLED=true
 NEO4J_HEALTH_CHECK_ENABLED=true
 ```
+
+Set `GRAPH_RETRIEVAL_ENABLED=false` only as an operator kill-switch. New
+explicit `graph`, `graph_postgres`, and `graph_neo4j` requests then return
+`strategy_not_enabled` (409). Saved duplicate-message replays still return the
+original completed response without re-running graph retrieval.
 
 PostgreSQL GraphRAG provider override:
 
@@ -165,7 +173,8 @@ non-secret development value `change-me-local`; override it for shared
 environments. Neo4j startup is not a hard application dependency: if it is
 temporarily unavailable, `graph_neo4j` records visible reason codes and falls
 back to PostgreSQL graph, then to the configured safe base retrieval path if no
-graph evidence exists.
+graph evidence exists. A base fallback remains visible as a fallback and is not
+recorded as a GraphRAG win.
 
 Do not paste real Neo4j credentials into docs, logs, PR comments, or shell
 transcripts. Set any shared-environment password in your shell without
@@ -234,8 +243,10 @@ Graph metrics are safe summaries:
 When Neo4j is not configured, unavailable, or unprojected, `graph_neo4j` uses
 PostgreSQL graph as a visible fallback when PostgreSQL graph sources can answer
 and records `neo4j_to_postgres_fallback`. If neither graph provider has usable
-sources, the run records safe reason codes instead of failing the full
-evaluation.
+sources, the run records safe reason codes and uses the configured safe base
+retriever. The graph target remains transparent, but the effective execution is
+reported as `dense` or `hybrid` so the fallback cannot inflate GraphRAG/provider
+success rates.
 
 ## Verification
 

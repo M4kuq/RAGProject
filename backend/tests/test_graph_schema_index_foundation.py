@@ -579,8 +579,8 @@ def test_graph_system_settings_defaults_are_safe() -> None:
     assert values["rag.graph.max_entities_per_chunk"] == 20
     assert values["rag.graph.max_relations_per_chunk"] == 40
     assert values["rag.graph.store_raw_evidence_text"] is False
-    assert values["rag.graph.store.provider"] == "postgres"
-    assert values["rag.graph.retrieval.enabled"] is False
+    assert values["rag.graph.store.provider"] == "neo4j"
+    assert values["rag.graph.retrieval.enabled"] is True
 
 
 def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: Engine) -> None:
