@@ -294,7 +294,8 @@ restart backend and worker after changing env values.
 
 If graph search returns no context, queue graph index jobs, wait for worker
 completion, and confirm the active document version has succeeded graph index
-runs. Explicit graph does not silently fall back.
+runs. Explicit graph uses the configured safe base fallback, and the response
+records the fallback reason and effective base strategy.
 
 If router does not select graph, confirm both `GRAPH_RETRIEVAL_ENABLED=true` and
 `GRAPH_ROUTER_ENABLED=true`, then use a relation or multi-hop synthetic query.

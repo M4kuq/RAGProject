@@ -71,7 +71,7 @@ Unsafe payload fields remain forbidden:
 
 ## Settings
 
-PR-46 seeds these disabled defaults:
+Graph indexing remains opt-in, while graph retrieval is enabled by default:
 
 | Key | Default |
 |---|---|
