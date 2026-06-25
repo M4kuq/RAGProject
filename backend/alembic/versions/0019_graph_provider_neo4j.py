@@ -1,6 +1,6 @@
 """forward migrate graph store provider default to neo4j
 
-Revision ID: 0019_graph_store_provider_neo4j_forward
+Revision ID: 0019_graph_provider_neo4j
 Revises: 0018_evaluation_generation_usage
 Create Date: 2026-06-25
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0019_graph_store_provider_neo4j_forward"
+revision = "0019_graph_provider_neo4j"
 down_revision = "0018_evaluation_generation_usage"
 branch_labels = None
 depends_on = None
