@@ -430,6 +430,84 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_incomple
         ]
 
 
+def test_graph_strategy_falls_back_before_returning_partial_neo4j_projection(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        _seed_out_of_scope_fastapi_mention(db, seed)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.fastapi_entity_id,
+                    "safe_label": "FastAPI",
+                    "entity_type": "technology",
+                },
+                {
+                    "entity_id": seed.postgresql_entity_id,
+                    "safe_label": "PostgreSQL",
+                    "entity_type": "technology",
+                },
+            ],
+            relation_rows=[
+                {
+                    "frontier_entity_id": seed.fastapi_entity_id,
+                    "other_entity_id": seed.postgresql_entity_id,
+                    "other_safe_label": "PostgreSQL",
+                    "other_entity_type": "technology",
+                    "relation_id": 1001,
+                    "relation_type": "uses",
+                    "confidence": 0.85,
+                    "source_document_chunk_id": min(seed.chunk_ids),
+                    "evidence_text_hash": "f" * 64,
+                    "source_entity_id": seed.fastapi_entity_id,
+                    "source_safe_label": "FastAPI",
+                    "source_entity_type": "technology",
+                    "target_entity_id": seed.postgresql_entity_id,
+                    "target_safe_label": "PostgreSQL",
+                    "target_entity_type": "technology",
+                }
+            ],
+            mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
+        )
+        strategy = GraphRetrievalStrategy(
+            resolver=GraphStoreResolver(
+                provider=GraphStoreProvider.NEO4J,
+                neo4j_store=Neo4jGraphStore(
+                    client=Neo4jClient(
+                        config=Neo4jConnectionConfig(
+                            uri="bolt://neo4j.local:7687",
+                            user="neo4j",
+                            password="configured-test-password",
+                        ),
+                        driver=fake_driver,
+                    )
+                ),
+            )
+        )
+
+        result = strategy.search(
+            db,
+            query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.fallback_used is True
+        assert result.graph_candidates
+        assert result.reason_codes == ("neo4j_to_postgres_fallback", "graph_search_completed")
+        assert result.score_breakdown["fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+
+
 def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -590,6 +668,7 @@ def test_neo4j_graph_store_maps_bounded_paths_to_common_dto(
                 }
             ],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -658,6 +737,7 @@ def test_neo4j_entity_lookup_matches_sanitized_aliases(
                     "confidence": 0.9,
                 }
             ],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -705,6 +785,7 @@ def test_neo4j_entity_lookup_applies_filters_before_limit(
             ],
             relation_rows=[],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -775,6 +856,7 @@ def test_neo4j_filters_whole_paths_with_out_of_scope_relation_chunks(
                 }
             ],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(

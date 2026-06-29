@@ -2941,6 +2941,7 @@ def _has_transient_graph_reason(summary: dict[str, object]) -> bool:
         "neo4j_driver_unavailable",
         "neo4j_not_configured",
         "neo4j_projection_empty",
+        "neo4j_projection_incomplete",
         "neo4j_query_failed",
         "neo4j_to_postgres_fallback",
         "neo4j_unavailable",

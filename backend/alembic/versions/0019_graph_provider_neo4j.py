@@ -18,17 +18,75 @@ down_revision = "0018_evaluation_generation_usage"
 branch_labels = None
 depends_on = None
 
-_SETTING_KEY = "rag.graph.store.provider"
-_OLD_SETTING_VALUE = "postgres"
-_NEW_SETTING_VALUE = "neo4j"
-_OLD_SETTING_DESCRIPTION = "GraphStore provider. Neo4j remains optional and disabled by default."
-_NEW_SETTING_DESCRIPTION = (
+_GRAPH_STORE_PROVIDER_KEY = "rag.graph.store.provider"
+_OLD_GRAPH_STORE_PROVIDER_VALUE = "postgres"
+_NEW_GRAPH_STORE_PROVIDER_VALUE = "neo4j"
+_OLD_GRAPH_STORE_PROVIDER_DESCRIPTION = (
+    "GraphStore provider. Neo4j remains optional and disabled by default."
+)
+_NEW_GRAPH_STORE_PROVIDER_DESCRIPTION = (
     "GraphStore provider. Neo4j is the default read model; PostgreSQL remains source of truth."
+)
+_GRAPH_RETRIEVAL_ENABLED_KEY = "rag.graph.retrieval.enabled"
+_OLD_GRAPH_RETRIEVAL_ENABLED_VALUE = False
+_NEW_GRAPH_RETRIEVAL_ENABLED_VALUE = True
+_OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
+    "Enable graph retrieval strategies. PR-48 connects retrieval."
+)
+_NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
+    "Enable explicit strategy=graph graph retrieval requests by default."
 )
 
 
 def upgrade() -> None:
     bind = op.get_bind()
+    _forward_default(
+        bind,
+        setting_key=_GRAPH_STORE_PROVIDER_KEY,
+        old_value=_OLD_GRAPH_STORE_PROVIDER_VALUE,
+        new_value=_NEW_GRAPH_STORE_PROVIDER_VALUE,
+        old_description=_OLD_GRAPH_STORE_PROVIDER_DESCRIPTION,
+        new_description=_NEW_GRAPH_STORE_PROVIDER_DESCRIPTION,
+    )
+    _forward_default(
+        bind,
+        setting_key=_GRAPH_RETRIEVAL_ENABLED_KEY,
+        old_value=_OLD_GRAPH_RETRIEVAL_ENABLED_VALUE,
+        new_value=_NEW_GRAPH_RETRIEVAL_ENABLED_VALUE,
+        old_description=_OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION,
+        new_description=_NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION,
+    )
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    _backward_default(
+        bind,
+        setting_key=_GRAPH_STORE_PROVIDER_KEY,
+        old_value=_OLD_GRAPH_STORE_PROVIDER_VALUE,
+        new_value=_NEW_GRAPH_STORE_PROVIDER_VALUE,
+        old_description=_OLD_GRAPH_STORE_PROVIDER_DESCRIPTION,
+        new_description=_NEW_GRAPH_STORE_PROVIDER_DESCRIPTION,
+    )
+    _backward_default(
+        bind,
+        setting_key=_GRAPH_RETRIEVAL_ENABLED_KEY,
+        old_value=_OLD_GRAPH_RETRIEVAL_ENABLED_VALUE,
+        new_value=_NEW_GRAPH_RETRIEVAL_ENABLED_VALUE,
+        old_description=_OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION,
+        new_description=_NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION,
+    )
+
+
+def _forward_default(
+    bind: sa.engine.Connection,
+    *,
+    setting_key: str,
+    old_value: object,
+    new_value: object,
+    old_description: str,
+    new_description: str,
+) -> None:
     bind.execute(
         sa.text(
             """
@@ -43,17 +101,24 @@ def upgrade() -> None:
             """
         ),
         {
-            "setting_key": _SETTING_KEY,
-            "old_setting_value": json.dumps(_OLD_SETTING_VALUE),
-            "new_setting_value": json.dumps(_NEW_SETTING_VALUE),
-            "old_description": _OLD_SETTING_DESCRIPTION,
-            "new_description": _NEW_SETTING_DESCRIPTION,
+            "setting_key": setting_key,
+            "old_setting_value": json.dumps(old_value),
+            "new_setting_value": json.dumps(new_value),
+            "old_description": old_description,
+            "new_description": new_description,
         },
     )
 
 
-def downgrade() -> None:
-    bind = op.get_bind()
+def _backward_default(
+    bind: sa.engine.Connection,
+    *,
+    setting_key: str,
+    old_value: object,
+    new_value: object,
+    old_description: str,
+    new_description: str,
+) -> None:
     bind.execute(
         sa.text(
             """
@@ -68,10 +133,10 @@ def downgrade() -> None:
             """
         ),
         {
-            "setting_key": _SETTING_KEY,
-            "old_setting_value": json.dumps(_OLD_SETTING_VALUE),
-            "new_setting_value": json.dumps(_NEW_SETTING_VALUE),
-            "old_description": _OLD_SETTING_DESCRIPTION,
-            "new_description": _NEW_SETTING_DESCRIPTION,
+            "setting_key": setting_key,
+            "old_setting_value": json.dumps(old_value),
+            "new_setting_value": json.dumps(new_value),
+            "old_description": old_description,
+            "new_description": new_description,
         },
     )

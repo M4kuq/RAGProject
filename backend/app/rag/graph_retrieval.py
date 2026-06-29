@@ -951,6 +951,13 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
                 started_at=started_at,
             )
+            projection_gap_reason = self._projection_gap_reason(db, filters)
+            if projection_gap_reason is not None:
+                return self._unavailable_result(
+                    query,
+                    started_at,
+                    projection_gap_reason,
+                )
         except Neo4jUnavailable as exc:
             return self._unavailable_result(query, started_at, exc.reason_code)
 
