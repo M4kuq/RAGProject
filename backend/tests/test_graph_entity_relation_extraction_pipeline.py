@@ -392,7 +392,7 @@ def test_llm_graph_extractor_falls_back_to_grounded_mention_for_canonical_name()
                 "entities": [
                     {
                         "mention": "Graph Index",
-                        "canonical_name": "Secret Roadmap",
+                        "canonical_name": "Hybrid RAG",
                         "entity_type": "concept",
                         "aliases": [],
                         "confidence": 0.92,
@@ -406,9 +406,23 @@ def test_llm_graph_extractor_falls_back_to_grounded_mention_for_canonical_name()
     result = extractor.extract((chunk,))
 
     assert [mention.canonical_name for mention in result.entity_mentions] == ["Graph Index"]
-    assert "Secret Roadmap" not in str(
-        [mention.metadata_json for mention in result.entity_mentions]
+    assert "Hybrid RAG" not in [mention.canonical_name for mention in result.entity_mentions]
+
+
+@pytest.mark.parametrize("payload", [{"entities": []}, {"relations": []}])
+def test_llm_graph_extractor_rejects_missing_required_arrays(
+    payload: dict[str, object],
+) -> None:
+    chunk = _chunk_ref("Graph Index supports Hybrid RAG.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(payload),
     )
+
+    with pytest.raises(LLMGraphExtractionError) as exc_info:
+        extractor.extract((chunk,))
+
+    assert exc_info.value.reason_code == "graph_extraction_llm_invalid_response"
 
 
 def test_llm_graph_extractor_matches_relation_evidence_later_mention_occurrence() -> None:
@@ -500,6 +514,78 @@ def test_llm_graph_extractor_matches_normalized_whitespace_spans() -> None:
         result.relations[0].evidence_text_hash
         == hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
     )
+
+
+def test_llm_graph_extractor_does_not_merge_non_dot_sentence_boundaries() -> None:
+    chunk = _chunk_ref("Graph Index is documented! Hybrid RAG is separate.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index and Hybrid RAG are connected.",
+                        "confidence": 0.81,
+                    }
+                ],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    assert result.relations == ()
+
+
+def test_llm_graph_extractor_requires_ascii_token_boundaries() -> None:
+    chunk = _chunk_ref("GraphRAG is paid.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "RAG",
+                        "canonical_name": "RAG",
+                        "entity_type": "acronym",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "AI",
+                        "canonical_name": "AI",
+                        "entity_type": "acronym",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                ],
+                "relations": [],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    assert result.entity_mentions == ()
 
 
 @pytest.mark.parametrize(

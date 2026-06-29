@@ -61,6 +61,7 @@ GRAPH_EXTRACTION_TASK_INSTRUCTIONS = (
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 _RELATION_TYPE_RE = re.compile(r"[^a-z0-9_]+")
+_SENTENCE_BOUNDARY_MARKERS = (".", "!", "?", "。", "！", "？", "\n")
 _DECIMAL_QUANT = Decimal("0.00001")
 _DEFAULT_ENTITY_CONFIDENCE = Decimal("0.70000")
 _DEFAULT_RELATION_CONFIDENCE = Decimal("0.65000")
@@ -205,8 +206,14 @@ class LLMGraphExtractor:
         chunk: GraphChunkRef,
         payload: Mapping[str, object],
     ) -> tuple[list[EntityMentionCandidate], list[RelationCandidate]]:
-        grounded_entities = self._ground_entities(chunk, payload.get("entities"))
-        relations = self._ground_relations(chunk, payload.get("relations"), grounded_entities)
+        if "entities" not in payload or "relations" not in payload:
+            raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
+        raw_entities = payload.get("entities")
+        raw_relations = payload.get("relations")
+        if raw_entities is None or raw_relations is None:
+            raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
+        grounded_entities = self._ground_entities(chunk, raw_entities)
+        relations = self._ground_relations(chunk, raw_relations, grounded_entities)
         return [entity.candidate for entity in grounded_entities], relations
 
     def _ground_entities(
@@ -242,14 +249,13 @@ class LLMGraphExtractor:
             )
             if confidence < self.min_confidence:
                 continue
-            raw_canonical_name = _text_value(raw_entity.get("canonical_name") or actual_mention)
-            canonical_name = (
-                raw_canonical_name
-                if raw_canonical_name and _find_span(chunk.content_text, raw_canonical_name)
-                else actual_mention
-            )
             entity_type = _normalize_entity_type(_text_value(raw_entity.get("entity_type")))
             aliases = _ground_aliases(chunk.content_text, raw_entity.get("aliases"))
+            canonical_name = _grounded_canonical_name(
+                actual_mention,
+                _text_value(raw_entity.get("canonical_name") or actual_mention),
+                aliases=aliases,
+            )
             normalized = self.normalizer.normalize(
                 canonical_name or actual_mention,
                 entity_type=entity_type,
@@ -454,13 +460,30 @@ def _find_span(text: str, needle: str) -> tuple[int, int] | None:
         return None
     collapsed = _WHITESPACE_RE.sub(" ", normalized)
     for candidate in dict.fromkeys((normalized, collapsed)):
-        index = text.find(candidate)
-        if index >= 0:
-            return (index, index + len(candidate))
-        lowered_index = text.lower().find(candidate.lower())
-        if lowered_index >= 0:
-            return (lowered_index, lowered_index + len(candidate))
+        span = _find_direct_span(text, candidate, case_sensitive=True)
+        if span is not None:
+            return span
+        span = _find_direct_span(text, candidate, case_sensitive=False)
+        if span is not None:
+            return span
     return _find_normalized_span(text, collapsed)
+
+
+def _find_direct_span(
+    text: str,
+    needle: str,
+    *,
+    case_sensitive: bool,
+) -> tuple[int, int] | None:
+    haystack = text if case_sensitive else text.lower()
+    target = needle if case_sensitive else needle.lower()
+    index = haystack.find(target)
+    while index >= 0:
+        span = (index, index + len(needle))
+        if _span_has_token_boundaries(text, span, needle):
+            return span
+        index = haystack.find(target, index + 1)
+    return None
 
 
 def _find_normalized_span(text: str, needle: str) -> tuple[int, int] | None:
@@ -468,11 +491,16 @@ def _find_normalized_span(text: str, needle: str) -> tuple[int, int] | None:
     normalized_needle = _WHITESPACE_RE.sub(" ", needle.replace("\x00", " ")).strip()
     if not normalized_text or not normalized_needle:
         return None
-    index = normalized_text.lower().find(normalized_needle.lower())
-    if index < 0:
-        return None
-    end_index = index + len(normalized_needle) - 1
-    return (offsets[index], offsets[end_index] + 1)
+    haystack = normalized_text.lower()
+    target = normalized_needle.lower()
+    index = haystack.find(target)
+    while index >= 0:
+        end_index = index + len(normalized_needle) - 1
+        span = (offsets[index], offsets[end_index] + 1)
+        if _span_has_token_boundaries(text, span, normalized_needle):
+            return span
+        index = haystack.find(target, index + 1)
+    return None
 
 
 def _normalized_text_with_offsets(value: str) -> tuple[str, list[int]]:
@@ -493,6 +521,25 @@ def _normalized_text_with_offsets(value: str) -> tuple[str, list[int]]:
         chars.pop()
         offsets.pop()
     return ("".join(chars), offsets)
+
+
+def _span_has_token_boundaries(text: str, span: tuple[int, int], needle: str) -> bool:
+    stripped = needle.strip()
+    if not stripped:
+        return False
+    if _is_ascii_token_char(stripped[0]) and span[0] > 0:
+        before = text[span[0] - 1]
+        if _is_ascii_token_char(before):
+            return False
+    if _is_ascii_token_char(stripped[-1]) and span[1] < len(text):
+        after = text[span[1]]
+        if _is_ascii_token_char(after):
+            return False
+    return True
+
+
+def _is_ascii_token_char(value: str) -> bool:
+    return value.isascii() and (value.isalnum() or value == "_")
 
 
 def _ground_aliases(text: str, raw_aliases: object) -> tuple[str, ...]:
@@ -516,6 +563,23 @@ def _ground_aliases(text: str, raw_aliases: object) -> tuple[str, ...]:
         if len(aliases) >= 32:
             break
     return tuple(aliases)
+
+
+def _grounded_canonical_name(
+    actual_mention: str,
+    canonical_name: str,
+    *,
+    aliases: tuple[str, ...],
+) -> str:
+    canonical_key = _ref_key(canonical_name)
+    if not canonical_key:
+        return actual_mention
+    if canonical_key == _ref_key(actual_mention):
+        return canonical_name
+    alias_keys = {_ref_key(alias) for alias in aliases}
+    if canonical_key in alias_keys:
+        return canonical_name
+    return actual_mention
 
 
 def _evidence_span(
@@ -542,10 +606,12 @@ def _evidence_span(
             else None
         )
     start = min(source.mention_offset_start, target.mention_offset_start)
-    end = max(source.mention_offset_end, target.mention_offset_end)
-    sentence_start = max(text.rfind(".", 0, start), text.rfind("\n", 0, start))
+    sentence_start = max(text.rfind(marker, 0, start) for marker in _SENTENCE_BOUNDARY_MARKERS)
     sentence_end_candidates = [
-        position for position in (text.find(".", end), text.find("\n", end)) if position >= 0
+        position
+        for marker in _SENTENCE_BOUNDARY_MARKERS
+        for position in (text.find(marker, start),)
+        if position >= 0
     ]
     sentence_start = 0 if sentence_start < 0 else sentence_start + 1
     sentence_end = min(sentence_end_candidates) + 1 if sentence_end_candidates else len(text)
