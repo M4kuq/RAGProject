@@ -64,7 +64,6 @@ _LLM_ALLOWED_ENTITY_TYPES = {
     "method",
     "organization",
     "paper",
-    "person",
     "system",
     "technology",
 }
@@ -94,6 +93,8 @@ class GraphEntityNormalizer:
     ) -> NormalizedGraphEntity | None:
         canonical = self._normalize_label(value)
         if canonical is None:
+            return None
+        if _looks_like_person_name(canonical):
             return None
         if entity_type is None and not self._looks_like_graph_entity(canonical):
             return None
@@ -183,3 +184,15 @@ class GraphEntityNormalizer:
         if normalized is None:
             return False
         return normalized.lower() in _LLM_ALLOWED_ENTITY_TYPES
+
+
+def _looks_like_person_name(value: str) -> bool:
+    tokens = value.split()
+    if len(tokens) < 2 or len(tokens) > 4:
+        return False
+    lowered = value.lower()
+    if any(term in lowered for term in _TECHNOLOGY_TERMS):
+        return False
+    if any(token.lower().endswith(_TECHNICAL_SUFFIXES) for token in tokens):
+        return False
+    return all(re.fullmatch(r"[A-Z][a-z]{1,40}", token) for token in tokens)

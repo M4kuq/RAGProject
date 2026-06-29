@@ -29,6 +29,7 @@ from app.graph.extraction import (
     RelationExtractionService,
     RuleBasedGraphExtractor,
 )
+from app.graph.job_settings import graph_extraction_settings, graph_extractor_type_override
 from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor
 from app.repositories.graph_repository import GraphRepository
 from app.schemas.graph import (
@@ -53,6 +54,7 @@ class GraphIndexBuildSnapshot:
     extractor_type: str
     extractor_version: str | None
     chunks: tuple[GraphChunkRef, ...]
+    graph_extraction_settings: Settings
 
 
 class Neo4jProjectionServiceProtocol(Protocol):
@@ -162,6 +164,8 @@ class GraphIndexService:
             raise ResourceNotFound()
         if version.status != "ready":
             raise ValueError("document_version_id must reference a ready document version")
+        effective_settings = graph_extraction_settings(db, self.settings)
+        effective_extractor_type = extractor_type or graph_extractor_type_override(db)
 
         run = (
             self.repository.get_graph_index_run(db, graph_index_run_id, for_update=True)
@@ -178,7 +182,7 @@ class GraphIndexService:
                 GraphIndexRunCreate(
                     document_version_id=document_version_id,
                     job_id=job_id,
-                    extractor_type=extractor_type or self.extractor_type,
+                    extractor_type=effective_extractor_type or self.extractor_type,
                     extractor_version=extractor_version or self.extractor_version,
                 ),
             )
@@ -197,7 +201,7 @@ class GraphIndexService:
                 run.extractor_type
             )
         if run.extractor_type == "none":
-            run.extractor_type = extractor_type or self.extractor_type
+            run.extractor_type = effective_extractor_type or self.extractor_type
         if run.extractor_version is None:
             run.extractor_version = extractor_version or self.extractor_version
 
@@ -222,6 +226,7 @@ class GraphIndexService:
             extractor_type=run.extractor_type,
             extractor_version=run.extractor_version,
             chunks=chunks,
+            graph_extraction_settings=effective_settings,
         )
 
     def extract_from_snapshot(self, snapshot: GraphIndexBuildSnapshot) -> GraphExtractionResult:
@@ -230,7 +235,9 @@ class GraphIndexService:
             return _dedupe_result(self.graph_extractor.extract(snapshot.chunks))
         if extractor_type == LLM_GRAPH_EXTRACTOR_TYPE:
             try:
-                return _dedupe_result(self._llm_extractor().extract(snapshot.chunks))
+                return _dedupe_result(
+                    self._llm_extractor(snapshot.graph_extraction_settings).extract(snapshot.chunks)
+                )
             except LLMGraphExtractionError as exc:
                 logger.warning(
                     "graph llm extraction fell back to rule_based",
@@ -238,7 +245,7 @@ class GraphIndexService:
                         "document_version_id": snapshot.document_version_id,
                         "graph_index_run_id": snapshot.graph_index_run_id,
                         "reason_code": exc.reason_code,
-                        "provider": self._llm_provider_name(),
+                        "provider": self._llm_provider_name(snapshot.graph_extraction_settings),
                     },
                 )
                 fallback = self.rule_based_extractor.extract(snapshot.chunks)
@@ -249,8 +256,12 @@ class GraphIndexService:
                         "requested_extractor_type": LLM_GRAPH_EXTRACTOR_TYPE,
                         "fallback_reason_code": exc.reason_code,
                         "fallback_extractor_type": RULE_BASED_GRAPH_EXTRACTOR_TYPE,
-                        "graph_extraction_provider": self._llm_provider_name(),
-                        "graph_extraction_model": self._llm_model_name(),
+                        "graph_extraction_provider": self._llm_provider_name(
+                            snapshot.graph_extraction_settings
+                        ),
+                        "graph_extraction_model": self._llm_model_name(
+                            snapshot.graph_extraction_settings
+                        ),
                     }
                 )
                 return _dedupe_result(
@@ -264,22 +275,21 @@ class GraphIndexService:
                 )
         return _dedupe_result(self.rule_based_extractor.extract(snapshot.chunks))
 
-    def _llm_extractor(self) -> GraphExtractor:
+    def _llm_extractor(self, settings: Settings) -> GraphExtractor:
         if self.llm_extractor is None:
-            self.llm_extractor = LLMGraphExtractor(settings=self.settings)
+            if settings is self.settings:
+                self.llm_extractor = LLMGraphExtractor(settings=self.settings)
+            else:
+                return LLMGraphExtractor(settings=settings)
         return self.llm_extractor
 
-    def _llm_provider_name(self) -> str:
-        return (
-            (self.settings.graph_extraction_provider or self.settings.generation_provider)
-            .strip()
-            .lower()
-        )
+    def _llm_provider_name(self, settings: Settings) -> str:
+        return (settings.graph_extraction_provider or settings.generation_provider).strip().lower()
 
-    def _llm_model_name(self) -> str:
-        return (
-            self.settings.graph_extraction_model_name or self.settings.generation_model_name
-        ).strip()[:160]
+    def _llm_model_name(self, settings: Settings) -> str:
+        return (settings.graph_extraction_model_name or settings.generation_model_name).strip()[
+            :160
+        ]
 
     def persist_extraction_result(
         self,

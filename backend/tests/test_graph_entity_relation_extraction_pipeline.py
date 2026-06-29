@@ -293,10 +293,100 @@ def test_graph_extraction_settings_default_to_llm(monkeypatch: pytest.MonkeyPatc
     assert settings.graph_extraction_max_relations_per_chunk == 40
 
 
+def test_graph_index_service_uses_stored_graph_extraction_settings(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    service = GraphIndexService(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            graph_extractor_type="llm",
+            graph_extraction_provider="openai",
+            graph_extraction_model_name="env-graph-model",
+            generation_provider="fake",
+        )
+    )
+    with graph_session_factory() as db:
+        db.add_all(
+            [
+                SystemSetting(
+                    setting_key="rag.graph.extraction.provider",
+                    setting_value="fake",
+                    description="Use fake graph extraction in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.model_name",
+                    setting_value="db-graph-model",
+                    description="Use DB graph model in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.timeout_seconds",
+                    setting_value=7,
+                    description="Use DB graph timeout in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.max_output_chars",
+                    setting_value=1000,
+                    description="Use DB graph output chars in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.max_output_tokens",
+                    setting_value=256,
+                    description="Use DB graph output tokens in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.min_confidence",
+                    setting_value=0.9,
+                    description="Use DB graph confidence in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.max_entities_per_chunk",
+                    setting_value=3,
+                    description="Use DB graph entity cap in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.max_relations_per_chunk",
+                    setting_value=4,
+                    description="Use DB graph relation cap in tests.",
+                ),
+            ]
+        )
+        db.flush()
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+        result = service.extract_from_snapshot(snapshot)
+
+        assert snapshot.graph_extraction_settings.graph_extraction_provider == "fake"
+        assert snapshot.graph_extraction_settings.graph_extraction_model_name == "db-graph-model"
+        assert snapshot.graph_extraction_settings.graph_extraction_timeout_seconds == 7
+        assert snapshot.graph_extraction_settings.graph_extraction_max_output_chars == 1000
+        assert snapshot.graph_extraction_settings.graph_extraction_max_output_tokens == 256
+        assert snapshot.graph_extraction_settings.graph_extraction_min_confidence == 0.9
+        assert snapshot.graph_extraction_settings.graph_extraction_max_entities_per_chunk == 3
+        assert snapshot.graph_extraction_settings.graph_extraction_max_relations_per_chunk == 4
+        assert result.extractor_type == "llm"
+        assert result.metadata_json["graph_extraction_provider"] == "fake"
+        assert result.metadata_json["graph_extraction_model"] == "db-graph-model"
+        assert result.entity_mentions == ()
+        assert result.relations == ()
+
+
 def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     chunk = _chunk_ref(
         "Graph Index supports Hybrid RAG. Qdrant stores vectors. "
-        "Alice Smith maintains Graph Index.",
+        "Alice Smith maintains Graph Index. Bob Jones reviews Hybrid RAG.",
     )
     extractor = LLMGraphExtractor(
         settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
@@ -323,6 +413,13 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
                         "entity_type": "person",
                         "aliases": [],
                         "confidence": 0.77,
+                    },
+                    {
+                        "mention": "Bob Jones",
+                        "canonical_name": "Bob Jones",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.78,
                     },
                     {
                         "mention": "Ghost System",
@@ -362,7 +459,9 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     result = extractor.extract((chunk,))
 
     names = {mention.canonical_name for mention in result.entity_mentions}
-    assert names == {"Graph Index", "Hybrid RAG", "Alice Smith"}
+    assert names == {"Graph Index", "Hybrid RAG"}
+    assert "Alice Smith" not in names
+    assert "Bob Jones" not in names
     graph_index_mention = next(
         mention for mention in result.entity_mentions if mention.canonical_name == "Graph Index"
     )
@@ -387,6 +486,7 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     )
     assert "Graph Index supports Hybrid RAG" not in serialized
     assert "Alice Smith maintains" not in serialized
+    assert "Bob Jones reviews" not in serialized
     assert "raw" not in serialized.lower()
     assert "prompt" not in serialized.lower()
 
@@ -415,6 +515,55 @@ def test_llm_graph_extractor_falls_back_to_grounded_mention_for_canonical_name()
 
     assert [mention.canonical_name for mention in result.entity_mentions] == ["Graph Index"]
     assert "Hybrid RAG" not in [mention.canonical_name for mention in result.entity_mentions]
+
+
+def test_llm_graph_extractor_prefers_exact_refs_over_duplicate_aliases() -> None:
+    chunk = _chunk_ref("Hybrid RAG expands retrieval. RAG uses Qdrant.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": ["RAG"],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "RAG",
+                        "canonical_name": "RAG",
+                        "entity_type": "acronym",
+                        "aliases": [],
+                        "confidence": 0.91,
+                    },
+                    {
+                        "mention": "Qdrant",
+                        "canonical_name": "Qdrant",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.9,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "RAG",
+                        "target": "Qdrant",
+                        "relation_type": "uses",
+                        "evidence": "RAG uses Qdrant.",
+                        "confidence": 0.81,
+                    }
+                ],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    assert len(result.relations) == 1
+    assert result.relations[0].source_key == ("rag", "acronym")
+    assert result.relations[0].source_key != ("hybrid rag", "technology")
 
 
 @pytest.mark.parametrize("payload", [{"entities": []}, {"relations": []}])

@@ -49,7 +49,7 @@ GRAPH_EXTRACTION_TASK_INSTRUCTIONS = (
     "Return a JSON object with two arrays: entities and relations.\n"
     'Entity shape: {"mention": string, "canonical_name": string, '
     '"entity_type": one of [technology, artifact, concept, acronym, organization, '
-    'person, paper, dataset, method, system, document], "aliases": string[], '
+    'paper, dataset, method, system, document], "aliases": string[], '
     '"confidence": number}.\n'
     'Relation shape: {"source": string, "target": string, "relation_type": '
     'lower_snake_case string, "evidence": string, "confidence": number}.\n'
@@ -84,7 +84,12 @@ class LLMGraphExtractionError(RuntimeError):
 @dataclass(frozen=True)
 class _GroundedEntity:
     candidate: EntityMentionCandidate
-    refs: frozenset[str]
+    exact_refs: frozenset[str]
+    alias_refs: frozenset[str]
+
+    @property
+    def refs(self) -> frozenset[str]:
+        return self.exact_refs | self.alias_refs
 
 
 @dataclass
@@ -290,17 +295,22 @@ class LLMGraphExtractor:
                     "graph_extraction_model": _bounded_string(self.model_name, max_length=160),
                 },
             )
-            refs = {
+            exact_refs = {
                 actual_mention,
                 normalized.canonical_name,
                 canonical_name,
-                *normalized.aliases,
-                *aliases,
             }
+            alias_refs = {*normalized.aliases, *aliases}
+            exact_ref_keys = frozenset(_ref_key(ref) for ref in exact_refs if _ref_key(ref))
             results.append(
                 _GroundedEntity(
                     candidate=candidate,
-                    refs=frozenset(_ref_key(ref) for ref in refs if _ref_key(ref)),
+                    exact_refs=exact_ref_keys,
+                    alias_refs=frozenset(
+                        _ref_key(ref)
+                        for ref in alias_refs
+                        if _ref_key(ref) and _ref_key(ref) not in exact_ref_keys
+                    ),
                 )
             )
         return results
@@ -318,10 +328,14 @@ class LLMGraphExtractor:
         if len(entities) < 2:
             return []
 
-        key_by_ref: dict[str, _GroundedEntity] = {}
+        exact_by_ref: dict[str, _GroundedEntity | None] = {}
+        alias_by_ref: dict[str, _GroundedEntity | None] = {}
         for entity in entities:
-            for ref in entity.refs:
-                key_by_ref.setdefault(ref, entity)
+            for ref in entity.exact_refs:
+                _store_entity_ref(exact_by_ref, ref, entity)
+            for ref in entity.alias_refs:
+                if ref not in exact_by_ref:
+                    _store_entity_ref(alias_by_ref, ref, entity)
 
         results: list[RelationCandidate] = []
         seen: set[tuple[tuple[str, str], tuple[str, str], str, int]] = set()
@@ -330,8 +344,16 @@ class LLMGraphExtractor:
                 break
             if not isinstance(raw_relation, Mapping):
                 continue
-            source_entity = key_by_ref.get(_ref_key(_text_value(raw_relation.get("source"))))
-            target_entity = key_by_ref.get(_ref_key(_text_value(raw_relation.get("target"))))
+            source_entity = _resolve_entity_ref(
+                _ref_key(_text_value(raw_relation.get("source"))),
+                exact_by_ref=exact_by_ref,
+                alias_by_ref=alias_by_ref,
+            )
+            target_entity = _resolve_entity_ref(
+                _ref_key(_text_value(raw_relation.get("target"))),
+                exact_by_ref=exact_by_ref,
+                alias_by_ref=alias_by_ref,
+            )
             if source_entity is None or target_entity is None:
                 continue
             source = source_entity.candidate
@@ -649,6 +671,35 @@ def _span_covers_candidate(span: tuple[int, int], candidate: EntityMentionCandid
 def _span_contains_ref(text: str, span: tuple[int, int], refs: frozenset[str]) -> bool:
     span_text = text[span[0] : span[1]]
     return any(_find_span(span_text, ref) is not None for ref in refs if ref)
+
+
+def _store_entity_ref(
+    refs: dict[str, _GroundedEntity | None],
+    ref: str,
+    entity: _GroundedEntity,
+) -> None:
+    existing = refs.get(ref)
+    if existing is None and ref in refs:
+        return
+    if existing is not None and existing.candidate.entity_key != entity.candidate.entity_key:
+        refs[ref] = None
+        return
+    refs[ref] = entity
+
+
+def _resolve_entity_ref(
+    ref: str,
+    *,
+    exact_by_ref: Mapping[str, _GroundedEntity | None],
+    alias_by_ref: Mapping[str, _GroundedEntity | None],
+) -> _GroundedEntity | None:
+    if not ref:
+        return None
+    if ref in exact_by_ref:
+        return exact_by_ref[ref]
+    if ref in alias_by_ref:
+        return alias_by_ref[ref]
+    return None
 
 
 def _relation_type(value: str) -> str | None:
