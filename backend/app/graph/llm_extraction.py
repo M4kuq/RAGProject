@@ -238,6 +238,7 @@ class LLMGraphExtractor:
             confidence = _confidence_decimal(
                 raw_entity.get("confidence"),
                 default=_DEFAULT_ENTITY_CONFIDENCE,
+                invalid_reason_code=GRAPH_EXTRACTION_LLM_INVALID_RESPONSE,
             )
             if confidence < self.min_confidence:
                 continue
@@ -328,6 +329,7 @@ class LLMGraphExtractor:
             confidence = _confidence_decimal(
                 raw_relation.get("confidence"),
                 default=_DEFAULT_RELATION_CONFIDENCE,
+                invalid_reason_code=GRAPH_EXTRACTION_LLM_INVALID_RESPONSE,
             )
             if confidence < self.min_confidence:
                 continue
@@ -483,7 +485,7 @@ def _evidence_span(
 ) -> tuple[int, int] | None:
     span = _find_span(text, evidence)
     if span is not None:
-        return span
+        return span if _span_covers_relation(span, source=source, target=target) else None
     start = min(source.mention_offset_start, target.mention_offset_start)
     end = max(source.mention_offset_end, target.mention_offset_end)
     sentence_start = max(text.rfind(".", 0, start), text.rfind("\n", 0, start))
@@ -492,11 +494,24 @@ def _evidence_span(
     ]
     sentence_start = 0 if sentence_start < 0 else sentence_start + 1
     sentence_end = min(sentence_end_candidates) + 1 if sentence_end_candidates else len(text)
-    if sentence_start <= source.mention_offset_start < sentence_end and (
-        sentence_start <= target.mention_offset_start < sentence_end
-    ):
+    sentence_span = (sentence_start, sentence_end)
+    if _span_covers_relation(sentence_span, source=source, target=target):
         return (sentence_start, sentence_end)
     return None
+
+
+def _span_covers_relation(
+    span: tuple[int, int],
+    *,
+    source: EntityMentionCandidate,
+    target: EntityMentionCandidate,
+) -> bool:
+    return (
+        span[0] <= source.mention_offset_start
+        and source.mention_offset_end <= span[1]
+        and span[0] <= target.mention_offset_start
+        and target.mention_offset_end <= span[1]
+    )
 
 
 def _relation_type(value: str) -> str | None:
@@ -521,10 +536,21 @@ def _normalize_entity_type(value: str) -> str:
     return normalized or "concept"
 
 
-def _confidence_decimal(value: object, *, default: Decimal) -> Decimal:
+def _confidence_decimal(
+    value: object,
+    *,
+    default: Decimal,
+    invalid_reason_code: str | None = None,
+) -> Decimal:
     try:
         confidence = Decimal(str(value if value is not None else default))
-    except (InvalidOperation, ValueError):
+    except (InvalidOperation, ValueError) as exc:
+        if invalid_reason_code is not None:
+            raise LLMGraphExtractionError(invalid_reason_code) from exc
+        confidence = default
+    if not confidence.is_finite():
+        if invalid_reason_code is not None:
+            raise LLMGraphExtractionError(invalid_reason_code)
         confidence = default
     if confidence < 0:
         confidence = Decimal("0")

@@ -167,7 +167,7 @@ class OllamaAnswerGenerator:
         if not isinstance(raw_content, str) or not raw_content.strip():
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            content=_generation_output_text(raw_content, request),
             usage=_extract_ollama_usage(payload),
         )
 
@@ -225,7 +225,7 @@ class OpenAIResponsesAnswerGenerator:
         if not raw_content:
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            content=_generation_output_text(raw_content, request),
             usage=_extract_openai_responses_usage(payload),
         )
 
@@ -283,14 +283,15 @@ class OpenAICompatibleChatAnswerGenerator:
         raw_content = _extract_chat_completion_output_text(payload)
         if not raw_content:
             raise AnswerGenerationError()
-        final_content = _final_answer_text(raw_content)
+        final_content = _generation_output_text(
+            raw_content,
+            request,
+            cleanup_final_answer=True,
+        )
         if not final_content:
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(
-                final_content,
-                request.max_output_chars,
-            ),
+            content=final_content,
             usage=_extract_chat_completion_usage(payload),
         )
 
@@ -347,7 +348,7 @@ class AnthropicMessagesAnswerGenerator:
         if not raw_content:
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            content=_generation_output_text(raw_content, request),
             usage=_extract_anthropic_usage(payload),
         )
 
@@ -413,7 +414,7 @@ class GeminiAnswerGenerator:
         if not raw_content:
             raise AnswerGenerationError()
         return GenerationResult(
-            content=_truncate_output(raw_content.strip(), request.max_output_chars),
+            content=_generation_output_text(raw_content, request),
             usage=_extract_gemini_usage(payload),
         )
 
@@ -972,6 +973,28 @@ def _truncate_output(value: str, max_chars: int) -> str:
     if max_chars <= 3:
         return text[:max_chars]
     return f"{text[: max_chars - 3]}..."
+
+
+def _generation_output_text(
+    raw_content: str,
+    request: GenerationRequest,
+    *,
+    cleanup_final_answer: bool = False,
+) -> str:
+    if request.task_instructions:
+        return _truncate_raw_output(raw_content.strip(), request.max_output_chars)
+    if cleanup_final_answer:
+        cleaned = _final_answer_text(raw_content)
+        if not cleaned:
+            return ""
+        return _truncate_output(cleaned, request.max_output_chars)
+    return _truncate_output(raw_content.strip(), request.max_output_chars)
+
+
+def _truncate_raw_output(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars]
 
 
 def _rewrite_insufficient_evidence_answer(value: str) -> str:

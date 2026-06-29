@@ -25,7 +25,7 @@ from app.graph.extraction import (
     GraphExtractionResult,
     RelationCandidate,
 )
-from app.graph.llm_extraction import LLMGraphExtractor
+from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
 from app.rag.generation import GenerationRequest, GenerationResult, TokenUsage
 from app.repositories.graph_repository import GraphRepository
@@ -270,7 +270,8 @@ def test_graph_extraction_settings_default_to_llm(monkeypatch: pytest.MonkeyPatc
 
 def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     chunk = _chunk_ref(
-        "Graph Index supports Hybrid RAG. Alice Smith maintains Graph Index.",
+        "Graph Index supports Hybrid RAG. Qdrant stores vectors. "
+        "Alice Smith maintains Graph Index.",
     )
     extractor = LLMGraphExtractor(
         settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
@@ -316,6 +317,13 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
                     },
                     {
                         "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "uses",
+                        "evidence": "Qdrant stores vectors.",
+                        "confidence": 0.83,
+                    },
+                    {
+                        "source": "Graph Index",
                         "target": "Ghost System",
                         "relation_type": "uses",
                         "evidence": "Graph Index uses Ghost System.",
@@ -356,6 +364,36 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     assert "Alice Smith maintains" not in serialized
     assert "raw" not in serialized.lower()
     assert "prompt" not in serialized.lower()
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    ["NaN", "Infinity", "not-a-number", float("nan"), float("inf")],
+)
+def test_llm_graph_extractor_rejects_invalid_confidence(confidence: object) -> None:
+    chunk = _chunk_ref("Graph Index supports Hybrid RAG.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": confidence,
+                    }
+                ],
+                "relations": [],
+            }
+        ),
+    )
+
+    with pytest.raises(LLMGraphExtractionError) as exc_info:
+        extractor.extract((chunk,))
+
+    assert exc_info.value.reason_code == "graph_extraction_llm_invalid_response"
 
 
 def test_graph_index_service_falls_back_to_rule_based_when_llm_provider_unavailable(
@@ -399,6 +437,76 @@ def test_graph_index_service_falls_back_to_rule_based_when_llm_provider_unavaila
         )
         assert persisted.status == "succeeded"
         assert persisted.mention_count > 0
+
+
+def test_graph_index_service_falls_back_when_llm_relation_confidence_invalid(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        generation_provider="fake",
+    )
+    llm_extractor = LLMGraphExtractor(
+        settings=settings,
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index supports Hybrid RAG.",
+                        "confidence": "NaN",
+                    }
+                ],
+            }
+        ),
+    )
+    service = GraphIndexService(settings=settings, llm_extractor=llm_extractor)
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+        persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
+        db.commit()
+
+        assert result.extractor_type == "rule_based"
+        assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_fallback"
+        assert result.metadata_json["fallback_reason_code"] == (
+            "graph_extraction_llm_invalid_response"
+        )
+        assert persisted.status == "succeeded"
+        assert persisted.extractor_type == "rule_based"
 
 
 def test_graph_index_worker_records_actual_extractor_after_llm_fallback(

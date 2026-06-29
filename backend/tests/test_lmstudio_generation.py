@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as json_module
 import os
 from typing import Any
 
@@ -108,6 +109,78 @@ def test_lmstudio_generator_removes_qwen_thinking_text(
     result = generator.generate(_request())
 
     assert result.content == "Qdrant is used for Phase1 vector search [1]."
+
+
+def test_lmstudio_task_request_preserves_raw_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_json = (
+        '{"entities":[],"relations":[{"source":"Graph Index","target":"Hybrid RAG",'
+        '"relation_type":"supports","evidence":"Graph Index supports Hybrid RAG.",'
+        '"confidence":0.92}]}'
+    )
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": raw_json,
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        del url, headers, timeout
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAICompatibleChatAnswerGenerator(
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen3.5-9b",
+        timeout_seconds=60.0,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Extract graph JSON.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=10,
+                    source_label="graph.md",
+                    text="Graph Index supports Hybrid RAG.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=500,
+            system_instructions="Return JSON only.",
+            task_instructions="Return JSON with entities and relations.",
+            temperature=0.0,
+        )
+    )
+
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    assert "Task:" in messages[1]["content"]
+    assert "Return the final answer only." not in messages[1]["content"]
+    assert result.content == raw_json
+    assert json_module.loads(result.content)["relations"][0]["confidence"] == 0.92
 
 
 def test_lmstudio_factory_normalizes_huggingface_repo_model_name(
