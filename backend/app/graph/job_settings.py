@@ -108,7 +108,6 @@ def _set_optional_provider(
     if value is _MISSING:
         return
     if value is None:
-        updates[field] = None
         return
     if not isinstance(value, str):
         return
@@ -125,7 +124,6 @@ def _set_optional_string(
     if value is _MISSING:
         return
     if value is None:
-        updates[field] = None
         return
     if not isinstance(value, str):
         return

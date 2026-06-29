@@ -91,12 +91,14 @@ class GraphEntityNormalizer:
         entity_type: str | None = None,
         aliases: list[str] | tuple[str, ...] | None = None,
     ) -> NormalizedGraphEntity | None:
+        if not _is_safe_raw_label(value, field_name="canonical_name", max_length=255):
+            return None
         canonical = self._normalize_label(value)
         if canonical is None:
             return None
         if _looks_like_person_name(canonical):
             return None
-        if entity_type is None and not self._looks_like_graph_entity(canonical):
+        if not self._looks_like_graph_entity(canonical):
             return None
         if entity_type is not None and not self._is_allowed_typed_entity(entity_type):
             return None
@@ -119,6 +121,8 @@ class GraphEntityNormalizer:
         safe_aliases: list[str] = []
         seen = {safe_name.lower()}
         for alias in aliases or ():
+            if not _is_safe_raw_label(alias, field_name="aliases_json", max_length=120):
+                continue
             normalized_alias = self._normalize_label(alias)
             if normalized_alias is None:
                 continue
@@ -196,3 +200,11 @@ def _looks_like_person_name(value: str) -> bool:
     if any(token.lower().endswith(_TECHNICAL_SUFFIXES) for token in tokens):
         return False
     return all(re.fullmatch(r"[A-Z][a-z]{1,40}", token) for token in tokens)
+
+
+def _is_safe_raw_label(value: str, *, field_name: str, max_length: int) -> bool:
+    try:
+        validate_safe_graph_label(value, field_name=field_name, max_length=max_length)
+    except ValueError:
+        return False
+    return True

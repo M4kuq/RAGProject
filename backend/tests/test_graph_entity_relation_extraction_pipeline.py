@@ -383,6 +383,106 @@ def test_graph_index_service_uses_stored_graph_extraction_settings(
         assert result.relations == ()
 
 
+def test_graph_index_service_preserves_env_graph_provider_when_stored_setting_null(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    service = GraphIndexService(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            graph_extractor_type="llm",
+            graph_extraction_provider="openai",
+            graph_extraction_model_name="env-graph-model",
+            generation_provider="fake",
+        )
+    )
+    with graph_session_factory() as db:
+        db.add_all(
+            [
+                SystemSetting(
+                    setting_key="rag.graph.extraction.provider",
+                    setting_value=None,
+                    description="Default graph provider override.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.extraction.model_name",
+                    setting_value=None,
+                    description="Default graph model override.",
+                ),
+            ]
+        )
+        db.flush()
+        version = _seed_ready_version(db, ["Graph Index supports Hybrid RAG."])
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        assert snapshot.graph_extraction_settings.graph_extraction_provider == "openai"
+        assert snapshot.graph_extraction_settings.graph_extraction_model_name == ("env-graph-model")
+
+
+def test_graph_index_service_applies_stored_caps_to_rule_based_fallback(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    service = GraphIndexService(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            graph_extractor_type="llm",
+            graph_extraction_provider="openai",
+            generation_provider="fake",
+            graph_extraction_max_entities_per_chunk=20,
+            graph_extraction_max_relations_per_chunk=20,
+        )
+    )
+    with graph_session_factory() as db:
+        db.add_all(
+            [
+                SystemSetting(
+                    setting_key="rag.graph.max_entities_per_chunk",
+                    setting_value=1,
+                    description="Limit graph entities in tests.",
+                ),
+                SystemSetting(
+                    setting_key="rag.graph.max_relations_per_chunk",
+                    setting_value=1,
+                    description="Limit graph relations in tests.",
+                ),
+            ]
+        )
+        db.flush()
+        version = _seed_ready_version(
+            db,
+            [
+                "Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant. "
+                "Qdrant stores vectors in PostgreSQL."
+            ],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+
+        assert result.extractor_type == "rule_based"
+        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
+        assert len(result.entity_mentions) == 1
+        assert len(result.relations) <= 1
+
+
 def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     chunk = _chunk_ref(
         "Graph Index supports Hybrid RAG. Qdrant stores vectors. "
@@ -489,6 +589,82 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     assert "Bob Jones reviews" not in serialized
     assert "raw" not in serialized.lower()
     assert "prompt" not in serialized.lower()
+
+
+def test_llm_graph_extractor_rejects_non_graph_like_and_unsafe_typed_labels() -> None:
+    fake_token = "ghp_" + "x" * 16
+    chunk = _chunk_ref(
+        "Graph Index supports Hybrid RAG. JOHN DOE owns Graph Index. "
+        f"John A. Doe reviews Hybrid RAG. 山田 太郎 uses Qdrant. {fake_token} connects Qdrant."
+    )
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                    {
+                        "mention": "Qdrant",
+                        "canonical_name": "Qdrant",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.87,
+                    },
+                    {
+                        "mention": "JOHN DOE",
+                        "canonical_name": "JOHN DOE",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.91,
+                    },
+                    {
+                        "mention": "John A. Doe",
+                        "canonical_name": "John A. Doe",
+                        "entity_type": "organization",
+                        "aliases": [],
+                        "confidence": 0.91,
+                    },
+                    {
+                        "mention": "山田 太郎",
+                        "canonical_name": "山田 太郎",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.91,
+                    },
+                    {
+                        "mention": fake_token,
+                        "canonical_name": fake_token,
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.91,
+                    },
+                ],
+                "relations": [],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    names = {mention.canonical_name for mention in result.entity_mentions}
+    assert names == {"Graph Index", "Hybrid RAG", "Qdrant"}
+    assert "JOHN DOE" not in names
+    assert "John A. Doe" not in names
+    assert "山田 太郎" not in names
+    assert fake_token not in names
 
 
 def test_llm_graph_extractor_falls_back_to_grounded_mention_for_canonical_name() -> None:

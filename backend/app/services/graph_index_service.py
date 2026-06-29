@@ -98,6 +98,9 @@ class GraphIndexService:
         self.graph_extractor = graph_extractor
         self.llm_extractor = llm_extractor
         self.neo4j_projection_service = neo4j_projection_service
+        self._uses_custom_rule_based_extractor = (
+            entity_extractor is not None or relation_extractor is not None
+        )
         self.extractor_type = _requested_extractor_type(
             extractor_type or self.settings.graph_extractor_type
         )
@@ -248,7 +251,9 @@ class GraphIndexService:
                         "provider": self._llm_provider_name(snapshot.graph_extraction_settings),
                     },
                 )
-                fallback = self.rule_based_extractor.extract(snapshot.chunks)
+                fallback = self._rule_based_extractor(snapshot.graph_extraction_settings).extract(
+                    snapshot.chunks
+                )
                 fallback_metadata = dict(fallback.metadata_json)
                 fallback_metadata.update(
                     {
@@ -273,7 +278,21 @@ class GraphIndexService:
                         metadata_json=validate_safe_graph_metadata(fallback_metadata),
                     )
                 )
-        return _dedupe_result(self.rule_based_extractor.extract(snapshot.chunks))
+        return _dedupe_result(
+            self._rule_based_extractor(snapshot.graph_extraction_settings).extract(snapshot.chunks)
+        )
+
+    def _rule_based_extractor(self, settings: Settings) -> GraphExtractor:
+        if self._uses_custom_rule_based_extractor or settings is self.settings:
+            return self.rule_based_extractor
+        return RuleBasedGraphExtractor(
+            entity_extractor=EntityExtractionService(
+                max_entities_per_chunk=settings.graph_extraction_max_entities_per_chunk,
+            ),
+            relation_extractor=RelationExtractionService(
+                max_relations_per_chunk=settings.graph_extraction_max_relations_per_chunk,
+            ),
+        )
 
     def _llm_extractor(self, settings: Settings) -> GraphExtractor:
         if self.llm_extractor is None:
