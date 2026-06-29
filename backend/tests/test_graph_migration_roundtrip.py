@@ -133,7 +133,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) is None
-        assert _graph_retrieval_enabled_value(pg_engine) is None
+        assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -153,7 +153,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
-        assert _graph_retrieval_enabled_value(pg_engine) is None
+        assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
