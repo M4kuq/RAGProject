@@ -18,7 +18,15 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.graph_models import GraphEntity, GraphEntityMention, GraphIndexRun, GraphRelation
-from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    Job,
+    LogicalDocument,
+    Role,
+    SystemSetting,
+    User,
+)
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.graph.extraction import (
     EntityMentionCandidate,
@@ -1007,6 +1015,13 @@ def test_queue_graph_index_build_jobs_targets_active_ready_versions(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_session_factory() as db:
+        db.add(
+            SystemSetting(
+                setting_key="rag.graph.extractor.default",
+                setting_value="rule_based",
+                description="Pin graph extraction for tests.",
+            )
+        )
         version = _seed_ready_version(
             db,
             ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
@@ -1035,6 +1050,7 @@ def test_queue_graph_index_build_jobs_targets_active_ready_versions(
         assert stored_job.payload_json == {
             "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
             "document_version_id": version.document_version_id,
+            "extractor_type": "rule_based",
             "reindex_policy": "replace_existing",
         }
         assert "Graph Index supports" not in str(stored_job.payload_json)

@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.job_utils import LeaseLostError
-from app.db.models import DocumentChunk, SystemSetting
+from app.db.models import DocumentChunk
 from app.db.session import SessionLocal
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
+from app.graph.job_settings import graph_extractor_type_override, graph_indexing_enabled
 from app.ingest.chunking import (
     Chunk,
     ChunkingConfig,
@@ -546,7 +547,7 @@ class DocumentIngestHandler:
             if stored_count != expected_chunk_count:
                 raise RuntimeError("chunk count mismatch during ready update")
             self.repository.mark_version_ready(db, version=version, updated_at=_now())
-            if _graph_indexing_enabled(db):
+            if graph_indexing_enabled(db):
                 self.job_repository.create_job(
                     db,
                     job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
@@ -554,6 +555,7 @@ class DocumentIngestHandler:
                     target_id=document_version_id,
                     payload_json=self.graph_index_service.build_graph_index_job_payload(
                         document_version_id=document_version_id,
+                        extractor_type=graph_extractor_type_override(db),
                     ),
                     priority=80,
                 )
@@ -727,13 +729,6 @@ def _is_positive_int(value: object) -> bool:
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _graph_indexing_enabled(db: Session) -> bool:
-    setting = db.get(SystemSetting, "rag.graph.indexing.enabled")
-    if setting is None:
-        return True
-    return setting.setting_value is True
 
 
 def _snapshot_metadata_str(value: object, key: str) -> str | None:

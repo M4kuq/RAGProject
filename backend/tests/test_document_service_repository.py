@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.errors import DocumentArchived, DocumentVersionNotApprovable, ResourceNotFound
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.models import AuditLog, DocumentVersion, Job, LogicalDocument, Role, User
+from app.db.models import AuditLog, DocumentVersion, Job, LogicalDocument, Role, SystemSetting, User
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
@@ -496,6 +496,139 @@ def test_approve_replacement_version_requeues_old_and_new_graph_projection(
             {
                 "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
                 "document_version_id": new_version.document_version_id,
+                "reindex_policy": "replace_existing",
+            },
+        ]
+
+
+def test_document_service_skips_approval_and_archive_graph_jobs_when_indexing_disabled(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        db.add(
+            SystemSetting(
+                setting_key="rag.graph.indexing.enabled",
+                setting_value=False,
+                description="Disable graph auto-indexing in tests.",
+            )
+        )
+        document = repository.create_logical_document(
+            db,
+            owner_user_id=user.user_id,
+            title="Disabled graph document",
+        )
+        version = repository.create_version(
+            db,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="c" * 64,
+            file_name="disabled.txt",
+            mime_type="text/plain",
+            file_size_bytes=3,
+            storage_key="disabled",
+            created_by=user.user_id,
+        )
+        version.status = "ready"
+        db.commit()
+
+        approved = service.approve_version(
+            db,
+            user=user,
+            logical_document_id=document.logical_document_id,
+            document_version_id=version.document_version_id,
+            request_id="doc-service-approve-graph-disabled",
+        )
+        assert approved.result_code == "approved"
+
+        archived = service.archive_document(
+            db,
+            user=user,
+            logical_document_id=document.logical_document_id,
+            request_id="doc-service-archive-graph-disabled",
+        )
+        assert archived.result_code == "archived"
+        assert db.query(Job).filter_by(job_type=GRAPH_INDEX_BUILD_JOB_TYPE).count() == 0
+
+
+def test_document_service_graph_jobs_use_extractor_default_setting(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        db.add(
+            SystemSetting(
+                setting_key="rag.graph.extractor.default",
+                setting_value="rule_based",
+                description="Pin graph extraction for tests.",
+            )
+        )
+        document = repository.create_logical_document(
+            db,
+            owner_user_id=user.user_id,
+            title="Rule based graph document",
+        )
+        old_version = repository.create_version(
+            db,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="d" * 64,
+            file_name="old-rule.txt",
+            mime_type="text/plain",
+            file_size_bytes=3,
+            storage_key="old-rule",
+            created_by=user.user_id,
+        )
+        new_version = repository.create_version(
+            db,
+            logical_document_id=document.logical_document_id,
+            version_no=2,
+            content_hash="e" * 64,
+            file_name="new-rule.txt",
+            mime_type="text/plain",
+            file_size_bytes=3,
+            storage_key="new-rule",
+            created_by=user.user_id,
+        )
+        old_version.status = "ready"
+        old_version.is_active = True
+        new_version.status = "ready"
+        db.commit()
+
+        approved = service.approve_version(
+            db,
+            user=user,
+            logical_document_id=document.logical_document_id,
+            document_version_id=new_version.document_version_id,
+            request_id="doc-service-approve-rule-based-graph",
+        )
+
+        assert approved.result_code == "approved"
+        graph_jobs = (
+            db.query(Job)
+            .filter_by(job_type=GRAPH_INDEX_BUILD_JOB_TYPE)
+            .order_by(Job.job_id.asc())
+            .all()
+        )
+        assert [job.payload_json for job in graph_jobs] == [
+            {
+                "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+                "document_version_id": old_version.document_version_id,
+                "extractor_type": "rule_based",
+                "reindex_policy": "replace_existing",
+            },
+            {
+                "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+                "document_version_id": new_version.document_version_id,
+                "extractor_type": "rule_based",
                 "reindex_policy": "replace_existing",
             },
         ]
