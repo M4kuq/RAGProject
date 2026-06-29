@@ -15,7 +15,16 @@ GRAPH_INDEX_RUN_STATUSES = frozenset(
     }
 )
 
-DEFAULT_GRAPH_EXTRACTOR_TYPE = "none"
+DEFAULT_GRAPH_EXTRACTOR_TYPE = "llm"
+LLM_GRAPH_EXTRACTOR_TYPE = "llm"
+LLM_GRAPH_EXTRACTOR_VERSION = "c2b-llm-v1"
+GRAPH_EXTRACTION_RULE_BASED_COMPLETED = "graph_extraction_rule_based_completed"
+GRAPH_EXTRACTION_LLM_COMPLETED = "graph_extraction_llm_completed"
+GRAPH_EXTRACTION_LLM_UNAVAILABLE = "graph_extraction_llm_unavailable"
+GRAPH_EXTRACTION_LLM_FAILED = "graph_extraction_llm_failed"
+GRAPH_EXTRACTION_LLM_INVALID_RESPONSE = "graph_extraction_llm_invalid_response"
+GRAPH_EXTRACTION_LLM_EMPTY_RESPONSE = "graph_extraction_llm_empty_response"
+GRAPH_EXTRACTION_LLM_FALLBACK = "graph_extraction_llm_fallback"
 
 PHASE3_GRAPH_SYSTEM_SETTINGS: dict[str, tuple[object, str]] = {
     "rag.graph.enabled": (False, "Enable Graph-RAG retrieval. PR-46 default is disabled."),
@@ -25,7 +34,31 @@ PHASE3_GRAPH_SYSTEM_SETTINGS: dict[str, tuple[object, str]] = {
     ),
     "rag.graph.extractor.default": (
         DEFAULT_GRAPH_EXTRACTOR_TYPE,
-        "Default graph extractor. PR-47 connects extractors.",
+        "Default graph extractor. C2b uses LLM extraction with rule_based fallback.",
+    ),
+    "rag.graph.extraction.provider": (
+        None,
+        "Optional graph extraction provider override; null reuses generation_provider.",
+    ),
+    "rag.graph.extraction.model_name": (
+        None,
+        "Optional graph extraction model override; null reuses generation_model_name.",
+    ),
+    "rag.graph.extraction.timeout_seconds": (
+        60,
+        "Timeout for one graph LLM extraction provider call.",
+    ),
+    "rag.graph.extraction.max_output_chars": (
+        12000,
+        "Maximum graph extraction LLM output characters per chunk.",
+    ),
+    "rag.graph.extraction.max_output_tokens": (
+        2048,
+        "Maximum graph extraction LLM output tokens per provider call.",
+    ),
+    "rag.graph.extraction.min_confidence": (
+        0.5,
+        "Minimum confidence for LLM graph extraction candidates.",
     ),
     "rag.graph.max_entities_per_chunk": (20, "Maximum entity candidates per chunk."),
     "rag.graph.max_relations_per_chunk": (40, "Maximum relation candidates per chunk."),

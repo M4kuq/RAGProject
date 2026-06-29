@@ -328,6 +328,51 @@ def test_ollama_generator_extracts_usage(monkeypatch) -> None:
     assert result.usage == TokenUsage(input_tokens=31, output_tokens=9, total_tokens=40)
 
 
+def test_ollama_generator_sends_num_predict_when_max_output_tokens_configured(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"response": "Ollama cites alpha [1]."}
+
+    def fake_post(url: str, **kwargs: object) -> Response:
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OllamaAnswerGenerator(
+        url="http://ollama:11434",
+        model_name="llama3.1",
+        timeout_seconds=123,
+        max_output_tokens=256,
+    )
+
+    generator.generate(
+        GenerationRequest(
+            message="Explain alpha.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="phase1-seed.md",
+                    text="Alpha is approved.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=2000,
+            temperature=0.0,
+        )
+    )
+
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert payload["options"] == {"temperature": 0.0, "num_predict": 256}
+
+
 def test_ollama_missing_usage_degrades_to_none(monkeypatch) -> None:
     class Response:
         status_code = 200

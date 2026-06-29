@@ -17,7 +17,15 @@ from app.core.config import get_settings
 from app.core.job_utils import LeaseLostError
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    Job,
+    LogicalDocument,
+    Role,
+    SystemSetting,
+    User,
+)
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.ingest.embedding import (
     DocumentEmbeddingService,
@@ -619,6 +627,82 @@ def test_document_ingest_handler_retry_cleans_existing_chunks_and_reinserts(
         )
         assert graph_job is not None
         assert graph_job.status == "queued"
+
+
+def test_document_ingest_handler_skips_graph_index_queue_when_indexing_disabled(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="graph-disabled.txt",
+        mime_type="text/plain",
+        content=b"alpha beta gamma delta epsilon",
+    )
+    with session_factory() as db:
+        db.add(
+            SystemSetting(
+                setting_key="rag.graph.indexing.enabled",
+                setting_value=False,
+                description="Disable graph auto-indexing in tests.",
+            )
+        )
+        db.commit()
+
+    result = _handler(session_factory, storage).handle(_context(version_id))
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        graph_job = db.scalar(
+            select(Job).where(
+                Job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE,
+                Job.target_type == "document_version",
+                Job.target_id == version_id,
+            )
+        )
+        assert graph_job is None
+
+
+def test_document_ingest_handler_uses_graph_extractor_default_setting(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="graph-extractor-default.txt",
+        mime_type="text/plain",
+        content=b"Graph Index supports Hybrid RAG.",
+    )
+    with session_factory() as db:
+        db.add(
+            SystemSetting(
+                setting_key="rag.graph.extractor.default",
+                setting_value="rule_based",
+                description="Pin graph extraction for tests.",
+            )
+        )
+        db.commit()
+
+    result = _handler(session_factory, storage).handle(_context(version_id))
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        graph_job = db.scalar(
+            select(Job).where(
+                Job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE,
+                Job.target_type == "document_version",
+                Job.target_id == version_id,
+            )
+        )
+        assert graph_job is not None
+        assert graph_job.payload_json == {
+            "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+            "document_version_id": version_id,
+            "extractor_type": "rule_based",
+            "reindex_policy": "replace_existing",
+        }
 
 
 def test_worker_single_iteration_processes_document_ingest_success_and_failure(

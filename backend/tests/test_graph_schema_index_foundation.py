@@ -575,7 +575,11 @@ def test_graph_system_settings_defaults_are_safe() -> None:
     values = {key: value for key, (value, _) in PHASE3_GRAPH_SYSTEM_SETTINGS.items()}
     assert values["rag.graph.enabled"] is False
     assert values["rag.graph.indexing.enabled"] is False
-    assert values["rag.graph.extractor.default"] == "none"
+    assert values["rag.graph.extractor.default"] == "llm"
+    assert values["rag.graph.extraction.provider"] is None
+    assert values["rag.graph.extraction.model_name"] is None
+    assert values["rag.graph.extraction.timeout_seconds"] == 60
+    assert values["rag.graph.extraction.max_output_chars"] == 12000
     assert values["rag.graph.max_entities_per_chunk"] == 20
     assert values["rag.graph.max_relations_per_chunk"] == 40
     assert values["rag.graph.store_raw_evidence_text"] is False
@@ -586,7 +590,7 @@ def test_graph_system_settings_defaults_are_safe() -> None:
 def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0019_graph_provider_neo4j"
+    assert version == "0020_graph_llm_extractor"
 
     expected_tables = {
         "graph_entities",
@@ -656,8 +660,11 @@ def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: 
                 text("SELECT setting_value FROM system_settings WHERE setting_key = :setting_key"),
                 {"setting_key": setting_key},
             ).scalar_one()
-        assert value is not None
-        assert isinstance(value, type(expected))
+        if expected is None:
+            assert value is None
+        else:
+            assert value is not None
+            assert isinstance(value, type(expected))
 
 
 def test_graph_postgres_constraints_reject_invalid_values(pg_engine: Engine) -> None:

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db.models import DocumentVersion, Job, LogicalDocument
 from app.db.session import SessionLocal
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
+from app.graph.job_settings import graph_extractor_type_override
 from app.repositories.job_repository import JobRepository
 from app.services.graph_index_service import GraphIndexService
 
@@ -72,7 +73,8 @@ def queue_graph_index_build_jobs(
             target_type="document_version",
             target_id=document_version_id,
             payload_json=graph_service.build_graph_index_job_payload(
-                document_version_id=document_version_id
+                document_version_id=document_version_id,
+                extractor_type=graph_extractor_type_override(db),
             ),
             priority=80,
         )

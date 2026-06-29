@@ -23,6 +23,7 @@ from app.core.errors import (
 )
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, User
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
+from app.graph.job_settings import graph_extractor_type_override, graph_indexing_enabled
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
@@ -802,7 +803,9 @@ class DocumentService:
         *,
         user: User,
         document_version_id: int,
-    ) -> Job:
+    ) -> Job | None:
+        if not graph_indexing_enabled(db):
+            return None
         return self.job_repository.create_job(
             db,
             job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
@@ -810,6 +813,7 @@ class DocumentService:
             target_id=document_version_id,
             payload_json=self.graph_index_service.build_graph_index_job_payload(
                 document_version_id=document_version_id,
+                extractor_type=graph_extractor_type_override(db),
             ),
             created_by=user.user_id,
             priority=80,

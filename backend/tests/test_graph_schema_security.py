@@ -65,3 +65,22 @@ def test_graph_metadata_allows_camel_case_hash_refs() -> None:
         entity_type="concept",
         metadata_json={"rawChunkTextHash": "a" * 64},
     )
+
+
+def test_graph_metadata_allows_safe_token_counts_only() -> None:
+    GraphEntityCreate(
+        canonical_name="Safe",
+        entity_type="concept",
+        metadata_json={
+            "graph_extraction_input_token_count": 12,
+            "graph_extraction_output_token_count": 5,
+            "graph_extraction_total_token_count": 17,
+        },
+    )
+
+    with pytest.raises(ValidationError):
+        GraphEntityCreate(
+            canonical_name="Unsafe",
+            entity_type="concept",
+            metadata_json={"graph_extraction_input_token_count": "sk-" + "x" * 16},
+        )

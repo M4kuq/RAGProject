@@ -24,15 +24,15 @@ Implemented backend foundation:
 - `graph_index_build` job type constant and payload schema reserved for PR-47 worker wiring
 - disabled Graph-RAG system settings defaults
 
-PR-47 implements the first rule-based entity/relation extraction pipeline and
-`graph_index_build` worker handler. It still does not implement graph retrieval,
-Graph-aware Router, Graph Citation generation, Graph Debug UI, OCR, image
-upload, AWS/S3/OIDC, external provider integration, or online evaluation.
+PR-47 implemented the first rule-based entity/relation extraction pipeline and
+`graph_index_build` worker handler. C2b makes LLM extraction the default while
+keeping rule-based fallback. OCR, image upload, AWS/S3/OIDC, and external export
+policy remain outside this schema draft.
 
 ## Design Rules
 
 - Graph rows reference existing `document_versions`, `document_chunks`, `jobs`, and `retrieval_runs` where applicable.
-- Graph tables do not store raw document text, raw chunk text, raw prompts, full context, PII, credential values, or secret values.
+- Graph tables do not store raw document text, raw chunk text, raw prompts, raw LLM responses, full context, PII details, credential values, or secret values.
 - Relation evidence is tracked with `source_document_chunk_id` plus `evidence_text_hash`.
 - Mentions are tracked with `document_chunk_id`, `document_version_id`, `mention_text_hash`, and optional offsets.
 - Graph retrieval paths store safe IDs, labels, score summaries, and `source_chunk_ids_json`, not raw evidence text.

@@ -129,6 +129,15 @@ class Settings(BaseSettings):
     hybrid_candidate_multiplier: int = Field(default=2, ge=1, le=5)
     graph_retrieval_enabled: bool = True
     graph_store_provider: str = "neo4j"
+    graph_extractor_type: str = "llm"
+    graph_extraction_provider: str | None = None
+    graph_extraction_model_name: str | None = None
+    graph_extraction_timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    graph_extraction_max_output_chars: int = Field(default=12000, ge=1000, le=50000)
+    graph_extraction_max_output_tokens: int = Field(default=2048, ge=128, le=8192)
+    graph_extraction_max_entities_per_chunk: int = Field(default=20, ge=1, le=100)
+    graph_extraction_max_relations_per_chunk: int = Field(default=40, ge=1, le=200)
+    graph_extraction_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     graph_retrieval_max_start_entities: int = Field(default=5, ge=1, le=20)
     graph_retrieval_max_depth: int = Field(default=2, ge=1, le=4)
     graph_retrieval_max_paths: int = Field(default=20, ge=1, le=100)
@@ -341,7 +350,14 @@ class Settings(BaseSettings):
             return json.loads(stripped)
         return [item.strip() for item in stripped.split(",") if item.strip()]
 
-    @field_validator("neo4j_uri", "neo4j_user", "neo4j_password", mode="before")
+    @field_validator(
+        "neo4j_uri",
+        "neo4j_user",
+        "neo4j_password",
+        "graph_extraction_provider",
+        "graph_extraction_model_name",
+        mode="before",
+    )
     @classmethod
     def blank_string_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -400,6 +416,29 @@ class Settings(BaseSettings):
         self.graph_store_provider = self.graph_store_provider.strip().lower()
         if self.graph_store_provider not in {"postgres", "neo4j"}:
             raise ValueError("GRAPH_STORE_PROVIDER must be postgres or neo4j")
+        self.graph_extractor_type = self.graph_extractor_type.strip().lower()
+        if self.graph_extractor_type not in {"llm", "rule_based"}:
+            raise ValueError("GRAPH_EXTRACTOR_TYPE must be llm or rule_based")
+        self.graph_extraction_provider = (
+            self.graph_extraction_provider.strip().lower()
+            if self.graph_extraction_provider
+            else None
+        )
+        if self.graph_extraction_provider is not None and self.graph_extraction_provider not in {
+            "fake",
+            "ollama",
+            "lmstudio",
+            "openai",
+            "anthropic",
+            "gemini",
+        }:
+            raise ValueError(
+                "GRAPH_EXTRACTION_PROVIDER must be fake, ollama, lmstudio, openai, "
+                "anthropic, gemini, or unset"
+            )
+        self.graph_extraction_model_name = (
+            self.graph_extraction_model_name.strip() if self.graph_extraction_model_name else None
+        )
         self.neo4j_uri = self.neo4j_uri.strip() if self.neo4j_uri else None
         self.neo4j_user = self.neo4j_user.strip() if self.neo4j_user else None
         self.neo4j_password = self.neo4j_password.strip() if self.neo4j_password else None

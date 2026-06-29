@@ -4,6 +4,8 @@ PR-46 added the first executable GraphRAG foundation tests. PR-47 added the
 first executable extraction pipeline and worker tests. PR-48 through PR-54
 extend the same safety pattern into retrieval, routing, citation/debug, cache,
 evaluation, default Neo4j projection, demo docs, and smoke.
+C2b adds LLM-default extraction with deterministic fake-provider coverage and
+rule-based fallback coverage.
 
 ## PR-46 Tests
 
@@ -29,6 +31,17 @@ Added/expected coverage:
 - worker registration processes `graph_index_build` jobs
 - failed graph index runs retry with a new run
 - extraction failures mark jobs/runs failed without leaking raw text
+
+## C2b Tests
+
+Added/expected coverage:
+
+- config and system-setting defaults use `llm`
+- fake/stub LLM extraction produces deterministic grounded candidates
+- hallucinated mentions or evidence that cannot be found in chunk text are dropped
+- provider unavailable/failure/invalid response paths fall back to `rule_based`
+- graph index runs and job results record the actual extractor and safe fallback reason
+- graph metadata and logs do not persist raw chunk text, prompt material, or raw LLM responses
 
 ## Migration / DB
 

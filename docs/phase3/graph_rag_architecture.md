@@ -4,7 +4,8 @@ PR-46 started the implementation path by adding the graph schema and index run
 foundation. PR-47 through PR-53 connect safe extraction, graph retrieval,
 graph-aware routing, provider-neutral GraphStore DTOs, Neo4j read-model
 projection, graph citation/debug, retrieval cache, and evaluation. C2a makes
-Neo4j the default read-model provider without changing extraction strategy.
+Neo4j the default read-model provider. C2b makes LLM extraction the default
+graph extraction strategy while retaining rule-based fallback.
 
 ## Phase2 Relationship
 
@@ -85,11 +86,15 @@ Not implemented:
 - OCR/multimodal
 - production/AWS expansion
 
-## PR-47 Integration
+## Extraction Integration
 
-PR-47 connects rule-based extraction to `GraphIndexService` through the
-`graph_index_build` worker job. It stores graph labels, refs, hashes, offsets,
-counts, and confidence only.
+C2b connects LLM extraction to `GraphIndexService` through the
+`graph_index_build` worker by reusing the generation provider abstraction. It
+grounds LLM mentions and relation evidence back to actual chunk spans before
+persistence. If the LLM provider is unavailable, fails, times out, or returns an
+invalid/empty response, the worker falls back to the PR-47 rule-based extractor
+and records the actual extractor used. Both paths store graph labels, refs,
+hashes, offsets, counts, confidence, and safe metadata only.
 
 ## PR-48 Through PR-53 Integration
 
@@ -119,4 +124,8 @@ bounded before planner visibility.
 
 ## Evidence Policy
 
-Graph evidence is represented by IDs, hashes, source refs, labels, confidence, and score summaries. Raw document text, raw chunk text, full context, raw prompt material, PII, token values, and secret values are not persisted to graph tables or exposed through API/debug output.
+Graph evidence is represented by IDs, hashes, source refs, labels, confidence,
+provider/model labels, aggregate token/cost/latency metadata, and score
+summaries. Raw document text, raw chunk text, raw LLM responses, full context,
+raw prompt material, PII details, token values, and secret values are not
+persisted to graph tables or exposed through API/debug output.

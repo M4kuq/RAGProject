@@ -66,6 +66,17 @@ _FORBIDDEN_METADATA_KEYS = {
 _FORBIDDEN_METADATA_KEY_FORMS = {
     form for key in _FORBIDDEN_METADATA_KEYS for form in _metadata_key_forms(key)
 }
+_SAFE_TOKEN_COUNT_METADATA_KEYS = {
+    "input_token_count",
+    "output_token_count",
+    "total_token_count",
+    "graph_extraction_input_token_count",
+    "graph_extraction_output_token_count",
+    "graph_extraction_total_token_count",
+}
+_SAFE_TOKEN_COUNT_METADATA_KEY_FORMS = {
+    form for key in _SAFE_TOKEN_COUNT_METADATA_KEYS for form in _metadata_key_forms(key)
+}
 
 
 class GraphEntityCreate(BaseModel):
@@ -223,7 +234,7 @@ class GraphEntityMentionRead(BaseModel):
 class GraphIndexRunCreate(BaseModel):
     document_version_id: StrictInt | None = Field(default=None, gt=0)
     job_id: StrictInt | None = Field(default=None, gt=0)
-    extractor_type: str = Field(default="none", min_length=1, max_length=80)
+    extractor_type: str = Field(default="llm", min_length=1, max_length=80)
     extractor_version: str | None = Field(default=None, max_length=80)
     metadata_json: dict[str, object] = Field(default_factory=dict)
 
@@ -364,6 +375,10 @@ def _assert_safe_mapping(value: Mapping[Any, object], *, parent_key: str = "") -
             for forbidden_part in _FORBIDDEN_METADATA_KEY_FORMS
         )
         if has_forbidden_part:
+            if key_forms <= _SAFE_TOKEN_COUNT_METADATA_KEY_FORMS:
+                if _is_non_negative_int(raw_value):
+                    continue
+                raise ValueError(f"unsafe graph metadata token count value: {parent_key}{key}")
             has_safe_hash_suffix = any(
                 key_form.endswith("_hash") or key_form.endswith("hash") for key_form in key_forms
             )
@@ -390,6 +405,10 @@ def _assert_safe_metadata_value(value: object, *, parent_key: str) -> None:
             raise ValueError(f"graph metadata string contains unsafe content: {parent_key}")
     if isinstance(value, (bytes, bytearray)):
         raise ValueError(f"graph metadata bytes are not allowed: {parent_key}")
+
+
+def _is_non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _contains_unsafe_graph_text(value: str) -> bool:

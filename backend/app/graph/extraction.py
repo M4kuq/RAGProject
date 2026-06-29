@@ -5,6 +5,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Protocol
 
 from app.graph.normalization import GraphEntityNormalizer
 
@@ -84,6 +85,38 @@ class RelationCandidate:
 class GraphExtractionResult:
     entity_mentions: tuple[EntityMentionCandidate, ...]
     relations: tuple[RelationCandidate, ...]
+    extractor_type: str = RULE_BASED_GRAPH_EXTRACTOR_TYPE
+    extractor_version: str | None = RULE_BASED_GRAPH_EXTRACTOR_VERSION
+    metadata_json: dict[str, object] = field(default_factory=dict)
+
+
+class GraphExtractor(Protocol):
+    def extract(self, chunks: tuple[GraphChunkRef, ...]) -> GraphExtractionResult: ...
+
+
+class RuleBasedGraphExtractor:
+    def __init__(
+        self,
+        *,
+        entity_extractor: EntityExtractionService | None = None,
+        relation_extractor: RelationExtractionService | None = None,
+    ) -> None:
+        self.entity_extractor = entity_extractor or EntityExtractionService()
+        self.relation_extractor = relation_extractor or RelationExtractionService()
+
+    def extract(self, chunks: tuple[GraphChunkRef, ...]) -> GraphExtractionResult:
+        mentions = self.entity_extractor.extract(chunks)
+        relations = self.relation_extractor.extract(chunks, mentions)
+        return GraphExtractionResult(
+            entity_mentions=mentions,
+            relations=relations,
+            extractor_type=RULE_BASED_GRAPH_EXTRACTOR_TYPE,
+            extractor_version=RULE_BASED_GRAPH_EXTRACTOR_VERSION,
+            metadata_json={
+                "extractor_result_code": "graph_extraction_rule_based_completed",
+                "chunk_count": len(chunks),
+            },
+        )
 
 
 class EntityExtractionService:

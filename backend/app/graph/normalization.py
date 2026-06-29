@@ -55,6 +55,18 @@ _TECHNICAL_SUFFIXES = (
     "service",
     "worker",
 )
+_LLM_ALLOWED_ENTITY_TYPES = {
+    "acronym",
+    "artifact",
+    "concept",
+    "dataset",
+    "document",
+    "method",
+    "organization",
+    "paper",
+    "system",
+    "technology",
+}
 
 
 @dataclass(frozen=True)
@@ -68,8 +80,8 @@ class GraphEntityNormalizer:
     """Deterministic, conservative graph label normalizer.
 
     The normalizer intentionally rejects labels that do not look technical enough for
-    the current graph index scope. This keeps private names or incidental text out of
-    graph tables while PR-47 ships a rule-based baseline.
+    the rule-based extractor scope. LLM extraction may pass explicit safe entity
+    types, but all labels still go through the same redaction and metadata checks.
     """
 
     def normalize(
@@ -79,8 +91,16 @@ class GraphEntityNormalizer:
         entity_type: str | None = None,
         aliases: list[str] | tuple[str, ...] | None = None,
     ) -> NormalizedGraphEntity | None:
+        if not _is_safe_raw_label(value, field_name="canonical_name", max_length=255):
+            return None
         canonical = self._normalize_label(value)
-        if canonical is None or not self._looks_like_graph_entity(canonical):
+        if canonical is None:
+            return None
+        if _looks_like_person_name(canonical):
+            return None
+        if not self._looks_like_graph_entity(canonical):
+            return None
+        if entity_type is not None and not self._is_allowed_typed_entity(entity_type):
             return None
 
         normalized_type = entity_type or self.infer_entity_type(canonical)
@@ -101,6 +121,8 @@ class GraphEntityNormalizer:
         safe_aliases: list[str] = []
         seen = {safe_name.lower()}
         for alias in aliases or ():
+            if not _is_safe_raw_label(alias, field_name="aliases_json", max_length=120):
+                continue
             normalized_alias = self._normalize_label(alias)
             if normalized_alias is None:
                 continue
@@ -160,3 +182,29 @@ class GraphEntityNormalizer:
         if re.fullmatch(r"[a-z]+(?:_[a-z0-9]+)+", value):
             return True
         return False
+
+    def _is_allowed_typed_entity(self, value: str) -> bool:
+        normalized = self._normalize_label(value)
+        if normalized is None:
+            return False
+        return normalized.lower() in _LLM_ALLOWED_ENTITY_TYPES
+
+
+def _looks_like_person_name(value: str) -> bool:
+    tokens = value.split()
+    if len(tokens) < 2 or len(tokens) > 4:
+        return False
+    lowered = value.lower()
+    if any(term in lowered for term in _TECHNOLOGY_TERMS):
+        return False
+    if any(token.lower().endswith(_TECHNICAL_SUFFIXES) for token in tokens):
+        return False
+    return all(re.fullmatch(r"[A-Z][a-z]{1,40}", token) for token in tokens)
+
+
+def _is_safe_raw_label(value: str, *, field_name: str, max_length: int) -> bool:
+    try:
+        validate_safe_graph_label(value, field_name=field_name, max_length=max_length)
+    except ValueError:
+        return False
+    return True

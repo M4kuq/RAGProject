@@ -14,7 +14,8 @@ portfolio/demo handoff for the GraphRAG work delivered through PR-46 to PR-53.
 Implemented GraphRAG scope:
 
 - graph schema and graph index run lifecycle
-- rule-based entity/relation extraction through `graph_index_build`
+- LLM-default entity/relation extraction through `graph_index_build`, with
+  rule-based graceful fallback
 - explicit `/api/v1/rag/search` and `/api/v1/rag/ask` `strategy=graph`
 - graph-aware `agentic_router` shortcut when graph retrieval and router flags are enabled
 - Neo4j-backed `GraphStore` as the default read-model provider
@@ -211,7 +212,7 @@ retrieval response and graph trace.
 The retrieval cache is disabled by default. When enabled, it caches retrieval
 references, scores, safe graph path refs, hashes, fingerprints, provider, and
 TTL metadata. It does not cache answers, prompts, raw query text, snippets, raw
-chunk text, full context, raw graph evidence, PII, credentials, tokens, or
+chunk text, full context, raw graph evidence, raw LLM responses, PII, credentials, tokens, or
 `.env` values.
 
 Graph cache keys include the graph store provider and graph index fingerprint.
