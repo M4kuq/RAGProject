@@ -255,7 +255,9 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
         assert all(entity_keys for entity_keys in repository.entity_key_lock_sets)
 
 
-def test_graph_extraction_settings_default_to_llm() -> None:
+def test_graph_extraction_settings_default_to_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRAPH_EXTRACTION_PROVIDER", raising=False)
+    monkeypatch.delenv("GRAPH_EXTRACTION_MODEL_NAME", raising=False)
     settings = Settings(_env_file=None, app_env="test")
 
     assert settings.graph_extractor_type == "llm"

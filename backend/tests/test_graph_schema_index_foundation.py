@@ -660,8 +660,11 @@ def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: 
                 text("SELECT setting_value FROM system_settings WHERE setting_key = :setting_key"),
                 {"setting_key": setting_key},
             ).scalar_one()
-        assert value is not None
-        assert isinstance(value, type(expected))
+        if expected is None:
+            assert value is None
+        else:
+            assert value is not None
+            assert isinstance(value, type(expected))
 
 
 def test_graph_postgres_constraints_reject_invalid_values(pg_engine: Engine) -> None:
