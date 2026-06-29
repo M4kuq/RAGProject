@@ -242,7 +242,12 @@ class LLMGraphExtractor:
             )
             if confidence < self.min_confidence:
                 continue
-            canonical_name = _text_value(raw_entity.get("canonical_name") or actual_mention)
+            raw_canonical_name = _text_value(raw_entity.get("canonical_name") or actual_mention)
+            canonical_name = (
+                raw_canonical_name
+                if raw_canonical_name and _find_span(chunk.content_text, raw_canonical_name)
+                else actual_mention
+            )
             entity_type = _normalize_entity_type(_text_value(raw_entity.get("entity_type")))
             aliases = _ground_aliases(chunk.content_text, raw_entity.get("aliases"))
             normalized = self.normalizer.normalize(
@@ -307,10 +312,10 @@ class LLMGraphExtractor:
         if len(entities) < 2:
             return []
 
-        key_by_ref: dict[str, EntityMentionCandidate] = {}
+        key_by_ref: dict[str, _GroundedEntity] = {}
         for entity in entities:
             for ref in entity.refs:
-                key_by_ref.setdefault(ref, entity.candidate)
+                key_by_ref.setdefault(ref, entity)
 
         results: list[RelationCandidate] = []
         seen: set[tuple[tuple[str, str], tuple[str, str], str, int]] = set()
@@ -319,9 +324,13 @@ class LLMGraphExtractor:
                 break
             if not isinstance(raw_relation, Mapping):
                 continue
-            source = key_by_ref.get(_ref_key(_text_value(raw_relation.get("source"))))
-            target = key_by_ref.get(_ref_key(_text_value(raw_relation.get("target"))))
-            if source is None or target is None or source.entity_key == target.entity_key:
+            source_entity = key_by_ref.get(_ref_key(_text_value(raw_relation.get("source"))))
+            target_entity = key_by_ref.get(_ref_key(_text_value(raw_relation.get("target"))))
+            if source_entity is None or target_entity is None:
+                continue
+            source = source_entity.candidate
+            target = target_entity.candidate
+            if source.entity_key == target.entity_key:
                 continue
             relation_type = _relation_type(_text_value(raw_relation.get("relation_type")))
             if relation_type is None:
@@ -338,6 +347,8 @@ class LLMGraphExtractor:
                 _text_value(raw_relation.get("evidence")),
                 source=source,
                 target=target,
+                source_refs=source_entity.refs,
+                target_refs=target_entity.refs,
             )
             if evidence_span is None:
                 continue
@@ -441,16 +452,47 @@ def _find_span(text: str, needle: str) -> tuple[int, int] | None:
     normalized = needle.strip()
     if not normalized:
         return None
-    index = text.find(normalized)
-    if index >= 0:
-        return (index, index + len(normalized))
-    lowered_index = text.lower().find(normalized.lower())
-    if lowered_index >= 0:
-        return (lowered_index, lowered_index + len(normalized))
     collapsed = _WHITESPACE_RE.sub(" ", normalized)
-    if collapsed != normalized:
-        return _find_span(text, collapsed)
-    return None
+    for candidate in dict.fromkeys((normalized, collapsed)):
+        index = text.find(candidate)
+        if index >= 0:
+            return (index, index + len(candidate))
+        lowered_index = text.lower().find(candidate.lower())
+        if lowered_index >= 0:
+            return (lowered_index, lowered_index + len(candidate))
+    return _find_normalized_span(text, collapsed)
+
+
+def _find_normalized_span(text: str, needle: str) -> tuple[int, int] | None:
+    normalized_text, offsets = _normalized_text_with_offsets(text)
+    normalized_needle = _WHITESPACE_RE.sub(" ", needle.replace("\x00", " ")).strip()
+    if not normalized_text or not normalized_needle:
+        return None
+    index = normalized_text.lower().find(normalized_needle.lower())
+    if index < 0:
+        return None
+    end_index = index + len(normalized_needle) - 1
+    return (offsets[index], offsets[end_index] + 1)
+
+
+def _normalized_text_with_offsets(value: str) -> tuple[str, list[int]]:
+    chars: list[str] = []
+    offsets: list[int] = []
+    in_whitespace = False
+    for index, char in enumerate(value.replace("\x00", " ")):
+        if char.isspace():
+            if chars and not in_whitespace:
+                chars.append(" ")
+                offsets.append(index)
+            in_whitespace = True
+            continue
+        chars.append(char)
+        offsets.append(index)
+        in_whitespace = False
+    if chars and chars[-1] == " ":
+        chars.pop()
+        offsets.pop()
+    return ("".join(chars), offsets)
 
 
 def _ground_aliases(text: str, raw_aliases: object) -> tuple[str, ...]:
@@ -482,10 +524,23 @@ def _evidence_span(
     *,
     source: EntityMentionCandidate,
     target: EntityMentionCandidate,
+    source_refs: frozenset[str],
+    target_refs: frozenset[str],
 ) -> tuple[int, int] | None:
     span = _find_span(text, evidence)
     if span is not None:
-        return span if _span_covers_relation(span, source=source, target=target) else None
+        return (
+            span
+            if _span_covers_relation(
+                span,
+                text=text,
+                source=source,
+                target=target,
+                source_refs=source_refs,
+                target_refs=target_refs,
+            )
+            else None
+        )
     start = min(source.mention_offset_start, target.mention_offset_start)
     end = max(source.mention_offset_end, target.mention_offset_end)
     sentence_start = max(text.rfind(".", 0, start), text.rfind("\n", 0, start))
@@ -495,7 +550,14 @@ def _evidence_span(
     sentence_start = 0 if sentence_start < 0 else sentence_start + 1
     sentence_end = min(sentence_end_candidates) + 1 if sentence_end_candidates else len(text)
     sentence_span = (sentence_start, sentence_end)
-    if _span_covers_relation(sentence_span, source=source, target=target):
+    if _span_covers_relation(
+        sentence_span,
+        text=text,
+        source=source,
+        target=target,
+        source_refs=source_refs,
+        target_refs=target_refs,
+    ):
         return (sentence_start, sentence_end)
     return None
 
@@ -503,15 +565,24 @@ def _evidence_span(
 def _span_covers_relation(
     span: tuple[int, int],
     *,
+    text: str,
     source: EntityMentionCandidate,
     target: EntityMentionCandidate,
+    source_refs: frozenset[str],
+    target_refs: frozenset[str],
 ) -> bool:
     return (
-        span[0] <= source.mention_offset_start
-        and source.mention_offset_end <= span[1]
-        and span[0] <= target.mention_offset_start
-        and target.mention_offset_end <= span[1]
-    )
+        _span_covers_candidate(span, source) or _span_contains_ref(text, span, source_refs)
+    ) and (_span_covers_candidate(span, target) or _span_contains_ref(text, span, target_refs))
+
+
+def _span_covers_candidate(span: tuple[int, int], candidate: EntityMentionCandidate) -> bool:
+    return span[0] <= candidate.mention_offset_start and candidate.mention_offset_end <= span[1]
+
+
+def _span_contains_ref(text: str, span: tuple[int, int], refs: frozenset[str]) -> bool:
+    span_text = text[span[0] : span[1]]
+    return any(_find_span(span_text, ref) is not None for ref in refs if ref)
 
 
 def _relation_type(value: str) -> str | None:

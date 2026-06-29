@@ -137,18 +137,31 @@ class FakeAnswerGenerator:
 
 
 class OllamaAnswerGenerator:
-    def __init__(self, *, url: str, model_name: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        url: str,
+        model_name: str,
+        timeout_seconds: float,
+        max_output_tokens: int | None = None,
+    ) -> None:
         self.url = url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
+        self.max_output_tokens = max_output_tokens
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
         prompt = _ollama_prompt(request)
         payload: dict[str, Any] = {"model": self.model_name, "prompt": prompt, "stream": False}
+        options: dict[str, float | int] = {}
         if request.temperature is not None:
-            payload["options"] = {"temperature": request.temperature}
+            options["temperature"] = request.temperature
+        if self.max_output_tokens is not None:
+            options["num_predict"] = _max_output_tokens(self.max_output_tokens)
+        if options:
+            payload["options"] = options
         try:
             response = httpx.post(
                 f"{self.url}/api/generate",
@@ -436,6 +449,7 @@ def create_answer_generator(
             url=settings.ollama_url,
             model_name=generation_model_name,
             timeout_seconds=timeout_seconds or settings.ollama_timeout_seconds,
+            max_output_tokens=max_output_tokens,
         )
     if generation_provider == "lmstudio":
         return OpenAICompatibleChatAnswerGenerator(

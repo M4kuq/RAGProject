@@ -113,6 +113,7 @@ class GraphIndexBuildHandler:
                     entity_count = run.entity_count
                     relation_count = run.relation_count
                     mention_count = run.mention_count
+                    extraction_payload = _extraction_payload(run)
                     db.commit()
                     projection_result = self._project_neo4j_after_commit(
                         db,
@@ -129,7 +130,7 @@ class GraphIndexBuildHandler:
                             "mention_count": mention_count,
                             "status": "already_succeeded",
                             "result_code": "no_op",
-                            **_extraction_payload(run),
+                            **extraction_payload,
                             **_projection_payload(projection_result),
                         }
                     )
@@ -268,6 +269,7 @@ class GraphIndexBuildHandler:
                 graph_index_run_id=graph_index_run_id,
             )
         except Exception:
+            db.rollback()
             logger.warning(
                 "neo4j projection skipped after graph index",
                 extra={

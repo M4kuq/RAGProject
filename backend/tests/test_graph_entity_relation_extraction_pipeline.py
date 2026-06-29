@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -174,6 +175,22 @@ class _SequenceNeo4jProjectionService:
         self.calls.append((document_version_id, graph_index_run_id))
         assert self.results
         return self.results.pop(0)
+
+
+class _FailingDbReadProjectionService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int | None]] = []
+
+    def project_document_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        graph_index_run_id: int | None = None,
+    ) -> Neo4jProjectionResult:
+        self.calls.append((document_version_id, graph_index_run_id))
+        db.execute(sql_text("SELECT * FROM missing_neo4j_projection_table"))
+        raise AssertionError("unreachable")
 
 
 def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
@@ -364,6 +381,125 @@ def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
     assert "Alice Smith maintains" not in serialized
     assert "raw" not in serialized.lower()
     assert "prompt" not in serialized.lower()
+
+
+def test_llm_graph_extractor_falls_back_to_grounded_mention_for_canonical_name() -> None:
+    chunk = _chunk_ref("Graph Index supports Hybrid RAG.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Secret Roadmap",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    }
+                ],
+                "relations": [],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    assert [mention.canonical_name for mention in result.entity_mentions] == ["Graph Index"]
+    assert "Secret Roadmap" not in str(
+        [mention.metadata_json for mention in result.entity_mentions]
+    )
+
+
+def test_llm_graph_extractor_matches_relation_evidence_later_mention_occurrence() -> None:
+    chunk = _chunk_ref("Graph Index is documented. Graph Index supports Hybrid RAG.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index supports Hybrid RAG.",
+                        "confidence": 0.81,
+                    }
+                ],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    assert len(result.relations) == 1
+    assert result.relations[0].relation_type == "supports"
+
+
+def test_llm_graph_extractor_matches_normalized_whitespace_spans() -> None:
+    chunk_text = "Graph\nIndex supports Hybrid   RAG."
+    chunk = _chunk_ref(chunk_text)
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index supports Hybrid RAG.",
+                        "confidence": 0.81,
+                    }
+                ],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+    graph_index_mention = next(
+        mention for mention in result.entity_mentions if mention.canonical_name == "Graph Index"
+    )
+
+    assert graph_index_mention.mention_offset_start == 0
+    assert graph_index_mention.mention_offset_end == len("Graph\nIndex")
+    assert len(result.relations) == 1
+    assert (
+        result.relations[0].evidence_text_hash
+        == hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
+    )
 
 
 @pytest.mark.parametrize(
@@ -1048,6 +1184,76 @@ def test_graph_index_build_worker_retries_projection_for_already_succeeded_run(
         assert (
             stored_job.result_json["neo4j_projection_result_code"] == "neo4j_projection_completed"
         )
+
+
+def test_graph_index_build_worker_reports_projection_failure_for_already_succeeded_run(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    projection_service = _FailingDbReadProjectionService()
+    job_repository = JobRepository()
+    graph_service = GraphIndexService()
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = graph_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = graph_service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+        graph_service.persist_extraction_result(
+            db,
+            snapshot=snapshot,
+            result=graph_service.extract_from_snapshot(snapshot),
+        )
+        job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=version.document_version_id,
+            payload_json=graph_service.build_graph_index_job_payload(
+                document_version_id=version.document_version_id,
+                graph_index_run_id=run.graph_index_run_id,
+            ),
+        )
+        db.commit()
+        job_id = job.job_id
+        run_id = run.graph_index_run_id
+        version_id = version.document_version_id
+
+    dispatcher = JobDispatcher(
+        {
+            GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
+                session_factory=graph_session_factory,
+                service_factory=lambda: GraphIndexService(
+                    neo4j_projection_service=projection_service
+                ),
+            )
+        }
+    )
+    runner = WorkerRunner(
+        config=_worker_config(enabled_job_types=frozenset({GRAPH_INDEX_BUILD_JOB_TYPE})),
+        session_factory=graph_session_factory,
+        dispatcher=dispatcher,
+    )
+    assert runner.run_once() == 1
+
+    with graph_session_factory() as db:
+        stored_job = db.get(Job, job_id)
+        assert stored_job is not None
+        assert stored_job.status == "succeeded"
+        assert stored_job.error_code is None
+        assert stored_job.result_json is not None
+        assert stored_job.result_json["status"] == "already_succeeded"
+        assert stored_job.result_json["result_code"] == "no_op"
+        assert stored_job.result_json["extractor_type"] == "llm"
+        assert stored_job.result_json["neo4j_projection_result_code"] == "neo4j_projection_failed"
+        assert projection_service.calls == [(version_id, run_id)]
 
 
 def test_graph_index_service_closes_temporary_neo4j_projection_service(
