@@ -114,13 +114,11 @@ class GraphIndexBuildHandler:
                     relation_count = run.relation_count
                     mention_count = run.mention_count
                     db.commit()
-                    projection_payload = _projection_payload(
-                        self._project_neo4j_after_commit(
-                            db,
-                            service,
-                            document_version_id=document_version_id,
-                            graph_index_run_id=graph_index_run_id,
-                        )
+                    projection_result = self._project_neo4j_after_commit(
+                        db,
+                        service,
+                        document_version_id=document_version_id,
+                        graph_index_run_id=graph_index_run_id,
                     )
                     return JobHandlerResult.succeeded(
                         {
@@ -131,7 +129,7 @@ class GraphIndexBuildHandler:
                             "mention_count": mention_count,
                             "status": "already_succeeded",
                             "result_code": "no_op",
-                            **projection_payload,
+                            **_projection_payload(projection_result),
                         }
                     )
                 if run.status == "failed":
@@ -214,16 +212,13 @@ class GraphIndexBuildHandler:
                 "result_code": "indexed",
             }
             db.commit()
-            result_payload.update(
-                _projection_payload(
-                    self._project_neo4j_after_commit(
-                        db,
-                        service,
-                        document_version_id=snapshot.document_version_id,
-                        graph_index_run_id=run.graph_index_run_id,
-                    )
-                )
+            projection_result = self._project_neo4j_after_commit(
+                db,
+                service,
+                document_version_id=snapshot.document_version_id,
+                graph_index_run_id=run.graph_index_run_id,
             )
+            result_payload.update(_projection_payload(projection_result))
             return JobHandlerResult.succeeded(result_payload)
         except LeaseLostError:
             db.rollback()

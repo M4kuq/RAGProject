@@ -6,6 +6,9 @@ import { ConfidenceBadge } from "./ConfidenceBadge";
 const STRATEGY_LABELS: Record<string, string> = {
   agentic_router: "Agentic Router",
   dense: "Normal RAG",
+  graph: "GraphRAG",
+  graph_neo4j: "GraphRAG",
+  graph_postgres: "GraphRAG (Postgres)",
   hybrid: "Hybrid RAG",
   langchain_agentic: "LangChain Agentic",
   langgraph_agentic: "LangGraph Agentic",
@@ -24,12 +27,30 @@ function RetrievalModeBadge({ summary }: { summary?: RagAskRetrievalSummary | nu
   if (!summary) {
     return null;
   }
-  const base = STRATEGY_LABELS[summary.strategy_type] ?? summary.strategy_type;
+  const base =
+    STRATEGY_LABELS[summary.selected_strategy ?? ""] ??
+    STRATEGY_LABELS[summary.strategy_type] ??
+    summary.strategy_type;
   const tools = summary.tools_used
     .filter((tool) => tool !== "finalize_answer")
     .map((tool) => TOOL_LABELS[tool] ?? tool)
     .filter(Boolean);
-  const detail = tools.length ? `${base}: ${Array.from(new Set(tools)).join(" + ")}` : base;
+  const graphProvider = summary.graph_store_provider
+    ? `provider ${summary.graph_store_provider}`
+    : null;
+  const fallbackReasons = [
+    summary.fallback_reason,
+    ...(summary.graph_fallback_reason_codes ?? [])
+  ].filter((reason): reason is string => Boolean(reason && reason.length > 0));
+  const fallback = fallbackReasons.length
+    ? `fallback ${Array.from(new Set(fallbackReasons)).join(", ")}`
+    : null;
+  const extras = [
+    tools.length ? Array.from(new Set(tools)).join(" + ") : null,
+    graphProvider,
+    fallback
+  ].filter(Boolean);
+  const detail = extras.length ? `${base}: ${extras.join(" / ")}` : base;
   return (
     <span className="retrieval-mode-badge" title={`retrieval_run_id=${summary.retrieval_run_id}`}>
       {detail}

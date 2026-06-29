@@ -95,7 +95,7 @@ as a new heavy gate:
 
 - Start with `phase3_graph_multi_hop`.
 - Compare dense, hybrid, agentic_router, graph_postgres, and graph_neo4j targets
-  after starting the optional Neo4j demo profile.
+  after starting the default Neo4j-backed local stack.
 - Treat graph_neo4j unavailable or unprojected as a visible
   `neo4j_to_postgres_fallback` when PostgreSQL graph sources exist, otherwise as
   safe reason codes rather than a default demo failure.

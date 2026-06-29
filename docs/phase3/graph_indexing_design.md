@@ -71,7 +71,7 @@ Unsafe payload fields remain forbidden:
 
 ## Settings
 
-PR-46 seeds these disabled defaults:
+Graph indexing remains opt-in, while graph retrieval is enabled by default:
 
 | Key | Default |
 |---|---|
@@ -81,7 +81,7 @@ PR-46 seeds these disabled defaults:
 | `rag.graph.max_entities_per_chunk` | `20` |
 | `rag.graph.max_relations_per_chunk` | `40` |
 | `rag.graph.store_raw_evidence_text` | `false` |
-| `rag.graph.retrieval.enabled` | `false` |
+| `rag.graph.retrieval.enabled` | `true` |
 
 ## Worker Flow
 

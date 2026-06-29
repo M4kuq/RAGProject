@@ -55,7 +55,7 @@ from app.rag.rerank import FakeRerankerClient, NoopRerankerClient, RerankCandida
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
-from app.services.rag_service import RagService, _safe_generation_label
+from app.services.rag_service import RagService, _retrieval_summary_response, _safe_generation_label
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
@@ -151,6 +151,125 @@ def test_generation_label_redacts_secret_like_values() -> None:
     assert _safe_generation_label("qwen3.5-9b", max_length=128) == "qwen3.5-9b"
 
 
+def test_retrieval_summary_prefers_cached_graph_fallback_score_summary() -> None:
+    run = RetrievalRun(
+        retrieval_run_id=7,
+        strategy_type=RetrievalStrategy.GRAPH.value,
+        strategy_decision_json={
+            "selected_strategy": "graph_neo4j",
+            "execution_strategy": "hybrid",
+            "fallback_used": False,
+            "graph_requested_provider": "neo4j",
+        },
+        retrieval_score_summary={
+            "fallback_used": True,
+            "fallback_reason": "graph_no_evidence_fallback",
+            "graph_store_provider": "neo4j",
+            "graph_fallback_reason_codes": ["graph_no_evidence_fallback"],
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.fallback_used is True
+    assert summary.fallback_reason == "graph_no_evidence_fallback"
+    assert summary.graph_store_provider == "neo4j"
+    assert summary.graph_fallback_reason_codes == ["graph_no_evidence_fallback"]
+
+
+def test_retrieval_summary_does_not_report_success_graph_reason_as_fallback() -> None:
+    run = RetrievalRun(
+        retrieval_run_id=8,
+        strategy_type=RetrievalStrategy.GRAPH.value,
+        strategy_decision_json={
+            "selected_strategy": "graph_postgres",
+            "execution_strategy": "graph",
+            "fallback_used": False,
+            "graph_store_provider": "postgres",
+        },
+        retrieval_score_summary={
+            "graph_store_provider": "postgres",
+            "graph_reason_codes": ["graph_search_completed"],
+            "graph_fallback_used": False,
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.fallback_used is False
+    assert summary.fallback_reason is None
+    assert summary.graph_store_provider == "postgres"
+    assert summary.graph_fallback_reason_codes == []
+
+
+@pytest.mark.parametrize(
+    "provider_reason_code",
+    ["neo4j_not_configured", "neo4j_connection_failed"],
+)
+def test_retrieval_summary_includes_graph_provider_failure_reason_codes(
+    provider_reason_code: str,
+) -> None:
+    run = RetrievalRun(
+        retrieval_run_id=9,
+        strategy_type=RetrievalStrategy.GRAPH.value,
+        strategy_decision_json={
+            "selected_strategy": "graph_neo4j",
+            "execution_strategy": "hybrid",
+            "fallback_used": False,
+            "graph_requested_provider": "neo4j",
+        },
+        retrieval_score_summary={
+            "fallback_used": True,
+            "fallback_reason": "graph_no_evidence_fallback",
+            "graph_store_provider": "postgres",
+            "graph_reason_codes": [
+                provider_reason_code,
+                "graph_no_evidence_fallback",
+                "graph_fallback_hybrid",
+            ],
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.fallback_used is True
+    assert summary.fallback_reason == provider_reason_code
+    assert summary.graph_requested_provider == "neo4j"
+    assert summary.graph_store_provider == "postgres"
+    assert provider_reason_code in summary.graph_fallback_reason_codes
+    assert "graph_no_evidence_fallback" in summary.graph_fallback_reason_codes
+
+
+def test_retrieval_summary_reads_graph_strategy_from_score_summary_when_trace_missing() -> None:
+    run = RetrievalRun(
+        retrieval_run_id=10,
+        strategy_type=RetrievalStrategy.HYBRID.value,
+        strategy_decision_json=None,
+        retrieval_score_summary={
+            "selected_strategy": "graph_neo4j",
+            "execution_strategy": "hybrid",
+            "fallback_used": True,
+            "fallback_reason": "graph_no_evidence_fallback",
+            "graph_store_provider": "postgres",
+            "graph_reason_codes": [
+                "neo4j_connection_failed",
+                "graph_no_evidence_fallback",
+                "graph_fallback_hybrid",
+            ],
+        },
+    )
+
+    summary = _retrieval_summary_response(run)
+
+    assert summary.strategy_type == RetrievalStrategy.HYBRID
+    assert summary.selected_strategy == "graph_neo4j"
+    assert summary.execution_strategy == "hybrid"
+    assert summary.graph_requested_provider == "neo4j"
+    assert summary.graph_store_provider == "postgres"
+    assert summary.fallback_used is True
+    assert summary.fallback_reason == "neo4j_connection_failed"
+
+
 def test_rag_ask_success_replay_and_duplicate_state_handling(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -193,6 +312,10 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         "execution_strategy": "dense",
         "tools_used": [],
         "fallback_used": False,
+        "fallback_reason": None,
+        "graph_store_provider": None,
+        "graph_requested_provider": None,
+        "graph_fallback_reason_codes": [],
         "no_context": None,
     }
     generation = data["generation"]
@@ -720,6 +843,7 @@ def test_rag_ask_agentic_router_uses_llm_planner_after_insufficient_context(
     client, session_factory, _ = rag_ask_client
     vector_client = StepVectorClient()
     settings = _settings(
+        graph_retrieval_enabled=False,
         router_mode="llm",
         generation_provider="lmstudio",
         generation_model_name="qwen3.5-9b",

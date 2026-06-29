@@ -46,7 +46,10 @@ try {
   $env:COMPOSE_DISABLE_ENV_FILE = "1"
   try {
     Invoke-Checked { docker compose config --quiet | Out-Null }
-    Invoke-Checked { docker compose --profile neo4j config --quiet | Out-Null }
+    Invoke-Checked {
+      docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --quiet |
+        Out-Null
+    }
   } finally {
     if ($null -eq $previousComposeDisableEnvFile) {
       Remove-Item Env:COMPOSE_DISABLE_ENV_FILE -ErrorAction SilentlyContinue
@@ -79,13 +82,13 @@ try {
 
   Write-Step "verify key GraphRAG handoff statements"
   Assert-FileContains "docs/phase3/graph_rag_final_readme.md" "PostgreSQL is the source of truth"
-  Assert-FileContains "docs/phase3/graph_rag_final_readme.md" "Neo4j, when enabled, is only a read model"
+  Assert-FileContains "docs/phase3/graph_rag_final_readme.md" "Neo4j is only a read model"
   Assert-FileContains "docs/phase3/graph_rag_final_readme.md" "RETRIEVAL_CACHE_ENABLED=false"
   Assert-FileContains "docs/phase3/graph_rag_final_readme.md" "phase3_graph_multi_hop"
   Assert-FileContains "docs/phase3/graph_rag_acceptance_checklist.md" "Raw text and secret non-storage"
   Assert-FileContains "docs/phase3/graph_rag_known_limitations.md" "graph_hybrid"
   Assert-FileContains "docker-compose.yml" "GRAPH_RETRIEVAL_ENABLED"
-  Assert-FileContains ".env.example" "GRAPH_RETRIEVAL_ENABLED=false"
+  Assert-FileContains ".env.example" "GRAPH_RETRIEVAL_ENABLED=true"
 
   Write-Step "check running backend/frontend if available"
   if (Test-Url "$BackendUrl/health") {

@@ -8,4 +8,4 @@ def test_health_returns_status() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "status" in payload
-    assert payload["checks"]["neo4j"]["status"] == "disabled"
+    assert payload["checks"]["neo4j"]["status"] in {"disabled", "ok", "degraded"}

@@ -174,6 +174,7 @@ from app.schemas.rag import (
     RetrievalRunDebugResponse,
     RetrievalRunDebugSummary,
     RetrievalScoreSummary,
+    build_rag_ask_retrieval_summary,
 )
 from app.services.chat_service import ChatService
 from app.services.url_fetch_service import redact_url_for_display
@@ -2328,7 +2329,9 @@ class RagService:
         bypass: bool,
         latency_tracker: LatencyTracker,
         retrieve: Any,
+        cache_settings: Settings | None = None,
     ) -> RetrievalPipelineResult:
+        effective_settings = cache_settings or self.settings
         cache_context = RetrievalCacheContext(
             query_hash=query_hash,
             strategy_type=requested_strategy,
@@ -2340,7 +2343,7 @@ class RagService:
         )
         execution = self.retrieval_cache_service.execute(
             db,
-            settings=self.settings,
+            settings=effective_settings,
             context=cache_context,
             bypass=bypass,
             cacheable=_is_cacheable_retrieval_strategy(requested_strategy),
@@ -2921,10 +2924,28 @@ def _is_cacheable_retrieval_strategy(strategy: RetrievalStrategy) -> bool:
 
 
 def _has_transient_graph_reason(summary: dict[str, object]) -> bool:
-    reason_codes = summary.get("graph_reason_codes")
-    if not isinstance(reason_codes, list):
+    reason_codes: list[object] = []
+    for field_name in ("graph_reason_codes", "graph_fallback_reason_codes"):
+        field_value = summary.get(field_name)
+        if isinstance(field_value, list):
+            reason_codes.extend(field_value)
+    for field_name in ("fallback_reason", "graph_fallback_reason"):
+        field_value = summary.get(field_name)
+        if isinstance(field_value, str):
+            reason_codes.append(field_value)
+    if not reason_codes:
         return False
-    non_cacheable_codes = {"neo4j_to_postgres_fallback"}
+    non_cacheable_codes = {
+        "graph_store_provider_unavailable",
+        "neo4j_connection_failed",
+        "neo4j_driver_unavailable",
+        "neo4j_not_configured",
+        "neo4j_projection_empty",
+        "neo4j_projection_incomplete",
+        "neo4j_query_failed",
+        "neo4j_to_postgres_fallback",
+        "neo4j_unavailable",
+    }
     if any(str(code) in non_cacheable_codes for code in reason_codes):
         return True
     transient_markers = ("timeout", "error", "failed", "failure")
@@ -4556,33 +4577,12 @@ def _confidence_response(run: RetrievalRun) -> RagAskConfidence:
 
 
 def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
-    decision = _safe_json_object(run.strategy_decision_json) or {}
-    tools_used_value = decision.get("tools_used")
-    tools_used = (
-        [str(item) for item in tools_used_value if isinstance(item, str)]
-        if isinstance(tools_used_value, list)
-        else []
-    )
-    return RagAskRetrievalSummary(
+    return build_rag_ask_retrieval_summary(
         retrieval_run_id=run.retrieval_run_id,
-        strategy_type=RetrievalStrategy(run.strategy_type),
-        selected_strategy=_optional_safe_string(decision.get("selected_strategy")),
-        execution_strategy=_optional_safe_string(decision.get("execution_strategy")),
-        tools_used=tools_used,
-        fallback_used=decision.get("fallback_used")
-        if isinstance(decision.get("fallback_used"), bool)
-        else None,
-        no_context=decision.get("no_context")
-        if isinstance(decision.get("no_context"), bool)
-        else None,
+        strategy_type=run.strategy_type,
+        strategy_decision=_safe_json_object(run.strategy_decision_json),
+        retrieval_score_summary=_safe_json_object(run.retrieval_score_summary),
     )
-
-
-def _optional_safe_string(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    safe = _safe_display_text(value)
-    return safe or None
 
 
 def _is_insufficient_evidence_answer(answer_text: str) -> bool:

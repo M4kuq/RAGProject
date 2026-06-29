@@ -177,6 +177,44 @@ class GraphRetrievalRepository:
             )
         return db.scalar(statement) is not None
 
+    def has_active_graph_sources_missing_projection(
+        self,
+        db: Session,
+        *,
+        filters: RetrievalFilters,
+        projected_document_version_ids: Iterable[int],
+    ) -> bool:
+        projected_ids = tuple(_ordered_positive_ids(projected_document_version_ids))
+        statement = (
+            select(GraphEntityMention.graph_entity_mention_id)
+            .join(
+                DocumentChunk,
+                DocumentChunk.document_chunk_id == GraphEntityMention.document_chunk_id,
+            )
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .join(
+                LogicalDocument,
+                LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
+            )
+            .where(
+                DocumentChunk.modality == filters.modality,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+                LogicalDocument.status == "active",
+            )
+            .limit(1)
+        )
+        if filters.logical_document_ids:
+            statement = statement.where(
+                LogicalDocument.logical_document_id.in_(filters.logical_document_ids)
+            )
+        if projected_ids:
+            statement = statement.where(DocumentVersion.document_version_id.notin_(projected_ids))
+        return db.scalar(statement) is not None
+
     def list_relations_for_entity_ids(
         self,
         db: Session,

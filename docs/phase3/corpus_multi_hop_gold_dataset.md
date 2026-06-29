@@ -205,7 +205,7 @@ These steps use only repository-owned demo material and existing scripts.
    ```
 
    Wait for `graph_index_build` jobs to finish in the worker/admin job view. For
-   a one-shot local demo that also runs optional Neo4j projection, use the
+   a one-shot local demo that also runs Neo4j projection, use the
    existing `scripts\neo4j_demo.ps1` runbook instead.
 
 6. Run the strategy comparison against this fixture.

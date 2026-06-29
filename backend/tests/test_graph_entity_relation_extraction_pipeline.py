@@ -68,6 +68,18 @@ class _RecordingNeo4jDriver:
         return _RecordingNeo4jSession(self)
 
 
+class _FlakyNeo4jDriver(_RecordingNeo4jDriver):
+    def __init__(self, *, execute_failures: int) -> None:
+        super().__init__()
+        self.execute_failures = execute_failures
+
+    def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
+        if self.execute_failures > 0:
+            self.execute_failures -= 1
+            raise RuntimeError("neo4j is not ready")
+        return super().execute_query(query, **kwargs)
+
+
 class _RecordingNeo4jSession:
     def __init__(self, driver: _RecordingNeo4jDriver) -> None:
         self.driver = driver
@@ -121,6 +133,24 @@ class _RecordingNeo4jProjectionService:
             projected_chunks=4,
             reason_codes=("neo4j_projection_completed",),
         )
+
+
+class _SequenceNeo4jProjectionService:
+    def __init__(self, results: list[Neo4jProjectionResult]) -> None:
+        self.calls: list[tuple[int, int | None]] = []
+        self.results = results
+
+    def project_document_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int,
+        graph_index_run_id: int | None = None,
+    ) -> Neo4jProjectionResult:
+        del db
+        self.calls.append((document_version_id, graph_index_run_id))
+        assert self.results
+        return self.results.pop(0)
 
 
 def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
@@ -300,6 +330,56 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
         assert "secret" not in parameter_dump
 
 
+def test_neo4j_projection_service_retries_startup_connection_failure(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    graph_service = GraphIndexService()
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = graph_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = graph_service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+        graph_service.persist_extraction_result(
+            db,
+            snapshot=snapshot,
+            result=graph_service.extract_from_snapshot(snapshot),
+        )
+
+        fake_driver = _FlakyNeo4jDriver(execute_failures=1)
+        projection_service = Neo4jProjectionService(
+            client=Neo4jClient(
+                config=Neo4jConnectionConfig(
+                    uri="bolt://neo4j.local:7687",
+                    user="neo4j",
+                    password="configured-test-password",
+                ),
+                driver=fake_driver,
+            ),
+            projection_enabled=True,
+            connect_retry_attempts=2,
+            connect_retry_delay_seconds=0,
+        )
+
+        result = projection_service.project_document_version(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        assert result.reason_codes == ("neo4j_projection_completed",)
+        assert fake_driver.execute_failures == 0
+        assert fake_driver.write_transactions
+
+
 def test_graph_index_build_worker_is_registered_and_succeeds(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
@@ -453,6 +533,106 @@ def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commi
         assert stored_job.result_json["neo4j_projected_entity_count"] == 1
 
 
+def test_graph_index_build_worker_records_projection_failure_metadata_then_retries(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    projection_service = _SequenceNeo4jProjectionService(
+        [
+            Neo4jProjectionResult(
+                enabled=True,
+                reason_codes=("neo4j_connection_failed",),
+            ),
+            Neo4jProjectionResult(
+                enabled=True,
+                projected_entities=1,
+                projected_relations=2,
+                projected_mentions=3,
+                projected_chunks=4,
+                reason_codes=("neo4j_projection_completed",),
+            ),
+        ]
+    )
+    job_repository = JobRepository()
+    graph_service = GraphIndexService()
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = graph_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        payload = graph_service.build_graph_index_job_payload(
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+        first_job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=version.document_version_id,
+            payload_json=payload,
+        )
+        db.commit()
+        first_job_id = first_job.job_id
+        run_id = run.graph_index_run_id
+        version_id = version.document_version_id
+
+    dispatcher = JobDispatcher(
+        {
+            GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
+                session_factory=graph_session_factory,
+                service_factory=lambda: GraphIndexService(
+                    neo4j_projection_service=projection_service
+                ),
+            )
+        }
+    )
+    runner = WorkerRunner(
+        config=_worker_config(enabled_job_types=frozenset({GRAPH_INDEX_BUILD_JOB_TYPE})),
+        session_factory=graph_session_factory,
+        dispatcher=dispatcher,
+    )
+    assert runner.run_once() == 1
+
+    with graph_session_factory() as db:
+        stored_first_job = db.get(Job, first_job_id)
+        stored_run = db.get(GraphIndexRun, run_id)
+        assert stored_first_job is not None
+        assert stored_run is not None
+        assert stored_first_job.status == "succeeded"
+        assert stored_first_job.error_code is None
+        assert stored_first_job.result_json is not None
+        assert stored_first_job.result_json["neo4j_projection_result_code"] == (
+            "neo4j_connection_failed"
+        )
+        assert stored_run.status == "succeeded"
+        retry_job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=version_id,
+            payload_json=payload,
+        )
+        db.commit()
+        retry_job_id = retry_job.job_id
+
+    assert runner.run_once() == 1
+
+    with graph_session_factory() as db:
+        stored_retry_job = db.get(Job, retry_job_id)
+        assert stored_retry_job is not None
+        assert stored_retry_job.status == "succeeded"
+        assert stored_retry_job.result_json is not None
+        assert stored_retry_job.result_json["status"] == "already_succeeded"
+        assert (
+            stored_retry_job.result_json["neo4j_projection_result_code"]
+            == "neo4j_projection_completed"
+        )
+        assert projection_service.calls == [(version_id, run_id), (version_id, run_id)]
+
+
 def test_graph_index_build_worker_retries_projection_for_already_succeeded_run(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
@@ -568,15 +748,18 @@ def test_graph_index_service_closes_temporary_neo4j_projection_service(
     assert closed_instance.closed is True
 
 
-def test_neo4j_docker_path_installs_optional_extra() -> None:
+def test_neo4j_docker_path_installs_default_extra() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8")
     compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    ci_compose = (repo_root / "docker-compose.ci.yml").read_text(encoding="utf-8")
     docs = (repo_root / "docs" / "phase3" / "neo4j_optional_backend.md").read_text(encoding="utf-8")
 
     assert 'ARG BACKEND_UV_EXTRA_ARGS=""' in dockerfile
     assert "uv sync --frozen --no-install-project --no-dev $BACKEND_UV_EXTRA_ARGS" in dockerfile
-    assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:-}" in compose
+    assert "BACKEND_UV_EXTRA_ARGS: ${BACKEND_UV_EXTRA_ARGS:---extra neo4j}" in compose
+    assert compose.count("neo4j:\n        condition: service_healthy") >= 3
+    assert ci_compose.count("neo4j:\n        condition: service_healthy") >= 4
     assert 'BACKEND_UV_EXTRA_ARGS="--extra neo4j"' in docs
 
 

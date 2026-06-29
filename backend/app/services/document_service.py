@@ -22,6 +22,7 @@ from app.core.errors import (
     ValidationFailed,
 )
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, User
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
@@ -47,6 +48,7 @@ from app.schemas.documents import (
     normalize_document_title,
 )
 from app.services.audit_service import audit
+from app.services.graph_index_service import GraphIndexService
 from app.services.source_locator_service import (
     LocatedChunk,
     safe_chunk_metadata,
@@ -76,11 +78,13 @@ class DocumentService:
         job_repository: JobRepository | None = None,
         storage: LocalFileStorage | None = None,
         url_fetcher: UrlFetcher | None = None,
+        graph_index_service: GraphIndexService | None = None,
     ) -> None:
         self.repository = repository or DocumentRepository()
         self.job_repository = job_repository or JobRepository()
         self.storage = storage or LocalFileStorage()
         self.url_fetcher = url_fetcher or UrlFetchService()
+        self.graph_index_service = graph_index_service or GraphIndexService()
 
     def list_documents(
         self,
@@ -616,6 +620,17 @@ class DocumentService:
                     "requested_by_user_id": user.user_id,
                 },
             )
+            if previous_active_id is not None and previous_active_id != version.document_version_id:
+                self._create_graph_index_job(
+                    db,
+                    user=user,
+                    document_version_id=previous_active_id,
+                )
+            self._create_graph_index_job(
+                db,
+                user=user,
+                document_version_id=version.document_version_id,
+            )
             self.repository.touch_document(db, document=document, updated_at=now)
             audit(
                 db,
@@ -679,6 +694,12 @@ class DocumentService:
                     display_status="archived",
                     result_code="already_archived",
                 )
+            active_version = self.repository.active_versions_by_document_ids(
+                db, logical_document_ids=[logical_document_id]
+            ).get(logical_document_id)
+            active_version_id = (
+                active_version.document_version_id if active_version is not None else None
+            )
             self.repository.archive_document(db, document=document, archived_at=self._now())
             mirror_job = self._create_qdrant_mirror_job(
                 db,
@@ -691,6 +712,12 @@ class DocumentService:
                     "requested_by_user_id": user.user_id,
                 },
             )
+            if active_version_id is not None:
+                self._create_graph_index_job(
+                    db,
+                    user=user,
+                    document_version_id=active_version_id,
+                )
             audit(
                 db,
                 action="document.archived",
@@ -767,6 +794,25 @@ class DocumentService:
             target_id=target_id,
             payload_json=payload,
             created_by=user.user_id,
+        )
+
+    def _create_graph_index_job(
+        self,
+        db: Session,
+        *,
+        user: User,
+        document_version_id: int,
+    ) -> Job:
+        return self.job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=document_version_id,
+            payload_json=self.graph_index_service.build_graph_index_job_payload(
+                document_version_id=document_version_id,
+            ),
+            created_by=user.user_id,
+            priority=80,
         )
 
     def _document_items(self, db: Session, documents: list[LogicalDocument]) -> list[DocumentItem]:

@@ -16,7 +16,7 @@ REPO_ROOT=$(CDPATH= cd "$SCRIPT_DIR/.." && pwd)
 
 say() { printf '%s\n' "[neo4j-demo] $*"; }
 compose() {
-  docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j "$@"
+  docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml "$@"
 }
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -52,7 +52,7 @@ say "validate compose config"
 docker compose config --quiet
 compose config --quiet
 
-say "start compose stack with neo4j profile"
+say "start compose stack with default Neo4j read model"
 if [ "$NO_BUILD" = "1" ]; then
   compose up -d
 else
@@ -70,7 +70,7 @@ if [ "$SKIP_CORPUS" != "1" ]; then
     --base-url http://127.0.0.1:8000
 fi
 
-say "build PostgreSQL graph index and run optional Neo4j projection"
+say "build PostgreSQL graph index and run Neo4j projection"
 compose exec -T backend python -m app.scripts.build_demo_graph_index
 
 if [ "$SKIP_EVALUATION" != "1" ]; then
@@ -85,4 +85,4 @@ if [ "$SKIP_EVALUATION" != "1" ]; then
     --output-md /tmp/ragproject_graph_provider_eval.md
 fi
 
-say "Neo4j demo profile is running with GRAPH_STORE_PROVIDER=neo4j"
+say "Neo4j demo stack is running with GRAPH_STORE_PROVIDER=neo4j"

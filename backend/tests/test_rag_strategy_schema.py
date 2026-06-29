@@ -62,12 +62,16 @@ def test_request_facing_strategy_values_exclude_internal_fallback_dense() -> Non
         "sparse",
         "hybrid",
         "graph",
+        "graph_postgres",
+        "graph_neo4j",
         "agentic_router",
     )
     assert RAG_ASK_REQUEST_STRATEGY_VALUES == (
         "dense",
         "hybrid",
         "graph",
+        "graph_postgres",
+        "graph_neo4j",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",
@@ -83,12 +87,16 @@ def test_request_model_schemas_exclude_internal_fallback_dense() -> None:
         "sparse",
         "hybrid",
         "graph",
+        "graph_postgres",
+        "graph_neo4j",
         "agentic_router",
     )
     assert _field_enum_values(RagAskRequest.model_json_schema(), "strategy") == (
         "dense",
         "hybrid",
         "graph",
+        "graph_postgres",
+        "graph_neo4j",
         "agentic_router",
         "llm_tool_orchestrator",
         "langchain_agentic",

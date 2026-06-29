@@ -21,9 +21,22 @@ GRAPH_TABLES = {
     "graph_retrieval_paths",
 }
 CACHE_TABLES = {"retrieval_cache_entries"}
-HEAD_REVISION = "0018_evaluation_generation_usage"
+HEAD_REVISION = "0019_graph_provider_neo4j"
+PRE_PROVIDER_FORWARD_REVISION = "0018_evaluation_generation_usage"
 PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
 CORPUS_MARKER_SETTING_KEY = "rag.retrieval_cache.corpus_marker"
+OLD_GRAPH_STORE_PROVIDER_DESCRIPTION = (
+    "GraphStore provider. Neo4j remains optional and disabled by default."
+)
+NEW_GRAPH_STORE_PROVIDER_DESCRIPTION = (
+    "GraphStore provider. Neo4j is the default read model; PostgreSQL remains source of truth."
+)
+OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
+    "Enable graph retrieval strategies. PR-48 connects retrieval."
+)
+NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
+    "Enable explicit strategy=graph graph retrieval requests by default."
+)
 
 
 @pytest.fixture(scope="module")
@@ -75,8 +88,23 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
+
+        command.downgrade(config, "-1")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == PRE_PROVIDER_FORWARD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_retrieval_enabled_value(pg_engine) is False
+
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
 
         command.downgrade(config, PRE_CACHE_REVISION)
         with pg_engine.connect() as conn:
@@ -85,6 +113,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -93,7 +122,8 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == HEAD_REVISION
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "0015_langgraph_agentic")
@@ -103,13 +133,15 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) is None
+        assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == HEAD_REVISION
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
@@ -121,6 +153,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert CACHE_TABLES.isdisjoint(set(inspect(pg_engine).get_table_names()))
         assert not _has_cache_summary_column(pg_engine)
+        assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -130,8 +163,61 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert GRAPH_TABLES <= set(inspect(pg_engine).get_table_names())
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
-        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
+
+        command.downgrade(config, "-1")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == PRE_PROVIDER_FORWARD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_retrieval_enabled_value(pg_engine) is False
+
+        _simulate_old_graph_store_provider_seed(pg_engine)
+        _simulate_old_graph_retrieval_enabled_seed(pg_engine)
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_store_provider_description(pg_engine) == NEW_GRAPH_STORE_PROVIDER_DESCRIPTION
+        assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert (
+            _graph_retrieval_enabled_description(pg_engine)
+            == NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION
+        )
+
+        command.downgrade(config, "-1")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == PRE_PROVIDER_FORWARD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_description(pg_engine) == OLD_GRAPH_STORE_PROVIDER_DESCRIPTION
+        assert _graph_retrieval_enabled_value(pg_engine) is False
+        assert (
+            _graph_retrieval_enabled_description(pg_engine)
+            == OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION
+        )
+
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
+
+        command.downgrade(config, "-1")
+        _simulate_operator_graph_store_provider_override(pg_engine)
+        _simulate_operator_graph_retrieval_enabled_override(pg_engine)
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert version == HEAD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "postgres"
+        assert _graph_store_provider_description(pg_engine) == "Operator provider override"
+        assert _graph_retrieval_enabled_value(pg_engine) is False
+        assert _graph_retrieval_enabled_description(pg_engine) == "Operator retrieval override"
     finally:
         get_settings.cache_clear()
 
@@ -157,6 +243,113 @@ def _graph_store_provider_value(engine: Engine) -> str | None:
                 """
             )
         ).scalar_one_or_none()
+
+
+def _graph_store_provider_description(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT description
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.store.provider'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _graph_retrieval_enabled_value(engine: Engine) -> bool | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT (setting_value #>> '{}')::boolean
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.retrieval.enabled'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _graph_retrieval_enabled_description(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT description
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.retrieval.enabled'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _simulate_old_graph_store_provider_seed(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = '"postgres"'::jsonb,
+                    description = :description,
+                    updated_by = NULL,
+                    created_at = now() - interval '1 day',
+                    updated_at = now() - interval '1 day'
+                WHERE setting_key = 'rag.graph.store.provider'
+                """
+            ),
+            {"description": OLD_GRAPH_STORE_PROVIDER_DESCRIPTION},
+        )
+
+
+def _simulate_old_graph_retrieval_enabled_seed(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = 'false'::jsonb,
+                    description = :description,
+                    updated_by = NULL,
+                    created_at = now() - interval '1 day',
+                    updated_at = now() - interval '1 day'
+                WHERE setting_key = 'rag.graph.retrieval.enabled'
+                """
+            ),
+            {"description": OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION},
+        )
+
+
+def _simulate_operator_graph_store_provider_override(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = '"postgres"'::jsonb,
+                    description = 'Operator provider override',
+                    updated_by = NULL,
+                    updated_at = now()
+                WHERE setting_key = 'rag.graph.store.provider'
+                """
+            ),
+        )
+
+
+def _simulate_operator_graph_retrieval_enabled_override(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = 'false'::jsonb,
+                    description = 'Operator retrieval override',
+                    updated_by = NULL,
+                    updated_at = now()
+                WHERE setting_key = 'rag.graph.retrieval.enabled'
+                """
+            ),
+        )
 
 
 def _retrieval_cache_corpus_marker_value(engine: Engine) -> str | None:

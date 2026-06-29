@@ -21,8 +21,8 @@ PR-48 PostgreSQL graph retrieval behavior. `Neo4jGraphStore` is intentionally a
 skeleton that returns a safe unavailable result. It must not import the Neo4j
 driver, open network connections, require a Docker service, or block app startup.
 
-`GRAPH_STORE_PROVIDER` defaults to `postgres`. `neo4j` is accepted as a provider
-value, but it is not a working backend until PR-50.
+`GRAPH_STORE_PROVIDER` now defaults to `neo4j` in current local deployments,
+with PostgreSQL retained as the source of truth and fallback graph provider.
 
 ## Common DTO Shape
 

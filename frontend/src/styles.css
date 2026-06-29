@@ -418,6 +418,9 @@ textarea {
 .retrieval-mode-badge {
   background: var(--color-primary-soft);
   color: var(--color-primary-soft-text);
+  line-height: 1.25;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .confidence-high {

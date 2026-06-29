@@ -4,10 +4,11 @@ These limitations are intentional at the PR-54 boundary.
 
 ## Runtime
 
-- Graph retrieval is disabled by default and must be explicitly enabled.
-- Graph-aware router selection is disabled by default and must be explicitly enabled.
-- Explicit `strategy=graph` requires a populated graph index. Without graph
-  evidence, explicit graph requests keep the no-context behavior.
+- Graph retrieval and graph-aware router selection are enabled by the default
+  Compose stack, but direct backend runs can still disable them with env flags.
+- Explicit `strategy=graph_neo4j` requires a populated graph index and Neo4j
+  projection for Neo4j-native results. Without graph evidence, explicit graph
+  requests record reason codes and fall back to the configured safe base path.
 - Router-selected graph can fall back to dense or hybrid, but the project does
   not expose a separate public `graph_hybrid` fusion strategy yet.
 - Graph indexing uses the current rule-based extractor. It is deterministic and
@@ -17,19 +18,25 @@ These limitations are intentional at the PR-54 boundary.
 
 ## UI
 
-- Retrieval Debug can display graph trace for graph runs, but the form may not
-  expose explicit `graph` as a selectable strategy. Use API or scripted local
-  calls to create explicit graph runs, then inspect the trace in the UI.
+- Chat exposes GraphRAG (Neo4j) and GraphRAG (Postgres) strategy choices.
+  Retrieval Debug can display graph trace for graph runs.
 - Viewer-facing chat does not show internal graph trace panels.
 - Graph debug output is admin-only and limited to safe refs, labels, counts,
   scores, coverage, and reason codes.
 
+## MCP
+
+- MCP RAG tools intentionally allow only the strategies they can execute through
+  their current safe schemas. Direct `graph_postgres` and `graph_neo4j` MCP
+  strategies are reserved for a follow-up dedicated graph adapter.
+
 ## Neo4j
 
-- Neo4j is optional and off by default.
+- Neo4j is part of the default Compose and CI stacks.
 - PostgreSQL remains the source of truth. Neo4j is a rebuildable read model.
-- Neo4j driver dependencies are optional. Docker-based Neo4j runs require
-  `BACKEND_UV_EXTRA_ARGS="--extra neo4j"` during backend/worker build.
+- Neo4j driver dependencies are still optional for non-Docker runs. The default
+  Compose build installs the `neo4j` extra for backend, worker, migrate, seed,
+  and CI test images.
 - Neo4j projection is best-effort after PostgreSQL graph index success.
 - If Neo4j is unavailable, the application should still start and PostgreSQL
   GraphRAG should remain usable.
@@ -47,7 +54,8 @@ These limitations are intentional at the PR-54 boundary.
 
 - `phase3_graph_multi_hop` is a small synthetic fixture, not a broad quality
   benchmark.
-- `graph_neo4j` is optional and can be not-applicable when Neo4j is absent.
+- `graph_neo4j` can fall back or become not-applicable when Neo4j is absent or
+  projection is not ready.
 - Graph metrics are safe summaries and should not be treated as calibrated
   production quality measurements.
 

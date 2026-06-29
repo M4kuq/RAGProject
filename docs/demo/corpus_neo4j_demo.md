@@ -87,11 +87,11 @@ By default it waits for ingest jobs to reach `ready` and approves ready versions
 so the corpus is retrieval-eligible. Use `--no-wait` only when you want to queue
 ingest and monitor the worker separately.
 
-## Neo4j Demo Profile
+## Neo4j Demo Stack
 
-PostgreSQL remains the source of truth and the default graph store. Neo4j is an
-optional read-model projection behind the existing `neo4j` Compose profile.
-Normal `docker compose up` and CI do not require Neo4j.
+PostgreSQL remains the source of truth. Neo4j is the default local and CI
+read-model projection; if it is temporarily unavailable, the application starts
+and graph retrieval records visible fallback reason codes.
 
 One-command local demo:
 
@@ -105,11 +105,11 @@ sh scripts/neo4j_demo.sh
 
 The script:
 
-1. uses `docker-compose.neo4j-demo.yml` plus the existing `neo4j` profile
-2. builds backend/worker with the optional `neo4j` extra
+1. uses `docker-compose.neo4j-demo.yml` as a small demo overlay on the default stack
+2. builds backend/worker with the `neo4j` extra
 3. ingests the manifest through the existing API
 4. builds PostgreSQL graph indexes for active ready documents
-5. runs optional Neo4j projection through `Neo4jProjectionService`
+5. runs Neo4j projection through `Neo4jProjectionService`
 6. leaves the running backend configured with `GRAPH_STORE_PROVIDER=neo4j`
 7. runs a retrieval evaluation smoke for `graph_postgres,graph_neo4j`
 
@@ -118,7 +118,7 @@ The local default Neo4j password is the non-secret Compose demo value
 shell before running the script and do not paste the value into docs, logs, or
 PR comments.
 
-To switch the running stack back to the default provider:
+To recreate backend and worker after changing local environment overrides:
 
 ```powershell
 docker compose up -d --force-recreate --build backend worker
@@ -128,14 +128,14 @@ docker compose up -d --force-recreate --build backend worker
 docker compose up -d --force-recreate --build backend worker
 ```
 
-To stop the demo profile without deleting volumes:
+To stop the demo stack without deleting volumes:
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j down
+docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml down
 ```
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j down
+docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml down
 ```
 
 ## Compare Providers
@@ -168,15 +168,13 @@ Non-destructive checks:
 
 ```powershell
 docker compose config --quiet
-docker compose --profile neo4j config --quiet
-docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j config --quiet
+docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --quiet
 docker compose -f docker-compose.ci.yml run --build --rm backend-test sh -c "ruff format --check . && ruff check . && pytest tests/test_demo_corpus_scripts.py tests/test_graph_retrieval_strategy.py tests/test_retrieval_eval_smoke.py"
 ```
 
 ```sh
 docker compose config --quiet
-docker compose --profile neo4j config --quiet
-docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml --profile neo4j config --quiet
+docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --quiet
 docker compose -f docker-compose.ci.yml run --build --rm backend-test sh -c 'ruff format --check . && ruff check . && pytest tests/test_demo_corpus_scripts.py tests/test_graph_retrieval_strategy.py tests/test_retrieval_eval_smoke.py'
 ```
 

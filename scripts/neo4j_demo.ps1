@@ -14,8 +14,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $ComposeArgs = @(
   "-f", "docker-compose.yml",
-  "-f", "docker-compose.neo4j-demo.yml",
-  "--profile", "neo4j"
+  "-f", "docker-compose.neo4j-demo.yml"
 )
 
 function Write-Step([string]$Message) {
@@ -51,7 +50,7 @@ try {
   Invoke-Checked { docker compose config --quiet | Out-Null }
   Invoke-Checked { docker compose @ComposeArgs config --quiet | Out-Null }
 
-  Write-Step "start compose stack with neo4j profile"
+  Write-Step "start compose stack with default Neo4j read model"
   if ($NoBuild) {
     Invoke-Checked { docker compose @ComposeArgs up -d }
   } else {
@@ -71,7 +70,7 @@ try {
     }
   }
 
-  Write-Step "build PostgreSQL graph index and run optional Neo4j projection"
+  Write-Step "build PostgreSQL graph index and run Neo4j projection"
   Invoke-Checked { docker compose @ComposeArgs exec -T backend python -m app.scripts.build_demo_graph_index }
 
   if (-not $SkipEvaluation) {
@@ -88,7 +87,7 @@ try {
     }
   }
 
-  Write-Step "Neo4j demo profile is running with GRAPH_STORE_PROVIDER=neo4j"
+  Write-Step "Neo4j demo stack is running with GRAPH_STORE_PROVIDER=neo4j"
 } finally {
   Pop-Location
 }

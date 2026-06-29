@@ -2,9 +2,9 @@
 
 PR-46 started the implementation path by adding the graph schema and index run
 foundation. PR-47 through PR-53 connect safe extraction, graph retrieval,
-graph-aware routing, provider-neutral GraphStore DTOs, optional Neo4j,
-graph citation/debug, retrieval cache, and evaluation. PR-54 finalizes the
-demo and acceptance docs without adding a new retrieval strategy.
+graph-aware routing, provider-neutral GraphStore DTOs, Neo4j read-model
+projection, graph citation/debug, retrieval cache, and evaluation. C2a makes
+Neo4j the default read-model provider without changing extraction strategy.
 
 ## Phase2 Relationship
 
@@ -29,7 +29,7 @@ document ingest / approved version
   -> graph_index_build job
   -> entity / relation extraction
   -> PostgreSQL graph tables
-  -> optional Neo4j projection
+  -> Neo4j projection
   -> explicit graph retrieval or graph-aware router selection
   -> retrieval_run_items backed by source chunks
   -> graph_retrieval_paths safe path refs
@@ -48,7 +48,7 @@ PostgreSQL
   graph_index_runs
   retrieval_runs / retrieval_run_items / citations
       |
-      | optional projection, rebuildable from PostgreSQL
+      | projection, rebuildable from PostgreSQL
       v
 Neo4j
   entity and chunk nodes
@@ -58,9 +58,9 @@ Neo4j
 
 PostgreSQL is the source of truth because it already owns document lifecycle,
 version state, jobs, retrieval runs, citations, migrations, tests, and the local
-demo durability boundary. Neo4j is optional because it is a traversal-oriented
-read model that can be rebuilt from PostgreSQL, can be absent in the default
-stack, and must not block application startup or PostgreSQL graph retrieval.
+demo durability boundary. Neo4j is a traversal-oriented read model that can be
+rebuilt from PostgreSQL. It is part of the default stack, but it must not block
+application startup or PostgreSQL graph retrieval when temporarily unavailable.
 
 ## PR-46 Boundary
 

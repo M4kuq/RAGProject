@@ -5,6 +5,9 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 export type RagStrategy =
   | "dense"
   | "hybrid"
+  | "graph"
+  | "graph_postgres"
+  | "graph_neo4j"
   | "agentic_router"
   | "llm_tool_orchestrator"
   | "langchain_agentic"
@@ -69,6 +72,10 @@ export type RagAskRetrievalSummary = {
   execution_strategy: string | null;
   tools_used: string[];
   fallback_used: boolean | null;
+  fallback_reason?: string | null;
+  graph_store_provider?: string | null;
+  graph_requested_provider?: string | null;
+  graph_fallback_reason_codes?: string[];
   no_context: boolean | null;
 };
 

@@ -14,6 +14,7 @@ from app.core.errors import DocumentArchived, DocumentVersionNotApprovable, Reso
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import AuditLog, DocumentVersion, Job, LogicalDocument, Role, User
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationParams
@@ -175,6 +176,16 @@ def test_document_service_repository_upload_duplicate_approve_archive(
         assert archived_document.status == "archived"
         assert archived_version.is_active is False
         assert db.query(Job).filter_by(job_type="qdrant_mirror_update").count() == 2
+        graph_jobs = (
+            db.query(Job)
+            .filter_by(job_type=GRAPH_INDEX_BUILD_JOB_TYPE)
+            .order_by(Job.job_id.asc())
+            .all()
+        )
+        assert [job.target_id for job in graph_jobs] == [
+            document_version_id,
+            document_version_id,
+        ]
         assert db.query(AuditLog).filter_by(action_type="document.archived").count() == 1
 
         with pytest.raises(DocumentArchived):
@@ -413,6 +424,81 @@ def test_document_repository_ready_failed_and_chunk_id_support(
         assert failed_version is not None
         assert failed_version.status == "failed"
         assert failed_version.error_code == "embedding_failed"
+
+
+def test_approve_replacement_version_requeues_old_and_new_graph_projection(
+    document_session_factory: tuple[sessionmaker[Session], Path],
+) -> None:
+    session_factory, storage_root = document_session_factory
+    service = DocumentService(storage=LocalFileStorage(storage_root))
+    repository = DocumentRepository()
+
+    with session_factory() as db:
+        user = admin_user(db)
+        document = repository.create_logical_document(
+            db,
+            owner_user_id=user.user_id,
+            title="Versioned graph document",
+        )
+        old_version = repository.create_version(
+            db,
+            logical_document_id=document.logical_document_id,
+            version_no=1,
+            content_hash="a" * 64,
+            file_name="old.txt",
+            mime_type="text/plain",
+            file_size_bytes=3,
+            storage_key="old",
+            created_by=user.user_id,
+        )
+        new_version = repository.create_version(
+            db,
+            logical_document_id=document.logical_document_id,
+            version_no=2,
+            content_hash="b" * 64,
+            file_name="new.txt",
+            mime_type="text/plain",
+            file_size_bytes=3,
+            storage_key="new",
+            created_by=user.user_id,
+        )
+        old_version.status = "ready"
+        old_version.is_active = True
+        new_version.status = "ready"
+        db.commit()
+
+        approved = service.approve_version(
+            db,
+            user=user,
+            logical_document_id=document.logical_document_id,
+            document_version_id=new_version.document_version_id,
+            request_id="doc-service-approve-replacement",
+        )
+
+        assert approved.result_code == "approved"
+        assert approved.previous_active_document_version_id == old_version.document_version_id
+        graph_jobs = (
+            db.query(Job)
+            .filter_by(job_type=GRAPH_INDEX_BUILD_JOB_TYPE)
+            .order_by(Job.job_id.asc())
+            .all()
+        )
+        assert [job.target_id for job in graph_jobs] == [
+            old_version.document_version_id,
+            new_version.document_version_id,
+        ]
+        assert [job.payload_json for job in graph_jobs] == [
+            {
+                "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+                "document_version_id": old_version.document_version_id,
+                "reindex_policy": "replace_existing",
+            },
+            {
+                "job_type": GRAPH_INDEX_BUILD_JOB_TYPE,
+                "document_version_id": new_version.document_version_id,
+                "reindex_policy": "replace_existing",
+            },
+        ]
 
 
 def _chunk_row(

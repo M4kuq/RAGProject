@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.graph_models import (
     GraphEntity,
@@ -50,6 +51,7 @@ from app.repositories.graph_retrieval_repository import (
     GraphEntityLookupResult,
     GraphRetrievalRepository,
 )
+from app.services.neo4j_projection_service import Neo4jProjectionService
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class _FakeNeo4jDriver:
         mention_rows: list[dict[str, object]],
         projected_entity_count: int | None = None,
         projected_entity_count_by_logical_document_id: dict[int, int] | None = None,
+        projected_document_version_ids: list[int] | None = None,
     ) -> None:
         self.entity_rows = entity_rows
         self.relation_rows = relation_rows
@@ -82,6 +85,7 @@ class _FakeNeo4jDriver:
         self.projected_entity_count_by_logical_document_id = (
             projected_entity_count_by_logical_document_id
         )
+        self.projected_document_version_ids = projected_document_version_ids
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def execute_query(self, query: str, **kwargs: object) -> list[dict[str, object]]:
@@ -91,6 +95,12 @@ class _FakeNeo4jDriver:
             if key not in {"database_", "result_transformer_"}
         }
         self.calls.append((query, parameters))
+        if "RETURN DISTINCT chunk.document_version_id AS document_version_id" in query:
+            projected_ids = self.projected_document_version_ids or []
+            return [
+                {"document_version_id": document_version_id}
+                for document_version_id in projected_ids
+            ]
         if "RETURN count(DISTINCT entity) AS entity_count" in query:
             logical_document_ids = parameters.get("logical_document_ids")
             if (
@@ -232,7 +242,7 @@ def test_graph_strategy_provider_default_is_honored_without_settings_override(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -254,9 +264,7 @@ def test_graph_resolver_provider_default_is_honored_without_settings_override(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        strategy = GraphRetrievalStrategy(
-            resolver=GraphStoreResolver(provider=GraphStoreProvider.NEO4J)
-        )
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -279,7 +287,7 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_unavailable_with_graph
 ) -> None:
     with graph_retrieval_session_factory() as db:
         _seed_graph(db)
-        strategy = GraphRetrievalStrategy(provider=GraphStoreProvider.NEO4J)
+        strategy = GraphRetrievalStrategy(resolver=_resolver_with_unconfigured_neo4j())
 
         result = strategy.search(
             db,
@@ -357,23 +365,29 @@ def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_empty(
             "graph_store_provider_unavailable",
             "neo4j_projection_empty",
         ]
-        count_query, count_parameters = fake_driver.calls[1]
-        assert "MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)" in count_query
-        assert "chunk.logical_document_id IN $logical_document_ids" in count_query
-        assert count_parameters["logical_document_ids"] == [seed.logical_document_id]
-        assert count_parameters["modality"] == "text"
+        projection_query, projection_parameters = fake_driver.calls[1]
+        assert (
+            "MATCH (entity:RAGGraphEntity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)"
+            in projection_query
+        )
+        assert (
+            "RETURN DISTINCT chunk.document_version_id AS document_version_id" in projection_query
+        )
+        assert "chunk.logical_document_id IN $logical_document_ids" in projection_query
+        assert projection_parameters["logical_document_ids"] == [seed.logical_document_id]
+        assert projection_parameters["modality"] == "text"
 
 
-def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
+def test_graph_strategy_falls_back_to_postgres_when_neo4j_projection_is_incomplete(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        _seed_graph(db)
+        seed = _seed_graph(db)
         fake_driver = _FakeNeo4jDriver(
             entity_rows=[],
             relation_rows=[],
             mention_rows=[],
-            projected_entity_count=1,
+            projected_document_version_ids=[seed.document_version_id + 1000],
         )
         strategy = GraphRetrievalStrategy(
             resolver=GraphStoreResolver(
@@ -394,6 +408,136 @@ def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
         result = strategy.search(
             db,
             query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.fallback_used is True
+        assert result.graph_candidates
+        assert result.reason_codes == ("neo4j_to_postgres_fallback", "graph_search_completed")
+        assert result.score_breakdown["fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+        assert result.summary_fields()["graph_fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+
+
+def test_graph_strategy_falls_back_before_returning_partial_neo4j_projection(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        _seed_out_of_scope_fastapi_mention(db, seed)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[
+                {
+                    "entity_id": seed.fastapi_entity_id,
+                    "safe_label": "FastAPI",
+                    "entity_type": "technology",
+                },
+                {
+                    "entity_id": seed.postgresql_entity_id,
+                    "safe_label": "PostgreSQL",
+                    "entity_type": "technology",
+                },
+            ],
+            relation_rows=[
+                {
+                    "frontier_entity_id": seed.fastapi_entity_id,
+                    "other_entity_id": seed.postgresql_entity_id,
+                    "other_safe_label": "PostgreSQL",
+                    "other_entity_type": "technology",
+                    "relation_id": 1001,
+                    "relation_type": "uses",
+                    "confidence": 0.85,
+                    "source_document_chunk_id": min(seed.chunk_ids),
+                    "evidence_text_hash": "f" * 64,
+                    "source_entity_id": seed.fastapi_entity_id,
+                    "source_safe_label": "FastAPI",
+                    "source_entity_type": "technology",
+                    "target_entity_id": seed.postgresql_entity_id,
+                    "target_safe_label": "PostgreSQL",
+                    "target_entity_type": "technology",
+                }
+            ],
+            mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
+        )
+        strategy = GraphRetrievalStrategy(
+            resolver=GraphStoreResolver(
+                provider=GraphStoreProvider.NEO4J,
+                neo4j_store=Neo4jGraphStore(
+                    client=Neo4jClient(
+                        config=Neo4jConnectionConfig(
+                            uri="bolt://neo4j.local:7687",
+                            user="neo4j",
+                            password="configured-test-password",
+                        ),
+                        driver=fake_driver,
+                    )
+                ),
+            )
+        )
+
+        result = strategy.search(
+            db,
+            query="FastAPI uses PostgreSQL",
+            top_k=3,
+            filters=RetrievalFilters(),
+            settings=GraphRetrievalSettings(
+                enabled=True,
+                min_entity_match_score=0.2,
+            ),
+        )
+
+        assert result.provider == GraphStoreProvider.POSTGRES
+        assert result.fallback_used is True
+        assert result.graph_candidates
+        assert result.reason_codes == ("neo4j_to_postgres_fallback", "graph_search_completed")
+        assert result.score_breakdown["fallback_reason_codes"] == [
+            "graph_store_provider_unavailable",
+            "neo4j_projection_incomplete",
+        ]
+
+
+def test_graph_strategy_keeps_neo4j_no_match_results_without_postgres_fallback(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_retrieval_session_factory() as db:
+        seed = _seed_graph(db)
+        fake_driver = _FakeNeo4jDriver(
+            entity_rows=[],
+            relation_rows=[],
+            mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
+        )
+        strategy = GraphRetrievalStrategy(
+            resolver=GraphStoreResolver(
+                provider=GraphStoreProvider.NEO4J,
+                neo4j_store=Neo4jGraphStore(
+                    client=Neo4jClient(
+                        config=Neo4jConnectionConfig(
+                            uri="bolt://neo4j.local:7687",
+                            user="neo4j",
+                            password="configured-test-password",
+                        ),
+                        driver=fake_driver,
+                    )
+                ),
+            )
+        )
+
+        result = strategy.search(
+            db,
+            query="unmatched entity name",
             top_k=3,
             filters=RetrievalFilters(),
             settings=GraphRetrievalSettings(
@@ -435,7 +579,7 @@ def test_neo4j_graph_store_is_safe_without_config(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
     with graph_retrieval_session_factory() as db:
-        store = Neo4jGraphStore()
+        store = Neo4jGraphStore(config=Neo4jConnectionConfig())
 
         result = store.search(
             db,
@@ -524,6 +668,7 @@ def test_neo4j_graph_store_maps_bounded_paths_to_common_dto(
                 }
             ],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -592,6 +737,7 @@ def test_neo4j_entity_lookup_matches_sanitized_aliases(
                     "confidence": 0.9,
                 }
             ],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -639,6 +785,7 @@ def test_neo4j_entity_lookup_applies_filters_before_limit(
             ],
             relation_rows=[],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -709,6 +856,7 @@ def test_neo4j_filters_whole_paths_with_out_of_scope_relation_chunks(
                 }
             ],
             mention_rows=[],
+            projected_document_version_ids=[seed.document_version_id],
         )
         store = Neo4jGraphStore(
             client=Neo4jClient(
@@ -1418,6 +1566,76 @@ def test_graph_retrieval_path_records_are_safe_and_link_to_retrieval_items(
         assert "prompt" not in payload_dump
 
 
+def test_graph_neo4j_provider_retrieves_projected_paths_with_real_neo4j(
+    graph_retrieval_session_factory: sessionmaker[Session],
+) -> None:
+    config = Neo4jConnectionConfig.from_settings(get_settings())
+    if not config.is_configured:
+        pytest.skip("Neo4j integration smoke requires NEO4J_URI/USER/PASSWORD")
+    client = Neo4jClient(config=config)
+    reason = client.verify_connectivity()
+    if reason is not None:
+        client.close()
+        pytest.skip(f"Neo4j integration smoke unavailable: {reason}")
+
+    graph_index_run_id = 987654321
+    try:
+        _cleanup_neo4j_projection(client, graph_index_run_id=graph_index_run_id)
+        with graph_retrieval_session_factory() as db:
+            seed = _seed_graph(db)
+            projection = Neo4jProjectionService(
+                client=client,
+                projection_enabled=True,
+            ).project_document_version(
+                db,
+                document_version_id=seed.document_version_id,
+                graph_index_run_id=graph_index_run_id,
+            )
+            assert projection.reason_codes == ("neo4j_projection_completed",)
+            assert projection.projected_entities >= 3
+            assert projection.projected_chunks >= 2
+
+            strategy = GraphRetrievalStrategy(
+                resolver=GraphStoreResolver(
+                    provider=GraphStoreProvider.NEO4J,
+                    neo4j_store=Neo4jGraphStore(client=client),
+                )
+            )
+            result = strategy.search(
+                db,
+                query="How does FastAPI use PostgreSQL in the RAGProject architecture?",
+                top_k=3,
+                filters=RetrievalFilters(),
+                settings=GraphRetrievalSettings(
+                    enabled=True,
+                    provider=GraphStoreProvider.NEO4J,
+                    min_entity_match_score=0.2,
+                ),
+            )
+
+        assert result.provider == GraphStoreProvider.NEO4J
+        assert result.graph_candidates
+        assert result.paths
+        assert "graph_store_provider_unavailable" not in result.reason_codes
+        assert result.summary_fields()["graph_store_provider"] == "neo4j"
+        key_rows = client.execute(
+            """
+            MATCH (chunk:RAGGraphChunk)
+            WHERE chunk.last_graph_index_run_id = $graph_index_run_id
+            RETURN keys(chunk) AS keys
+            LIMIT 5
+            """,
+            {"graph_index_run_id": graph_index_run_id},
+        )
+        keys = {key for row in key_rows for key in row.get("keys", [])}
+        assert "content_text" not in keys
+        assert "raw_text" not in keys
+        assert "snippet" not in keys
+    finally:
+        _cleanup_neo4j_projection(client, graph_index_run_id=graph_index_run_id)
+        client.close()
+
+
 def test_graph_path_relation_refs_preserve_actual_direction_for_incoming_edges(
     graph_retrieval_session_factory: sessionmaker[Session],
 ) -> None:
@@ -1481,6 +1699,36 @@ def test_graph_query_signal_score_detects_japanese_relation_queries() -> None:
     assert graph_query_signal_score("FastAPI は PostgreSQL に依存していますか") >= threshold
     # An unrelated Japanese question stays below the threshold.
     assert graph_query_signal_score("今日の天気は?") < threshold
+
+
+def _cleanup_neo4j_projection(client: Neo4jClient, *, graph_index_run_id: int) -> None:
+    client.execute_write(
+        [
+            (
+                """
+                MATCH (chunk:RAGGraphChunk)
+                WHERE chunk.last_graph_index_run_id = $graph_index_run_id
+                DETACH DELETE chunk
+                """,
+                {"graph_index_run_id": graph_index_run_id},
+            ),
+            (
+                """
+                MATCH (entity:RAGGraphEntity)
+                WHERE entity.last_graph_index_run_id = $graph_index_run_id
+                DETACH DELETE entity
+                """,
+                {"graph_index_run_id": graph_index_run_id},
+            ),
+        ]
+    )
+
+
+def _resolver_with_unconfigured_neo4j() -> GraphStoreResolver:
+    return GraphStoreResolver(
+        provider=GraphStoreProvider.NEO4J,
+        neo4j_store=Neo4jGraphStore(config=Neo4jConnectionConfig()),
+    )
 
 
 def _seed_graph(db: Session) -> SeedGraph:

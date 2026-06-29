@@ -926,11 +926,12 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
             )
             if not start_entities:
-                if not self._has_projected_entities(filters):
+                projection_gap_reason = self._projection_gap_reason(db, filters)
+                if projection_gap_reason is not None:
                     return self._unavailable_result(
                         query,
                         started_at,
-                        "neo4j_projection_empty",
+                        projection_gap_reason,
                     )
                 return _graph_retrieval_result(
                     provider=self.provider,
@@ -950,6 +951,13 @@ class Neo4jGraphStore:
                 settings=bounded_settings,
                 started_at=started_at,
             )
+            projection_gap_reason = self._projection_gap_reason(db, filters)
+            if projection_gap_reason is not None:
+                return self._unavailable_result(
+                    query,
+                    started_at,
+                    projection_gap_reason,
+                )
         except Neo4jUnavailable as exc:
             return self._unavailable_result(query, started_at, exc.reason_code)
 
@@ -1002,7 +1010,19 @@ class Neo4jGraphStore:
             elapsed_ms=_elapsed_ms(started_at),
         )
 
-    def _has_projected_entities(self, filters: RetrievalFilters) -> bool:
+    def _projection_gap_reason(self, db: Session, filters: RetrievalFilters) -> str | None:
+        projected_document_version_ids = self._projected_document_version_ids(filters)
+        if not projected_document_version_ids:
+            return "neo4j_projection_empty"
+        if self.repository.has_active_graph_sources_missing_projection(
+            db,
+            filters=filters,
+            projected_document_version_ids=projected_document_version_ids,
+        ):
+            return "neo4j_projection_incomplete"
+        return None
+
+    def _projected_document_version_ids(self, filters: RetrievalFilters) -> set[int]:
         filter_params = _neo4j_filter_params(filters)
         rows = self.client.execute(
             """
@@ -1015,16 +1035,16 @@ class Neo4jGraphStore:
                   size($logical_document_ids) = 0
                   OR chunk.logical_document_id IN $logical_document_ids
               )
-            RETURN count(DISTINCT entity) AS entity_count
+            RETURN DISTINCT chunk.document_version_id AS document_version_id
+            ORDER BY document_version_id ASC
             """,
             filter_params,
         )
-        if not rows:
-            return False
-        try:
-            return int(str(rows[0].get("entity_count", 0))) > 0
-        except (TypeError, ValueError):
-            return False
+        return {
+            document_version_id
+            for row in rows
+            if (document_version_id := _positive_int(row.get("document_version_id"))) is not None
+        }
 
     def _lookup_entities(
         self,
@@ -1761,6 +1781,7 @@ def _neo4j_result_allows_postgres_fallback(result: GraphRetrievalResult) -> bool
         "neo4j_driver_unavailable",
         "neo4j_connection_failed",
         "neo4j_projection_empty",
+        "neo4j_projection_incomplete",
     }
     return any(reason_code in setup_reason_codes for reason_code in result.reason_codes)
 

@@ -1,18 +1,20 @@
-# Neo4j Optional Backend
+# Neo4j Graph Store Backend
 
-PR-50 adds Neo4j as an optional GraphStore read model. PostgreSQL remains the
+C2a promotes Neo4j from an opt-in demo profile to the default GraphStore read
+model for the local Compose and CI stacks. PostgreSQL remains the
 source of truth for `graph_entities`, `graph_relations`, `graph_entity_mentions`,
 retrieval runs, retrieval run items, and citations.
 
 ## Defaults
 
-- `GRAPH_STORE_PROVIDER=postgres` remains the default.
-- The Neo4j Python driver is an optional dependency extra, not a required
-  runtime dependency.
-- The `neo4j` Docker Compose service is behind the `neo4j` profile and is not
-  part of default `docker compose up`.
-- Neo4j projection is disabled unless `NEO4J_PROJECTION_ENABLED=true`.
-- Neo4j health checking is disabled unless `NEO4J_HEALTH_CHECK_ENABLED=true`.
+- `GRAPH_STORE_PROVIDER=neo4j` is the default in `docker-compose.yml` and
+  `docker-compose.ci.yml`.
+- `GRAPH_RETRIEVAL_ENABLED=true`, `NEO4J_PROJECTION_ENABLED=true`, and
+  `NEO4J_HEALTH_CHECK_ENABLED=true` are the local Compose defaults.
+- The `neo4j` Docker Compose service is part of default `docker compose up`.
+- The backend and worker Compose builds install the `neo4j` optional dependency
+  extra by default. Running the backend outside Docker still requires
+  `uv sync --extra dev --extra neo4j` for Neo4j connectivity.
 
 If Neo4j is not configured, the driver is not installed, the server is down, or
 projection has not been populated, the application still starts and PostgreSQL
@@ -31,62 +33,37 @@ cd backend
 python -m uv sync --extra dev --extra neo4j
 ```
 
-Start only the optional Neo4j service:
+Start the default local stack:
 
 ```powershell
-$env:NEO4J_USER = "neo4j"
-$secureNeo4jPassword = Read-Host "Local Neo4j password" -AsSecureString
-$neo4jPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
-  $secureNeo4jPassword
-)
-try {
-  $plainNeo4jPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($neo4jPasswordPtr)
-  $env:NEO4J_PASSWORD = $plainNeo4jPassword
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($neo4jPasswordPtr)
-}
-docker compose --profile neo4j up -d neo4j
+docker compose up -d --build
 ```
 
-Run the app with Neo4j enabled:
+The local default Neo4j password is the non-secret Compose development value
+`change-me-local`. Override it before any shared environment:
 
 ```powershell
-$env:GRAPH_STORE_PROVIDER = "neo4j"
-$env:GRAPH_RETRIEVAL_ENABLED = "true"
-$env:NEO4J_URI = "bolt://neo4j:7687"
-$env:NEO4J_PROJECTION_ENABLED = "true"
-$env:BACKEND_UV_EXTRA_ARGS = "--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+$env:NEO4J_PASSWORD = "<local override>"
+docker compose up -d --build
 ```
 
 Equivalent POSIX shell shape:
 
 ```sh
-export NEO4J_USER=neo4j
-printf "Local Neo4j password: "
-stty -echo
-read -r NEO4J_PASSWORD
-stty echo
-printf "\n"
-export NEO4J_PASSWORD
-export GRAPH_STORE_PROVIDER=neo4j
-export GRAPH_RETRIEVAL_ENABLED=true
-export NEO4J_URI=bolt://neo4j:7687
-export NEO4J_PROJECTION_ENABLED=true
-export BACKEND_UV_EXTRA_ARGS="--extra neo4j"
-docker compose --profile neo4j up --build backend worker frontend
+export NEO4J_PASSWORD="<local override>"
+docker compose up -d --build
 ```
 
-`BACKEND_UV_EXTRA_ARGS="--extra neo4j"` is required for Docker-based Neo4j
-runs because the default backend image installs runtime dependencies with
-`uv sync --no-dev` and intentionally does not include optional extras.
+`BACKEND_UV_EXTRA_ARGS="--extra neo4j"` remains available for explicit Docker
+build overrides, but the default Compose stack already passes that extra to
+backend, worker, migrate, seed, and CI test builds.
 
 Use a local-only password for development and replace it before any shared
 environment. Do not paste real Neo4j credentials into docs, logs, PR comments,
 or shell transcripts.
 
-For a single local demo command that starts the `neo4j` profile, rebuilds the
-self-docs corpus, builds PostgreSQL graph indexes, projects to Neo4j, and runs
+For a single local demo command that starts the default Neo4j stack, rebuilds
+the self-docs corpus, builds PostgreSQL graph indexes, projects to Neo4j, and runs
 `graph_postgres` vs `graph_neo4j` comparison, use:
 
 ```powershell
@@ -179,8 +156,8 @@ This smoke is not required for normal CI.
    ```
 
 5. Confirm `graph_index_build` jobs succeed in the worker/admin job view.
-6. Query once with `GRAPH_STORE_PROVIDER=postgres`.
-7. Query the same request with `GRAPH_STORE_PROVIDER=neo4j`.
+6. Query once with `strategy=graph_postgres`.
+7. Query the same request with `strategy=graph_neo4j`.
 8. Compare that both responses are chunk-backed and that graph path summaries
    contain only safe refs and `source_chunk_ids`.
 
@@ -188,8 +165,9 @@ Useful checks:
 
 ```bash
 docker compose config --services
-docker compose --profile neo4j config --services
+docker compose -f docker-compose.yml -f docker-compose.neo4j-demo.yml config --services
 docker compose ps neo4j
 ```
 
-The first command must not list `neo4j`; the profile command should list it.
+The default config must list `neo4j`; the demo overlay should not define a
+second Neo4j service.

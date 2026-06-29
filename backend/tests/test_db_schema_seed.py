@@ -68,7 +68,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0018_evaluation_generation_usage"
+    assert version == "0019_graph_provider_neo4j"
 
     expected_tables = {
         "roles",

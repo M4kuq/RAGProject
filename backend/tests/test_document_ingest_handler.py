@@ -18,6 +18,7 @@ from app.core.job_utils import LeaseLostError
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
+from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
 from app.ingest.embedding import (
     DocumentEmbeddingService,
     EmbeddingAdapterError,
@@ -609,6 +610,15 @@ def test_document_ingest_handler_retry_cleans_existing_chunks_and_reinserts(
         assert version.error_code is None
         assert chunks
         assert all(chunk.content_text != "old chunk" for chunk in chunks)
+        graph_job = db.scalar(
+            select(Job).where(
+                Job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE,
+                Job.target_type == "document_version",
+                Job.target_id == version_id,
+            )
+        )
+        assert graph_job is not None
+        assert graph_job.status == "queued"
 
 
 def test_worker_single_iteration_processes_document_ingest_success_and_failure(
@@ -680,6 +690,13 @@ def test_worker_single_iteration_processes_document_ingest_success_and_failure(
         assert 0 <= min_char_count <= median_char_count <= max_char_count
         assert jobs[2].status == "failed"
         assert jobs[2].error_code == "storage_file_missing"
+        graph_jobs = [
+            job
+            for job in jobs.values()
+            if job.job_type == GRAPH_INDEX_BUILD_JOB_TYPE and job.target_id == success_version_id
+        ]
+        assert len(graph_jobs) == 1
+        assert graph_jobs[0].status == "queued"
         assert db.query(DocumentChunk).filter_by(document_version_id=success_version_id).count() > 0
         failed_version = db.get(DocumentVersion, failure_version_id)
         assert failed_version is not None
@@ -1081,6 +1098,30 @@ def _set_stale_ingest_metadata(
 class _NoopJobRepository:
     def assert_ownership(self, db: Session, *, job_id: int, worker_instance_id: str) -> None:
         return None
+
+    def create_job(
+        self,
+        db: Session,
+        *,
+        job_type: str,
+        target_type: str | None = None,
+        target_id: int | None = None,
+        payload_json: dict[str, object] | None = None,
+        created_by: int | None = None,
+        priority: int = 100,
+    ) -> Job:
+        job = Job(
+            job_type=job_type,
+            status="queued",
+            priority=priority,
+            target_type=target_type,
+            target_id=target_id,
+            payload_json=payload_json,
+            created_by=created_by,
+        )
+        db.add(job)
+        db.flush()
+        return job
 
 
 class _LeaseLostJobRepository:

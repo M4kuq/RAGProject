@@ -48,6 +48,16 @@ const RAG_STRATEGY_OPTIONS = [
     description: "LangGraph Agentic RAG: the same retrieval tools are orchestrated through a LangGraph StateGraph."
   },
   {
+    value: "graph_neo4j" as const,
+    label: "GraphRAG",
+    description: "Neo4j graph retrieval with safe fallback when the read model is unavailable."
+  },
+  {
+    value: "graph_postgres" as const,
+    label: "GraphRAG (Postgres)",
+    description: "PostgreSQL graph retrieval using the source-of-truth graph index."
+  },
+  {
     value: "dense" as const,
     label: "Normal RAG",
     description: "Dense vector retrieval followed by answer generation."

@@ -29,6 +29,7 @@ from app.db.models import (
     SystemSetting,
     User,
 )
+from app.rag.strategy import RetrievalStrategy
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.retrieval_repository import CitationRecord, RetrievalRepository
 from app.schemas.common import PaginationParams
@@ -431,6 +432,124 @@ def test_chat_service_list_messages_batches_retrieval_metadata(
     expected_run_ids = [run_one_id, run_two_id]
     assert retrieval_repository.run_calls == [expected_run_ids]
     assert retrieval_repository.citation_calls == [expected_run_ids]
+
+
+def test_chat_service_list_messages_restores_graph_retrieval_summary(
+    session_factory: sessionmaker[Session],
+) -> None:
+    service = ChatService()
+    with session_factory() as db:
+        _, viewer = users(db)
+        session = service.create_session(
+            db,
+            user=viewer,
+            title="graph metadata",
+            temporary_flag=False,
+            request_id="graph-summary-create",
+        )
+        success_request = ChatMessage(
+            chat_session_id=session.chat_session_id,
+            role="user",
+            content="graph success question",
+            client_message_id="graph-success-1",
+        )
+        fallback_request = ChatMessage(
+            chat_session_id=session.chat_session_id,
+            role="user",
+            content="graph fallback question",
+            client_message_id="graph-fallback-1",
+        )
+        db.add_all([success_request, fallback_request])
+        db.flush()
+        now = datetime.now(UTC)
+        success_run = RetrievalRun(
+            chat_session_id=session.chat_session_id,
+            request_message_id=success_request.chat_message_id,
+            status="succeeded",
+            started_at=now,
+            finished_at=now,
+            top_k=1,
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            strategy_decision_json={
+                "selected_strategy": "graph_postgres",
+                "execution_strategy": "graph",
+                "fallback_used": False,
+                "graph_store_provider": "postgres",
+            },
+            retrieval_score_summary={
+                "graph_store_provider": "postgres",
+                "graph_reason_codes": ["graph_search_completed"],
+                "graph_fallback_used": False,
+            },
+        )
+        fallback_run = RetrievalRun(
+            chat_session_id=session.chat_session_id,
+            request_message_id=fallback_request.chat_message_id,
+            status="succeeded",
+            started_at=now,
+            finished_at=now,
+            top_k=1,
+            strategy_type=RetrievalStrategy.GRAPH.value,
+            strategy_decision_json={
+                "selected_strategy": "graph_neo4j",
+                "execution_strategy": "hybrid",
+                "fallback_used": False,
+                "graph_requested_provider": "neo4j",
+            },
+            retrieval_score_summary={
+                "fallback_used": True,
+                "fallback_reason": "graph_no_evidence_fallback",
+                "graph_store_provider": "postgres",
+                "graph_reason_codes": [
+                    "neo4j_connection_failed",
+                    "graph_no_evidence_fallback",
+                    "graph_fallback_dense",
+                ],
+            },
+        )
+        db.add_all([success_run, fallback_run])
+        db.flush()
+        db.add_all(
+            [
+                ChatMessage(
+                    chat_session_id=session.chat_session_id,
+                    role="assistant",
+                    content="graph success answer",
+                    linked_retrieval_run_id=success_run.retrieval_run_id,
+                ),
+                ChatMessage(
+                    chat_session_id=session.chat_session_id,
+                    role="assistant",
+                    content="graph fallback answer",
+                    linked_retrieval_run_id=fallback_run.retrieval_run_id,
+                ),
+            ]
+        )
+        db.commit()
+
+        messages, _ = service.list_messages(
+            db,
+            user=viewer,
+            chat_session_id=session.chat_session_id,
+            pagination=PaginationParams(page=1, page_size=20),
+        )
+
+    summaries = [message.retrieval_summary for message in messages if message.role == "assistant"]
+    assert len(summaries) == 2
+    success_summary = summaries[0]
+    fallback_summary = summaries[1]
+    assert success_summary is not None
+    assert success_summary.graph_store_provider == "postgres"
+    assert success_summary.fallback_used is False
+    assert success_summary.fallback_reason is None
+    assert success_summary.graph_fallback_reason_codes == []
+    assert fallback_summary is not None
+    assert fallback_summary.graph_requested_provider == "neo4j"
+    assert fallback_summary.graph_store_provider == "postgres"
+    assert fallback_summary.fallback_used is True
+    assert fallback_summary.fallback_reason == "neo4j_connection_failed"
+    assert "neo4j_connection_failed" in fallback_summary.graph_fallback_reason_codes
+    assert "graph_no_evidence_fallback" in fallback_summary.graph_fallback_reason_codes
 
 
 def test_chat_repository_filters_pagination_messages_tags_and_archive(
