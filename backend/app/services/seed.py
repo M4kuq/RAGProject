@@ -18,6 +18,7 @@ from app.db.models import (
     User,
     UserSetting,
 )
+from app.graph.constants import PHASE3_GRAPH_SYSTEM_SETTINGS
 from app.ingest.embedding import EmbeddingAdapterError
 from app.ingest.qdrant import (
     DocumentIndexingService,
@@ -344,6 +345,7 @@ def _seed_system_settings(db: Session) -> None:
             "Keep strategy selection accuracy not-applicable unless expected strategy exists.",
         ),
         **PHASE2_RETRIEVAL_SYSTEM_SETTINGS,
+        **PHASE3_GRAPH_SYSTEM_SETTINGS,
     }
     for key, (value, description) in defaults.items():
         if not db.get(SystemSetting, key):

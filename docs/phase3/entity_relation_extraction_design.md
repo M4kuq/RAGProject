@@ -1,8 +1,10 @@
 # Entity / Relation Extraction Design
 
-PR-47 implements the first safe entity/relation extraction pipeline. It uses a
-deterministic rule-based extractor and a `graph_index_build` worker handler to
-index ready `document_versions` without persisting raw evidence text.
+C2b makes LLM entity/relation extraction the default graph extraction mode. It
+uses the existing generation provider abstraction for chunk-scoped structured
+extraction and falls back gracefully to the deterministic `rule_based`
+extractor when no usable provider is configured or the provider fails. Both
+modes index ready `document_versions` without persisting raw evidence text.
 
 ## Extraction Target
 
@@ -58,12 +60,15 @@ counts, confidence, and safe metadata.
 
 | Mode | Purpose | Phase3 use |
 |---|---|---|
-| rule_based | Safe baseline for technical labels and explicit relation keywords | Implemented in PR-47. |
-| llm_optional | Higher recall extraction | Future, optional, and gated by export policy. |
+| llm | Default higher-recall extractor using the configured generation provider. It grounds returned mentions/evidence back to chunk spans before persistence. | Default in C2b. |
+| rule_based | Deterministic baseline for technical labels and explicit relation keywords. | Graceful fallback when LLM provider is unavailable, fails, times out, returns invalid JSON, or returns an empty response. |
 
 ## Raw Text Handling
 
-Extraction internally reads chunk text. It must not persist or log raw document text, raw chunk text, full context, prompt material, PII, credential values, or secret values. Use:
+Extraction internally reads chunk text and the LLM prompt contains the current
+chunk in memory only. It must not persist or log raw document text, raw chunk
+text, raw LLM response, full context, prompt material, PII details, credential
+values, or secret values. Use:
 
 - `document_chunk_id`
 - `document_version_id`
@@ -71,14 +76,20 @@ Extraction internally reads chunk text. It must not persist or log raw document 
 - `evidence_text_hash`
 - bounded safe labels
 - confidence and reason codes
+- actual `extractor_type` / `extractor_version`
+- provider/model labels, latency, cost estimate, and token counts only as safe aggregate metadata
 
 ## PII Redaction
 
-The extraction layer must run the same redaction policy as retrieval traces. Person-like or organization-like labels are allowed only as normalized entity labels when they are needed for retrieval, but raw private details must not be logged or displayed in debug output.
+The extraction layer must run the same redaction policy as retrieval traces.
+Person-like or organization-like labels are allowed only as grounded,
+normalized entity labels when needed for retrieval. Raw private details, copied
+source passages, prompt text, and raw LLM responses must not be logged,
+persisted, projected to Neo4j, or displayed in debug output.
 
 ## Entity Normalization
 
-Normalization should be deterministic before any optional LLM merge:
+Normalization remains deterministic after LLM extraction:
 
 - Unicode normalization.
 - trim/case folding where appropriate.
@@ -120,7 +131,17 @@ Each relation must map to at least one source chunk through `source_document_chu
 
 ## Failure Handling
 
-Failures must use safe error codes such as:
+LLM extractor failures do not fail the graph job by themselves. The worker falls
+back to `rule_based`, persists the actual extractor used, and records safe reason
+codes such as:
+
+- `graph_extraction_llm_unavailable`
+- `graph_extraction_llm_failed`
+- `graph_extraction_llm_invalid_response`
+- `graph_extraction_llm_empty_response`
+- `graph_extraction_llm_fallback`
+
+Hard graph failures must still use safe error codes such as:
 
 - `graph_extraction_failed`
 - `graph_normalization_failed`

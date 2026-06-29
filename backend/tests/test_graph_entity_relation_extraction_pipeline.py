@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
@@ -12,12 +14,20 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.graph_models import GraphEntity, GraphEntityMention, GraphIndexRun, GraphRelation
 from app.db.models import DocumentChunk, DocumentVersion, Job, LogicalDocument, Role, User
 from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
-from app.graph.extraction import EntityMentionCandidate, GraphExtractionResult, RelationCandidate
+from app.graph.extraction import (
+    EntityMentionCandidate,
+    GraphChunkRef,
+    GraphExtractionResult,
+    RelationCandidate,
+)
+from app.graph.llm_extraction import LLMGraphExtractor
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
+from app.rag.generation import GenerationRequest, GenerationResult, TokenUsage
 from app.repositories.graph_repository import GraphRepository
 from app.repositories.job_repository import JobRepository
 from app.scripts.queue_graph_index_builds import queue_graph_index_build_jobs
@@ -112,6 +122,19 @@ class _RecordingNeo4jResult:
         return None
 
 
+class _StaticGraphAnswerGenerator:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+        self.requests: list[GenerationRequest] = []
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        return GenerationResult(
+            content=json.dumps(self.payload),
+            usage=TokenUsage(input_tokens=7, output_tokens=5, total_tokens=12),
+        )
+
+
 class _RecordingNeo4jProjectionService:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int | None]] = []
@@ -185,6 +208,9 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
         assert first_counts["mentions"] >= 4
         assert first_counts["relations"] >= 2
         assert first_run.status == "succeeded"
+        assert first_run.extractor_type == "llm"
+        assert first_run.extractor_version == "c2b-llm-v1"
+        assert first_run.metadata_json["extractor_result_code"] == "graph_extraction_llm_completed"
         assert first_run.entity_count == first_counts["entities"]
         assert first_run.mention_count == first_counts["mentions"]
         assert first_run.relation_count == first_counts["relations"]
@@ -227,6 +253,218 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
         ]
         assert len(repository.entity_key_lock_sets) == 2
         assert all(entity_keys for entity_keys in repository.entity_key_lock_sets)
+
+
+def test_graph_extraction_settings_default_to_llm() -> None:
+    settings = Settings(_env_file=None, app_env="test")
+
+    assert settings.graph_extractor_type == "llm"
+    assert settings.graph_extraction_provider is None
+    assert settings.graph_extraction_model_name is None
+    assert settings.graph_extraction_timeout_seconds == 60
+    assert settings.graph_extraction_max_entities_per_chunk == 20
+    assert settings.graph_extraction_max_relations_per_chunk == 40
+
+
+def test_llm_graph_extractor_grounds_offsets_and_drops_hallucinations() -> None:
+    chunk = _chunk_ref(
+        "Graph Index supports Hybrid RAG. Alice Smith maintains Graph Index.",
+    )
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 0.92,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.88,
+                    },
+                    {
+                        "mention": "Alice Smith",
+                        "canonical_name": "Alice Smith",
+                        "entity_type": "person",
+                        "aliases": [],
+                        "confidence": 0.77,
+                    },
+                    {
+                        "mention": "Ghost System",
+                        "canonical_name": "Ghost System",
+                        "entity_type": "system",
+                        "aliases": [],
+                        "confidence": 0.99,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index supports Hybrid RAG.",
+                        "confidence": 0.81,
+                    },
+                    {
+                        "source": "Graph Index",
+                        "target": "Ghost System",
+                        "relation_type": "uses",
+                        "evidence": "Graph Index uses Ghost System.",
+                        "confidence": 0.99,
+                    },
+                ],
+            }
+        ),
+    )
+
+    result = extractor.extract((chunk,))
+
+    names = {mention.canonical_name for mention in result.entity_mentions}
+    assert names == {"Graph Index", "Hybrid RAG", "Alice Smith"}
+    graph_index_mention = next(
+        mention for mention in result.entity_mentions if mention.canonical_name == "Graph Index"
+    )
+    assert graph_index_mention.mention_offset_start == 0
+    assert graph_index_mention.mention_offset_end == len("Graph Index")
+    assert graph_index_mention.mention_text_hash == hashlib.sha256(b"Graph Index").hexdigest()
+    assert len(result.relations) == 1
+    assert result.relations[0].relation_type == "supports"
+    assert (
+        result.relations[0].evidence_text_hash
+        == hashlib.sha256(b"Graph Index supports Hybrid RAG.").hexdigest()
+    )
+    assert result.extractor_type == "llm"
+    assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_completed"
+    assert result.metadata_json["graph_extraction_input_token_count"] == 7
+    serialized = str(
+        [
+            result.metadata_json,
+            *[mention.metadata_json for mention in result.entity_mentions],
+            *[relation.metadata_json for relation in result.relations],
+        ]
+    )
+    assert "Graph Index supports Hybrid RAG" not in serialized
+    assert "Alice Smith maintains" not in serialized
+    assert "raw" not in serialized.lower()
+    assert "prompt" not in serialized.lower()
+
+
+def test_graph_index_service_falls_back_to_rule_based_when_llm_provider_unavailable(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    service = GraphIndexService(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            graph_extractor_type="llm",
+            graph_extraction_provider="openai",
+            generation_provider="fake",
+        )
+    )
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+        persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
+        db.commit()
+
+        assert result.extractor_type == "rule_based"
+        assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_fallback"
+        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
+        assert persisted.extractor_type == "rule_based"
+        assert persisted.extractor_version == "pr47-rule-based-v1"
+        assert persisted.metadata_json["fallback_reason_code"] == (
+            "graph_extraction_llm_unavailable"
+        )
+        assert persisted.status == "succeeded"
+        assert persisted.mention_count > 0
+
+
+def test_graph_index_worker_records_actual_extractor_after_llm_fallback(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    job_repository = JobRepository()
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        graph_extraction_provider="openai",
+        generation_provider="fake",
+    )
+    service = GraphIndexService(settings=settings)
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            ["Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        job = job_repository.create_job(
+            db,
+            job_type=GRAPH_INDEX_BUILD_JOB_TYPE,
+            target_type="document_version",
+            target_id=version.document_version_id,
+            payload_json=service.build_graph_index_job_payload(
+                document_version_id=version.document_version_id,
+                graph_index_run_id=run.graph_index_run_id,
+            ),
+        )
+        db.commit()
+        job_id = job.job_id
+        run_id = run.graph_index_run_id
+
+    dispatcher = JobDispatcher(
+        {
+            GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
+                session_factory=graph_session_factory,
+                service_factory=lambda: GraphIndexService(settings=settings),
+            )
+        }
+    )
+    runner = WorkerRunner(
+        config=_worker_config(enabled_job_types=frozenset({GRAPH_INDEX_BUILD_JOB_TYPE})),
+        session_factory=graph_session_factory,
+        dispatcher=dispatcher,
+    )
+    assert runner.run_once() == 1
+
+    with graph_session_factory() as db:
+        stored_job = db.get(Job, job_id)
+        stored_run = db.get(GraphIndexRun, run_id)
+        assert stored_job is not None
+        assert stored_run is not None
+        assert stored_job.status == "succeeded"
+        assert stored_job.result_json is not None
+        assert stored_job.result_json["extractor_type"] == "rule_based"
+        assert stored_job.result_json["graph_extraction_result_code"] == (
+            "graph_extraction_llm_fallback"
+        )
+        assert stored_job.result_json["graph_extraction_fallback_reason"] == (
+            "graph_extraction_llm_unavailable"
+        )
+        assert "Graph Index supports" not in str(stored_job.result_json)
+        assert stored_run.extractor_type == "rule_based"
 
 
 def test_neo4j_projection_service_projects_safe_rows_idempotently(
@@ -976,6 +1214,16 @@ def _seed_ready_version(db: Session, chunk_texts: list[str]) -> DocumentVersion:
         )
     db.flush()
     return version
+
+
+def _chunk_ref(text: str) -> GraphChunkRef:
+    return GraphChunkRef(
+        document_chunk_id=1,
+        document_version_id=1,
+        chunk_index=0,
+        chunk_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        content_text=text,
+    )
 
 
 def _graph_counts(db: Session, document_version_id: int) -> dict[str, int]:

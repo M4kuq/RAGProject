@@ -1,7 +1,8 @@
 # Graph Indexing Design
 
-PR-46 implemented the graph index state foundation. PR-47 connects that
-foundation to a safe entity/relation extraction worker.
+PR-46 implemented the graph index state foundation. PR-47 connected that
+foundation to a safe entity/relation extraction worker. C2b makes LLM
+extraction the default and keeps rule-based extraction as the graceful fallback.
 
 ## Implemented Foundation
 
@@ -12,8 +13,9 @@ foundation to a safe entity/relation extraction worker.
 - `GraphIndexJobPayload` DTO
 - disabled graph settings defaults in `system_settings`
 
-## Implemented In PR-47
+## Implemented Extractors
 
+- LLM `LLMGraphExtractor` using the existing generation provider abstraction
 - rule-based `EntityExtractionService`
 - rule-based `RelationExtractionService`
 - `GraphEntityNormalizer`
@@ -66,6 +68,7 @@ Unsafe payload fields remain forbidden:
 - raw document text
 - raw chunk text
 - raw prompt
+- raw LLM response
 - full context
 - credential or secret values
 
@@ -77,7 +80,13 @@ Graph indexing remains opt-in, while graph retrieval is enabled by default:
 |---|---|
 | `rag.graph.enabled` | `false` |
 | `rag.graph.indexing.enabled` | `false` |
-| `rag.graph.extractor.default` | `none` |
+| `rag.graph.extractor.default` | `llm` |
+| `rag.graph.extraction.provider` | `null` (reuse `generation_provider`) |
+| `rag.graph.extraction.model_name` | `null` (reuse `generation_model_name`) |
+| `rag.graph.extraction.timeout_seconds` | `60` |
+| `rag.graph.extraction.max_output_chars` | `12000` |
+| `rag.graph.extraction.max_output_tokens` | `2048` |
+| `rag.graph.extraction.min_confidence` | `0.5` |
 | `rag.graph.max_entities_per_chunk` | `20` |
 | `rag.graph.max_relations_per_chunk` | `40` |
 | `rag.graph.store_raw_evidence_text` | `false` |
@@ -90,8 +99,9 @@ The handler:
 1. Acquire a `graph_index_build` job.
 2. Mark the corresponding `graph_index_runs` row `running`.
 3. Read approved chunk text internally.
-4. Persist entities, relations, mentions, hashes, refs, confidence, and counts.
-5. Mark the run `succeeded` or `failed` with a safe error code/message.
+4. Run LLM extraction by default, or fall back to `rule_based` when the provider is unavailable, fails, times out, or returns invalid/empty output.
+5. Persist entities, relations, mentions, hashes, offsets, refs, confidence, safe extractor metadata, and counts.
+6. Mark the run `succeeded` or `failed` with a safe error code/message.
 
 ## Transaction Boundary
 

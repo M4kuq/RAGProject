@@ -47,6 +47,14 @@ _SAFE_RESULT_KEYS = frozenset(
         "cleaned_count",
         "neo4j_projection_result_code",
         "result_redacted",
+        "extractor_type",
+        "extractor_version",
+        "graph_extraction_result_code",
+        "graph_extraction_fallback_reason",
+        "graph_extraction_provider",
+        "graph_extraction_model",
+        "graph_extraction_estimated_cost_usd",
+        "graph_extraction_latency_ms",
     }
 )
 _SAFE_PAYLOAD_KEYS = frozenset(
@@ -176,6 +184,8 @@ def _redact_value(value: object, *, key: str | None) -> object:
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
+    if lowered.endswith("_token_count"):
+        return False
     if lowered.endswith(("_id", "_ids", "_count")) and not any(
         part in lowered for part in _SECRET_KEY_PARTS
     ):

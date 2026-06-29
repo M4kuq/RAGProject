@@ -6,10 +6,17 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.errors import ResourceNotFound
 from app.db.graph_models import GraphEntity, GraphIndexRun
 from app.db.models import DocumentVersion
-from app.graph.constants import GRAPH_INDEX_BUILD_JOB_TYPE
+from app.graph.constants import (
+    DEFAULT_GRAPH_EXTRACTOR_TYPE,
+    GRAPH_EXTRACTION_LLM_FALLBACK,
+    GRAPH_INDEX_BUILD_JOB_TYPE,
+    LLM_GRAPH_EXTRACTOR_TYPE,
+    LLM_GRAPH_EXTRACTOR_VERSION,
+)
 from app.graph.extraction import (
     RULE_BASED_GRAPH_EXTRACTOR_TYPE,
     RULE_BASED_GRAPH_EXTRACTOR_VERSION,
@@ -17,9 +24,12 @@ from app.graph.extraction import (
     EntityMentionCandidate,
     GraphChunkRef,
     GraphExtractionResult,
+    GraphExtractor,
     RelationCandidate,
     RelationExtractionService,
+    RuleBasedGraphExtractor,
 )
+from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor
 from app.repositories.graph_repository import GraphRepository
 from app.schemas.graph import (
     GraphEntityCreate,
@@ -28,6 +38,7 @@ from app.schemas.graph import (
     GraphIndexRunCreate,
     GraphIndexSummary,
     GraphRelationCreate,
+    validate_safe_graph_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,16 +74,34 @@ class GraphIndexService:
         *,
         entity_extractor: EntityExtractionService | None = None,
         relation_extractor: RelationExtractionService | None = None,
+        graph_extractor: GraphExtractor | None = None,
+        llm_extractor: GraphExtractor | None = None,
         neo4j_projection_service: Neo4jProjectionServiceProtocol | None = None,
-        extractor_type: str = RULE_BASED_GRAPH_EXTRACTOR_TYPE,
-        extractor_version: str | None = RULE_BASED_GRAPH_EXTRACTOR_VERSION,
+        settings: Settings | None = None,
+        extractor_type: str | None = None,
+        extractor_version: str | None = None,
     ) -> None:
+        self.settings = settings or get_settings()
         self.repository = repository or GraphRepository()
-        self.entity_extractor = entity_extractor or EntityExtractionService()
-        self.relation_extractor = relation_extractor or RelationExtractionService()
+        self.rule_based_extractor = RuleBasedGraphExtractor(
+            entity_extractor=entity_extractor
+            or EntityExtractionService(
+                max_entities_per_chunk=self.settings.graph_extraction_max_entities_per_chunk,
+            ),
+            relation_extractor=relation_extractor
+            or RelationExtractionService(
+                max_relations_per_chunk=self.settings.graph_extraction_max_relations_per_chunk,
+            ),
+        )
+        self.graph_extractor = graph_extractor
+        self.llm_extractor = llm_extractor
         self.neo4j_projection_service = neo4j_projection_service
-        self.extractor_type = extractor_type
-        self.extractor_version = extractor_version
+        self.extractor_type = _requested_extractor_type(
+            extractor_type or self.settings.graph_extractor_type
+        )
+        self.extractor_version = extractor_version or _default_extractor_version(
+            self.extractor_type
+        )
 
     def create_index_run_for_document_version(
         self,
@@ -162,6 +191,11 @@ class GraphIndexService:
 
         if run.job_id is None and job_id is not None:
             run.job_id = job_id
+        if extractor_type is not None:
+            run.extractor_type = _requested_extractor_type(extractor_type)
+            run.extractor_version = extractor_version or _default_extractor_version(
+                run.extractor_type
+            )
         if run.extractor_type == "none":
             run.extractor_type = extractor_type or self.extractor_type
         if run.extractor_version is None:
@@ -191,12 +225,61 @@ class GraphIndexService:
         )
 
     def extract_from_snapshot(self, snapshot: GraphIndexBuildSnapshot) -> GraphExtractionResult:
-        mentions = self.entity_extractor.extract(snapshot.chunks)
-        relations = self.relation_extractor.extract(snapshot.chunks, mentions)
-        return GraphExtractionResult(
-            entity_mentions=_dedupe_mentions(mentions),
-            relations=_dedupe_relations(relations),
+        extractor_type = _requested_extractor_type(snapshot.extractor_type)
+        if self.graph_extractor is not None:
+            return _dedupe_result(self.graph_extractor.extract(snapshot.chunks))
+        if extractor_type == LLM_GRAPH_EXTRACTOR_TYPE:
+            try:
+                return _dedupe_result(self._llm_extractor().extract(snapshot.chunks))
+            except LLMGraphExtractionError as exc:
+                logger.warning(
+                    "graph llm extraction fell back to rule_based",
+                    extra={
+                        "document_version_id": snapshot.document_version_id,
+                        "graph_index_run_id": snapshot.graph_index_run_id,
+                        "reason_code": exc.reason_code,
+                        "provider": self._llm_provider_name(),
+                    },
+                )
+                fallback = self.rule_based_extractor.extract(snapshot.chunks)
+                fallback_metadata = dict(fallback.metadata_json)
+                fallback_metadata.update(
+                    {
+                        "extractor_result_code": GRAPH_EXTRACTION_LLM_FALLBACK,
+                        "requested_extractor_type": LLM_GRAPH_EXTRACTOR_TYPE,
+                        "fallback_reason_code": exc.reason_code,
+                        "fallback_extractor_type": RULE_BASED_GRAPH_EXTRACTOR_TYPE,
+                        "graph_extraction_provider": self._llm_provider_name(),
+                        "graph_extraction_model": self._llm_model_name(),
+                    }
+                )
+                return _dedupe_result(
+                    GraphExtractionResult(
+                        entity_mentions=fallback.entity_mentions,
+                        relations=fallback.relations,
+                        extractor_type=RULE_BASED_GRAPH_EXTRACTOR_TYPE,
+                        extractor_version=RULE_BASED_GRAPH_EXTRACTOR_VERSION,
+                        metadata_json=validate_safe_graph_metadata(fallback_metadata),
+                    )
+                )
+        return _dedupe_result(self.rule_based_extractor.extract(snapshot.chunks))
+
+    def _llm_extractor(self) -> GraphExtractor:
+        if self.llm_extractor is None:
+            self.llm_extractor = LLMGraphExtractor(settings=self.settings)
+        return self.llm_extractor
+
+    def _llm_provider_name(self) -> str:
+        return (
+            (self.settings.graph_extraction_provider or self.settings.generation_provider)
+            .strip()
+            .lower()
         )
+
+    def _llm_model_name(self) -> str:
+        return (
+            self.settings.graph_extraction_model_name or self.settings.generation_model_name
+        ).strip()[:160]
 
     def persist_extraction_result(
         self,
@@ -214,6 +297,14 @@ class GraphIndexService:
             raise ResourceNotFound()
         if run.status != "running":
             raise ValueError("graph_index_run must be running")
+        run.extractor_type = result.extractor_type
+        run.extractor_version = result.extractor_version
+        run.metadata_json = validate_safe_graph_metadata(
+            {
+                **(run.metadata_json or {}),
+                **result.metadata_json,
+            }
+        )
 
         version = db.get(DocumentVersion, snapshot.document_version_id)
         if version is None:
@@ -465,6 +556,34 @@ def _dedupe_mentions(
         seen.add(key)
         deduped.append(mention)
     return tuple(deduped)
+
+
+def _dedupe_result(result: GraphExtractionResult) -> GraphExtractionResult:
+    return GraphExtractionResult(
+        entity_mentions=_dedupe_mentions(result.entity_mentions),
+        relations=_dedupe_relations(result.relations),
+        extractor_type=result.extractor_type,
+        extractor_version=result.extractor_version,
+        metadata_json=validate_safe_graph_metadata(dict(result.metadata_json)),
+    )
+
+
+def _requested_extractor_type(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"", "none"}:
+        return DEFAULT_GRAPH_EXTRACTOR_TYPE
+    if normalized in {LLM_GRAPH_EXTRACTOR_TYPE, RULE_BASED_GRAPH_EXTRACTOR_TYPE}:
+        return normalized
+    logger.warning("unknown graph extractor requested; falling back to rule_based")
+    return RULE_BASED_GRAPH_EXTRACTOR_TYPE
+
+
+def _default_extractor_version(extractor_type: str) -> str | None:
+    if extractor_type == LLM_GRAPH_EXTRACTOR_TYPE:
+        return LLM_GRAPH_EXTRACTOR_VERSION
+    if extractor_type == RULE_BASED_GRAPH_EXTRACTOR_TYPE:
+        return RULE_BASED_GRAPH_EXTRACTOR_VERSION
+    return None
 
 
 def _dedupe_relations(

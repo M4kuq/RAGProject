@@ -22,6 +22,7 @@ Graph tables do not store:
 - raw document text
 - raw chunk text
 - raw prompt material
+- raw LLM response text
 - full context
 - raw OCR text
 - raw graph evidence text
@@ -56,7 +57,11 @@ Retrieval paths use:
 
 ## Metadata Guard
 
-Repository and DTO paths validate or sanitize graph metadata. Metadata must not include raw text dumps, prompt material, full context, PII, token values, credential values, password values, or secret values.
+Repository and DTO paths validate or sanitize graph metadata. Metadata must not
+include raw text dumps, prompt material, raw LLM responses, full context, PII
+details, token values, credential values, password values, or secret values.
+Safe aggregate token counts such as `graph_extraction_input_token_count` are
+allowed when stored as non-negative integers.
 
 ## Error Handling
 
@@ -65,7 +70,8 @@ Repository and DTO paths validate or sanitize graph metadata. Metadata must not 
 ## Viewer/Admin Boundary
 
 Admin graph debug surfaces may show counts, IDs, refs, scores, validation
-summaries, provider labels, cache status, and reason codes. Viewer-facing
+summaries, provider/model labels, latency, cost estimates, token counts, cache
+status, and reason codes. Viewer-facing
 responses must not expose graph internals or raw evidence.
 
 ## PR-54 Demo And Docs Checklist
@@ -74,6 +80,7 @@ Before publishing demo docs, screenshots, PR comments, smoke logs, or manual
 test evidence, confirm they do not contain:
 
 - raw prompt text
+- raw LLM response text
 - raw query text beyond safe synthetic examples
 - raw chunk text or raw document text
 - full generated context

@@ -55,6 +55,19 @@ _TECHNICAL_SUFFIXES = (
     "service",
     "worker",
 )
+_LLM_ALLOWED_ENTITY_TYPES = {
+    "acronym",
+    "artifact",
+    "concept",
+    "dataset",
+    "document",
+    "method",
+    "organization",
+    "paper",
+    "person",
+    "system",
+    "technology",
+}
 
 
 @dataclass(frozen=True)
@@ -68,8 +81,8 @@ class GraphEntityNormalizer:
     """Deterministic, conservative graph label normalizer.
 
     The normalizer intentionally rejects labels that do not look technical enough for
-    the current graph index scope. This keeps private names or incidental text out of
-    graph tables while PR-47 ships a rule-based baseline.
+    the rule-based extractor scope. LLM extraction may pass explicit safe entity
+    types, but all labels still go through the same redaction and metadata checks.
     """
 
     def normalize(
@@ -80,7 +93,11 @@ class GraphEntityNormalizer:
         aliases: list[str] | tuple[str, ...] | None = None,
     ) -> NormalizedGraphEntity | None:
         canonical = self._normalize_label(value)
-        if canonical is None or not self._looks_like_graph_entity(canonical):
+        if canonical is None:
+            return None
+        if entity_type is None and not self._looks_like_graph_entity(canonical):
+            return None
+        if entity_type is not None and not self._is_allowed_typed_entity(entity_type):
             return None
 
         normalized_type = entity_type or self.infer_entity_type(canonical)
@@ -160,3 +177,9 @@ class GraphEntityNormalizer:
         if re.fullmatch(r"[a-z]+(?:_[a-z0-9]+)+", value):
             return True
         return False
+
+    def _is_allowed_typed_entity(self, value: str) -> bool:
+        normalized = self._normalize_label(value)
+        if normalized is None:
+            return False
+        return normalized.lower() in _LLM_ALLOWED_ENTITY_TYPES

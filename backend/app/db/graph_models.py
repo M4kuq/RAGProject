@@ -242,7 +242,7 @@ class GraphIndexRun(Base):
         String(30), default="queued", server_default=text("'queued'"), nullable=False
     )
     extractor_type: Mapped[str] = mapped_column(
-        String(80), default="none", server_default=text("'none'"), nullable=False
+        String(80), default="llm", server_default=text("'llm'"), nullable=False
     )
     extractor_version: Mapped[str | None] = mapped_column(String(80))
     entity_count: Mapped[int] = mapped_column(

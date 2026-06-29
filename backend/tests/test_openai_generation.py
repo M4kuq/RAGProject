@@ -383,6 +383,73 @@ def test_gemini_missing_usage_degrades_to_none(monkeypatch: pytest.MonkeyPatch) 
     assert result.usage is None
 
 
+def test_provider_generators_honor_explicit_max_output_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_payloads: list[dict[str, Any]] = []
+
+    class OpenAIResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"output_text": "OpenAI cites alpha [1]."}
+
+    class AnthropicResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"content": [{"type": "text", "text": "Anthropic cites alpha [1]."}]}
+
+    class GeminiResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"candidates": [{"content": {"parts": [{"text": "Gemini cites alpha [1]."}]}}]}
+
+    responses = iter((OpenAIResponse(), AnthropicResponse(), GeminiResponse()))
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> object:
+        _ = (url, headers, timeout)
+        captured_payloads.append(json)
+        return next(responses)
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    request = _request()
+
+    OpenAIResponsesAnswerGenerator(
+        api_key="test-openai-key",
+        base_url="https://api.openai.com/v1",
+        model_name="gpt-5.5",
+        timeout_seconds=12.0,
+        max_output_tokens=321,
+    ).generate(request)
+    AnthropicMessagesAnswerGenerator(
+        api_key="test-anthropic-key",
+        base_url="https://api.anthropic.com",
+        api_version="2023-06-01",
+        model_name="claude-sonnet-4-20250514",
+        timeout_seconds=12.0,
+        max_output_tokens=322,
+    ).generate(request)
+    GeminiAnswerGenerator(
+        api_key="test-gemini-key",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model_name="gemini-2.5-flash",
+        timeout_seconds=12.0,
+        max_output_tokens=323,
+    ).generate(request)
+
+    assert captured_payloads[0]["max_output_tokens"] == 321
+    assert captured_payloads[1]["max_tokens"] == 322
+    assert captured_payloads[2]["generationConfig"]["maxOutputTokens"] == 323
+
+
 def test_openai_generation_with_real_api_key_when_enabled() -> None:
     if os.getenv("RUN_OPENAI_GENERATION_TEST") != "true":
         pytest.skip("Set RUN_OPENAI_GENERATION_TEST=true to call the real OpenAI API.")

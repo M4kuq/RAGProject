@@ -129,6 +129,7 @@ class GraphIndexBuildHandler:
                             "mention_count": mention_count,
                             "status": "already_succeeded",
                             "result_code": "no_op",
+                            **_extraction_payload(run),
                             **_projection_payload(projection_result),
                         }
                     )
@@ -210,6 +211,7 @@ class GraphIndexBuildHandler:
                 "mention_count": run.mention_count,
                 "status": "succeeded",
                 "result_code": "indexed",
+                **_extraction_payload(run),
             }
             db.commit()
             projection_result = self._project_neo4j_after_commit(
@@ -350,3 +352,28 @@ def _projection_payload(result: object | None) -> dict[str, object]:
         "neo4j_projected_mention_count": int(getattr(result, "projected_mentions", 0)),
         "neo4j_projected_chunk_count": int(getattr(result, "projected_chunks", 0)),
     }
+
+
+def _extraction_payload(run: object) -> dict[str, object]:
+    metadata = getattr(run, "metadata_json", None)
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    payload: dict[str, object] = {
+        "extractor_type": str(getattr(run, "extractor_type", "")),
+        "extractor_version": getattr(run, "extractor_version", None),
+    }
+    key_map = {
+        "extractor_result_code": "graph_extraction_result_code",
+        "fallback_reason_code": "graph_extraction_fallback_reason",
+        "graph_extraction_provider": "graph_extraction_provider",
+        "graph_extraction_model": "graph_extraction_model",
+        "graph_extraction_input_token_count": "graph_extraction_input_token_count",
+        "graph_extraction_output_token_count": "graph_extraction_output_token_count",
+        "graph_extraction_total_token_count": "graph_extraction_total_token_count",
+        "graph_extraction_estimated_cost_usd": "graph_extraction_estimated_cost_usd",
+        "graph_extraction_latency_ms": "graph_extraction_latency_ms",
+    }
+    for metadata_key, payload_key in key_map.items():
+        value = metadata_dict.get(metadata_key)
+        if value is not None:
+            payload[payload_key] = value
+    return payload

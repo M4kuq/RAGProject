@@ -674,6 +674,15 @@ def test_seed_can_run_twice_without_duplicates(
         assert _setting_value(db, "rag.router.no_context_after_budget_exhausted") is True
         assert _setting_value(db, "rag.router.fallback_strategy") == "fallback_dense"
         assert _setting_value(db, "rag.router.store_decision_trace") is True
+        assert _setting_value(db, "rag.graph.extractor.default") == "llm"
+        assert _setting_value(db, "rag.graph.extraction.provider") is None
+        assert _setting_value(db, "rag.graph.extraction.model_name") is None
+        assert _setting_value(db, "rag.graph.extraction.timeout_seconds") == 60
+        assert _setting_value(db, "rag.graph.extraction.max_output_chars") == 12000
+        assert _setting_value(db, "rag.graph.extraction.max_output_tokens") == 2048
+        assert _setting_value(db, "rag.graph.extraction.min_confidence") == 0.5
+        assert _setting_value(db, "rag.graph.max_entities_per_chunk") == 20
+        assert _setting_value(db, "rag.graph.max_relations_per_chunk") == 40
         assert _setting_value(db, "rag.tool_result_compression.enabled") is True
         assert _setting_value(db, "rag.tool_result_compression.max_items_per_tool") == 8
         assert _setting_value(db, "rag.tool_result_compression.max_total_items_per_turn") == 20

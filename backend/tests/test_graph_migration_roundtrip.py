@@ -21,10 +21,14 @@ GRAPH_TABLES = {
     "graph_retrieval_paths",
 }
 CACHE_TABLES = {"retrieval_cache_entries"}
-HEAD_REVISION = "0019_graph_provider_neo4j"
+HEAD_REVISION = "0020_graph_llm_extractor"
+PRE_LLM_FORWARD_REVISION = "0019_graph_provider_neo4j"
 PRE_PROVIDER_FORWARD_REVISION = "0018_evaluation_generation_usage"
 PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
 CORPUS_MARKER_SETTING_KEY = "rag.retrieval_cache.corpus_marker"
+GRAPH_EXTRACTION_PROVIDER_SETTING_KEY = "rag.graph.extraction.provider"
+GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS_SETTING_KEY = "rag.graph.extraction.max_output_tokens"
+GRAPH_EXTRACTION_MIN_CONFIDENCE_SETTING_KEY = "rag.graph.extraction.min_confidence"
 OLD_GRAPH_STORE_PROVIDER_DESCRIPTION = (
     "GraphStore provider. Neo4j remains optional and disabled by default."
 )
@@ -36,6 +40,10 @@ OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
 )
 NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION = (
     "Enable explicit strategy=graph graph retrieval requests by default."
+)
+OLD_GRAPH_EXTRACTOR_DESCRIPTION = "Default graph extractor. PR-47 connects extractors."
+NEW_GRAPH_EXTRACTOR_DESCRIPTION = (
+    "Default graph extractor. C2b uses LLM extraction with rule_based fallback."
 )
 
 
@@ -90,14 +98,25 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
+        assert _graph_extractor_description(pg_engine) == NEW_GRAPH_EXTRACTOR_DESCRIPTION
+        assert _setting_exists(pg_engine, GRAPH_EXTRACTION_PROVIDER_SETTING_KEY)
+        assert _graph_extraction_timeout_value(pg_engine) == 60
+        assert _setting_value(pg_engine, GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS_SETTING_KEY) == 2048
+        assert _setting_value(pg_engine, GRAPH_EXTRACTION_MIN_CONFIDENCE_SETTING_KEY) == 0.5
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "-1")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == PRE_PROVIDER_FORWARD_REVISION
-        assert _graph_store_provider_value(pg_engine) == "postgres"
-        assert _graph_retrieval_enabled_value(pg_engine) is False
+        assert version == PRE_LLM_FORWARD_REVISION
+        assert _graph_store_provider_value(pg_engine) == "neo4j"
+        assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "none"
+        assert _graph_extractor_description(pg_engine) == OLD_GRAPH_EXTRACTOR_DESCRIPTION
+        assert not _setting_exists(pg_engine, GRAPH_EXTRACTION_PROVIDER_SETTING_KEY)
+        assert not _setting_exists(pg_engine, GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS_SETTING_KEY)
+        assert not _setting_exists(pg_engine, GRAPH_EXTRACTION_MIN_CONFIDENCE_SETTING_KEY)
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -105,6 +124,10 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == HEAD_REVISION
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
+        assert _setting_exists(pg_engine, GRAPH_EXTRACTION_PROVIDER_SETTING_KEY)
+        assert _setting_value(pg_engine, GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS_SETTING_KEY) == 2048
+        assert _setting_value(pg_engine, GRAPH_EXTRACTION_MIN_CONFIDENCE_SETTING_KEY) == 0.5
 
         command.downgrade(config, PRE_CACHE_REVISION)
         with pg_engine.connect() as conn:
@@ -114,6 +137,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert not _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "postgres"
         assert _graph_retrieval_enabled_value(pg_engine) is False
+        assert _graph_extractor_value(pg_engine) == "none"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is None
 
         command.upgrade(config, "head")
@@ -124,6 +148,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
         command.downgrade(config, "0015_langgraph_agentic")
@@ -142,6 +167,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == HEAD_REVISION
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
         assert CACHE_TABLES <= set(inspect(pg_engine).get_table_names())
         assert _has_cache_summary_column(pg_engine)
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
@@ -165,17 +191,20 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _has_cache_summary_column(pg_engine)
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
-        command.downgrade(config, "-1")
+        command.downgrade(config, PRE_PROVIDER_FORWARD_REVISION)
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == PRE_PROVIDER_FORWARD_REVISION
         assert _graph_store_provider_value(pg_engine) == "postgres"
         assert _graph_retrieval_enabled_value(pg_engine) is False
+        assert _graph_extractor_value(pg_engine) == "none"
 
         _simulate_old_graph_store_provider_seed(pg_engine)
         _simulate_old_graph_retrieval_enabled_seed(pg_engine)
+        _simulate_old_graph_extractor_seed(pg_engine)
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -187,8 +216,10 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
             _graph_retrieval_enabled_description(pg_engine)
             == NEW_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION
         )
+        assert _graph_extractor_value(pg_engine) == "llm"
+        assert _graph_extractor_description(pg_engine) == NEW_GRAPH_EXTRACTOR_DESCRIPTION
 
-        command.downgrade(config, "-1")
+        command.downgrade(config, PRE_PROVIDER_FORWARD_REVISION)
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == PRE_PROVIDER_FORWARD_REVISION
@@ -199,6 +230,8 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
             _graph_retrieval_enabled_description(pg_engine)
             == OLD_GRAPH_RETRIEVAL_ENABLED_DESCRIPTION
         )
+        assert _graph_extractor_value(pg_engine) == "none"
+        assert _graph_extractor_description(pg_engine) == OLD_GRAPH_EXTRACTOR_DESCRIPTION
 
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
@@ -206,10 +239,12 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert version == HEAD_REVISION
         assert _graph_store_provider_value(pg_engine) == "neo4j"
         assert _graph_retrieval_enabled_value(pg_engine) is True
+        assert _graph_extractor_value(pg_engine) == "llm"
 
-        command.downgrade(config, "-1")
+        command.downgrade(config, PRE_PROVIDER_FORWARD_REVISION)
         _simulate_operator_graph_store_provider_override(pg_engine)
         _simulate_operator_graph_retrieval_enabled_override(pg_engine)
+        _simulate_operator_graph_extractor_override(pg_engine)
         command.upgrade(config, "head")
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -218,6 +253,8 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _graph_store_provider_description(pg_engine) == "Operator provider override"
         assert _graph_retrieval_enabled_value(pg_engine) is False
         assert _graph_retrieval_enabled_description(pg_engine) == "Operator retrieval override"
+        assert _graph_extractor_value(pg_engine) == "rule_based"
+        assert _graph_extractor_description(pg_engine) == "Operator extractor override"
     finally:
         get_settings.cache_clear()
 
@@ -284,6 +321,76 @@ def _graph_retrieval_enabled_description(engine: Engine) -> str | None:
         ).scalar_one_or_none()
 
 
+def _graph_extractor_value(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT setting_value #>> '{}'
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.extractor.default'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _graph_extractor_description(engine: Engine) -> str | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT description
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.extractor.default'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _graph_extraction_timeout_value(engine: Engine) -> int | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT (setting_value #>> '{}')::integer
+                FROM system_settings
+                WHERE setting_key = 'rag.graph.extraction.timeout_seconds'
+                """
+            )
+        ).scalar_one_or_none()
+
+
+def _setting_exists(engine: Engine, setting_key: str) -> bool:
+    with engine.connect() as conn:
+        return (
+            conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM system_settings
+                    WHERE setting_key = :setting_key
+                    """
+                ),
+                {"setting_key": setting_key},
+            ).scalar_one_or_none()
+            is not None
+        )
+
+
+def _setting_value(engine: Engine, setting_key: str) -> object | None:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                """
+                SELECT setting_value
+                FROM system_settings
+                WHERE setting_key = :setting_key
+                """
+            ),
+            {"setting_key": setting_key},
+        ).scalar_one_or_none()
+
+
 def _simulate_old_graph_store_provider_seed(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -320,6 +427,24 @@ def _simulate_old_graph_retrieval_enabled_seed(engine: Engine) -> None:
         )
 
 
+def _simulate_old_graph_extractor_seed(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = '"none"'::jsonb,
+                    description = :description,
+                    updated_by = NULL,
+                    created_at = now() - interval '1 day',
+                    updated_at = now() - interval '1 day'
+                WHERE setting_key = 'rag.graph.extractor.default'
+                """
+            ),
+            {"description": OLD_GRAPH_EXTRACTOR_DESCRIPTION},
+        )
+
+
 def _simulate_operator_graph_store_provider_override(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -347,6 +472,22 @@ def _simulate_operator_graph_retrieval_enabled_override(engine: Engine) -> None:
                     updated_by = NULL,
                     updated_at = now()
                 WHERE setting_key = 'rag.graph.retrieval.enabled'
+                """
+            ),
+        )
+
+
+def _simulate_operator_graph_extractor_override(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE system_settings
+                SET setting_value = '"rule_based"'::jsonb,
+                    description = 'Operator extractor override',
+                    updated_by = NULL,
+                    updated_at = now()
+                WHERE setting_key = 'rag.graph.extractor.default'
                 """
             ),
         )
