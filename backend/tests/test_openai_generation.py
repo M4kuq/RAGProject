@@ -113,6 +113,112 @@ def test_openai_generator_extracts_nested_response_text(
     assert result.usage is None
 
 
+def test_openai_responses_generator_sends_text_format_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"output_text": '{"entities":[],"relations":[]}'}
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        del url, headers, timeout
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAIResponsesAnswerGenerator(
+        api_key="test-openai-key",
+        base_url="https://api.openai.com/v1",
+        model_name="gpt-5.5",
+        timeout_seconds=12.0,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Extract graph JSON.",
+            context_items=_request().context_items,
+            max_output_chars=500,
+            task_instructions="Return JSON with entities and relations.",
+            response_format={"type": "json_object"},
+        )
+    )
+
+    assert captured["json"]["text"] == {"format": {"type": "json_object"}}
+    assert result.content == '{"entities":[],"relations":[]}'
+
+
+def test_openai_responses_generator_converts_chat_json_schema_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"output_text": '{"entities":[],"relations":[]}'}
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        del url, headers, timeout
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAIResponsesAnswerGenerator(
+        api_key="test-openai-key",
+        base_url="https://api.openai.com/v1",
+        model_name="gpt-5.5",
+        timeout_seconds=12.0,
+    )
+
+    result = generator.generate(
+        GenerationRequest(
+            message="Extract graph JSON.",
+            context_items=_request().context_items,
+            max_output_chars=500,
+            task_instructions="Return JSON with entities and relations.",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "graph_extraction_chunk",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "entities": {"type": "array", "items": {"type": "object"}},
+                            "relations": {"type": "array", "items": {"type": "object"}},
+                        },
+                        "required": ["entities", "relations"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        )
+    )
+
+    assert captured["json"]["text"]["format"]["type"] == "json_schema"
+    assert captured["json"]["text"]["format"]["name"] == "graph_extraction_chunk"
+    assert captured["json"]["text"]["format"]["strict"] is True
+    assert "json_schema" not in captured["json"]["text"]["format"]
+    assert result.content == '{"entities":[],"relations":[]}'
+
+
 def test_openai_generator_maps_api_error_to_generation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

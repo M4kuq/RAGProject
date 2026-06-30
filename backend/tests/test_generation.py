@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from app.core.config import Settings
 from app.rag.generation import (
+    FakeAnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
     OllamaAnswerGenerator,
@@ -33,6 +36,37 @@ def test_openai_input_lists_actual_noncontiguous_marker_ids() -> None:
     assert "Cite only the citation markers shown above: [2];" in prompt
     assert "[1] through [1]" not in prompt
     assert "through" not in prompt
+
+
+def test_fake_graph_generation_ignores_response_format() -> None:
+    result = FakeAnswerGenerator().generate(
+        GenerationRequest(
+            message="Extract graph JSON.",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="graph.md",
+                    text="Graph Index supports Hybrid RAG.",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+            task_instructions="Entity shape: graph JSON.",
+            response_format={"type": "json_object"},
+        )
+    )
+    payload = json.loads(result.content)
+
+    assert {entity["mention"] for entity in payload["entities"]} >= {"Graph Index", "Hybrid RAG"}
+    assert payload["relations"] == [
+        {
+            "source": "Graph Index",
+            "target": "Hybrid RAG",
+            "relation_type": "supports",
+            "evidence": "Graph Index supports Hybrid RAG.",
+            "confidence": 0.72,
+        }
+    ]
 
 
 ANSWER_TEXT = (

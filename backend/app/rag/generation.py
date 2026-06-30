@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import quote
@@ -96,6 +96,7 @@ class GenerationRequest:
     system_instructions: str | None = None
     task_instructions: str | None = None
     temperature: float | None = None
+    response_format: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +222,7 @@ class OpenAIResponsesAnswerGenerator:
                         self.max_output_tokens,
                     ),
                     **_temperature_payload(request),
+                    **_responses_text_format_payload(request),
                 },
                 timeout=self.timeout_seconds,
             )
@@ -280,6 +282,7 @@ class OpenAICompatibleChatAnswerGenerator:
                     "max_tokens": _max_output_tokens(self.max_output_tokens),
                     "temperature": request.temperature if request.temperature is not None else 0.2,
                     "stream": False,
+                    **_chat_response_format_payload(request),
                 },
                 timeout=self.timeout_seconds,
             )
@@ -676,6 +679,29 @@ def _temperature_payload(request: GenerationRequest) -> dict[str, float]:
     if request.temperature is None:
         return {}
     return {"temperature": request.temperature}
+
+
+def _chat_response_format_payload(request: GenerationRequest) -> dict[str, object]:
+    if request.response_format is None:
+        return {}
+    return {"response_format": request.response_format}
+
+
+def _responses_text_format_payload(request: GenerationRequest) -> dict[str, object]:
+    if request.response_format is None:
+        return {}
+    return {"text": {"format": _responses_text_format(request.response_format)}}
+
+
+def _responses_text_format(response_format: dict[str, object]) -> dict[str, object]:
+    if response_format.get("type") != "json_schema":
+        return response_format
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, Mapping):
+        return response_format
+    converted: dict[str, object] = {"type": "json_schema"}
+    converted.update({str(key): value for key, value in json_schema.items()})
+    return converted
 
 
 def _gemini_temperature_payload(request: GenerationRequest) -> dict[str, float]:

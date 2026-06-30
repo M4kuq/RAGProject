@@ -34,7 +34,7 @@ from app.graph.extraction import (
     GraphExtractionResult,
     RelationCandidate,
 )
-from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor
+from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor, _parse_llm_json
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
 from app.rag.generation import GenerationRequest, GenerationResult, TokenUsage
 from app.repositories.graph_repository import GraphRepository
@@ -141,6 +141,21 @@ class _StaticGraphAnswerGenerator:
         return GenerationResult(
             content=json.dumps(self.payload),
             usage=TokenUsage(input_tokens=7, output_tokens=5, total_tokens=12),
+        )
+
+
+class _SequenceGraphAnswerGenerator:
+    def __init__(self, contents: list[str]) -> None:
+        self.contents = contents
+        self.requests: list[GenerationRequest] = []
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        assert self.contents
+        content = self.contents.pop(0)
+        return GenerationResult(
+            content=content,
+            usage=TokenUsage(input_tokens=3, output_tokens=2, total_tokens=5),
         )
 
 
@@ -742,6 +757,112 @@ def test_llm_graph_extractor_prefers_exact_refs_over_duplicate_aliases() -> None
     assert result.relations[0].source_key != ("hybrid rag", "technology")
 
 
+def test_llm_graph_extractor_requests_json_schema_response_format() -> None:
+    chunk = _chunk_ref("Graph Index supports Hybrid RAG.")
+    generator = _StaticGraphAnswerGenerator({"entities": [], "relations": []})
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=generator,
+    )
+
+    extractor.extract((chunk,))
+
+    assert generator.requests[0].response_format is not None
+    assert generator.requests[0].response_format["type"] == "json_schema"
+    schema = generator.requests[0].response_format["json_schema"]
+    assert isinstance(schema, dict)
+    assert schema["name"] == "graph_extraction_chunk"
+    assert schema["strict"] is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        (
+            '<think>{"entities":"not the answer","relations":"not the answer"}</think>\n'
+            "Here is the requested JSON:\n"
+            '```json\n{"entities":[],"relations":[]}\n```'
+        ),
+        '<think>reasoning without a closing tag\n{"entities":[],"relations":[]}',
+    ],
+)
+def test_llm_graph_parser_ignores_thinking_prefix_and_markdown_fence(content: str) -> None:
+    payload = _parse_llm_json(content)
+
+    assert payload == {"entities": [], "relations": []}
+
+
+def test_llm_graph_extractor_keeps_successful_chunks_after_invalid_chunk() -> None:
+    first_chunk = _chunk_ref("This chunk intentionally has no usable graph JSON.")
+    second_text = "Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."
+    second_chunk = GraphChunkRef(
+        document_chunk_id=2,
+        document_version_id=1,
+        chunk_index=1,
+        chunk_hash=hashlib.sha256(second_text.encode("utf-8")).hexdigest(),
+        content_text=second_text,
+    )
+    generator = _SequenceGraphAnswerGenerator(
+        [
+            "not json",
+            "still not json",
+            json.dumps(
+                {
+                    "entities": [
+                        {
+                            "mention": "Graph Index",
+                            "canonical_name": "Graph Index",
+                            "entity_type": "concept",
+                            "aliases": [],
+                            "confidence": 0.92,
+                        },
+                        {
+                            "mention": "Hybrid RAG",
+                            "canonical_name": "Hybrid RAG",
+                            "entity_type": "technology",
+                            "aliases": [],
+                            "confidence": 0.88,
+                        },
+                    ],
+                    "relations": [
+                        {
+                            "source": "Graph Index",
+                            "target": "Hybrid RAG",
+                            "relation_type": "supports",
+                            "evidence": "Graph Index supports Hybrid RAG.",
+                            "confidence": 0.81,
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=generator,
+    )
+
+    result = extractor.extract((first_chunk, second_chunk))
+
+    assert result.extractor_type == "llm"
+    assert result.metadata_json["extractor_result_code"] == (
+        "graph_extraction_llm_partial_completed"
+    )
+    assert result.metadata_json["llm_failed_chunk_count"] == 1
+    assert result.metadata_json["llm_successful_chunk_count"] == 1
+    assert result.metadata_json["llm_retry_count"] == 1
+    assert result.metadata_json["llm_chunk_failure_reason_codes"] == [
+        "graph_extraction_llm_invalid_response"
+    ]
+    assert len(result.entity_mentions) == 2
+    assert len(result.relations) == 1
+    assert len(generator.requests) == 3
+    assert generator.requests[0].response_format is not None
+    assert generator.requests[0].response_format["type"] == "json_schema"
+    assert generator.requests[1].task_instructions is not None
+    assert "Retry constraint" in generator.requests[1].task_instructions
+
+
 @pytest.mark.parametrize("payload", [{"entities": []}, {"relations": []}])
 def test_llm_graph_extractor_rejects_missing_required_arrays(
     payload: dict[str, object],
@@ -1062,6 +1183,86 @@ def test_graph_index_service_falls_back_when_llm_relation_confidence_invalid(
         )
         assert persisted.status == "succeeded"
         assert persisted.extractor_type == "rule_based"
+
+
+def test_graph_index_service_does_not_fallback_when_later_llm_chunk_succeeds(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        generation_provider="fake",
+    )
+    llm_extractor = LLMGraphExtractor(
+        settings=settings,
+        answer_generator=_SequenceGraphAnswerGenerator(
+            [
+                "not json",
+                "still not json",
+                json.dumps(
+                    {
+                        "entities": [
+                            {
+                                "mention": "Graph Index",
+                                "canonical_name": "Graph Index",
+                                "entity_type": "concept",
+                                "aliases": [],
+                                "confidence": 0.92,
+                            },
+                            {
+                                "mention": "Hybrid RAG",
+                                "canonical_name": "Hybrid RAG",
+                                "entity_type": "technology",
+                                "aliases": [],
+                                "confidence": 0.88,
+                            },
+                        ],
+                        "relations": [
+                            {
+                                "source": "Graph Index",
+                                "target": "Hybrid RAG",
+                                "relation_type": "supports",
+                                "evidence": "Graph Index supports Hybrid RAG.",
+                                "confidence": 0.81,
+                            }
+                        ],
+                    }
+                ),
+            ]
+        ),
+    )
+    service = GraphIndexService(settings=settings, llm_extractor=llm_extractor)
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            [
+                "This chunk intentionally has no usable graph JSON.",
+                "Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant.",
+            ],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+        persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
+        db.commit()
+
+        assert result.extractor_type == "llm"
+        assert result.metadata_json["extractor_result_code"] == (
+            "graph_extraction_llm_partial_completed"
+        )
+        assert result.metadata_json["llm_failed_chunk_count"] == 1
+        assert persisted.status == "succeeded"
+        assert persisted.extractor_type == "llm"
+        assert persisted.relation_count == 1
 
 
 def test_graph_index_worker_records_actual_extractor_after_llm_fallback(
