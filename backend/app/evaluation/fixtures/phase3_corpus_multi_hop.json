@@ -31,7 +31,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["RAG", "Retrieval"],
-        "expected_relation_types": []
+        "expected_relation_types": ["uses", "organizes"],
+        "required_hop_count": 1
       },
       "status": "active"
     },
@@ -53,7 +54,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["LoRA", "LLM"],
-        "expected_relation_types": []
+        "expected_relation_types": ["uses"],
+        "required_hop_count": 1
       },
       "status": "active"
     },
@@ -75,7 +77,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["DeepSeek", "LLM"],
-        "expected_relation_types": []
+        "expected_relation_types": ["describes"],
+        "required_hop_count": 1
       },
       "status": "active"
     },
@@ -97,7 +100,56 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["API", "ToolBench"],
-        "expected_relation_types": []
+        "expected_relation_types": ["evaluates", "uses"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_graphrag_global_summarization_relation",
+      "question": "Which GraphRAG paper entry links entity relationships, a graph index, and community summaries to global summarization?",
+      "expected_answer": "GraphRAG organizes entity relationships and uses graph index plus community summary evidence to support global query-focused summarization.",
+      "expected_keywords": [
+        "GraphRAG",
+        "entities and relationships",
+        "global summarization",
+        "graph index",
+        "community summaries"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "relation", "rag"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["GraphRAG", "RAG", "Retrieval"],
+        "expected_relation_types": ["organizes", "supports"],
+        "required_hop_count": 1
+      },
+      "status": "active"
+    },
+    {
+      "case_key": "paper_react_reasoning_action_relation",
+      "question": "Which agent paper links reasoning traces with actions such as search for grounded tasks?",
+      "expected_answer": "ReAct links language-model reasoning traces with actions such as search or environment steps so acting and reasoning inform grounded tasks.",
+      "expected_keywords": [
+        "ReAct",
+        "reasoning traces",
+        "actions",
+        "search",
+        "grounded tasks"
+      ],
+      "expected_document_ids": [],
+      "expected_chunk_ids": [],
+      "required_citation": true,
+      "tags": ["paper", "multi_hop", "relation", "agent"],
+      "metadata_json": {
+        "expected_strategy": "graph",
+        "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
+        "expected_entity_labels": ["ReAct", "LLM"],
+        "expected_relation_types": ["uses"],
+        "required_hop_count": 1
       },
       "status": "active"
     },
