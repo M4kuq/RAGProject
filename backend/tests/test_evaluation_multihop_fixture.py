@@ -17,10 +17,23 @@ from app.ingest.extractors.base import ExtractedDocument, ExtractedPage, Extract
 from app.schemas.evaluations import EvaluationDatasetManifest
 
 DATASET_NAME = "phase3_corpus_multi_hop"
-EXPECTED_CASE_COUNT = 12
-EXPECTED_PAPER_CASES = 4
+EXPECTED_CASE_COUNT = 14
+EXPECTED_PAPER_CASES = 6
 EXPECTED_SYSTEM_DOC_CASES = 8
-EMITTED_RELATION_TYPES = frozenset({"supports", "uses", "depends_on", "includes", "connects"})
+RULE_BASED_RELATION_TYPES = frozenset({"supports", "uses", "depends_on", "includes", "connects"})
+LLM_OBSERVED_RELATION_TYPES = frozenset(
+    {
+        "describes",
+        "evaluates",
+        "implements",
+        "improves",
+        "includes",
+        "organizes",
+        "supports",
+        "uses",
+    }
+)
+EMITTED_RELATION_TYPES = RULE_BASED_RELATION_TYPES | LLM_OBSERVED_RELATION_TYPES
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 FIXTURE_PATH = BACKEND_ROOT / "app" / "evaluation" / "fixtures" / f"{DATASET_NAME}.json"
@@ -58,6 +71,9 @@ def test_phase3_corpus_multi_hop_fixture_loads_with_required_metadata() -> None:
         assert _string_list(raw_relation_types)
         assert isinstance(raw_relation_types, list)
         assert set(raw_relation_types).issubset(EMITTED_RELATION_TYPES)
+        if "paper" in case.tags:
+            assert raw_relation_types
+            assert set(raw_relation_types).issubset(LLM_OBSERVED_RELATION_TYPES)
         required_hop_count = case.metadata_json.get("required_hop_count")
         if raw_relation_types:
             assert isinstance(required_hop_count, int)
@@ -130,6 +146,11 @@ def test_phase3_corpus_multi_hop_entities_match_rule_based_extraction() -> None:
             )
 
         assert set(relation_types).issubset(EMITTED_RELATION_TYPES)
+        if "paper" in case.tags and relation_types:
+            assert set(relation_types).issubset(LLM_OBSERVED_RELATION_TYPES)
+            continue
+
+        assert set(relation_types).issubset(RULE_BASED_RELATION_TYPES)
         assert set(relation_types).issubset(extracted.relation_types)
         if relation_types:
             label_set = set(labels)

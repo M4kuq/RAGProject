@@ -22,11 +22,11 @@ corpus text. `expected_document_ids` and `expected_chunk_ids` are intentionally
 empty because ingest-time IDs are local database state. Use the runbook below to
 create the live IDs for a local comparison.
 
-The fixture has 12 active cases:
+The fixture has 14 active cases:
 
 | Domain | Count | Support shape |
 |---|---:|---|
-| LLM paper corpus | 4 | extracted canonical entity hubs |
+| LLM paper corpus | 6 | LLM-observed relations plus extracted canonical entity hubs |
 | RAGProject self docs | 8 | extracted relations plus canonical entity hubs |
 
 Every case includes:
@@ -37,23 +37,28 @@ Every case includes:
 - `metadata_json.expected_entity_labels`
 - `metadata_json.expected_relation_types`
 
-Paper cases intentionally use an empty `expected_relation_types` list because
-the rule-based extractor emits no relations for the current paper seed corpus.
-Those cases are still multi-hop: a single canonical entity is extracted from
-multiple paper blocks and acts as the graph hub. Self-doc cases use relation
-types only when the extractor actually emits the relation. The only relation
-types expected by this fixture are the rule-based extractor outputs:
-`supports`, `uses`, `depends_on`, `includes`, and `connects`.
+Paper cases now use non-empty `expected_relation_types` based on the #82 LLM
+graph extraction validation. The old deterministic rule-based extractor still
+emits 0 paper relations, but structured-output LLM extraction produced paper
+relations in the live corpus run. Self-doc cases continue to use relation types
+only when the deterministic extractor emits the relation.
+
+The relation types expected by this fixture are safe labels only. Self-doc
+relation cases use the rule-based outputs `supports`, `uses`, `depends_on`,
+`includes`, and `connects`. Paper cases use the LLM-observed safe type set
+`describes`, `evaluates`, `implements`, `improves`, `includes`, `organizes`,
+`supports`, and `uses`, with only 1-3 conservative types per case.
 
 Only relation-backed cases set `metadata_json.required_hop_count`. Hub-only
-cases omit it because the current multi-hop answerability metric measures
-relation path depth, not same-entity hub fanout. All present `required_hop_count`
-values are 1, within the default `GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
+system-doc cases omit it because the current multi-hop answerability metric
+measures relation path depth, not same-entity hub fanout. All present
+`required_hop_count` values are 1, within the default
+`GRAPH_RETRIEVAL_MAX_DEPTH` runbook setting.
 
 ## Extracted Graph Grounding
 
-The fixture was aligned against the deterministic rule-based graph extractor:
-`EntityExtractionService`, `RelationExtractionService`, and
+The original fixture was aligned against the deterministic rule-based graph
+extractor: `EntityExtractionService`, `RelationExtractionService`, and
 `GraphEntityNormalizer`. Validation uses the same `FixedTokenChunker`
 configuration as document ingest: 512-unit windows with 128-unit overlap.
 
@@ -63,6 +68,27 @@ Extraction summary, without source text:
 |---|---:|---:|---:|---:|
 | Paper seed corpus | 110 | 121 | 32 | 0 |
 | Self-doc manifest corpus | 113 | 1567 | 322 | 72 |
+
+#82 then validated structured-output LLM graph extraction against the live
+active-ready corpus without adding raw evidence to the fixture. The latest
+observed aggregate was:
+
+| Scope | Relations |
+|---|---:|
+| Full active corpus | 22 |
+| Paper seed corpus | 9 |
+
+This means the paper baseline moved from rule-based `0` relations to LLM
+`9` relations for the paper logical document. Paper `expected_relation_types`
+are therefore grounded from the LLM-observed safe type set, but remain
+conservative because LLM extraction is non-deterministic.
+
+`graph_path_relevance` uses intersection scoring: expected entity labels and
+expected relation types receive credit when the observed graph path contains a
+matching safe label or type. The corpus eval runbook remains a manual/demo
+workflow with warn thresholds so LLM non-determinism does not make CI flaky. CI
+continues to use Fake paths and fixture/schema/metric-logic tests; it does not
+require a live LLM graph index or the full corpus index.
 
 Paper multi-source hubs used by the fixture:
 
@@ -74,6 +100,17 @@ Paper multi-source hubs used by the fixture:
 | `LLM` | 18 | 25 |
 | `API` | 2 | 4 |
 | `DeepSeek` | 4 | 8 |
+
+Paper relation types used by the fixture:
+
+| Case | Conservative LLM-observed relation types |
+|---|---|
+| `paper_rag_retrieval_hub` | `uses`, `organizes` |
+| `paper_lora_quantization_hub` | `uses` |
+| `paper_deepseek_llm_hub` | `describes` |
+| `paper_api_tool_hub` | `evaluates`, `uses` |
+| `paper_graphrag_global_summarization_relation` | `organizes`, `supports` |
+| `paper_react_reasoning_action_relation` | `uses` |
 
 Self-doc relation edges used by the fixture:
 
@@ -105,18 +142,21 @@ Self-doc multi-source hubs used by the fixture:
 | `graph citation coverage` | 2 | 2 |
 
 Graph advantage is clearest in technical and structural content where extracted
-entities and relation edges reflect implementation boundaries. The paper corpus
-is useful for hub traversal, but not for relation-based graph scoring in its
-current one-paragraph-per-entry shape.
+entities and relation edges reflect implementation boundaries. With LLM
+extraction enabled, the paper corpus is also useful for lightweight relation
+scoring, but the expectations stay intentionally sparse to avoid overfitting to
+one non-deterministic extraction run.
 
 ## Case Design
 
 | Case | Domain | Actual graph support | Why dense can miss |
 |---|---|---|---|
-| `paper_rag_retrieval_hub` | paper | `RAG` and `Retrieval` hubs span multiple paper blocks. | A lexical hit can stop at one RAG entry and miss later Self-RAG, CRAG, RAPTOR, or GraphRAG entries. |
-| `paper_lora_quantization_hub` | paper | `LoRA` spans LoRA and QLoRA entries; `LLM` links the broader model corpus. | Quantization terms can rank QLoRA without bringing the earlier LoRA adaptation entry. |
-| `paper_deepseek_llm_hub` | paper | `DeepSeek` and `LLM` span scaling, V3, reasoning, and code-focused entries. | A query about one DeepSeek variant can miss the adjacent DeepSeek entries. |
-| `paper_api_tool_hub` | paper | `API` spans Gorilla and ToolBench; `ToolBench` is an extracted endpoint label. | API terms can overfocus on Gorilla and miss the tool-use benchmark entry. |
+| `paper_rag_retrieval_hub` | paper | `RAG` and `Retrieval` hubs span multiple paper blocks; LLM extraction adds `uses` / `organizes` relation types. | A lexical hit can stop at one RAG entry and miss later Self-RAG, CRAG, RAPTOR, or GraphRAG entries. |
+| `paper_lora_quantization_hub` | paper | `LoRA` spans LoRA and QLoRA entries; `LLM` links the broader model corpus; LLM extraction adds `uses`. | Quantization terms can rank QLoRA without bringing the earlier LoRA adaptation entry. |
+| `paper_deepseek_llm_hub` | paper | `DeepSeek` and `LLM` span scaling, V3, reasoning, and code-focused entries; LLM extraction adds `describes`. | A query about one DeepSeek variant can miss the adjacent DeepSeek entries. |
+| `paper_api_tool_hub` | paper | `API` spans Gorilla and ToolBench; LLM extraction adds `evaluates` / `uses`. | API terms can overfocus on Gorilla and miss the tool-use benchmark entry. |
+| `paper_graphrag_global_summarization_relation` | paper | `GraphRAG`, `RAG`, and `Retrieval` labels connect to `organizes` / `supports` relation types around graph indexing and summaries. | GraphRAG terms can retrieve the title entry without following the relation to summary-oriented evidence. |
+| `paper_react_reasoning_action_relation` | paper | `ReAct` and `LLM` labels connect through a `uses` relation type around reasoning and action traces. | Agent terms can retrieve benchmark or tool entries without the reasoning-action paper. |
 | `system_graph_metric_chain_relation` | system docs | `Graph uses graph path relevance`; `graph path relevance uses graph citation coverage`. | Dense retrieval can find one metric term while missing the metric chain. |
 | `system_graph_citation_relation` | system docs | `Graph connects Citation`; retrieval trace hubs attach citation evidence to source chunks. | Citation terms can miss graph path and retrieval-run evidence. |
 | `system_graphrag_postgresql_relation` | system docs | `GraphRAG connects PostgreSQL`; both labels are multi-source hubs. | GraphRAG terms can retrieve user-facing docs without the storage boundary. |
@@ -214,7 +254,7 @@ These steps use only repository-owned demo material and existing scripts.
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies dense,hybrid,graph_postgres `
-     -CaseLimit 12 `
+     -CaseLimit 14 `
      -ThresholdMode warn
    ```
 
@@ -224,7 +264,7 @@ These steps use only repository-owned demo material and existing scripts.
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies graph_postgres,graph_neo4j `
-     -CaseLimit 12 `
+     -CaseLimit 14 `
      -ThresholdMode warn
    ```
 
@@ -246,12 +286,12 @@ instead of using the multi-strategy smoke command:
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies dense `
-     -CaseLimit 12 `
+     -CaseLimit 14 `
      -ThresholdMode warn
    .\scripts\run_retrieval_eval_smoke.ps1 `
      -Dataset phase3_corpus_multi_hop `
      -Strategies graph_postgres `
-     -CaseLimit 12 `
+     -CaseLimit 14 `
      -ThresholdMode warn
    ```
 
@@ -272,7 +312,9 @@ no-context or fallback reason codes instead of quality gains.
 - Use the live database to map document and chunk IDs after ingest. Keep fixture
   ID arrays empty.
 
-## Next PR
+## Next Handoff
 
-C2 can add graph-specific or multi-hop scoring improvements. This C1 dataset
-only supplies corpus-grounded gold cases and validation.
+This C2 dataset update records the LLM-observed paper relation behavior without
+making CI depend on a live LLM, full corpus indexing, or a specific local DB
+state. Future scoring changes should keep the same redaction boundary: safe
+labels, relation types, hashes, IDs, counts, and aggregate metrics only.
