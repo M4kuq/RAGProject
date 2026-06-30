@@ -76,7 +76,8 @@ GRAPH_EXTRACTION_TASK_INSTRUCTIONS = (
 )
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
-_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 _RELATION_TYPE_RE = re.compile(r"[^a-z0-9_]+")
 _SENTENCE_BOUNDARY_MARKERS = (".", "!", "?", "。", "！", "？", "\n")
@@ -595,11 +596,17 @@ def _parse_llm_json(content: str) -> Mapping[str, object]:
     if not stripped:
         raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
     first_mapping: Mapping[str, object] | None = None
+    best_mapping: Mapping[str, object] | None = None
+    best_score = -1
     for parsed in _json_object_candidates(stripped):
         if first_mapping is None:
             first_mapping = parsed
-        if "entities" in parsed and "relations" in parsed:
-            return parsed
+        score = _graph_payload_score(parsed)
+        if score is not None and score >= best_score:
+            best_mapping = parsed
+            best_score = score
+    if best_mapping is not None:
+        return best_mapping
     if first_mapping is not None:
         return first_mapping
     raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
@@ -613,20 +620,48 @@ def _json_object_candidates(content: str) -> list[Mapping[str, object]]:
     decoder = json.JSONDecoder()
     candidates: list[Mapping[str, object]] = []
     think_block_spans = _think_block_spans(content)
-    for index, char in enumerate(content):
-        if char != "{" or _index_in_spans(index, think_block_spans):
+    index = 0
+    while index < len(content):
+        object_start = content.find("{", index)
+        if object_start < 0:
+            break
+        if _index_in_spans(object_start, think_block_spans):
+            index = object_start + 1
             continue
         try:
-            parsed, _ = decoder.raw_decode(content[index:])
+            parsed, object_end = decoder.raw_decode(content[object_start:])
         except json.JSONDecodeError:
+            index = object_start + 1
             continue
         if isinstance(parsed, Mapping):
             candidates.append(parsed)
+            index = object_start + object_end
+            continue
+        index = object_start + 1
     return candidates
 
 
 def _think_block_spans(content: str) -> list[tuple[int, int]]:
-    return [match.span() for match in _THINK_BLOCK_RE.finditer(content)]
+    spans: list[tuple[int, int]] = []
+    search_start = 0
+    while True:
+        open_match = _THINK_OPEN_RE.search(content, search_start)
+        if open_match is None:
+            return spans
+        close_match = _THINK_CLOSE_RE.search(content, open_match.end())
+        block_end = close_match.end() if close_match is not None else len(content)
+        spans.append((open_match.start(), block_end))
+        search_start = block_end
+
+
+def _graph_payload_score(parsed: Mapping[str, object]) -> int | None:
+    raw_entities = parsed.get("entities")
+    raw_relations = parsed.get("relations")
+    if not isinstance(raw_entities, Sequence) or isinstance(raw_entities, (str, bytes)):
+        return None
+    if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
+        return None
+    return len(raw_entities) + len(raw_relations)
 
 
 def _index_in_spans(index: int, spans: Sequence[tuple[int, int]]) -> bool:

@@ -4,15 +4,21 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ResourceNotFound
-from app.db.graph_models import GraphEntity, GraphIndexRun
-from app.db.models import DocumentVersion
+from app.db.graph_models import GraphEntity, GraphEntityMention, GraphIndexRun, GraphRelation
+from app.db.models import DocumentChunk, DocumentVersion
 from app.graph.constants import (
     DEFAULT_GRAPH_EXTRACTOR_TYPE,
+    GRAPH_EXTRACTION_LLM_FAILED,
     GRAPH_EXTRACTION_LLM_FALLBACK,
+    GRAPH_EXTRACTION_LLM_PARTIAL_COMPLETED,
+    GRAPH_EXTRACTION_LLM_PARTIAL_REBUILD_SKIPPED,
+    GRAPH_EXTRACTION_LLM_RETRYABLE_FAILED,
+    GRAPH_EXTRACTION_LLM_UNAVAILABLE,
     GRAPH_INDEX_BUILD_JOB_TYPE,
     LLM_GRAPH_EXTRACTOR_TYPE,
     LLM_GRAPH_EXTRACTOR_VERSION,
@@ -43,6 +49,15 @@ from app.schemas.graph import (
 )
 
 logger = logging.getLogger(__name__)
+
+_RETRYABLE_LLM_FAILURE_REASON_CODES = frozenset(
+    {
+        GRAPH_EXTRACTION_LLM_UNAVAILABLE,
+        GRAPH_EXTRACTION_LLM_FAILED,
+    }
+)
+_RETRYABLE_LLM_FAILURE_MESSAGE = "Graph LLM extraction failed retryably."
+_PARTIAL_REBUILD_SKIPPED_MESSAGE = "Graph LLM partial rebuild skipped to preserve existing index."
 
 
 @dataclass(frozen=True)
@@ -242,6 +257,21 @@ class GraphIndexService:
                     self._llm_extractor(snapshot.graph_extraction_settings).extract(snapshot.chunks)
                 )
             except LLMGraphExtractionError as exc:
+                if exc.reason_code in _RETRYABLE_LLM_FAILURE_REASON_CODES:
+                    logger.warning(
+                        "graph llm extraction failed retryably",
+                        extra={
+                            "document_version_id": snapshot.document_version_id,
+                            "graph_index_run_id": snapshot.graph_index_run_id,
+                            "reason_code": exc.reason_code,
+                            "provider": self._llm_provider_name(snapshot.graph_extraction_settings),
+                        },
+                    )
+                    return _failed_llm_result(
+                        reason_code=exc.reason_code,
+                        provider=self._llm_provider_name(snapshot.graph_extraction_settings),
+                        model_name=self._llm_model_name(snapshot.graph_extraction_settings),
+                    )
                 logger.warning(
                     "graph llm extraction fell back to rule_based",
                     extra={
@@ -345,6 +375,37 @@ class GraphIndexService:
             db,
             document_version_id=snapshot.document_version_id,
         )
+        result_code = _extractor_result_code(result)
+        if result_code == GRAPH_EXTRACTION_LLM_RETRYABLE_FAILED:
+            self.repository.mark_graph_index_run_failed(
+                db,
+                run=run,
+                error_code=GRAPH_EXTRACTION_LLM_RETRYABLE_FAILED,
+                error_message=_RETRYABLE_LLM_FAILURE_MESSAGE,
+            )
+            return run
+        if (
+            result_code == GRAPH_EXTRACTION_LLM_PARTIAL_COMPLETED
+            and _document_version_has_graph_artifacts(
+                db,
+                document_version_id=snapshot.document_version_id,
+            )
+        ):
+            run.metadata_json = validate_safe_graph_metadata(
+                {
+                    **(run.metadata_json or {}),
+                    "extractor_result_code": GRAPH_EXTRACTION_LLM_PARTIAL_REBUILD_SKIPPED,
+                    "partial_result_code": GRAPH_EXTRACTION_LLM_PARTIAL_COMPLETED,
+                    "retryable": True,
+                }
+            )
+            self.repository.mark_graph_index_run_failed(
+                db,
+                run=run,
+                error_code=GRAPH_EXTRACTION_LLM_PARTIAL_REBUILD_SKIPPED,
+                error_message=_PARTIAL_REBUILD_SKIPPED_MESSAGE,
+            )
+            return run
         self.repository.delete_index_artifacts_for_document_version(
             db,
             document_version_id=snapshot.document_version_id,
@@ -595,6 +656,60 @@ def _dedupe_result(result: GraphExtractionResult) -> GraphExtractionResult:
         extractor_version=result.extractor_version,
         metadata_json=validate_safe_graph_metadata(dict(result.metadata_json)),
     )
+
+
+def _failed_llm_result(
+    *,
+    reason_code: str,
+    provider: str,
+    model_name: str,
+) -> GraphExtractionResult:
+    return GraphExtractionResult(
+        entity_mentions=(),
+        relations=(),
+        extractor_type=LLM_GRAPH_EXTRACTOR_TYPE,
+        extractor_version=LLM_GRAPH_EXTRACTOR_VERSION,
+        metadata_json=validate_safe_graph_metadata(
+            {
+                "extractor_result_code": GRAPH_EXTRACTION_LLM_RETRYABLE_FAILED,
+                "requested_extractor_type": LLM_GRAPH_EXTRACTOR_TYPE,
+                "llm_failure_reason_code": reason_code,
+                "graph_extraction_provider": provider,
+                "graph_extraction_model": model_name,
+                "retryable": True,
+            }
+        ),
+    )
+
+
+def _extractor_result_code(result: GraphExtractionResult) -> str | None:
+    result_code = result.metadata_json.get("extractor_result_code")
+    if isinstance(result_code, str):
+        return result_code
+    return None
+
+
+def _document_version_has_graph_artifacts(
+    db: Session,
+    *,
+    document_version_id: int,
+) -> bool:
+    mention_id = db.scalar(
+        select(GraphEntityMention.graph_entity_mention_id)
+        .where(GraphEntityMention.document_version_id == document_version_id)
+        .limit(1)
+    )
+    if mention_id is not None:
+        return True
+    chunk_ids = select(DocumentChunk.document_chunk_id).where(
+        DocumentChunk.document_version_id == document_version_id
+    )
+    relation_id = db.scalar(
+        select(GraphRelation.graph_relation_id)
+        .where(GraphRelation.source_document_chunk_id.in_(chunk_ids))
+        .limit(1)
+    )
+    return relation_id is not None
 
 
 def _requested_extractor_type(value: str) -> str:

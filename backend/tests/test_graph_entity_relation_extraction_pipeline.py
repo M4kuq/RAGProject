@@ -453,16 +453,21 @@ def test_graph_index_service_preserves_env_graph_provider_when_stored_setting_nu
 def test_graph_index_service_applies_stored_caps_to_rule_based_fallback(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        generation_provider="fake",
+        graph_extraction_max_entities_per_chunk=20,
+        graph_extraction_max_relations_per_chunk=20,
+    )
+    llm_extractor = LLMGraphExtractor(
+        settings=settings,
+        answer_generator=_StaticGraphAnswerGenerator({"entities": []}),
+    )
     service = GraphIndexService(
-        settings=Settings(
-            _env_file=None,
-            app_env="test",
-            graph_extractor_type="llm",
-            graph_extraction_provider="openai",
-            generation_provider="fake",
-            graph_extraction_max_entities_per_chunk=20,
-            graph_extraction_max_relations_per_chunk=20,
-        )
+        settings=settings,
+        llm_extractor=llm_extractor,
     )
     with graph_session_factory() as db:
         db.add_all(
@@ -500,7 +505,9 @@ def test_graph_index_service_applies_stored_caps_to_rule_based_fallback(
         result = service.extract_from_snapshot(snapshot)
 
         assert result.extractor_type == "rule_based"
-        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
+        assert result.metadata_json["fallback_reason_code"] == (
+            "graph_extraction_llm_invalid_response"
+        )
         assert len(result.entity_mentions) == 1
         assert len(result.relations) <= 1
 
@@ -803,13 +810,19 @@ def test_llm_graph_extractor_requests_json_schema_response_format() -> None:
             "Here is the requested JSON:\n"
             '```json\n{"entities":[],"relations":[]}\n```'
         ),
-        '<think>reasoning without a closing tag\n{"entities":[],"relations":[]}',
     ],
 )
 def test_llm_graph_parser_ignores_thinking_prefix_and_markdown_fence(content: str) -> None:
     payload = _parse_llm_json(content)
 
     assert payload == {"entities": [], "relations": []}
+
+
+def test_llm_graph_parser_ignores_unclosed_thinking_block_candidates() -> None:
+    with pytest.raises(LLMGraphExtractionError) as exc_info:
+        _parse_llm_json('<think>reasoning without a closing tag\n{"entities":[],"relations":[]}')
+
+    assert exc_info.value.reason_code == "graph_extraction_llm_invalid_response"
 
 
 def test_llm_graph_parser_preserves_think_tags_inside_json_strings() -> None:
@@ -839,18 +852,38 @@ def test_llm_graph_parser_preserves_think_tags_inside_json_strings() -> None:
     assert parsed == payload
 
 
-def test_llm_graph_parser_keeps_first_graph_json_candidate() -> None:
-    first_payload = {
+def test_llm_graph_parser_keeps_most_complete_graph_json_candidate() -> None:
+    draft_payload = {
         "entities": [{"mention": "Graph Index"}],
+        "relations": [],
+    }
+    final_payload = {
+        "entities": [{"mention": "Graph Index"}, {"mention": "Hybrid RAG"}],
         "relations": [{"source": "Graph Index", "target": "Hybrid RAG"}],
     }
     trailing_payload: dict[str, object] = {"entities": [], "relations": []}
 
     parsed = _parse_llm_json(
-        f"{json.dumps(first_payload)}\nTrailing example:\n{json.dumps(trailing_payload)}"
+        f"{json.dumps(draft_payload)}\nFinal:\n{json.dumps(final_payload)}"
+        f"\nTrailing example:\n{json.dumps(trailing_payload)}"
     )
 
-    assert parsed == first_payload
+    assert parsed == final_payload
+
+
+def test_llm_graph_parser_uses_later_candidate_when_content_scores_tie() -> None:
+    first_payload = {
+        "entities": [{"mention": "Draft Index"}],
+        "relations": [{"source": "Draft Index", "target": "Hybrid RAG"}],
+    }
+    later_payload = {
+        "entities": [{"mention": "Graph Index"}],
+        "relations": [{"source": "Graph Index", "target": "Hybrid RAG"}],
+    }
+
+    parsed = _parse_llm_json(f"{json.dumps(first_payload)}\n{json.dumps(later_payload)}")
+
+    assert parsed == later_payload
 
 
 def test_llm_graph_extractor_keeps_successful_chunks_after_invalid_chunk() -> None:
@@ -1215,7 +1248,7 @@ def test_llm_graph_extractor_rejects_invalid_confidence(confidence: object) -> N
     assert exc_info.value.reason_code == "graph_extraction_llm_invalid_response"
 
 
-def test_graph_index_service_falls_back_to_rule_based_when_llm_provider_unavailable(
+def test_graph_index_service_marks_llm_provider_unavailable_failed_without_artifacts(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     service = GraphIndexService(
@@ -1246,16 +1279,22 @@ def test_graph_index_service_falls_back_to_rule_based_when_llm_provider_unavaila
         persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
         db.commit()
 
-        assert result.extractor_type == "rule_based"
-        assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_fallback"
-        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
-        assert persisted.extractor_type == "rule_based"
-        assert persisted.extractor_version == "pr47-rule-based-v1"
-        assert persisted.metadata_json["fallback_reason_code"] == (
+        assert result.extractor_type == "llm"
+        assert result.metadata_json["extractor_result_code"] == (
+            "graph_extraction_llm_retryable_failed"
+        )
+        assert result.metadata_json["llm_failure_reason_code"] == (
             "graph_extraction_llm_unavailable"
         )
-        assert persisted.status == "succeeded"
-        assert persisted.mention_count > 0
+        assert persisted.extractor_type == "llm"
+        assert persisted.extractor_version == "c2b-llm-v1"
+        assert persisted.status == "failed"
+        assert persisted.error_code == "graph_extraction_llm_retryable_failed"
+        assert _graph_counts(db, version.document_version_id) == {
+            "entities": 0,
+            "mentions": 0,
+            "relations": 0,
+        }
 
 
 def test_graph_index_service_falls_back_when_llm_relation_confidence_invalid(
@@ -1408,7 +1447,109 @@ def test_graph_index_service_does_not_fallback_when_later_llm_chunk_succeeds(
         assert persisted.relation_count == 1
 
 
-def test_graph_index_service_falls_back_when_later_llm_chunk_provider_fails(
+def test_graph_index_service_skips_partial_rebuild_without_replacing_existing_index(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        generation_provider="fake",
+    )
+    llm_extractor = LLMGraphExtractor(
+        settings=settings,
+        answer_generator=_SequenceGraphAnswerGenerator(
+            [
+                "not json",
+                "still not json",
+                json.dumps(
+                    {
+                        "entities": [
+                            {
+                                "mention": "Graph Index",
+                                "canonical_name": "Graph Index",
+                                "entity_type": "concept",
+                                "aliases": [],
+                                "confidence": 0.92,
+                            },
+                            {
+                                "mention": "Hybrid RAG",
+                                "canonical_name": "Hybrid RAG",
+                                "entity_type": "technology",
+                                "aliases": [],
+                                "confidence": 0.88,
+                            },
+                        ],
+                        "relations": [
+                            {
+                                "source": "Graph Index",
+                                "target": "Hybrid RAG",
+                                "relation_type": "supports",
+                                "evidence": "Graph Index supports Hybrid RAG.",
+                                "confidence": 0.81,
+                            }
+                        ],
+                    }
+                ),
+            ]
+        ),
+    )
+    service = GraphIndexService(settings=settings, llm_extractor=llm_extractor)
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            [
+                "This chunk intentionally has no usable graph JSON.",
+                "Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant.",
+            ],
+        )
+        baseline_service = GraphIndexService(extractor_type="rule_based")
+        baseline_run = baseline_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        baseline_snapshot = baseline_service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=baseline_run.graph_index_run_id,
+        )
+        baseline_service.persist_extraction_result(
+            db,
+            snapshot=baseline_snapshot,
+            result=baseline_service.extract_from_snapshot(baseline_snapshot),
+        )
+        baseline_counts = _graph_counts(db, version.document_version_id)
+
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+        persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
+        db.commit()
+
+        assert result.extractor_type == "llm"
+        assert result.metadata_json["extractor_result_code"] == (
+            "graph_extraction_llm_partial_completed"
+        )
+        assert persisted.status == "failed"
+        assert persisted.error_code == "graph_extraction_llm_partial_rebuild_skipped"
+        assert persisted.metadata_json["extractor_result_code"] == (
+            "graph_extraction_llm_partial_rebuild_skipped"
+        )
+        assert persisted.metadata_json["partial_result_code"] == (
+            "graph_extraction_llm_partial_completed"
+        )
+        assert _graph_counts(db, version.document_version_id) == baseline_counts
+
+
+def test_graph_index_service_marks_later_provider_failure_failed_without_replacement(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     settings = Settings(
@@ -1463,6 +1604,23 @@ def test_graph_index_service_falls_back_when_later_llm_chunk_provider_fails(
                 "Hybrid RAG uses Qdrant.",
             ],
         )
+        baseline_service = GraphIndexService(extractor_type="rule_based")
+        baseline_run = baseline_service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        baseline_snapshot = baseline_service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=baseline_run.graph_index_run_id,
+        )
+        baseline_service.persist_extraction_result(
+            db,
+            snapshot=baseline_snapshot,
+            result=baseline_service.extract_from_snapshot(baseline_snapshot),
+        )
+        baseline_counts = _graph_counts(db, version.document_version_id)
+
         run = service.create_index_run_for_document_version(
             db,
             document_version_id=version.document_version_id,
@@ -1477,15 +1635,21 @@ def test_graph_index_service_falls_back_when_later_llm_chunk_provider_fails(
         persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
         db.commit()
 
-        assert result.extractor_type == "rule_based"
-        assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_fallback"
-        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
+        assert result.extractor_type == "llm"
+        assert result.metadata_json["extractor_result_code"] == (
+            "graph_extraction_llm_retryable_failed"
+        )
+        assert result.metadata_json["llm_failure_reason_code"] == (
+            "graph_extraction_llm_unavailable"
+        )
         assert "llm_failed_chunk_count" not in result.metadata_json
-        assert persisted.status == "succeeded"
-        assert persisted.extractor_type == "rule_based"
+        assert persisted.status == "failed"
+        assert persisted.error_code == "graph_extraction_llm_retryable_failed"
+        assert persisted.extractor_type == "llm"
+        assert _graph_counts(db, version.document_version_id) == baseline_counts
 
 
-def test_graph_index_worker_records_actual_extractor_after_llm_fallback(
+def test_graph_index_worker_records_retryable_llm_failure_without_fallback(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     job_repository = JobRepository()
@@ -1540,17 +1704,13 @@ def test_graph_index_worker_records_actual_extractor_after_llm_fallback(
         stored_run = db.get(GraphIndexRun, run_id)
         assert stored_job is not None
         assert stored_run is not None
-        assert stored_job.status == "succeeded"
-        assert stored_job.result_json is not None
-        assert stored_job.result_json["extractor_type"] == "rule_based"
-        assert stored_job.result_json["graph_extraction_result_code"] == (
-            "graph_extraction_llm_fallback"
-        )
-        assert stored_job.result_json["graph_extraction_fallback_reason"] == (
-            "graph_extraction_llm_unavailable"
-        )
-        assert "Graph Index supports" not in str(stored_job.result_json)
-        assert stored_run.extractor_type == "rule_based"
+        assert stored_job.status == "failed"
+        assert stored_job.result_json is None
+        assert stored_job.error_code == "graph_extraction_llm_retryable_failed"
+        assert "Graph Index supports" not in str(stored_job.error_message)
+        assert stored_run.status == "failed"
+        assert stored_run.error_code == "graph_extraction_llm_retryable_failed"
+        assert stored_run.extractor_type == "llm"
 
 
 def test_neo4j_projection_service_projects_safe_rows_idempotently(
