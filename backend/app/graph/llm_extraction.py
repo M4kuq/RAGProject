@@ -77,7 +77,6 @@ GRAPH_EXTRACTION_TASK_INSTRUCTIONS = (
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
-_THINK_START_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 _RELATION_TYPE_RE = re.compile(r"[^a-z0-9_]+")
 _SENTENCE_BOUNDARY_MARKERS = (".", "!", "?", "。", "！", "？", "\n")
@@ -85,6 +84,9 @@ _DECIMAL_QUANT = Decimal("0.00001")
 _DEFAULT_ENTITY_CONFIDENCE = Decimal("0.70000")
 _DEFAULT_RELATION_CONFIDENCE = Decimal("0.65000")
 _MAX_INVALID_RESPONSE_RETRIES = 1
+_DOCUMENT_LEVEL_PROVIDER_FAILURE_CATEGORIES = frozenset(
+    {"auth", "connection", "rate_limited", "timeout"}
+)
 _ENTITY_TYPE_ALIASES = {
     "org": "organization",
     "company": "organization",
@@ -240,6 +242,8 @@ class LLMGraphExtractor:
                 payload = _parse_llm_json(generation.content)
                 chunk_mentions, chunk_relations = self._ground_chunk(chunk, payload)
             except AnswerGenerationError as exc:
+                if _is_document_level_provider_failure(exc):
+                    raise LLMGraphExtractionError(_llm_failure_reason(exc)) from exc
                 return _ChunkExtractionOutcome(
                     mentions=[],
                     relations=[],
@@ -590,34 +594,27 @@ def _parse_llm_json(content: str) -> Mapping[str, object]:
     stripped = _strip_llm_json_content(content)
     if not stripped:
         raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
-    selected_mapping: Mapping[str, object] | None = None
     first_mapping: Mapping[str, object] | None = None
     for parsed in _json_object_candidates(stripped):
         if first_mapping is None:
             first_mapping = parsed
         if "entities" in parsed and "relations" in parsed:
-            selected_mapping = parsed
-    if selected_mapping is not None:
-        return selected_mapping
+            return parsed
     if first_mapping is not None:
         return first_mapping
     raise LLMGraphExtractionError(GRAPH_EXTRACTION_LLM_INVALID_RESPONSE)
 
 
 def _strip_llm_json_content(content: str) -> str:
-    stripped = _THINK_BLOCK_RE.sub("", content).strip()
-    if _THINK_START_RE.search(stripped):
-        first_json = stripped.find("{")
-        if first_json >= 0:
-            stripped = stripped[first_json:]
-    return _JSON_FENCE_RE.sub("", stripped).strip()
+    return _JSON_FENCE_RE.sub("", content.strip()).strip()
 
 
 def _json_object_candidates(content: str) -> list[Mapping[str, object]]:
     decoder = json.JSONDecoder()
     candidates: list[Mapping[str, object]] = []
+    think_block_spans = _think_block_spans(content)
     for index, char in enumerate(content):
-        if char != "{":
+        if char != "{" or _index_in_spans(index, think_block_spans):
             continue
         try:
             parsed, _ = decoder.raw_decode(content[index:])
@@ -626,6 +623,14 @@ def _json_object_candidates(content: str) -> list[Mapping[str, object]]:
         if isinstance(parsed, Mapping):
             candidates.append(parsed)
     return candidates
+
+
+def _think_block_spans(content: str) -> list[tuple[int, int]]:
+    return [match.span() for match in _THINK_BLOCK_RE.finditer(content)]
+
+
+def _index_in_spans(index: int, spans: Sequence[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in spans)
 
 
 def _graph_response_format_schema() -> dict[str, object]:
@@ -1019,3 +1024,7 @@ def _llm_failure_reason(exc: AnswerGenerationError) -> str:
     if exc.error_category == "timeout":
         return GRAPH_EXTRACTION_LLM_FAILED
     return GRAPH_EXTRACTION_LLM_FAILED
+
+
+def _is_document_level_provider_failure(exc: AnswerGenerationError) -> bool:
+    return exc.error_category in _DOCUMENT_LEVEL_PROVIDER_FAILURE_CATEGORIES

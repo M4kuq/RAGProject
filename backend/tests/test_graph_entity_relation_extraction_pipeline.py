@@ -36,7 +36,12 @@ from app.graph.extraction import (
 )
 from app.graph.llm_extraction import LLMGraphExtractionError, LLMGraphExtractor, _parse_llm_json
 from app.graph.neo4j_backend import Neo4jClient, Neo4jConnectionConfig
-from app.rag.generation import GenerationRequest, GenerationResult, TokenUsage
+from app.rag.generation import (
+    AnswerGenerationError,
+    GenerationRequest,
+    GenerationResult,
+    TokenUsage,
+)
 from app.repositories.graph_repository import GraphRepository
 from app.repositories.job_repository import JobRepository
 from app.scripts.queue_graph_index_builds import queue_graph_index_build_jobs
@@ -145,7 +150,7 @@ class _StaticGraphAnswerGenerator:
 
 
 class _SequenceGraphAnswerGenerator:
-    def __init__(self, contents: list[str]) -> None:
+    def __init__(self, contents: list[str | AnswerGenerationError]) -> None:
         self.contents = contents
         self.requests: list[GenerationRequest] = []
 
@@ -153,6 +158,8 @@ class _SequenceGraphAnswerGenerator:
         self.requests.append(request)
         assert self.contents
         content = self.contents.pop(0)
+        if isinstance(content, AnswerGenerationError):
+            raise content
         return GenerationResult(
             content=content,
             usage=TokenUsage(input_tokens=3, output_tokens=2, total_tokens=5),
@@ -792,6 +799,47 @@ def test_llm_graph_parser_ignores_thinking_prefix_and_markdown_fence(content: st
     assert payload == {"entities": [], "relations": []}
 
 
+def test_llm_graph_parser_preserves_think_tags_inside_json_strings() -> None:
+    payload = {
+        "entities": [
+            {
+                "mention": "literal <think>trace</think> tag",
+                "canonical_name": "literal <think>trace</think> tag",
+                "entity_type": "concept",
+                "aliases": [],
+                "confidence": 0.92,
+            }
+        ],
+        "relations": [
+            {
+                "source": "literal <think>trace</think> tag",
+                "target": "Graph Index",
+                "relation_type": "documents",
+                "evidence": "Docs can contain literal <think>trace</think> tags.",
+                "confidence": 0.81,
+            }
+        ],
+    }
+
+    parsed = _parse_llm_json(json.dumps(payload))
+
+    assert parsed == payload
+
+
+def test_llm_graph_parser_keeps_first_graph_json_candidate() -> None:
+    first_payload = {
+        "entities": [{"mention": "Graph Index"}],
+        "relations": [{"source": "Graph Index", "target": "Hybrid RAG"}],
+    }
+    trailing_payload: dict[str, object] = {"entities": [], "relations": []}
+
+    parsed = _parse_llm_json(
+        f"{json.dumps(first_payload)}\nTrailing example:\n{json.dumps(trailing_payload)}"
+    )
+
+    assert parsed == first_payload
+
+
 def test_llm_graph_extractor_keeps_successful_chunks_after_invalid_chunk() -> None:
     first_chunk = _chunk_ref("This chunk intentionally has no usable graph JSON.")
     second_text = "Graph Index supports Hybrid RAG. Hybrid RAG uses Qdrant."
@@ -861,6 +909,45 @@ def test_llm_graph_extractor_keeps_successful_chunks_after_invalid_chunk() -> No
     assert generator.requests[0].response_format["type"] == "json_schema"
     assert generator.requests[1].task_instructions is not None
     assert "Retry constraint" in generator.requests[1].task_instructions
+
+
+@pytest.mark.parametrize(
+    ("error_category", "reason_code"),
+    [
+        ("auth", "graph_extraction_llm_unavailable"),
+        ("rate_limited", "graph_extraction_llm_unavailable"),
+        ("connection", "graph_extraction_llm_unavailable"),
+        ("timeout", "graph_extraction_llm_failed"),
+    ],
+)
+def test_llm_graph_extractor_raises_after_provider_chunk_failure(
+    error_category: str,
+    reason_code: str,
+) -> None:
+    first_chunk = _chunk_ref("This chunk has no graph entities.")
+    second_chunk = GraphChunkRef(
+        document_chunk_id=2,
+        document_version_id=1,
+        chunk_index=1,
+        chunk_hash=hashlib.sha256(b"Hybrid RAG uses Qdrant.").hexdigest(),
+        content_text="Hybrid RAG uses Qdrant.",
+    )
+    generator = _SequenceGraphAnswerGenerator(
+        [
+            json.dumps({"entities": [], "relations": []}),
+            AnswerGenerationError(error_category=error_category),
+        ]
+    )
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=generator,
+    )
+
+    with pytest.raises(LLMGraphExtractionError) as exc_info:
+        extractor.extract((first_chunk, second_chunk))
+
+    assert exc_info.value.reason_code == reason_code
+    assert len(generator.requests) == 2
 
 
 @pytest.mark.parametrize("payload", [{"entities": []}, {"relations": []}])
@@ -1263,6 +1350,83 @@ def test_graph_index_service_does_not_fallback_when_later_llm_chunk_succeeds(
         assert persisted.status == "succeeded"
         assert persisted.extractor_type == "llm"
         assert persisted.relation_count == 1
+
+
+def test_graph_index_service_falls_back_when_later_llm_chunk_provider_fails(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        graph_extractor_type="llm",
+        generation_provider="fake",
+    )
+    llm_extractor = LLMGraphExtractor(
+        settings=settings,
+        answer_generator=_SequenceGraphAnswerGenerator(
+            [
+                json.dumps(
+                    {
+                        "entities": [
+                            {
+                                "mention": "Graph Index",
+                                "canonical_name": "Graph Index",
+                                "entity_type": "concept",
+                                "aliases": [],
+                                "confidence": 0.92,
+                            },
+                            {
+                                "mention": "Hybrid RAG",
+                                "canonical_name": "Hybrid RAG",
+                                "entity_type": "technology",
+                                "aliases": [],
+                                "confidence": 0.88,
+                            },
+                        ],
+                        "relations": [
+                            {
+                                "source": "Graph Index",
+                                "target": "Hybrid RAG",
+                                "relation_type": "supports",
+                                "evidence": "Graph Index supports Hybrid RAG.",
+                                "confidence": 0.81,
+                            }
+                        ],
+                    }
+                ),
+                AnswerGenerationError(error_category="connection"),
+            ]
+        ),
+    )
+    service = GraphIndexService(settings=settings, llm_extractor=llm_extractor)
+    with graph_session_factory() as db:
+        version = _seed_ready_version(
+            db,
+            [
+                "Graph Index supports Hybrid RAG.",
+                "Hybrid RAG uses Qdrant.",
+            ],
+        )
+        run = service.create_index_run_for_document_version(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        snapshot = service.prepare_index_build(
+            db,
+            document_version_id=version.document_version_id,
+            graph_index_run_id=run.graph_index_run_id,
+        )
+
+        result = service.extract_from_snapshot(snapshot)
+        persisted = service.persist_extraction_result(db, snapshot=snapshot, result=result)
+        db.commit()
+
+        assert result.extractor_type == "rule_based"
+        assert result.metadata_json["extractor_result_code"] == "graph_extraction_llm_fallback"
+        assert result.metadata_json["fallback_reason_code"] == "graph_extraction_llm_unavailable"
+        assert "llm_failed_chunk_count" not in result.metadata_json
+        assert persisted.status == "succeeded"
+        assert persisted.extractor_type == "rule_based"
 
 
 def test_graph_index_worker_records_actual_extractor_after_llm_fallback(
