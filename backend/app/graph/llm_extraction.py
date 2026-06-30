@@ -670,8 +670,6 @@ def _graph_response_format_schema() -> dict[str, object]:
                                 },
                                 "confidence": {
                                     "type": "number",
-                                    "minimum": 0.0,
-                                    "maximum": 1.0,
                                 },
                             },
                             "required": [
@@ -695,8 +693,6 @@ def _graph_response_format_schema() -> dict[str, object]:
                                 "evidence": {"type": "string"},
                                 "confidence": {
                                     "type": "number",
-                                    "minimum": 0.0,
-                                    "maximum": 1.0,
                                 },
                             },
                             "required": [

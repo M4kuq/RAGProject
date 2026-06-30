@@ -780,6 +780,19 @@ def test_llm_graph_extractor_requests_json_schema_response_format() -> None:
     assert isinstance(schema, dict)
     assert schema["name"] == "graph_extraction_chunk"
     assert schema["strict"] is True
+    payload_schema = cast(dict[str, object], schema["schema"])
+    properties = cast(dict[str, object], payload_schema["properties"])
+    entity_schema = cast(dict[str, object], properties["entities"])
+    entity_items = cast(dict[str, object], entity_schema["items"])
+    entity_properties = cast(dict[str, object], entity_items["properties"])
+    relation_schema = cast(dict[str, object], properties["relations"])
+    relation_items = cast(dict[str, object], relation_schema["items"])
+    relation_properties = cast(dict[str, object], relation_items["properties"])
+    assert entity_properties["confidence"] == {"type": "number"}
+    assert relation_properties["confidence"] == {"type": "number"}
+    serialized_schema = json.dumps(payload_schema)
+    assert '"minimum"' not in serialized_schema
+    assert '"maximum"' not in serialized_schema
 
 
 @pytest.mark.parametrize(
@@ -1127,6 +1140,49 @@ def test_llm_graph_extractor_requires_ascii_token_boundaries() -> None:
     result = extractor.extract((chunk,))
 
     assert result.entity_mentions == ()
+
+
+def test_llm_graph_extractor_clamps_out_of_range_confidence() -> None:
+    chunk = _chunk_ref("Graph Index supports Hybrid RAG.")
+    extractor = LLMGraphExtractor(
+        settings=Settings(_env_file=None, app_env="test", generation_provider="fake"),
+        answer_generator=_StaticGraphAnswerGenerator(
+            {
+                "entities": [
+                    {
+                        "mention": "Graph Index",
+                        "canonical_name": "Graph Index",
+                        "entity_type": "concept",
+                        "aliases": [],
+                        "confidence": 1.4,
+                    },
+                    {
+                        "mention": "Hybrid RAG",
+                        "canonical_name": "Hybrid RAG",
+                        "entity_type": "technology",
+                        "aliases": [],
+                        "confidence": 0.7,
+                    },
+                ],
+                "relations": [
+                    {
+                        "source": "Graph Index",
+                        "target": "Hybrid RAG",
+                        "relation_type": "supports",
+                        "evidence": "Graph Index supports Hybrid RAG.",
+                        "confidence": -0.2,
+                    }
+                ],
+            }
+        ),
+        min_confidence=0,
+    )
+
+    result = extractor.extract((chunk,))
+
+    confidences = {mention.canonical_name: mention.confidence for mention in result.entity_mentions}
+    assert confidences["Graph Index"] == Decimal("1.00000")
+    assert result.relations[0].confidence == Decimal("0.00000")
 
 
 @pytest.mark.parametrize(
