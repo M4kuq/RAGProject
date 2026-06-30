@@ -27,6 +27,10 @@ _SAFE_MESSAGES = {
     "graph_normalization_failed": "Graph normalization failed.",
     "graph_relation_validation_failed": "Graph relation validation failed.",
     "graph_index_write_failed": "Graph index write failed.",
+    "graph_extraction_llm_retryable_failed": "Graph LLM extraction failed retryably.",
+    "graph_extraction_llm_partial_rebuild_skipped": (
+        "Graph LLM partial rebuild skipped to preserve existing index."
+    ),
     "internal_error": "Graph index build failed.",
 }
 
@@ -204,6 +208,10 @@ class GraphIndexBuildHandler:
                 snapshot=snapshot,
                 result=extraction_result,
             )
+            if run.status == "failed":
+                error_code = run.error_code or "graph_extraction_failed"
+                db.commit()
+                return _failed(error_code)
             result_payload = {
                 "document_version_id": snapshot.document_version_id,
                 "graph_index_run_id": run.graph_index_run_id,

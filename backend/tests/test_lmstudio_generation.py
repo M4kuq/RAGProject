@@ -170,11 +170,13 @@ def test_lmstudio_task_request_preserves_raw_json(
             system_instructions="Return JSON only.",
             task_instructions="Return JSON with entities and relations.",
             temperature=0.0,
+            response_format={"type": "json_object"},
         )
     )
 
     payload = captured["json"]
     assert isinstance(payload, dict)
+    assert payload["response_format"] == {"type": "json_object"}
     messages = payload["messages"]
     assert isinstance(messages, list)
     assert "Task:" in messages[1]["content"]
