@@ -680,6 +680,7 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="budget ask")
@@ -1851,6 +1852,7 @@ def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -1897,6 +1899,7 @@ def test_rag_ask_llm_tool_orchestrator_empty_finalize_selection_returns_no_conte
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2021,6 +2024,7 @@ def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
