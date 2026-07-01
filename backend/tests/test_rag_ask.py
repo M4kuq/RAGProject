@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -36,6 +38,7 @@ from app.rag.generation import (
     GenerationContextItem,
     GenerationRequest,
     GenerationResult,
+    TokenUsage,
 )
 from app.rag.langchain_agentic import (
     LangChainPlanningState,
@@ -59,6 +62,14 @@ from app.services.rag_service import RagService, _retrieval_summary_response, _s
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
+TEST_LMSTUDIO_MODEL = "qwen3.5-9b"
+OBSERVED_CITED_ANSWER = "提供された文脈では、alpha policy の要点が確認できます [1]。"
+OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER = (
+    "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]"
+)
+INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER = (
+    "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+)
 
 
 @pytest.fixture
@@ -78,10 +89,11 @@ def rag_ask_client() -> Iterator[tuple[TestClient, sessionmaker[Session], _Stati
 
     vector_client = _StaticVectorClient([_candidate(100, 0.91, 1), _candidate(101, 0.82, 2)])
     service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
 
     def override_db() -> Iterator[Session]:
@@ -295,7 +307,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
     assert data["user_message"]["client_message_id"] == "viewer-msg-1"
     assert data["assistant_message"]["role"] == "assistant"
     assert data["assistant_message"]["linked_retrieval_run_id"] == data["retrieval_run_id"]
-    assert "Fake answer" in data["assistant_message"]["content"]
+    assert data["assistant_message"]["content"] == OBSERVED_CITED_ANSWER
     assert "[1]" in data["assistant_message"]["content"]
     assert data["citations"][0]["local_citation_id"] == 1
     assert data["citations"][0]["document_chunk_id"] == 100
@@ -319,8 +331,8 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         "no_context": None,
     }
     generation = data["generation"]
-    assert generation["provider"] == "fake"
-    assert generation["model"] == "fake-rag-answer"
+    assert generation["provider"] == "lmstudio"
+    assert generation["model"] == TEST_LMSTUDIO_MODEL
     assert generation["input_tokens"] > 0
     assert generation["output_tokens"] > 0
     assert generation["total_tokens"] == generation["input_tokens"] + generation["output_tokens"]
@@ -358,7 +370,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert retrieval_settings["rerank_top_n"] == 1
         assert retrieval_settings["embedding_provider"] == "fake"
         assert retrieval_settings["rerank_provider"] == "fake"
-        assert retrieval_settings["generation_provider"] == "fake"
+        assert retrieval_settings["generation_provider"] == "lmstudio"
         assert retrieval_settings["qdrant_collection"] == "document_chunks"
         assert run.latency_breakdown_json is not None
         assert "generation_ms" in run.latency_breakdown_json
@@ -546,7 +558,7 @@ def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings(
+    settings = _lmstudio_test_settings(
         generation_max_context_chars=130,
         context_budget_max_context_tokens=1000,
         context_budget_reserve_answer_tokens=0,
@@ -557,6 +569,7 @@ def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=NoopRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="budget char cap")
@@ -606,7 +619,7 @@ def test_rag_ask_evidence_pack_disabled_bypasses_evidence_caps(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings(
+    settings = _lmstudio_test_settings(
         evidence_pack_enabled=False,
         evidence_pack_max_items=1,
         evidence_pack_max_items_per_source=1,
@@ -619,6 +632,7 @@ def test_rag_ask_evidence_pack_disabled_bypasses_evidence_caps(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=NoopRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="evidence disabled")
@@ -656,7 +670,7 @@ def test_rag_ask_context_budget_drop_all_saves_safe_failed_trace(
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     caplog.set_level("INFO", logger="app.services.rag_service")
-    settings = _settings(
+    settings = _lmstudio_test_settings(
         context_budget_max_context_tokens=1,
         context_budget_reserve_answer_tokens=0,
         context_budget_max_tokens_per_item=1,
@@ -857,7 +871,7 @@ def test_rag_ask_agentic_router_uses_llm_planner_after_insufficient_context(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
-        answer_generator=FakeAnswerGenerator(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="agentic llm ask")
@@ -964,13 +978,13 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
     client_message_id: str,
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
-        answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+        answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title=f"{strategy} weak answer")
@@ -990,8 +1004,8 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["assistant_message"]["content"] != "insufficient evidence [1]"
-    assert "[1]" in data["assistant_message"]["content"]
+    assert data["assistant_message"]["content"] != OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
     assert data["citations"][0]["local_citation_id"] == 1
     assert data["citations"][0]["document_chunk_id"] == 100
     assert data["confidence"]["confidence_label"] == "Low"
@@ -1012,6 +1026,63 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
         assert [message.role for message in messages] == ["user", "assistant"]
 
 
+@pytest.mark.integration
+def test_rag_ask_live_lmstudio_insufficient_answer_with_context_returns_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    if os.getenv("RAG_LIVE_LLM") != "1":
+        pytest.skip("set RAG_LIVE_LLM=1 to run the LM Studio integration test")
+
+    client, session_factory, vector_client = rag_ask_client
+    settings = _live_lmstudio_settings()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="live lmstudio insufficient")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "live-lmstudio-insufficient-msg-1",
+            "message": (
+                "この文書だけに基づいて、Mercury 計画の打ち上げ番号を答えてください。"
+                "文書に直接根拠がない場合は"
+                "「検索された文書には、この質問に答えるための十分な根拠がありません」"
+                "と答えてください。"
+            ),
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["generation"]["provider"] == "lmstudio"
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["citations"][0]["document_chunk_id"] == 100
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert data["confidence"]["answer_confidence"] < settings.confidence_medium_threshold
+    assert "content_text" not in str(response.json())
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["generation_provider"] == "lmstudio"
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+
+
 @pytest.mark.parametrize(
     ("strategy", "client_message_id"),
     [
@@ -1026,7 +1097,7 @@ def test_rag_ask_true_empty_retrieval_returns_no_context(
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     vector_client.candidates = []
-    settings = _settings(hybrid_sparse_weight=0.0, hybrid_dense_weight=1.0)
+    settings = _lmstudio_test_settings(hybrid_sparse_weight=0.0, hybrid_dense_weight=1.0)
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
@@ -1062,6 +1133,19 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_HybridThenFinalizePlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="llm agentic ask")
     message = "Compare alpha secondary retrieval evidence"
@@ -1262,13 +1346,13 @@ def test_rag_ask_langchain_agentic_insufficient_answer_with_context_returns_cita
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
-        answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+        answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="langchain insufficient")
@@ -1288,7 +1372,7 @@ def test_rag_ask_langchain_agentic_insufficient_answer_with_context_returns_cita
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert "[1]" in data["assistant_message"]["content"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
     assert data["citations"][0]["document_chunk_id"] in {100, 101}
     assert data["confidence"]["confidence_label"] == "Low"
     with session_factory() as db:
@@ -1537,18 +1621,7 @@ def test_rag_ask_hybrid_disabled_returns_strategy_not_enabled(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         hybrid_enabled=False,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
@@ -1582,18 +1655,7 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_best_effort_finalizes_wi
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         sparse_enabled=False,
         hybrid_enabled=False,
         llm_orchestrator_max_tool_calls=1,
@@ -1648,18 +1710,7 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_without_candidates_retur
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     vector_client.candidates = []
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         sparse_enabled=False,
         hybrid_enabled=False,
         llm_orchestrator_max_tool_calls=1,
@@ -1704,7 +1755,7 @@ def test_rag_ask_llm_tool_orchestrator_oversized_tool_output_rejected_safely(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings(
+    settings = _lmstudio_test_settings(
         tool_result_compression_max_snippet_chars=100,
         tool_result_compression_max_tokens_per_tool=1,
         tool_result_compression_max_total_tool_result_tokens=1,
@@ -1720,6 +1771,7 @@ def test_rag_ask_llm_tool_orchestrator_oversized_tool_output_rejected_safely(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -1783,18 +1835,7 @@ def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         sparse_enabled=False,
         hybrid_enabled=False,
         llm_orchestrator_max_tool_calls=2,
@@ -1846,7 +1887,7 @@ def test_rag_ask_llm_tool_orchestrator_empty_finalize_selection_returns_no_conte
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_EmptyFinalizeAfterSearchPlanner(),
@@ -1967,18 +2008,7 @@ def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         llm_orchestrator_timeout_seconds=1,
     )
     orchestrator = LLMToolCallingRetrievalOrchestrator(
@@ -2021,7 +2051,7 @@ def test_rag_ask_llm_tool_orchestrator_repeated_query_best_effort_finalizes_with
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_RepeatingDensePlanner(),
@@ -2031,6 +2061,7 @@ def test_rag_ask_llm_tool_orchestrator_repeated_query_best_effort_finalizes_with
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2073,7 +2104,7 @@ def test_rag_ask_llm_tool_orchestrator_repeated_tool_result_is_traced(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_DenseDifferentQueriesThenNoToolPlanner(),
@@ -2083,6 +2114,7 @@ def test_rag_ask_llm_tool_orchestrator_repeated_tool_result_is_traced(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2117,7 +2149,7 @@ def test_rag_ask_llm_tool_orchestrator_compression_disabled_preserves_final_cont
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings(
+    settings = _lmstudio_test_settings(
         tool_result_compression_enabled=False,
         tool_result_compression_max_items_per_tool=1,
         tool_result_compression_max_total_items_per_turn=1,
@@ -2132,6 +2164,7 @@ def test_rag_ask_llm_tool_orchestrator_compression_disabled_preserves_final_cont
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=NoopRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2172,7 +2205,7 @@ def test_rag_ask_llm_tool_orchestrator_repeated_query_without_candidates_returns
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     vector_client.candidates = []
-    settings = _settings(sparse_enabled=False, hybrid_enabled=False)
+    settings = _lmstudio_test_settings(sparse_enabled=False, hybrid_enabled=False)
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_RepeatingDensePlanner(),
@@ -2213,7 +2246,7 @@ def test_rag_ask_llm_tool_orchestrator_falls_back_to_hybrid_for_dense_hybrid_com
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_DenseThenNoToolPlanner(),
@@ -2296,7 +2329,7 @@ def test_rag_ask_llm_tool_orchestrator_prefers_named_project_source_for_citation
         db.add(_chunk(600, 60, "ReAct reasoning and acting generic agent paper. " * 4))
         db.commit()
     vector_client.candidates = [_candidate(600, 0.99, 1), _candidate(500, 0.50, 2)]
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_DenseThenNoToolPlanner(),
@@ -2306,6 +2339,7 @@ def test_rag_ask_llm_tool_orchestrator_prefers_named_project_source_for_citation
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2343,7 +2377,7 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_with_context_returns_
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _settings()
+    settings = _lmstudio_test_settings()
     orchestrator = LLMToolCallingRetrievalOrchestrator(
         settings,
         planner=_DenseThenNoToolPlanner(),
@@ -2353,9 +2387,7 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_with_context_returns_
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
-        answer_generator=_StaticAnswerGenerator(
-            "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]"
-        ),
+        answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
@@ -2374,7 +2406,7 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_with_context_returns_
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert "[1]" in data["assistant_message"]["content"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
     assert data["citations"][0]["document_chunk_id"] == 100
     assert data["confidence"]["confidence_label"] == "Low"
     with session_factory() as db:
@@ -2391,18 +2423,7 @@ def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         router_enabled=False,
         router_sufficiency_top_score_threshold=0.99,
     )
@@ -2411,6 +2432,7 @@ def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="agentic ask disabled")
@@ -2490,18 +2512,7 @@ def test_rag_ask_agentic_router_no_context_skips_reranker_failure(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         router_max_retrieval_calls=1,
         router_max_fallback_calls=0,
         router_sufficiency_top_score_threshold=0.99,
@@ -2555,18 +2566,7 @@ def test_rag_ask_agentic_router_respects_store_decision_trace_false(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = Settings(
-        app_env="test",
-        embedding_provider="fake",
-        embedding_fake_dimension=4,
-        retrieval_top_k_default=2,
-        retrieval_top_k_max=5,
-        rerank_provider="fake",
-        rerank_top_n_default=1,
-        rerank_top_n_max=5,
-        qdrant_collection_name="document_chunks",
-        search_snippet_max_chars=32,
-        generation_provider="fake",
+    settings = _lmstudio_test_settings(
         router_store_decision_trace=False,
     )
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
@@ -2574,6 +2574,7 @@ def test_rag_ask_agentic_router_respects_store_decision_trace_false(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="agentic ask no decision")
@@ -2659,7 +2660,7 @@ def test_rag_ask_persists_and_replays_multiple_citations(
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2739,7 +2740,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
 
     vector_client.candidates = [_candidate(100, 0.91, 1)]
     failing_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2781,7 +2782,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         assert db.query(Citation).count() == 0
 
     no_marker_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2814,7 +2815,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
     unknown_marker_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2847,7 +2848,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
     marker_only_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2882,7 +2883,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
     sensitive_output_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
@@ -2956,7 +2957,7 @@ def test_rag_ask_retrieval_and_rerank_failures_keep_only_user_message(
 
     vector_client.fail = False
     failing_service = RagService(
-        settings=_settings(),
+        settings=_lmstudio_test_settings(),
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=_FailingReranker(),
@@ -3100,6 +3101,24 @@ class _HybridOnlyPlanner:
         return [LLMToolCall(tool_name="hybrid_search", arguments={"query": "hybrid only"})]
 
 
+class _HybridThenFinalizePlanner:
+    def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        if request.tool_results:
+            return [
+                LLMToolCall(
+                    tool_name="finalize_answer",
+                    arguments={
+                        "selected_tool_call_ids": [
+                            result.tool_call_id
+                            for result in request.tool_results
+                            if result.item_count > 0
+                        ],
+                    },
+                )
+            ]
+        return [LLMToolCall(tool_name="hybrid_search", arguments={"query": request.user_query})]
+
+
 class _EmptyFinalizeAfterSearchPlanner:
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
         if not request.tool_results:
@@ -3157,6 +3176,75 @@ class _StaticAnswerGenerator:
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         return GenerationResult(content=self.content)
+
+
+class _ObservedCitationAnswerGenerator:
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=OBSERVED_CITED_ANSWER,
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
+class _ObservedInsufficientEvidenceAnswerGenerator:
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
+def _lmstudio_test_settings(**overrides: Any) -> Settings:
+    return _settings(
+        generation_provider="lmstudio",
+        generation_model_name=TEST_LMSTUDIO_MODEL,
+        **overrides,
+    )
+
+
+def _live_lmstudio_settings() -> Settings:
+    base_url = os.getenv("RAG_LIVE_LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1").strip()
+    base_url = base_url.rstrip("/")
+    if not base_url:
+        pytest.skip("RAG_LIVE_LMSTUDIO_BASE_URL must not be empty")
+    model_name = os.getenv("RAG_LIVE_LMSTUDIO_MODEL")
+    try:
+        models_response = httpx.get(f"{base_url}/models", timeout=2.0)
+    except httpx.HTTPError:
+        pytest.skip("LM Studio is not reachable")
+    if models_response.status_code >= 400:
+        pytest.skip("LM Studio models endpoint is not available")
+    if not model_name:
+        try:
+            models_payload = models_response.json()
+        except ValueError:
+            pytest.skip("LM Studio models endpoint did not return JSON")
+        model_entries = models_payload.get("data") if isinstance(models_payload, dict) else None
+        if isinstance(model_entries, list):
+            for entry in model_entries:
+                entry_id = entry.get("id") if isinstance(entry, dict) else None
+                if isinstance(entry_id, str):
+                    model_name = entry_id
+                    break
+    if not model_name:
+        pytest.skip("LM Studio has no loaded model; set RAG_LIVE_LMSTUDIO_MODEL")
+    try:
+        timeout_seconds = float(os.getenv("RAG_LIVE_LMSTUDIO_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        pytest.skip("RAG_LIVE_LMSTUDIO_TIMEOUT_SECONDS must be numeric")
+    if timeout_seconds <= 0:
+        pytest.skip("RAG_LIVE_LMSTUDIO_TIMEOUT_SECONDS must be positive")
+    return _settings(
+        generation_provider="lmstudio",
+        generation_model_name=model_name,
+        lmstudio_base_url=base_url,
+        lmstudio_timeout_seconds=timeout_seconds,
+        generation_max_output_chars=800,
+    )
 
 
 def _settings(**overrides: Any) -> Settings:

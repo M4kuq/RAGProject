@@ -26,7 +26,12 @@ from app.db.models import (
 )
 from app.graph.neo4j_backend import Neo4jConnectionConfig
 from app.ingest.embedding import EmbeddingAdapterError, FakeEmbeddingAdapter
-from app.rag.generation import GenerationRequest, GenerationResult
+from app.rag.generation import (
+    AnswerGenerationError,
+    GenerationRequest,
+    GenerationResult,
+    TokenUsage,
+)
 from app.rag.graph_retrieval import (
     GraphRetrievalStrategy,
     GraphStoreProvider,
@@ -51,6 +56,15 @@ from app.services.graph_rag_service import (
     _graph_settings_snapshot,
 )
 from app.services.rag_service import RagAskPipelineError, RagSearchPipelineError, RagService
+
+TEST_LMSTUDIO_MODEL = "qwen3.5-9b"
+OBSERVED_CITED_ANSWER = "提供された文脈では、FastAPI と PostgreSQL の関係を確認できます [1]。"
+OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER = (
+    "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]"
+)
+INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER = (
+    "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+)
 
 
 @dataclass(frozen=True)
@@ -79,12 +93,24 @@ class _StaticVectorClient:
         return self.candidates[:limit]
 
 
-class _StaticAnswerGenerator:
-    def __init__(self, content: str) -> None:
-        self.content = content
-
+class _ObservedCitationAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
-        return GenerationResult(content=self.content)
+        if not request.context_items:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=OBSERVED_CITED_ANSWER,
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
+class _ObservedInsufficientEvidenceAnswerGenerator:
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        return GenerationResult(
+            content=OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
 
 
 @pytest.fixture
@@ -117,7 +143,8 @@ def _settings(**overrides: Any) -> Settings:
             "ask_rerank_top_n_default": 2,
             "qdrant_collection_name": "document_chunks",
             "search_snippet_max_chars": 64,
-            "generation_provider": "fake",
+            "generation_provider": "lmstudio",
+            "generation_model_name": TEST_LMSTUDIO_MODEL,
             "graph_retrieval_enabled": True,
             "graph_store_provider": "postgres",
             **overrides,
@@ -136,7 +163,7 @@ def _service(
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=_StaticVectorClient(candidates),
         reranker=FakeRerankerClient(),
-        answer_generator=answer_generator,
+        answer_generator=answer_generator or _ObservedCitationAnswerGenerator(),
     )
 
 
@@ -389,7 +416,7 @@ def test_graph_ask_with_context_and_insufficient_answer_returns_low_confidence_c
             _service(
                 settings,
                 [_vector_candidate(min(seed.chunk_ids))],
-                answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+                answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
             )
         )
 
@@ -405,8 +432,8 @@ def test_graph_ask_with_context_and_insufficient_answer_returns_low_confidence_c
             request_id="req-graph-insufficient",
         )
 
-        assert response.assistant_message.content != "insufficient evidence [1]"
-        assert "[1]" in response.assistant_message.content
+        assert response.assistant_message.content != OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER
+        assert response.assistant_message.content == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
         assert response.confidence.confidence_label == "Low"
         assert response.confidence.answer_confidence < settings.confidence_medium_threshold
         assert [citation.local_citation_id for citation in response.citations] == [1]
@@ -697,7 +724,7 @@ def test_explicit_graph_true_empty_retrieval_returns_no_context(
             _service(
                 _settings(graph_retrieval_fallback_strategy="dense"),
                 [],
-                answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+                answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
             )
         )
 
