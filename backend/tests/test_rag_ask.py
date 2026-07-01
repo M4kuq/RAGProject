@@ -1667,6 +1667,7 @@ def test_rag_ask_llm_tool_orchestrator_budget_exhausted_best_effort_finalizes_wi
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="llm budget")
@@ -2260,6 +2261,7 @@ def test_rag_ask_llm_tool_orchestrator_falls_back_to_hybrid_for_dense_hybrid_com
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
         llm_tool_orchestrator=orchestrator,
     )
     csrf_token = _login(client, email="viewer@example.com")
