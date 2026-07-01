@@ -56,7 +56,7 @@ from app.services.rag_service import (
     _context_refs_for_citation_sources,
     _decimal_score,
     _elapsed_ms,
-    _is_insufficient_evidence_answer,
+    _low_confidence_for_insufficient_evidence,
     _optional_decimal_score,
     _payload_snapshot,
     _prompt_citation_sources,
@@ -503,20 +503,16 @@ class GraphRagService:
                 latency_ms=_elapsed_ms(generation_started),
             )
             with latency_tracker.span("citation_build_ms"):
-                parsed_generation, cited_sources = _validated_generation_or_fallback(
+                (
+                    parsed_generation,
+                    cited_sources,
+                    insufficient_evidence_fallback,
+                ) = _validated_generation_or_fallback(
                     generation.content,
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
+                    allow_insufficient_evidence_fallback=True,
                 )
-                if _is_insufficient_evidence_answer(parsed_generation.answer_text):
-                    self.base._mark_failed_safely(
-                        db,
-                        retrieval_run_id=run_id,
-                        error_code="no_context_found",
-                        latency_tracker=latency_tracker,
-                        rollback=False,
-                    )
-                    raise RagAskPipelineError("no_context_found", 422)
                 assistant_message = self.base.chat_repository.create_message(
                     db,
                     chat_session_id=payload.chat_session_id,
@@ -544,6 +540,11 @@ class GraphRagService:
                     ),
                     self.base.settings,
                 )
+                if insufficient_evidence_fallback:
+                    confidence = _low_confidence_for_insufficient_evidence(
+                        confidence,
+                        self.base.settings,
+                    )
             run = self.base._require_run(db, run_id)
             self.base.repository.mark_succeeded(
                 db,

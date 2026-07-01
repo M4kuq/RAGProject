@@ -951,6 +951,113 @@ def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
         assert all(item.retrieval_source == "hybrid" for item in items)
 
 
+@pytest.mark.parametrize(
+    ("strategy", "client_message_id"),
+    [
+        ("dense", "dense-insufficient-with-context"),
+        ("hybrid", "hybrid-insufficient-with-context"),
+    ],
+)
+def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    strategy: str,
+    client_message_id: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title=f"{strategy} weak answer")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": client_message_id,
+            "message": "alpha policy weak generated answer",
+            "strategy": strategy,
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] != "insufficient evidence [1]"
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["citations"][0]["document_chunk_id"] == 100
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert data["confidence"]["answer_confidence"] < settings.confidence_medium_threshold
+    assert "content_text" not in str(response.json())
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.strategy_type == strategy
+        assert run.confidence_label == "Low"
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+
+
+@pytest.mark.parametrize(
+    ("strategy", "client_message_id"),
+    [
+        ("dense", "dense-empty-retrieval"),
+        ("hybrid", "hybrid-empty-retrieval"),
+    ],
+)
+def test_rag_ask_true_empty_retrieval_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    strategy: str,
+    client_message_id: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    settings = _settings(hybrid_sparse_weight=0.0, hybrid_dense_weight=1.0)
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title=f"{strategy} empty")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": client_message_id,
+            "message": "alpha policy no retrievable context",
+            "strategy": strategy,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+
+
 def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -1149,6 +1256,47 @@ def test_rag_ask_langchain_agentic_uses_langchain_tools_and_saves_safe_trace(
         assert "content_text" not in dumped
         assert "normalized_query_preview" not in dumped
         assert "rewritten_query_preview" not in dumped
+
+
+def test_rag_ask_langchain_agentic_insufficient_answer_with_context_returns_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="langchain insufficient")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "langchain-insufficient-msg-1",
+            "message": "Compare alpha secondary retrieval evidence",
+            "strategy": "langchain_agentic",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["citations"][0]["document_chunk_id"] in {100, 101}
+    assert data["confidence"]["confidence_label"] == "Low"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
 
 def test_rag_ask_langgraph_agentic_uses_state_graph_and_saves_safe_trace(
@@ -2191,7 +2339,7 @@ def test_rag_ask_llm_tool_orchestrator_prefers_named_project_source_for_citation
         assert first_selected.document_chunk_id == 500
 
 
-def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
+def test_rag_ask_llm_tool_orchestrator_insufficient_answer_with_context_returns_citations(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
@@ -2224,15 +2372,19 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_returns_no_context(
         headers=_unsafe_headers(csrf_token),
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "no_context_found"
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["citations"][0]["document_chunk_id"] == 100
+    assert data["confidence"]["confidence_label"] == "Low"
     with session_factory() as db:
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
-        assert run.status == "failed"
-        assert run.error_code == "no_context_found"
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
         messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
-        assert [message.role for message in messages] == ["user"]
-        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        assert [message.role for message in messages] == ["user", "assistant"]
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
 
 def test_rag_ask_agentic_router_disabled_uses_single_fallback_dense_retrieval(

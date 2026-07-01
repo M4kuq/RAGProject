@@ -16,6 +16,7 @@ from app.db.base import Base
 from app.db.graph_models import GraphEntity, GraphEntityMention, GraphRelation
 from app.db.models import (
     ChatSession,
+    Citation,
     DocumentChunk,
     DocumentVersion,
     LogicalDocument,
@@ -25,6 +26,7 @@ from app.db.models import (
 )
 from app.graph.neo4j_backend import Neo4jConnectionConfig
 from app.ingest.embedding import EmbeddingAdapterError, FakeEmbeddingAdapter
+from app.rag.generation import GenerationRequest, GenerationResult
 from app.rag.graph_retrieval import (
     GraphRetrievalStrategy,
     GraphStoreProvider,
@@ -77,6 +79,14 @@ class _StaticVectorClient:
         return self.candidates[:limit]
 
 
+class _StaticAnswerGenerator:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        return GenerationResult(content=self.content)
+
+
 @pytest.fixture
 def graph_session_factory() -> Iterator[sessionmaker[Session]]:
     engine = create_engine(
@@ -115,12 +125,18 @@ def _settings(**overrides: Any) -> Settings:
     )
 
 
-def _service(settings: Settings, candidates: list[VectorSearchCandidate]) -> RagService:
+def _service(
+    settings: Settings,
+    candidates: list[VectorSearchCandidate],
+    *,
+    answer_generator: Any | None = None,
+) -> RagService:
     return RagService(
         settings=settings,
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=_StaticVectorClient(candidates),
         reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
     )
 
 
@@ -358,6 +374,52 @@ def test_graph_ask_records_injection_pattern_reason_code(
         reason_codes = run.strategy_decision_json.get("reason_codes")
         assert isinstance(reason_codes, list)
         assert "injection_pattern_detected" in reason_codes
+
+
+def test_graph_ask_with_context_and_insufficient_answer_returns_low_confidence_citations(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        settings = _settings()
+        service = GraphRagService(
+            _service(
+                settings,
+                [_vector_candidate(min(seed.chunk_ids))],
+                answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+            )
+        )
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="graph-insufficient-with-context-1",
+                message="How does FastAPI use PostgreSQL?",
+                strategy=RagAskRequestStrategy.GRAPH,
+            ),
+            user=user,
+            request_id="req-graph-insufficient",
+        )
+
+        assert response.assistant_message.content != "insufficient evidence [1]"
+        assert "[1]" in response.assistant_message.content
+        assert response.confidence.confidence_label == "Low"
+        assert response.confidence.answer_confidence < settings.confidence_medium_threshold
+        assert [citation.local_citation_id for citation in response.citations] == [1]
+        assert response.citations[0].document_chunk_id in seed.chunk_ids
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] >= 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
 
 def test_explicit_graph_ask_respects_disabled_global_flag(
@@ -617,6 +679,47 @@ def test_explicit_graph_no_evidence_falls_back_to_base(
         assert response.retrieval_summary.strategy_type == RetrievalStrategy.DENSE
         assert response.retrieval_summary.selected_strategy == "graph"
         assert response.retrieval_summary.execution_strategy == "dense"
+
+
+def test_explicit_graph_true_empty_retrieval_returns_no_context(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        db.execute(delete(GraphRelation))
+        db.execute(delete(GraphEntityMention))
+        db.commit()
+
+        service = GraphRagService(
+            _service(
+                _settings(graph_retrieval_fallback_strategy="dense"),
+                [],
+                answer_generator=_StaticAnswerGenerator("insufficient evidence [1]"),
+            )
+        )
+
+        with pytest.raises(RagAskPipelineError) as exc_info:
+            service.ask(
+                db,
+                payload=RagAskRequest(
+                    chat_session_id=chat_session_id,
+                    client_message_id="explicit-graph-empty-1",
+                    message="How does FastAPI use PostgreSQL?",
+                    strategy=RagAskRequestStrategy.GRAPH,
+                ),
+                user=user,
+                request_id="req-graph-empty",
+            )
+
+        assert exc_info.value.error_code == "no_context_found"
+        assert exc_info.value.status_code == 422
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
 
 
 def test_graph_search_router_no_evidence_falls_back_to_base(
