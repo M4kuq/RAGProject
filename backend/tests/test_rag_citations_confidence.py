@@ -186,6 +186,61 @@ def test_groundedness_keeps_supported_answer_with_uncited_caveat_confident() -> 
 
 
 @pytest.mark.parametrize(
+    ("summary_kwargs", "selected_count"),
+    [
+        (
+            {
+                "requested_top_k": 20,
+                "qdrant_candidate_count": 40,
+                "sparse_candidate_count": 0,
+                "post_filter_candidate_count": 5,
+                "selected_count": 5,
+                "excluded_by_rdb_check_count": 0,
+                "top1_retrieval_score": 0.953125,
+                "top3_avg_retrieval_score": 0.933449,
+                "top1_rerank_score": None,
+                "fusion_method": "rrf",
+            },
+            5,
+        ),
+        (
+            {
+                "requested_top_k": 20,
+                "qdrant_candidate_count": 0,
+                "post_filter_candidate_count": 1,
+                "selected_count": 1,
+                "excluded_by_rdb_check_count": 0,
+                "top1_retrieval_score": 0.73,
+                "top3_avg_retrieval_score": 0.73,
+                "top1_rerank_score": None,
+                "graph_store_provider": "neo4j",
+                "graph_path_count": 1,
+                "graph_source_candidate_count": 1,
+            },
+            1,
+        ),
+    ],
+)
+def test_confidence_uses_retrieval_support_when_rerank_is_absent(
+    summary_kwargs: dict[str, object],
+    selected_count: int,
+) -> None:
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(**summary_kwargs),
+            marker_count=1,
+            unique_citation_count=1,
+            selected_count=selected_count,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score == 1.0
+    assert result.confidence_label == "High"
+    assert result.answer_confidence > 0.75
+
+
+@pytest.mark.parametrize(
     ("score", "expected_label"),
     [
         (0.20, "Low"),
@@ -218,6 +273,55 @@ def test_confidence_labels_single_context_answers_by_retrieval_support(
 
     assert result.groundedness_score == 1.0
     assert result.confidence_label == expected_label
+
+
+def test_confidence_keeps_low_when_rerank_absent_and_retrieval_support_is_low() -> None:
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=20,
+                qdrant_candidate_count=20,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.20,
+                top3_avg_retrieval_score=0.20,
+                top1_rerank_score=None,
+            ),
+            marker_count=1,
+            unique_citation_count=1,
+            selected_count=1,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score == 1.0
+    assert result.confidence_label == "Low"
+    assert result.answer_confidence < Settings(app_env="test").confidence_medium_threshold
+
+
+def test_confidence_keeps_low_when_groundedness_is_low_despite_high_retrieval() -> None:
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=20,
+                qdrant_candidate_count=20,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.95,
+                top3_avg_retrieval_score=0.95,
+                top1_rerank_score=None,
+            ),
+            marker_count=0,
+            unique_citation_count=0,
+            selected_count=1,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score < Settings(app_env="test").groundedness_medium_threshold
+    assert result.confidence_label == "Low"
 
 
 def test_confidence_with_all_scores_present_matches_flat_formula() -> None:
