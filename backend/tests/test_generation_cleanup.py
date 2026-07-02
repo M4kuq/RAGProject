@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from app.rag.citations import CitationSource, parse_generation_output
-from app.rag.generation import GenerationContextItem, _final_answer_text, _truncate_output
+from app.rag.generation import (
+    GenerationContextItem,
+    GenerationRequest,
+    _final_answer_text,
+    _generation_output_text,
+    _truncate_output,
+)
+from app.rag.insufficient import is_insufficient_evidence_answer
 from app.services.rag_service import (
-    _is_insufficient_evidence_answer,
     _validated_generation_or_fallback,
 )
 
@@ -45,13 +51,18 @@ def test_generation_rewritten_insufficient_answer_remains_detectable() -> None:
 
     rewritten = _truncate_output(raw, max_chars=200)
 
-    assert _is_insufficient_evidence_answer(rewritten)
+    assert is_insufficient_evidence_answer(rewritten)
 
 
-def test_supported_answer_with_insufficient_caveat_is_not_rewritten_to_fallback() -> None:
-    content = (
+def test_generation_output_keeps_supported_answer_with_insufficient_caveat() -> None:
+    expected = (
         "Alpha policy requires owner approval [1]. "
         "There is insufficient evidence for the requested launch number."
+    )
+    content = _generation_output_text(
+        f"Final answer: {expected}",
+        _generation_request(),
+        cleanup_final_answer=True,
     )
 
     parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
@@ -62,14 +73,21 @@ def test_supported_answer_with_insufficient_caveat_is_not_rewritten_to_fallback(
     )
 
     assert parsed.answer_text == content
+    assert content == expected
     assert [source.local_citation_id for source in cited_sources] == [1]
     assert not used_fallback
-    assert not _is_insufficient_evidence_answer(content)
+    assert not is_insufficient_evidence_answer(content)
 
 
-def test_standalone_insufficient_answer_still_uses_safe_fallback() -> None:
+def test_generation_output_standalone_insufficient_still_uses_safe_fallback() -> None:
+    content = _generation_output_text(
+        "Final answer: 検索された文書には、この質問に答えるための十分な根拠がありません。 [1]",
+        _generation_request(),
+        cleanup_final_answer=True,
+    )
+
     parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
-        "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]",
+        content,
         context_items=_context_items(),
         prompt_citation_sources=_citation_sources(),
         allow_insufficient_evidence_fallback=True,
@@ -81,6 +99,14 @@ def test_standalone_insufficient_answer_still_uses_safe_fallback() -> None:
     )
     assert [source.local_citation_id for source in cited_sources] == [1]
     assert used_fallback
+
+
+def _generation_request() -> GenerationRequest:
+    return GenerationRequest(
+        message="What does the Alpha policy require before launch?",
+        context_items=_context_items(),
+        max_output_chars=500,
+    )
 
 
 def _context_items() -> list[GenerationContextItem]:

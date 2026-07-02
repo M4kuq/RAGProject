@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from app.core.config import Settings
+from app.rag.insufficient import is_insufficient_evidence_answer
 
 logger = logging.getLogger(__name__)
 
@@ -1049,22 +1050,7 @@ def _truncate_raw_output(value: str, max_chars: int) -> str:
 
 
 def _rewrite_insufficient_evidence_answer(value: str) -> str:
-    normalized = " ".join(value.lower().split())
-    if not any(
-        phrase in normalized
-        for phrase in (
-            "十分な根拠がありません",
-            "十分な根拠がない",
-            "十分な情報がありません",
-            "根拠が不足",
-            "insufficient evidence",
-            "insufficient context",
-            "not enough evidence",
-            "not enough context",
-            "no sufficient evidence",
-            "no usable context",
-        )
-    ):
+    if not is_insufficient_evidence_answer(value):
         return value
     marker_match = re.search(r"\[(\d+)\]", value)
     marker = f" [{marker_match.group(1)}]" if marker_match else ""
