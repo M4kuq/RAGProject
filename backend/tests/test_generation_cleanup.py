@@ -57,6 +57,8 @@ def test_generation_rewritten_insufficient_answer_remains_detectable() -> None:
 def test_wrapped_standalone_insufficient_answers_use_safe_fallback() -> None:
     for content in (
         "Final answer: Insufficient evidence [1].",
+        "Insufficient evidence for the requested launch number [1].",
+        "There is not enough evidence for the requested launch number.",
         "There is insufficient evidence in the retrieved documents to answer the question [1].",
         "The retrieved documents do not contain enough evidence to answer this question [1].",
     ):
@@ -84,6 +86,7 @@ def test_standalone_japanese_insufficient_variants_use_safe_fallback() -> None:
         "検索された引用では、この質問への回答を確定できません",
         "十分な根拠がありません",
         "十分な情報がありません",
+        "要求された打ち上げ番号について十分な情報がありません。",
         "根拠が不足しています",
         "回答：十分な根拠がありません",
         "回答：十分な情報がありません",
@@ -122,6 +125,40 @@ def test_plain_standalone_template_remains_insufficient() -> None:
 
 def test_supported_answer_is_not_insufficient() -> None:
     assert not is_insufficient_evidence_answer("Alpha policy requires owner approval [1].")
+
+
+def test_supported_answer_with_scoped_insufficient_clause_is_not_insufficient() -> None:
+    for content in (
+        "Alpha policy requires owner approval [1]. "
+        "There is insufficient evidence for the requested launch number.",
+        "Alpha policy requires owner approval [1]; however, "
+        "there is not enough evidence for the requested launch number.",
+        "Alpha policy requires owner approval [1] however "
+        "there is not enough evidence for the requested launch number.",
+    ):
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert parsed.answer_text == content
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert not used_fallback
+        assert not is_insufficient_evidence_answer(content)
+
+
+def test_scoped_insufficient_with_followup_claim_is_not_insufficient() -> None:
+    for content in (
+        "Insufficient evidence for the requested launch number; however, "
+        "Alpha policy requires owner approval [1].",
+        "There is not enough evidence for the requested launch number. "
+        "However, Alpha policy requires owner approval [1].",
+        "要求された打ち上げ番号について十分な情報がありません。しかし、"
+        "Alphaポリシーではオーナー承認が必要です [1]。",
+    ):
+        assert not is_insufficient_evidence_answer(content)
 
 
 def test_generation_output_keeps_supported_answer_with_insufficient_caveat() -> None:
