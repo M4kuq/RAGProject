@@ -54,6 +54,38 @@ def test_generation_rewritten_insufficient_answer_remains_detectable() -> None:
     assert is_insufficient_evidence_answer(rewritten)
 
 
+def test_wrapped_standalone_insufficient_answers_use_safe_fallback() -> None:
+    for content in (
+        "Final answer: Insufficient evidence [1].",
+        "There is insufficient evidence in the retrieved documents to answer the question [1].",
+    ):
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert (
+            parsed.answer_text
+            == "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+        )
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert used_fallback
+        assert is_insufficient_evidence_answer(content)
+
+
+def test_plain_standalone_template_remains_insufficient() -> None:
+    assert is_insufficient_evidence_answer("Insufficient evidence [1].")
+    assert is_insufficient_evidence_answer(
+        "検索された文書には、この質問に答えるための十分な根拠がありません。"
+    )
+
+
+def test_supported_answer_is_not_insufficient() -> None:
+    assert not is_insufficient_evidence_answer("Alpha policy requires owner approval [1].")
+
+
 def test_generation_output_keeps_supported_answer_with_insufficient_caveat() -> None:
     expected = (
         "Alpha policy requires owner approval [1]. "
