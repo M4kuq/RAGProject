@@ -137,7 +137,7 @@ def test_confidence_does_not_penalize_concise_single_source_answers() -> None:
                 requested_top_k=20,
                 qdrant_candidate_count=20,
                 post_filter_candidate_count=20,
-                selected_count=5,
+                selected_count=1,
                 excluded_by_rdb_check_count=0,
                 top1_retrieval_score=0.65,
                 top3_avg_retrieval_score=0.62,
@@ -145,13 +145,48 @@ def test_confidence_does_not_penalize_concise_single_source_answers() -> None:
             ),
             marker_count=1,
             unique_citation_count=1,
-            selected_count=5,
+            selected_count=1,
         ),
         Settings(app_env="test"),
     )
 
     assert result.groundedness_score == 1.0
     assert result.confidence_label == "High"
+
+
+@pytest.mark.parametrize(
+    ("score", "expected_label"),
+    [
+        (0.20, "Low"),
+        (0.30, "Medium"),
+        (0.65, "High"),
+    ],
+)
+def test_confidence_labels_single_context_answers_by_retrieval_support(
+    score: float,
+    expected_label: str,
+) -> None:
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=20,
+                qdrant_candidate_count=20,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=score,
+                top3_avg_retrieval_score=score,
+                top1_rerank_score=score,
+            ),
+            marker_count=1,
+            unique_citation_count=1,
+            selected_count=1,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score == 1.0
+    assert result.confidence_label == expected_label
 
 
 def test_confidence_with_all_scores_present_matches_flat_formula() -> None:
@@ -212,8 +247,9 @@ def test_confidence_renormalizes_when_rerank_score_absent() -> None:
 
 def test_confidence_renormalizes_when_retrieval_and_rerank_absent() -> None:
     # Both retrieval signals absent -> only groundedness (0.20) and context
-    # strength (0.10) remain, renormalized over 0.30. With groundedness 1.0 and
-    # context strength clamp(2/3): (0.20*1.0 + 0.10*0.666667) / 0.30 = 0.888889.
+    # presence (0.10) remain. The raw weighted value would be high, but the
+    # retrieval-support floor caps confidence below Medium so citations/context
+    # alone cannot look confident without retrieval or rerank support.
     result = calculate_confidence(
         ConfidenceInputs(
             retrieval_score_summary=RetrievalScoreSummary(
@@ -233,8 +269,8 @@ def test_confidence_renormalizes_when_retrieval_and_rerank_absent() -> None:
         Settings(app_env="test"),
     )
 
-    expected = (0.20 * 1.0 + 0.10 * (2 / 3)) / 0.30
-    assert result.answer_confidence == pytest.approx(expected)
+    assert result.answer_confidence == pytest.approx(0.44)
+    assert result.confidence_label == "Low"
 
 
 def _source(local_citation_id: int) -> CitationSource:

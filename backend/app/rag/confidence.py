@@ -11,6 +11,12 @@ from app.schemas.rag import RetrievalScoreSummary
 # kept a plain string so future bases (e.g. "calibrated") don't break clients.
 CONFIDENCE_BASIS = "retrieval_signals"
 
+# Raw retrieval/rerank scores are heuristic support signals, not probabilities.
+# These floors keep citations/context alone from upgrading weak retrieval while
+# allowing cited answers with moderate retrieval support to reach Medium.
+_MEDIUM_RETRIEVAL_SUPPORT_FLOOR = 0.30
+_HIGH_RETRIEVAL_SUPPORT_FLOOR = 0.60
+
 
 @dataclass(frozen=True)
 class ConfidenceScores:
@@ -43,12 +49,17 @@ def calculate_confidence(inputs: ConfidenceInputs, settings: Settings) -> Confid
     answer is correct.
 
     Each component carries a nominal weight (retrieval 0.35, rerank 0.35,
-    groundedness 0.20, context_strength 0.10). Optional retrieval signals may be
+    groundedness 0.20, context_strength 0.10). ``context_strength`` represents
+    safe context presence, not breadth: context compression and graph retrieval
+    may intentionally keep one strong source. Optional retrieval signals may be
     absent (e.g. ``top1_rerank_score`` is ``None`` when reranking is disabled). In
     that case the score is the weighted sum over the *present* components divided
     by the sum of their weights, i.e. the remaining weights are renormalized to
     1.0 so an absent signal does not silently drag the score toward zero. When all
     optional scores are present this is numerically identical to the flat formula.
+    Label upgrades are also gated by the average present retrieval/rerank support:
+    0.30 is the Medium floor and 0.60 is the High floor, so cited context without
+    actual retrieval support remains Low.
     """
     selected_count = max(0, inputs.selected_count)
     citation_coverage = _safe_ratio(
@@ -61,10 +72,11 @@ def calculate_confidence(inputs: ConfidenceInputs, settings: Settings) -> Confid
     marker_presence = 1.0 if inputs.marker_count > 0 else 0.0
 
     groundedness = _clamp((0.75 * citation_coverage) + (0.25 * marker_presence))
-    context_strength = _clamp(selected_count / 3)
+    context_strength = _context_strength(selected_count)
 
     top1_retrieval = inputs.retrieval_score_summary.top1_retrieval_score
     top1_rerank = inputs.retrieval_score_summary.top1_rerank_score
+    retrieval_support = _retrieval_support_score(top1_retrieval, top1_rerank)
     components: list[_ConfidenceComponent] = [
         _ConfidenceComponent(
             weight=0.35,
@@ -79,10 +91,15 @@ def calculate_confidence(inputs: ConfidenceInputs, settings: Settings) -> Confid
         _ConfidenceComponent(weight=0.20, value=groundedness, present=True),
         _ConfidenceComponent(weight=0.10, value=context_strength, present=True),
     ]
-    answer_confidence = _clamp(_weighted_renormalized(components))
+    answer_confidence = _support_capped_confidence(
+        _clamp(_weighted_renormalized(components)),
+        retrieval_support_score=retrieval_support,
+        settings=settings,
+    )
     label = _confidence_label(
         answer_confidence=answer_confidence,
         groundedness_score=groundedness,
+        retrieval_support_score=retrieval_support,
         settings=settings,
     )
     return ConfidenceScores(
@@ -96,16 +113,19 @@ def _confidence_label(
     *,
     answer_confidence: float,
     groundedness_score: float,
+    retrieval_support_score: float,
     settings: Settings,
 ) -> str:
     if (
         answer_confidence >= settings.confidence_high_threshold
         and groundedness_score >= settings.groundedness_high_threshold
+        and retrieval_support_score >= _HIGH_RETRIEVAL_SUPPORT_FLOOR
     ):
         return "High"
     if (
         answer_confidence >= settings.confidence_medium_threshold
         and groundedness_score >= settings.groundedness_medium_threshold
+        and retrieval_support_score >= _MEDIUM_RETRIEVAL_SUPPORT_FLOOR
     ):
         return "Medium"
     return "Low"
@@ -126,10 +146,41 @@ def _optional_score(value: float | None) -> float:
     return _clamp(float(value))
 
 
+def _retrieval_support_score(*scores: float | None) -> float:
+    present = [_optional_score(score) for score in scores if score is not None]
+    if not present:
+        return 0.0
+    return sum(present) / len(present)
+
+
+def _support_capped_confidence(
+    answer_confidence: float,
+    *,
+    retrieval_support_score: float,
+    settings: Settings,
+) -> float:
+    if retrieval_support_score < _MEDIUM_RETRIEVAL_SUPPORT_FLOOR:
+        return min(answer_confidence, _below_threshold(settings.confidence_medium_threshold))
+    if retrieval_support_score < _HIGH_RETRIEVAL_SUPPORT_FLOOR:
+        return min(answer_confidence, _below_threshold(settings.confidence_high_threshold))
+    return answer_confidence
+
+
+def _below_threshold(threshold: float) -> float:
+    return max(0.0, min(1.0, threshold) - 0.01)
+
+
 def _safe_ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return _clamp(numerator / denominator)
+
+
+def _context_strength(selected_count: int) -> float:
+    # Context compression and graph retrieval can deliberately keep one concise,
+    # high-quality evidence item. Treat context strength as presence, not breadth;
+    # retrieval/rerank and groundedness still prevent weak evidence from escalating.
+    return 1.0 if selected_count > 0 else 0.0
 
 
 def _required_citation_count(*, selected_count: int, unique_citation_count: int) -> int:
