@@ -83,6 +83,7 @@ from app.rag.injection_detection import (
     INJECTION_PATTERN_REASON_CODE,
     detect_injection_patterns,
 )
+from app.rag.insufficient import is_insufficient_evidence_answer as _is_insufficient_evidence_answer
 from app.rag.langchain_agentic import (
     LangChainAgenticExecutionResult,
     LangChainAgenticRetrievalOrchestrator,
@@ -4599,26 +4600,6 @@ def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
         strategy_type=run.strategy_type,
         strategy_decision=_safe_json_object(run.strategy_decision_json),
         retrieval_score_summary=_safe_json_object(run.retrieval_score_summary),
-    )
-
-
-def _is_insufficient_evidence_answer(answer_text: str) -> bool:
-    normalized = " ".join(answer_text.lower().split())
-    return any(
-        phrase in normalized
-        for phrase in (
-            "十分な根拠がありません",
-            "十分な根拠がない",
-            "十分な情報がありません",
-            "根拠が不足",
-            "検索された引用では、この質問への回答を確定できません",
-            "insufficient evidence",
-            "insufficient context",
-            "not enough evidence",
-            "not enough context",
-            "no sufficient evidence",
-            "no usable context",
-        )
     )
 
 

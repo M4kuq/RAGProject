@@ -156,6 +156,8 @@ def test_lmstudio_generator_uses_openai_compatible_chat_api(monkeypatch) -> None
     assert messages[1]["content"].startswith("/no_think\n")
     assert "Citation [1]" in messages[1]["content"]
     assert "Return the final answer only." in messages[1]["content"]
+    assert "If one or more shown citations directly support the answer" in messages[1]["content"]
+    assert "Use the insufficient-evidence sentence only when none" in messages[1]["content"]
     assert "十分な根拠がありません" in messages[1]["content"]
     assert result.content == "Phase1 は Qdrant をベクトル検索に使用しています [1]。"
     assert result.usage == TokenUsage(input_tokens=41, output_tokens=17, total_tokens=58)

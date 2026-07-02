@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from app.rag.citations import parse_generation_output
-from app.rag.generation import _final_answer_text, _truncate_output
-from app.services.rag_service import _is_insufficient_evidence_answer
+from app.rag.citations import CitationSource, parse_generation_output
+from app.rag.generation import (
+    GenerationContextItem,
+    GenerationRequest,
+    _final_answer_text,
+    _generation_output_text,
+    _truncate_output,
+)
+from app.rag.insufficient import is_insufficient_evidence_answer
+from app.services.rag_service import (
+    _validated_generation_or_fallback,
+)
 
 
 def test_final_answer_text_strips_model_self_check_tail() -> None:
@@ -42,4 +51,216 @@ def test_generation_rewritten_insufficient_answer_remains_detectable() -> None:
 
     rewritten = _truncate_output(raw, max_chars=200)
 
-    assert _is_insufficient_evidence_answer(rewritten)
+    assert is_insufficient_evidence_answer(rewritten)
+
+
+def test_wrapped_standalone_insufficient_answers_use_safe_fallback() -> None:
+    for content in (
+        "Final answer: Insufficient evidence [1].",
+        "Insufficient evidence for the requested launch number [1].",
+        "There is not enough evidence for the requested launch number.",
+        "There is insufficient evidence in the retrieved documents to answer the question [1].",
+        "The retrieved documents do not contain enough evidence to answer this question [1].",
+    ):
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert (
+            parsed.answer_text
+            == "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+        )
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert used_fallback
+        assert is_insufficient_evidence_answer(content)
+
+
+def test_standalone_japanese_insufficient_variants_use_safe_fallback() -> None:
+    for content in (
+        "検索された文書には、この質問に答えるための十分な情報がありません。",
+        "検索された文書には、この質問に答えるための十分な根拠がありません。",
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません",
+        "検索された引用では、この質問への回答を確定できません",
+        "十分な根拠がありません",
+        "十分な情報がありません",
+        "要求された打ち上げ番号について十分な情報がありません。",
+        "根拠が不足しています",
+        "回答：十分な根拠がありません",
+        "回答：十分な情報がありません",
+    ):
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert (
+            parsed.answer_text
+            == "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+        )
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert used_fallback
+        assert is_insufficient_evidence_answer(content)
+
+
+def test_plain_standalone_template_remains_insufficient() -> None:
+    assert is_insufficient_evidence_answer("Insufficient evidence [1].")
+    assert is_insufficient_evidence_answer(
+        "検索された文書には、この質問に答えるための十分な根拠がありません。"
+    )
+    for content in (
+        "十分な根拠がない",
+        "十分な情報がない",
+        "根拠が不足",
+        "根拠が不足している",
+        "情報が不足しています",
+        "十分なエビデンスが存在しません",
+    ):
+        assert is_insufficient_evidence_answer(content)
+
+
+def test_supported_answer_is_not_insufficient() -> None:
+    assert not is_insufficient_evidence_answer("Alpha policy requires owner approval [1].")
+
+
+def test_supported_answer_with_scoped_insufficient_clause_is_not_insufficient() -> None:
+    for content in (
+        "Alpha policy requires owner approval [1]. "
+        "There is insufficient evidence for the requested launch number.",
+        "Alpha policy requires owner approval [1]; however, "
+        "there is not enough evidence for the requested launch number.",
+        "Alpha policy requires owner approval [1] however "
+        "there is not enough evidence for the requested launch number.",
+    ):
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert parsed.answer_text == content
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert not used_fallback
+        assert not is_insufficient_evidence_answer(content)
+
+
+def test_scoped_insufficient_with_followup_claim_is_not_insufficient() -> None:
+    for content in (
+        "Insufficient evidence for the requested launch number; however, "
+        "Alpha policy requires owner approval [1].",
+        "There is not enough evidence for the requested launch number. "
+        "However, Alpha policy requires owner approval [1].",
+        "要求された打ち上げ番号について十分な情報がありません。しかし、"
+        "Alphaポリシーではオーナー承認が必要です [1]。",
+    ):
+        assert not is_insufficient_evidence_answer(content)
+
+
+def test_generation_output_keeps_supported_answer_with_insufficient_caveat() -> None:
+    expected = (
+        "Alpha policy requires owner approval [1]. "
+        "There is insufficient evidence for the requested launch number."
+    )
+    content = _generation_output_text(
+        f"Final answer: {expected}",
+        _generation_request(),
+        cleanup_final_answer=True,
+    )
+
+    parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+        content,
+        context_items=_context_items(),
+        prompt_citation_sources=_citation_sources(),
+        allow_insufficient_evidence_fallback=True,
+    )
+
+    assert parsed.answer_text == content
+    assert content == expected
+    assert [source.local_citation_id for source in cited_sources] == [1]
+    assert not used_fallback
+    assert not is_insufficient_evidence_answer(content)
+
+
+def test_supported_japanese_answer_with_insufficient_phrase_is_not_insufficient() -> None:
+    for phrase in (
+        "検索された文書には、この質問に答えるための十分な情報がありません",
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません",
+        "検索された引用では、この質問への回答を確定できません",
+        "十分な根拠がありません",
+        "十分な情報がありません",
+        "根拠が不足しています",
+    ):
+        content = f"Alphaポリシーではリリース前にオーナー承認が必要です [1]。ただし、{phrase}。"
+
+        parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+            content,
+            context_items=_context_items(),
+            prompt_citation_sources=_citation_sources(),
+            allow_insufficient_evidence_fallback=True,
+        )
+
+        assert parsed.answer_text == content
+        assert [source.local_citation_id for source in cited_sources] == [1]
+        assert not used_fallback
+        assert not is_insufficient_evidence_answer(content)
+
+
+def test_generation_output_standalone_insufficient_still_uses_safe_fallback() -> None:
+    content = _generation_output_text(
+        "Final answer: 検索された文書には、この質問に答えるための十分な根拠がありません。 [1]",
+        _generation_request(),
+        cleanup_final_answer=True,
+    )
+
+    parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
+        content,
+        context_items=_context_items(),
+        prompt_citation_sources=_citation_sources(),
+        allow_insufficient_evidence_fallback=True,
+    )
+
+    assert (
+        parsed.answer_text
+        == "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
+    )
+    assert [source.local_citation_id for source in cited_sources] == [1]
+    assert used_fallback
+
+
+def _generation_request() -> GenerationRequest:
+    return GenerationRequest(
+        message="What does the Alpha policy require before launch?",
+        context_items=_context_items(),
+        max_output_chars=500,
+    )
+
+
+def _context_items() -> list[GenerationContextItem]:
+    return [
+        GenerationContextItem(
+            document_chunk_id=100,
+            source_label="alpha-policy.md",
+            text="Alpha policy requires owner approval before launch.",
+            local_citation_id=1,
+        )
+    ]
+
+
+def _citation_sources() -> list[CitationSource]:
+    return [
+        CitationSource(
+            local_citation_id=1,
+            retrieval_run_item_id=10,
+            document_chunk_id=100,
+            source_label="alpha-policy.md",
+            snippet="Alpha policy requires owner approval before launch.",
+            page_from=None,
+            page_to=None,
+            section_title=None,
+        )
+    ]
