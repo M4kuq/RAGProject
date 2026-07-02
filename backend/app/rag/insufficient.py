@@ -33,18 +33,21 @@ _STANDALONE_ENGLISH_INSUFFICIENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_STANDALONE_JAPANESE_INSUFFICIENT_RE = re.compile(
+    r"(?:"
+    r"(?:検索された(?:文書|引用)(?:には|では)[、,]?\s*)?"
+    r"(?:(?:この質問に(?:直接)?(?:答える|回答する)|この質問への回答をする)ための\s*)?"
+    r"十分な(?:情報|根拠|エビデンス)が(?:ない|ありません|存在しません)"
+    r"|"
+    r"(?:検索された(?:文書|引用)(?:には|では)[、,]?\s*)?"
+    r"(?:情報|根拠|エビデンス)が不足(?:している|しています)?"
+    r"|"
+    r"(?:検索された(?:文書|引用)(?:には|では)[、,]?\s*)?"
+    r"(?:この質問への)?回答を確定できません"
+    r")"
+)
 
 INSUFFICIENT_EVIDENCE_ANSWER_TEMPLATES = (
-    "検索された文書には、この質問に答えるための十分な根拠がありません",
-    "検索された文書には、この質問に直接答えるための十分な根拠がありません",
-    "検索された引用では、この質問への回答を確定できません",
-    "十分な根拠がない",
-    "十分な根拠がありません",
-    "十分な情報がない",
-    "十分な情報がありません",
-    "根拠が不足",
-    "根拠が不足している",
-    "根拠が不足しています",
     "insufficient evidence",
     "insufficient context",
     "not enough evidence",
@@ -59,10 +62,14 @@ def is_insufficient_evidence_answer(answer_text: str) -> bool:
     if not candidate:
         return False
     compact_answer = compact_insufficient_evidence_text(candidate)
-    return any(
-        compact_answer == compact_insufficient_evidence_text(template)
-        for template in INSUFFICIENT_EVIDENCE_ANSWER_TEMPLATES
-    ) or bool(_STANDALONE_ENGLISH_INSUFFICIENT_RE.fullmatch(candidate))
+    return (
+        bool(_STANDALONE_JAPANESE_INSUFFICIENT_RE.fullmatch(candidate))
+        or any(
+            compact_answer == compact_insufficient_evidence_text(template)
+            for template in INSUFFICIENT_EVIDENCE_ANSWER_TEMPLATES
+        )
+        or bool(_STANDALONE_ENGLISH_INSUFFICIENT_RE.fullmatch(candidate))
+    )
 
 
 def standalone_insufficient_evidence_candidate(value: str) -> str:

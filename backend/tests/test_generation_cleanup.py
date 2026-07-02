@@ -58,6 +58,7 @@ def test_wrapped_standalone_insufficient_answers_use_safe_fallback() -> None:
     for content in (
         "Final answer: Insufficient evidence [1].",
         "There is insufficient evidence in the retrieved documents to answer the question [1].",
+        "The retrieved documents do not contain enough evidence to answer this question [1].",
     ):
         parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
             content,
@@ -77,10 +78,15 @@ def test_wrapped_standalone_insufficient_answers_use_safe_fallback() -> None:
 
 def test_standalone_japanese_insufficient_variants_use_safe_fallback() -> None:
     for content in (
+        "検索された文書には、この質問に答えるための十分な情報がありません。",
+        "検索された文書には、この質問に答えるための十分な根拠がありません。",
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません",
+        "検索された引用では、この質問への回答を確定できません",
         "十分な根拠がありません",
         "十分な情報がありません",
         "根拠が不足しています",
         "回答：十分な根拠がありません",
+        "回答：十分な情報がありません",
     ):
         parsed, cited_sources, used_fallback = _validated_generation_or_fallback(
             content,
@@ -108,6 +114,8 @@ def test_plain_standalone_template_remains_insufficient() -> None:
         "十分な情報がない",
         "根拠が不足",
         "根拠が不足している",
+        "情報が不足しています",
+        "十分なエビデンスが存在しません",
     ):
         assert is_insufficient_evidence_answer(content)
 
@@ -143,6 +151,9 @@ def test_generation_output_keeps_supported_answer_with_insufficient_caveat() -> 
 
 def test_supported_japanese_answer_with_insufficient_phrase_is_not_insufficient() -> None:
     for phrase in (
+        "検索された文書には、この質問に答えるための十分な情報がありません",
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません",
+        "検索された引用では、この質問への回答を確定できません",
         "十分な根拠がありません",
         "十分な情報がありません",
         "根拠が不足しています",
