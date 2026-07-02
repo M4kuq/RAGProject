@@ -188,6 +188,17 @@ GENERATION_LABEL_SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|secret|password|token|credential|bearer|sk-[A-Za-z0-9_-]{8,})"
 )
 CITATION_MARKER_RE = re.compile(r"\[(\d{1,6})\]")
+INSUFFICIENT_EVIDENCE_ANSWER_TEMPLATES = (
+    "検索された文書には、この質問に答えるための十分な根拠がありません",
+    "検索された文書には、この質問に直接答えるための十分な根拠がありません",
+    "検索された引用では、この質問への回答を確定できません",
+    "insufficient evidence",
+    "insufficient context",
+    "not enough evidence",
+    "not enough context",
+    "no sufficient evidence",
+    "no usable context",
+)
 MODEL_KEY_SEPARATOR = ":"
 logger = logging.getLogger(__name__)
 
@@ -4603,23 +4614,16 @@ def _retrieval_summary_response(run: RetrievalRun) -> RagAskRetrievalSummary:
 
 
 def _is_insufficient_evidence_answer(answer_text: str) -> bool:
-    normalized = " ".join(answer_text.lower().split())
+    compact_answer = _compact_insufficient_evidence_text(answer_text)
     return any(
-        phrase in normalized
-        for phrase in (
-            "十分な根拠がありません",
-            "十分な根拠がない",
-            "十分な情報がありません",
-            "根拠が不足",
-            "検索された引用では、この質問への回答を確定できません",
-            "insufficient evidence",
-            "insufficient context",
-            "not enough evidence",
-            "not enough context",
-            "no sufficient evidence",
-            "no usable context",
-        )
+        compact_answer == _compact_insufficient_evidence_text(template)
+        for template in INSUFFICIENT_EVIDENCE_ANSWER_TEMPLATES
     )
+
+
+def _compact_insufficient_evidence_text(value: str) -> str:
+    without_markers = CITATION_MARKER_RE.sub("", value.lower())
+    return re.sub(r"[\s。、．.，,！？!?:：;；「」『』（）()【】]+", "", without_markers)
 
 
 def _old_version_flag(record: CitationRecord) -> bool:

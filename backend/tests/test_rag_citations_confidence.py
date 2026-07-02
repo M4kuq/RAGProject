@@ -154,6 +154,37 @@ def test_confidence_does_not_penalize_concise_single_source_answers() -> None:
     assert result.confidence_label == "High"
 
 
+def test_groundedness_keeps_supported_answer_with_uncited_caveat_confident() -> None:
+    source_map = [_source(1)]
+    parsed = parse_generation_output(
+        "Alpha policy requires owner approval [1]. "
+        "There is insufficient evidence for the requested launch number."
+    )
+    cited_sources = validate_generation_citations(parsed, source_map=source_map)
+
+    result = calculate_confidence(
+        ConfidenceInputs(
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=20,
+                qdrant_candidate_count=20,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+                top1_retrieval_score=0.82,
+                top3_avg_retrieval_score=0.82,
+                top1_rerank_score=0.82,
+            ),
+            marker_count=len(parsed.markers),
+            unique_citation_count=len(cited_sources),
+            selected_count=1,
+        ),
+        Settings(app_env="test"),
+    )
+
+    assert result.groundedness_score == 1.0
+    assert result.confidence_label == "High"
+
+
 @pytest.mark.parametrize(
     ("score", "expected_label"),
     [
