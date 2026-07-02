@@ -51,7 +51,7 @@ from app.rag.citations import (
     parse_generation_output,
     validate_generation_citations,
 )
-from app.rag.confidence import ConfidenceInputs, calculate_confidence
+from app.rag.confidence import ConfidenceInputs, ConfidenceScores, calculate_confidence
 from app.rag.context_budget import (
     ContextBudgetCandidate,
     ContextBudgetDecision,
@@ -895,23 +895,16 @@ class RagService:
                 latency_ms=_elapsed_ms(generation_started),
             )
             with latency_tracker.span("citation_build_ms"):
-                parsed_generation, cited_sources = _validated_generation_or_fallback(
+                (
+                    parsed_generation,
+                    cited_sources,
+                    insufficient_evidence_fallback,
+                ) = _validated_generation_or_fallback(
                     generation.content,
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
+                    allow_insufficient_evidence_fallback=True,
                 )
-                if requested_strategy in {
-                    RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
-                    RetrievalStrategy.LANGCHAIN_AGENTIC,
-                } and _is_insufficient_evidence_answer(parsed_generation.answer_text):
-                    self._mark_failed_safely(
-                        db,
-                        retrieval_run_id=run_id,
-                        error_code="no_context_found",
-                        latency_tracker=latency_tracker,
-                        rollback=False,
-                    )
-                    raise RagAskPipelineError("no_context_found", 422)
                 assistant_message = self.chat_repository.create_message(
                     db,
                     chat_session_id=payload.chat_session_id,
@@ -939,6 +932,11 @@ class RagService:
                     ),
                     self.settings,
                 )
+                if insufficient_evidence_fallback:
+                    confidence = _low_confidence_for_insufficient_evidence(
+                        confidence,
+                        self.settings,
+                    )
             run = self._require_run(db, run_id)
             self.repository.mark_succeeded(
                 db,
@@ -4438,9 +4436,15 @@ def _validated_generation_or_fallback(
     *,
     context_items: list[GenerationContextItem],
     prompt_citation_sources: list[CitationSource],
-) -> tuple[ParsedGenerationOutput, list[CitationSource]]:
+    allow_insufficient_evidence_fallback: bool = False,
+) -> tuple[ParsedGenerationOutput, list[CitationSource], bool]:
     parsed_generation = parse_generation_output(content)
     if _is_insufficient_evidence_answer(parsed_generation.answer_text):
+        if allow_insufficient_evidence_fallback:
+            fallback_generation, fallback_sources = _insufficient_citation_fallback(
+                prompt_citation_sources
+            )
+            return fallback_generation, fallback_sources, True
         raise InsufficientEvidenceAnswerError()
     _validate_generation_output_safety(
         parsed_generation.answer_text,
@@ -4452,11 +4456,12 @@ def _validated_generation_or_fallback(
             source_map=prompt_citation_sources,
         )
     except CitationBuildError:
-        return _repair_generation_citations(
+        repaired_generation, repaired_sources = _repair_generation_citations(
             parsed_generation,
             prompt_citation_sources=prompt_citation_sources,
         )
-    return parsed_generation, cited_sources
+        return repaired_generation, repaired_sources, False
+    return parsed_generation, cited_sources, False
 
 
 def _repair_generation_citations(
@@ -4506,6 +4511,18 @@ def _insufficient_citation_fallback(
         source_map=prompt_citation_sources,
     )
     return parsed_generation, cited_sources
+
+
+def _low_confidence_for_insufficient_evidence(
+    confidence: ConfidenceScores,
+    settings: Settings,
+) -> ConfidenceScores:
+    low_ceiling = max(0.0, min(1.0, settings.confidence_medium_threshold) - 0.01)
+    return ConfidenceScores(
+        answer_confidence=round(min(confidence.answer_confidence, low_ceiling), 6),
+        groundedness_score=confidence.groundedness_score,
+        confidence_label="Low",
+    )
 
 
 def _ask_response(
