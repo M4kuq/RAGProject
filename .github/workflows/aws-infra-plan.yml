@@ -58,8 +58,8 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       TF_VAR_region: ${{ vars.AWS_REGION }}
-      TF_VAR_github_oidc_repo: ${{ vars.GITHUB_OIDC_REPO }}
-      TF_VAR_github_deploy_branch: ${{ vars.GITHUB_DEPLOY_BRANCH }}
+      TF_VAR_github_oidc_repo: ${{ vars.OIDC_REPO }}
+      TF_VAR_github_deploy_branch: ${{ vars.DEPLOY_BRANCH }}
       TF_VAR_database_url_secret_arn: ${{ vars.DATABASE_URL_SECRET_ARN }}
       TF_VAR_session_secret_arn: ${{ vars.SESSION_SECRET_ARN }}
       TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}

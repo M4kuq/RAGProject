@@ -15,7 +15,7 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   FRONTEND_BUCKET_NAME: ${{ vars.FRONTEND_BUCKET_NAME }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-  GITHUB_DEPLOY_BRANCH: ${{ vars.GITHUB_DEPLOY_BRANCH }}
+  DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
 
 jobs:
   deploy:
@@ -30,8 +30,8 @@ jobs:
       - name: Check deploy branch
         working-directory: .
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/${GITHUB_DEPLOY_BRANCH}" ]; then
-            echo "This workflow is limited to refs/heads/${GITHUB_DEPLOY_BRANCH}."
+          if [ "$GITHUB_REF" != "refs/heads/${DEPLOY_BRANCH}" ]; then
+            echo "This workflow is limited to refs/heads/${DEPLOY_BRANCH}."
             exit 1
           fi
 

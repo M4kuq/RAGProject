@@ -218,7 +218,7 @@ prod/EKS phase 対応: custom origin hostname + ALB ACM certificate を用意し
 
 ### Migration task
 
-新規 RDS では API を scale out する前に one-off ECS task を実行し、schema migration だけを適用します。
+新規 RDS では API を scale out する前に one-off ECS task を実行し、schema migration 後に `--skip-document-indexing` 付き seed でログインユーザー、システム設定、seed DB rows を作成します。
 
 ```bash
 terraform output -json public_subnet_ids
@@ -235,10 +235,10 @@ aws ecs run-task \
 task command:
 
 ```bash
-alembic upgrade head
+sh -c 'alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing'
 ```
 
-この migration task では seed と document indexing は実行しません。seed は demo data 作成に加えて document indexing も行うため、実 embedding provider である Bedrock Titan V2 を有効化した後に別途手動で実行してください。Bedrock adapter 未実装または fake provider のまま seed すると、`document_chunks_bedrock_titan_v2` に fake vector が入り、Bedrock 有効化後に re-index が必要になります。
+seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。`--skip-document-indexing` により Qdrant への document indexing は実行しないため、Bedrock adapter 未実装または fake provider のままでも `document_chunks_bedrock_titan_v2` に fake vector は入りません。Bedrock Titan V2 を有効化した後、document indexing だけを別途実行してください。
 
 成功後に `api_desired_count` と `qdrant_desired_count` を必要数へ変更して再 apply します。`worker_desired_count` は document 共有ストレージの deferral が解消された後にだけ増やしてください。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
 

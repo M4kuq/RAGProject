@@ -152,7 +152,10 @@ module "ecs" {
   worker_log_group_name = module.observability.worker_log_group_name
   qdrant_log_group_name = module.observability.qdrant_log_group_name
 
-  depends_on = [module.alb]
+  depends_on = [
+    module.alb,
+    module.iam,
+  ]
 }
 
 module "cloudfront" {
