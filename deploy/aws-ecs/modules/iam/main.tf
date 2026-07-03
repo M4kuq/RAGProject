@@ -1,0 +1,264 @@
+data "aws_partition" "current" {}
+
+locals {
+  ecr_repository_arns = values(var.ecr_repository_arns)
+  bedrock_model_arns = [
+    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_generation_model_id}",
+    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_embedding_model_id}",
+    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_rerank_model_id}",
+  ]
+}
+
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = var.github_oidc_thumbprints
+
+  tags = {
+    Name = "${var.name_prefix}-github-oidc"
+  }
+}
+
+data "aws_iam_policy_document" "github_deploy_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_oidc_repo}:ref:refs/heads/${var.github_deploy_branch}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_deploy" {
+  name               = "${var.name_prefix}-github-deploy"
+  assume_role_policy = data.aws_iam_policy_document.github_deploy_assume.json
+
+  tags = {
+    Name = "${var.name_prefix}-github-deploy"
+  }
+}
+
+data "aws_iam_policy_document" "ecs_task_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  name               = "${var.name_prefix}-ecs-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+
+  tags = {
+    Name = "${var.name_prefix}-ecs-execution"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_managed" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+data "aws_iam_policy_document" "execution_secrets" {
+  count = length(var.secret_arns) > 0 ? 1 : 0
+
+  statement {
+    sid       = "ReadTaskDefinitionSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = var.secret_arns
+  }
+}
+
+resource "aws_iam_policy" "execution_secrets" {
+  count = length(var.secret_arns) > 0 ? 1 : 0
+
+  name   = "${var.name_prefix}-ecs-execution-secrets"
+  policy = data.aws_iam_policy_document.execution_secrets[0].json
+}
+
+resource "aws_iam_role_policy_attachment" "execution_secrets" {
+  count = length(var.secret_arns) > 0 ? 1 : 0
+
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = aws_iam_policy.execution_secrets[0].arn
+}
+
+resource "aws_iam_role" "ecs_task" {
+  name               = "${var.name_prefix}-ecs-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+
+  tags = {
+    Name = "${var.name_prefix}-ecs-task"
+  }
+}
+
+data "aws_iam_policy_document" "ecs_task" {
+  statement {
+    sid    = "InvokeSelectedBedrockModels"
+    effect = "Allow"
+    actions = [
+      "bedrock:InvokeModel",
+    ]
+    resources = [
+      local.bedrock_model_arns[0],
+      local.bedrock_model_arns[1],
+    ]
+  }
+
+  statement {
+    sid       = "RunSelectedBedrockRerankModel"
+    effect    = "Allow"
+    actions   = ["bedrock:Rerank"]
+    resources = [local.bedrock_model_arns[2]]
+  }
+
+  statement {
+    sid    = "UseDocumentsBucket"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:ListBucket",
+    ]
+    resources = [
+      var.documents_bucket_arn,
+      "${var.documents_bucket_arn}/*",
+    ]
+  }
+
+  statement {
+    sid    = "UseJobQueue"
+    effect = "Allow"
+    actions = [
+      "sqs:ChangeMessageVisibility",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl",
+      "sqs:ReceiveMessage",
+      "sqs:SendMessage",
+    ]
+    resources = [var.sqs_queue_arn]
+  }
+
+  dynamic "statement" {
+    for_each = length(var.secret_arns) > 0 ? [1] : []
+
+    content {
+      sid       = "ReadConfiguredSecrets"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = var.secret_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.ssm_parameter_arns) > 0 ? [1] : []
+
+    content {
+      sid    = "ReadConfiguredParameters"
+      effect = "Allow"
+      actions = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+      ]
+      resources = var.ssm_parameter_arns
+    }
+  }
+}
+
+resource "aws_iam_policy" "ecs_task" {
+  name   = "${var.name_prefix}-ecs-task"
+  policy = data.aws_iam_policy_document.ecs_task.json
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task" {
+  role       = aws_iam_role.ecs_task.name
+  policy_arn = aws_iam_policy.ecs_task.arn
+}
+
+data "aws_iam_policy_document" "github_deploy" {
+  statement {
+    sid       = "GetEcrAuthorization"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "PushImagesToStackRepositories"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:CompleteLayerUpload",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+    ]
+    resources = local.ecr_repository_arns
+  }
+
+  statement {
+    sid    = "DeployEcsTaskDefinitionsAndServices"
+    effect = "Allow"
+    actions = [
+      "ecs:DescribeClusters",
+      "ecs:DescribeServices",
+      "ecs:DescribeTaskDefinition",
+      "ecs:RegisterTaskDefinition",
+      "ecs:UpdateService",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "PassOnlyEcsTaskRoles"
+    effect = "Allow"
+    actions = [
+      "iam:PassRole",
+    ]
+    resources = [
+      aws_iam_role.ecs_task_execution.arn,
+      aws_iam_role.ecs_task.arn,
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "github_deploy" {
+  name   = "${var.name_prefix}-github-deploy"
+  policy = data.aws_iam_policy_document.github_deploy.json
+}
+
+resource "aws_iam_role_policy_attachment" "github_deploy" {
+  role       = aws_iam_role.github_deploy.name
+  policy_arn = aws_iam_policy.github_deploy.arn
+}

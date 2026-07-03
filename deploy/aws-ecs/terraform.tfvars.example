@@ -1,0 +1,30 @@
+region      = "ap-northeast-1"
+project     = "ragproject"
+environment = "demo"
+
+github_oidc_repo     = "OWNER/REPO"
+github_deploy_branch = "main"
+
+api_image_tag    = "placeholder"
+worker_image_tag = "placeholder"
+
+# Store the actual values in Secrets Manager, not in Terraform files.
+database_url_secret_arn = "REPLACE_WITH_DATABASE_URL_SECRET_ARN"
+session_secret_arn      = "REPLACE_WITH_SESSION_SECRET_ARN"
+additional_secret_arns  = []
+ssm_parameter_arns      = []
+
+basic_auth_username      = "demo-user"
+basic_auth_header_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+basic_auth_realm         = "RAGProject Demo"
+
+bedrock_generation_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+bedrock_embedding_model_id  = "amazon.titan-embed-text-v2:0"
+bedrock_rerank_model_id     = "amazon.rerank-v1:0"
+
+api_desired_count    = 0
+worker_desired_count = 0
+qdrant_desired_count = 0
+
+budget_alert_email      = "you@example.com"
+monthly_budget_limit_usd = "30"
