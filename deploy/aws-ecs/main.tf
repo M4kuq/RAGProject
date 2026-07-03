@@ -90,6 +90,8 @@ module "iam" {
   github_oidc_thumbprints     = var.github_oidc_thumbprints
   ecr_repository_arns         = module.ecr.repository_arns
   documents_bucket_arn        = module.s3.documents_bucket_arn
+  frontend_bucket_arn         = module.s3.frontend_bucket_arn
+  cloudfront_distribution_arn = module.cloudfront.distribution_arn
   sqs_queue_arn               = module.sqs.queue_arn
   secret_arns                 = local.secret_arns
   ssm_parameter_arns          = var.ssm_parameter_arns

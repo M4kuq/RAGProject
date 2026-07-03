@@ -44,6 +44,16 @@ variable "documents_bucket_arn" {
   type        = string
 }
 
+variable "frontend_bucket_arn" {
+  description = "Frontend bucket ARN."
+  type        = string
+}
+
+variable "cloudfront_distribution_arn" {
+  description = "CloudFront distribution ARN used for frontend invalidations."
+  type        = string
+}
+
 variable "sqs_queue_arn" {
   description = "SQS queue ARN."
   type        = string

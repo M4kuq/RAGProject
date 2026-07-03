@@ -28,6 +28,31 @@ output "ecs_cluster_name" {
   value       = module.ecs.cluster_name
 }
 
+output "api_service_name" {
+  description = "API ECS service name."
+  value       = module.ecs.api_service_name
+}
+
+output "worker_service_name" {
+  description = "Worker ECS service name."
+  value       = module.ecs.worker_service_name
+}
+
+output "qdrant_service_name" {
+  description = "Qdrant ECS service name."
+  value       = module.ecs.qdrant_service_name
+}
+
+output "api_task_definition_family" {
+  description = "API ECS task definition family."
+  value       = module.ecs.api_task_definition_family
+}
+
+output "worker_task_definition_family" {
+  description = "Worker ECS task definition family."
+  value       = module.ecs.worker_task_definition_family
+}
+
 output "public_subnet_ids" {
   description = "Public subnet IDs used by Fargate tasks."
   value       = module.network.public_subnet_ids
@@ -41,6 +66,11 @@ output "app_security_group_id" {
 output "migration_task_definition_arn" {
   description = "One-off schema migration ECS task definition ARN."
   value       = module.ecs.migration_task_definition_arn
+}
+
+output "migration_task_definition_family" {
+  description = "One-off schema migration ECS task definition family."
+  value       = module.ecs.migration_task_definition_family
 }
 
 output "rds_endpoint" {

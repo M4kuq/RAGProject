@@ -16,6 +16,12 @@ locals {
     "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-worker",
     "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-qdrant",
   ]
+  migration_task_definition_arns = [
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-migration:*",
+  ]
+  migration_task_arns = [
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.name_prefix}-cluster/*",
+  ]
   bedrock_invoke_model_arns = [
     local.bedrock_generation_model_arn,
     local.bedrock_embedding_model_arn,
@@ -271,6 +277,62 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecs:RegisterTaskDefinition",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid    = "ListFrontendBucket"
+    effect = "Allow"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+    ]
+    resources = [var.frontend_bucket_arn]
+  }
+
+  statement {
+    sid    = "WriteFrontendAssets"
+    effect = "Allow"
+    actions = [
+      "s3:DeleteObject",
+      "s3:PutObject",
+    ]
+    resources = ["${var.frontend_bucket_arn}/*"]
+  }
+
+  statement {
+    sid    = "InvalidateFrontendDistribution"
+    effect = "Allow"
+    actions = [
+      "cloudfront:CreateInvalidation",
+      "cloudfront:GetInvalidation",
+    ]
+    resources = [var.cloudfront_distribution_arn]
+  }
+
+  statement {
+    sid       = "RunMigrationTask"
+    effect    = "Allow"
+    actions   = ["ecs:RunTask"]
+    resources = local.migration_task_definition_arns
+
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [local.ecs_cluster_arn]
+    }
+  }
+
+  statement {
+    sid       = "DescribeMigrationTasks"
+    effect    = "Allow"
+    actions   = ["ecs:DescribeTasks"]
+    resources = local.migration_task_arns
+
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [local.ecs_cluster_arn]
+    }
   }
 
   statement {
