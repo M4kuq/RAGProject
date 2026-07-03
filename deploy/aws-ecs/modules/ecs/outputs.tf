@@ -24,7 +24,7 @@ output "qdrant_service_name" {
 }
 
 output "migration_task_definition_arn" {
-  description = "One-off migration and seed ECS task definition ARN."
+  description = "One-off schema migration ECS task definition ARN."
   value       = aws_ecs_task_definition.migration.arn
 }
 

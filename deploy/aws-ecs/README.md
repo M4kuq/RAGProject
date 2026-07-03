@@ -200,9 +200,9 @@ app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
 prod/EKS phase 対応: custom origin hostname + ALB ACM certificate を用意して `origin_protocol_policy = "https-only"` にするか、CloudFront VPC origin / internal ALB へ移行します。
 
-### Migration and seed task
+### Migration task
 
-新規 RDS では API を scale out する前に one-off ECS task を実行します。
+新規 RDS では API を scale out する前に one-off ECS task を実行し、schema migration だけを適用します。
 
 ```bash
 terraform output -json public_subnet_ids
@@ -219,8 +219,10 @@ aws ecs run-task \
 task command:
 
 ```bash
-alembic upgrade head && python -m app.scripts.seed --skip-document-indexing
+alembic upgrade head
 ```
+
+この migration task では seed と document indexing は実行しません。seed は demo data 作成に加えて document indexing も行うため、実 embedding provider である Bedrock Titan V2 を有効化した後に別途手動で実行してください。Bedrock adapter 未実装または fake provider のまま seed すると、`document_chunks_bedrock_titan_v2` に fake vector が入り、Bedrock 有効化後に re-index が必要になります。
 
 成功後に `api_desired_count`、`worker_desired_count`、`qdrant_desired_count` を必要数へ変更して再 apply します。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
 
@@ -237,4 +239,4 @@ create_github_oidc_provider = false
 
 ### Embedding demo defaults
 
-ECS demo は Bedrock adapter 有効化前の default として `EMBEDDING_PROVIDER=fake` を維持しますが、`EMBEDDING_VECTOR_DIMENSION` と `EMBEDDING_FAKE_DIMENSION` はどちらも `1024` にします。これにより `document_chunks_bedrock_titan_v2` に fake 8 次元 collection が作られ、後続の Titan V2 利用時に dimension mismatch になる事態を避けます。
+ECS demo は Bedrock adapter 有効化前の安全側 default として `EMBEDDING_PROVIDER=fake` を維持しますが、`EMBEDDING_VECTOR_DIMENSION` と `EMBEDDING_FAKE_DIMENSION` はどちらも `1024` にします。fake embedding は CI/ローカル用途の default であり、本番 document indexing は Bedrock Titan V2 を有効化した後に実行してください。これにより fake provider を使う検証時も `document_chunks_bedrock_titan_v2` の vector dimension は Titan V2 想定と揃いますが、fake vector 自体を本番データとして扱うことは避けます。

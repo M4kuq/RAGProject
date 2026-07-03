@@ -230,7 +230,7 @@ resource "aws_ecs_task_definition" "migration" {
       name      = "migration"
       image     = var.api_image
       essential = true
-      command   = ["sh", "-c", "alembic upgrade head && python -m app.scripts.seed --skip-document-indexing"]
+      command   = ["alembic", "upgrade", "head"]
       environment = [
         for name, value in local.app_environment : {
           name  = name

@@ -39,7 +39,7 @@ output "app_security_group_id" {
 }
 
 output "migration_task_definition_arn" {
-  description = "One-off migration and seed ECS task definition ARN."
+  description = "One-off schema migration ECS task definition ARN."
   value       = module.ecs.migration_task_definition_arn
 }
 
