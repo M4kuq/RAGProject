@@ -86,6 +86,19 @@ data "aws_iam_policy_document" "ecs_task_assume" {
   }
 }
 
+data "aws_iam_policy_document" "ecs_infrastructure_assume" {
+  statement {
+    sid     = "AllowAccessToECSForInfrastructureManagement"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs.${data.aws_partition.current.dns_suffix}"]
+    }
+  }
+}
+
 resource "aws_iam_role" "ecs_task_execution" {
   name               = "${var.name_prefix}-ecs-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
@@ -141,6 +154,20 @@ resource "aws_iam_role" "qdrant_task" {
   tags = {
     Name = "${var.name_prefix}-qdrant-task"
   }
+}
+
+resource "aws_iam_role" "ecs_infrastructure" {
+  name               = "${var.name_prefix}-ecs-infra"
+  assume_role_policy = data.aws_iam_policy_document.ecs_infrastructure_assume.json
+
+  tags = {
+    Name = "${var.name_prefix}-ecs-infra"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_infrastructure_volumes" {
+  role       = aws_iam_role.ecs_infrastructure.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForVolumes"
 }
 
 data "aws_iam_policy_document" "ecs_task" {

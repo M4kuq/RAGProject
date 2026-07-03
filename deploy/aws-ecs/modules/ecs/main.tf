@@ -163,17 +163,8 @@ resource "aws_ecs_task_definition" "qdrant" {
   }
 
   volume {
-    name = "qdrant-storage"
-
-    efs_volume_configuration {
-      file_system_id     = var.efs_file_system_id
-      transit_encryption = "ENABLED"
-
-      authorization_config {
-        access_point_id = var.efs_access_point_id
-        iam             = "DISABLED"
-      }
-    }
+    name                = "qdrant-storage"
+    configure_at_launch = true
   }
 
   container_definitions = jsonencode([
@@ -304,6 +295,26 @@ resource "aws_ecs_service" "qdrant" {
   task_definition = aws_ecs_task_definition.qdrant.arn
   launch_type     = "FARGATE"
   desired_count   = var.qdrant_desired_count
+
+  volume_configuration {
+    name = "qdrant-storage"
+
+    managed_ebs_volume {
+      role_arn         = var.ecs_infrastructure_role_arn
+      size_in_gb       = var.qdrant_ebs_volume_size_gib
+      volume_type      = "gp3"
+      encrypted        = true
+      file_system_type = "xfs"
+
+      tag_specifications {
+        resource_type  = "volume"
+        propagate_tags = "SERVICE"
+        tags = {
+          Name = "${var.name_prefix}-qdrant-ebs"
+        }
+      }
+    }
+  }
 
   network_configuration {
     subnets          = var.subnet_ids

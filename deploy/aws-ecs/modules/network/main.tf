@@ -98,16 +98,6 @@ resource "aws_security_group" "rds" {
   }
 }
 
-resource "aws_security_group" "efs" {
-  name        = "${var.name_prefix}-efs-sg"
-  description = "Allow Qdrant tasks to mount EFS"
-  vpc_id      = aws_vpc.this.id
-
-  tags = {
-    Name = "${var.name_prefix}-efs-sg"
-  }
-}
-
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
   security_group_id = aws_security_group.alb.id
   description       = "HTTP from CloudFront origin-facing edge locations"
@@ -153,7 +143,7 @@ resource "aws_vpc_security_group_ingress_rule" "qdrant_from_app" {
 
 resource "aws_vpc_security_group_egress_rule" "qdrant_all_egress" {
   security_group_id = aws_security_group.qdrant.id
-  description       = "Qdrant egress for EFS and image pulls"
+  description       = "Qdrant egress for image pulls and ECS-managed volume attachment"
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
@@ -165,20 +155,4 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_app" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
-}
-
-resource "aws_vpc_security_group_ingress_rule" "efs_from_qdrant" {
-  security_group_id            = aws_security_group.efs.id
-  description                  = "NFS from Qdrant tasks"
-  referenced_security_group_id = aws_security_group.qdrant.id
-  ip_protocol                  = "tcp"
-  from_port                    = 2049
-  to_port                      = 2049
-}
-
-resource "aws_vpc_security_group_egress_rule" "efs_all_egress" {
-  security_group_id = aws_security_group.efs.id
-  description       = "EFS response traffic"
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
 }

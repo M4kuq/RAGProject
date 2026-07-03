@@ -3,38 +3,68 @@ name: AWS Infra Plan
 on:
   pull_request:
     paths:
+      - ".github/workflows/aws-infra-plan.yml"
       - "deploy/aws-ecs/**"
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: aws-infra-plan-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TF_VAR_region: ${{ vars.AWS_REGION }}
-  TF_VAR_github_oidc_repo: ${{ vars.GITHUB_OIDC_REPO }}
-  TF_VAR_github_deploy_branch: ${{ vars.GITHUB_DEPLOY_BRANCH }}
-  TF_VAR_database_url_secret_arn: ${{ vars.DATABASE_URL_SECRET_ARN }}
-  TF_VAR_session_secret_arn: ${{ vars.SESSION_SECRET_ARN }}
-  TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}
-  TF_VAR_basic_auth_header_sha256: ${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
-  TF_VAR_origin_verify_header_value: ${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
 
 jobs:
-  terraform:
-    name: terraform fmt / validate / plan
+  validate:
+    name: terraform fmt / validate
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: deploy/aws-ecs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+  plan:
+    name: terraform plan (manual)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: deploy/aws-ecs
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_github_oidc_repo: ${{ vars.GITHUB_OIDC_REPO }}
+      TF_VAR_github_deploy_branch: ${{ vars.GITHUB_DEPLOY_BRANCH }}
+      TF_VAR_database_url_secret_arn: ${{ vars.DATABASE_URL_SECRET_ARN }}
+      TF_VAR_session_secret_arn: ${{ vars.SESSION_SECRET_ARN }}
+      TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}
+      TF_VAR_basic_auth_header_sha256: ${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
+      TF_VAR_origin_verify_header_value: ${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
 
     steps:
       - name: Checkout

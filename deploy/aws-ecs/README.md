@@ -18,7 +18,7 @@ flowchart TD
   Worker --> SQS
   API -. future storage adapter .-> Docs[S3 documents bucket<br/>provisioned]
   Worker -. future storage adapter .-> Docs
-  Qdrant --> EFS[(EFS access point)]
+  Qdrant --> EBS[(service-managed EBS volume<br/>block storage)]
   API --> Bedrock[Amazon Bedrock<br/>Claude / Titan Embeddings V2 / Rerank]
   Worker --> Bedrock
 ```
@@ -44,7 +44,6 @@ Amazon Neptune はこの demo stack では採用しません。Neptune openCyphe
 | `s3` | documents/frontend buckets、暗号化、versioning、public block | bucket security baseline を再利用しやすくする |
 | `cloudfront` | distribution、OAC、Basic Auth Function | edge 配信と認証 gate を分離する |
 | `iam` | GitHub OIDC、ECS roles、Bedrock/S3/SQS/Secrets 権限 | trust boundary と least privilege をレビューしやすくする |
-| `efs` | Qdrant 永続化用 EFS/access point | Qdrant だけに永続化責務を閉じる |
 | `observability` | CloudWatch log groups | retention を短くし、ログコストを見える化する |
 | `budget` | AWS Budgets、SNS topic、email subscription | コスト guardrail を infrastructure と同時に用意する |
 
@@ -54,7 +53,9 @@ root module は各 module をつなぐ orchestration だけを持ちます。例
 
 Fargate は EC2 worker node の OS patch、capacity 管理、AMI 更新を持たないため、デモ環境の運用負担を下げられます。API、worker、Qdrant は `desired_count = 0` を default にしており、普段は task 課金を止めます。
 
-必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1` のように増やす想定です。`worker_desired_count` は document 共有ストレージの app 実装が揃うまで `0` を維持し、S3 storage adapter または共有 EFS mount が入った後にジョブ実行用として増やします。ECS service は `desired_count` を ignore しないため、これらの変数変更は Terraform apply で反映されます。
+必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1` のように増やす想定です。Qdrant の `/qdrant/storage` は NFS/EFS ではなく、ECS service-managed EBS の `gp3` block storage を mount します。これは Qdrant の storage 要件に合わせるためです。ただし ECS service が管理する EBS volume は task replacement や scale-to-zero で削除されるため、Qdrant collection は永続的な source of truth ではありません。task 置換、scale-to-zero 後の再起動、Bedrock adapter 有効化後は source documents から再indexしてください。
+
+`worker_desired_count` は document 共有ストレージの app 実装が揃うまで `0` を維持します。S3 storage adapter または durable 共有マウントが入るまでは document upload/indexing はこの ECS stack の対応範囲外です。ECS service は `desired_count` を ignore しないため、これらの変数変更は Terraform apply で反映されます。
 
 ## 4. NAT Gateway を使わない理由と tradeoff
 
@@ -62,7 +63,7 @@ Fargate は EC2 worker node の OS patch、capacity 管理、AMI 更新を持た
 
 tradeoff は次のとおりです。
 
-- task に public IP が付きます。ただし inbound は security group で閉じ、API は ALB 経由、Qdrant/RDS/EFS は内部 SG 参照だけに制限します。
+- task に public IP が付きます。ただし inbound は security group で閉じ、API は ALB 経由、Qdrant/RDS は内部 SG 参照だけに制限します。
 - private subnet + NAT/VPC endpoints よりも network isolation は弱いです。本番化フェーズでは private subnet、VPC endpoints、WAF、Route53/ACM を追加する余地があります。
 - RDS は `publicly_accessible = false` で public IP を持たせず、SG は ECS app SG からの 5432 のみ許可します。DB subnet group は小構成のため public subnets を使います。
 
@@ -125,7 +126,7 @@ Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task r
 | ECS API/worker/Qdrant | server 管理なし、desired count で起動停止しやすい | default 0 で task 課金を止める |
 | ECR | image scan と lifecycle で最小限保持 | default 最新 10 images のみ保持 |
 | RDS PostgreSQL | source of truth。managed password で平文 secret 不要 | single-AZ、`db.t4g.micro`、backup 1 day |
-| Qdrant + EFS | demo 用 vector store を task 停止後も保持 | Qdrant task は 0/1、EFS は保存量分 |
+| Qdrant + EBS | Qdrant 要件に合う block storage を task に attach | Qdrant task は 0/1、EBS volume は task 稼働中に service-managed で作成され、停止/置換時は再index前提 |
 | SQS + DLQ | worker retry と失敗隔離 | request 数に応じた従量課金 |
 | S3 documents | source documents の private storage | AES256、versioning enabled |
 | CloudWatch Logs | task log の集約 | retention default 7 days |
@@ -201,9 +202,9 @@ app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
 ### Document storage / worker ingestion deferral
 
-現時点のアプリ実装は `LocalFileStorage` のみで、`STORAGE_ROOT` 配下のローカルファイルを API と worker がそれぞれの task-local filesystem から参照します。ECS Fargate では API task と worker task の `/tmp/ragproject/uploads` は共有されないため、`worker_desired_count = 1` にすると worker ingestion は upload 済みファイルを読めず、`storage_file_missing` で失敗する可能性があります。
+現時点のアプリ実装は `LocalFileStorage` のみで、`STORAGE_ROOT` 配下のローカルファイルを API と worker がそれぞれの task-local filesystem から参照します。ECS Fargate では API task と worker task の `/tmp/ragproject/uploads` は共有されず、task replacement や redeploy でも失われます。DB には storage key だけが残るため、upload 済み document record が後から missing file になる可能性があります。
 
-この PR ではアプリコードを変更しないため、document ingestion の worker 有効化は defer します。S3 storage adapter のアプリ側実装、または API/worker が同じ永続 filesystem を参照する共有 EFS mount が入るまでは、`worker_desired_count = 0` を維持し、API 単体のデモに留めてください。
+この PR ではアプリコードを変更しないため、document upload/indexing の有効化は defer します。S3 storage adapter のアプリ側実装、または API/worker が同じ durable 共有ストレージを参照する仕組みが入るまでは、この ECS stack で document upload/indexing は非対応です。`worker_desired_count = 0` を維持し、API の upload flow も永続化されない前提で公開しないでください。
 
 IaC 側には将来接続用の S3 documents bucket と ECS task role の S3 権限を用意済みです。S3 adapter 実装時は、既に ECS env として渡している `DOCUMENTS_BUCKET_NAME` と `AWS_REGION` を接続点にできます。現在有効な storage 設定は `STORAGE_ROOT` だけなので、`STORAGE_BACKEND=s3` のような backend selector が必要な場合はアプリ側で追加してください。
 

@@ -23,7 +23,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "Two public subnet CIDR blocks for ALB, Fargate, RDS subnet group, and EFS mount targets."
+  description = "Two public subnet CIDR blocks for ALB, Fargate tasks, and the RDS subnet group."
   type        = list(string)
   default     = ["10.40.0.0/24", "10.40.1.0/24"]
 
@@ -134,6 +134,17 @@ variable "qdrant_memory" {
   description = "Fargate memory MiB for the Qdrant task."
   type        = number
   default     = 1024
+}
+
+variable "qdrant_ebs_volume_size_gib" {
+  description = "Service-managed EBS volume size for the Qdrant data directory. The volume is block storage and is recreated when the service task is replaced."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.qdrant_ebs_volume_size_gib >= 1 && var.qdrant_ebs_volume_size_gib <= 16384
+    error_message = "qdrant_ebs_volume_size_gib must be between 1 and 16384."
+  }
 }
 
 variable "database_name" {

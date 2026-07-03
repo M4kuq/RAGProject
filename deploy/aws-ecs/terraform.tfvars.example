@@ -35,6 +35,7 @@ bedrock_rerank_model_id     = "amazon.rerank-v1:0"
 api_desired_count    = 0
 worker_desired_count = 0
 qdrant_desired_count = 0
+qdrant_ebs_volume_size_gib = 20
 
 budget_alert_email      = "you@example.com"
 monthly_budget_limit_usd = "30"

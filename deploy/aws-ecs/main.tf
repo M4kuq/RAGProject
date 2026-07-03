@@ -69,14 +69,6 @@ module "observability" {
   retention_days = var.cloudwatch_log_retention_days
 }
 
-module "efs" {
-  source = "./modules/efs"
-
-  name_prefix       = local.name_prefix
-  subnet_ids        = module.network.public_subnet_ids
-  security_group_id = module.network.efs_security_group_id
-}
-
 module "iam" {
   source = "./modules/iam"
 
@@ -125,31 +117,33 @@ module "alb" {
 module "ecs" {
   source = "./modules/ecs"
 
-  name_prefix              = local.name_prefix
-  region                   = var.region
-  vpc_id                   = module.network.vpc_id
-  subnet_ids               = module.network.public_subnet_ids
-  api_security_group_id    = module.network.app_security_group_id
-  worker_security_group_id = module.network.app_security_group_id
-  qdrant_security_group_id = module.network.qdrant_security_group_id
-  target_group_arn         = module.alb.target_group_arn
-  execution_role_arn       = module.iam.ecs_task_execution_role_arn
-  task_role_arn            = module.iam.ecs_task_role_arn
-  qdrant_task_role_arn     = module.iam.qdrant_task_role_arn
-  api_image                = local.api_image
-  worker_image             = local.worker_image
-  qdrant_image             = var.qdrant_image
-  graph_store_provider     = var.graph_store_provider
-  api_cpu                  = var.api_cpu
-  api_memory               = var.api_memory
-  worker_cpu               = var.worker_cpu
-  worker_memory            = var.worker_memory
-  qdrant_cpu               = var.qdrant_cpu
-  qdrant_memory            = var.qdrant_memory
-  api_desired_count        = var.api_desired_count
-  worker_desired_count     = var.worker_desired_count
-  qdrant_desired_count     = var.qdrant_desired_count
-  common_environment       = local.common_app_env
+  name_prefix                 = local.name_prefix
+  region                      = var.region
+  vpc_id                      = module.network.vpc_id
+  subnet_ids                  = module.network.public_subnet_ids
+  api_security_group_id       = module.network.app_security_group_id
+  worker_security_group_id    = module.network.app_security_group_id
+  qdrant_security_group_id    = module.network.qdrant_security_group_id
+  target_group_arn            = module.alb.target_group_arn
+  execution_role_arn          = module.iam.ecs_task_execution_role_arn
+  task_role_arn               = module.iam.ecs_task_role_arn
+  qdrant_task_role_arn        = module.iam.qdrant_task_role_arn
+  ecs_infrastructure_role_arn = module.iam.ecs_infrastructure_role_arn
+  api_image                   = local.api_image
+  worker_image                = local.worker_image
+  qdrant_image                = var.qdrant_image
+  graph_store_provider        = var.graph_store_provider
+  api_cpu                     = var.api_cpu
+  api_memory                  = var.api_memory
+  worker_cpu                  = var.worker_cpu
+  worker_memory               = var.worker_memory
+  qdrant_cpu                  = var.qdrant_cpu
+  qdrant_memory               = var.qdrant_memory
+  qdrant_ebs_volume_size_gib  = var.qdrant_ebs_volume_size_gib
+  api_desired_count           = var.api_desired_count
+  worker_desired_count        = var.worker_desired_count
+  qdrant_desired_count        = var.qdrant_desired_count
+  common_environment          = local.common_app_env
   secret_environment = {
     DATABASE_URL   = var.database_url_secret_arn
     SESSION_SECRET = var.session_secret_arn
@@ -157,10 +151,8 @@ module "ecs" {
   api_log_group_name    = module.observability.api_log_group_name
   worker_log_group_name = module.observability.worker_log_group_name
   qdrant_log_group_name = module.observability.qdrant_log_group_name
-  efs_file_system_id    = module.efs.file_system_id
-  efs_access_point_id   = module.efs.access_point_id
 
-  depends_on = [module.alb, module.efs]
+  depends_on = [module.alb]
 }
 
 module "cloudfront" {

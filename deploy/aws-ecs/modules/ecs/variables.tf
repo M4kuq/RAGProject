@@ -53,6 +53,11 @@ variable "qdrant_task_role_arn" {
   type        = string
 }
 
+variable "ecs_infrastructure_role_arn" {
+  description = "ECS infrastructure role ARN used by ECS to manage service-attached EBS volumes."
+  type        = string
+}
+
 variable "api_image" {
   description = "API container image."
   type        = string
@@ -113,6 +118,11 @@ variable "qdrant_desired_count" {
   type        = number
 }
 
+variable "qdrant_ebs_volume_size_gib" {
+  description = "Size in GiB for the Qdrant service-managed EBS volume."
+  type        = number
+}
+
 variable "graph_store_provider" {
   description = "Graph store backend provider for API and worker tasks."
   type        = string
@@ -145,15 +155,5 @@ variable "worker_log_group_name" {
 
 variable "qdrant_log_group_name" {
   description = "Qdrant log group name."
-  type        = string
-}
-
-variable "efs_file_system_id" {
-  description = "EFS file system ID for Qdrant persistence."
-  type        = string
-}
-
-variable "efs_access_point_id" {
-  description = "EFS access point ID for Qdrant persistence."
   type        = string
 }
