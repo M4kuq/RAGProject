@@ -152,7 +152,7 @@ resource "aws_ecs_task_definition" "qdrant" {
   cpu                      = tostring(var.qdrant_cpu)
   memory                   = tostring(var.qdrant_memory)
   execution_role_arn       = var.execution_role_arn
-  task_role_arn            = var.task_role_arn
+  task_role_arn            = var.qdrant_task_role_arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -211,6 +211,50 @@ resource "aws_ecs_task_definition" "qdrant" {
   ])
 }
 
+resource "aws_ecs_task_definition" "migration" {
+  family                   = "${var.name_prefix}-migration"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = tostring(var.api_cpu)
+  memory                   = tostring(var.api_memory)
+  execution_role_arn       = var.execution_role_arn
+  task_role_arn            = var.task_role_arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name      = "migration"
+      image     = var.api_image
+      essential = true
+      command   = ["sh", "-c", "alembic upgrade head && python -m app.scripts.seed --skip-document-indexing"]
+      environment = [
+        for name, value in local.app_environment : {
+          name  = name
+          value = value
+        }
+      ]
+      secrets = [
+        for name, value_from in var.secret_environment : {
+          name      = name
+          valueFrom = value_from
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = var.api_log_group_name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "migration"
+        }
+      }
+    }
+  ])
+}
+
 resource "aws_ecs_service" "api" {
   name            = "${var.name_prefix}-api"
   cluster         = aws_ecs_cluster.this.id
@@ -232,10 +276,6 @@ resource "aws_ecs_service" "api" {
 
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
-
-  lifecycle {
-    ignore_changes = [desired_count]
-  }
 }
 
 resource "aws_ecs_service" "worker" {
@@ -253,10 +293,6 @@ resource "aws_ecs_service" "worker" {
 
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
-
-  lifecycle {
-    ignore_changes = [desired_count]
-  }
 }
 
 resource "aws_ecs_service" "qdrant" {
@@ -278,8 +314,4 @@ resource "aws_ecs_service" "qdrant" {
 
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
-
-  lifecycle {
-    ignore_changes = [desired_count]
-  }
 }

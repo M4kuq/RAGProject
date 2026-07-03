@@ -48,6 +48,11 @@ variable "task_role_arn" {
   type        = string
 }
 
+variable "qdrant_task_role_arn" {
+  description = "Qdrant ECS task role ARN. This should not include application Secrets, Bedrock, S3, or SQS permissions."
+  type        = string
+}
+
 variable "api_image" {
   description = "API container image."
   type        = string

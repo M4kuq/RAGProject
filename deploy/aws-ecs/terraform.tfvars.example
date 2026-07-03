@@ -4,6 +4,9 @@ environment = "demo"
 
 github_oidc_repo     = "OWNER/REPO"
 github_deploy_branch = "main"
+# Set false when the account already has token.actions.githubusercontent.com.
+create_github_oidc_provider = true
+# github_oidc_provider_arn = "REPLACE_WITH_EXISTING_GITHUB_OIDC_PROVIDER_ARN"
 
 api_image_tag    = "placeholder"
 worker_image_tag = "placeholder"
@@ -17,6 +20,10 @@ ssm_parameter_arns      = []
 basic_auth_username      = "demo-user"
 basic_auth_header_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 basic_auth_realm         = "RAGProject Demo"
+
+origin_verify_header_name  = "X-RAGProject-Origin-Verify"
+origin_verify_header_value = "replace-with-random-32-plus-character-value"
+# app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
 bedrock_generation_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 bedrock_embedding_model_id  = "amazon.titan-embed-text-v2:0"

@@ -154,6 +154,17 @@ variable "session_secret_arn" {
   type        = string
 }
 
+variable "app_public_origin" {
+  description = "Public HTTPS origin allowed by backend CSRF checks, for example https://d111111abcdef8.cloudfront.net. Leave null to use this stack's CloudFront default domain."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.app_public_origin == null || can(regex("^https://[^/]+$", var.app_public_origin))
+    error_message = "app_public_origin must be an HTTPS origin without a path, for example https://d111111abcdef8.cloudfront.net."
+  }
+}
+
 variable "additional_secret_arns" {
   description = "Additional Secrets Manager ARNs the ECS tasks may read."
   type        = list(string)
@@ -180,6 +191,23 @@ variable "github_deploy_branch" {
   description = "GitHub branch allowed in the OIDC trust policy for deploy operations."
   type        = string
   default     = "main"
+}
+
+variable "create_github_oidc_provider" {
+  description = "Whether to create the token.actions.githubusercontent.com OIDC provider. Set false when the AWS account already has one."
+  type        = bool
+  default     = true
+}
+
+variable "github_oidc_provider_arn" {
+  description = "Existing GitHub Actions OIDC provider ARN. When null, the module creates one or uses the standard account-local ARN if create_github_oidc_provider=false."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_oidc_provider_arn == null || can(regex("^arn:[^:]+:iam::[0-9]{12}:oidc-provider/.+", var.github_oidc_provider_arn))
+    error_message = "github_oidc_provider_arn must be an IAM OIDC provider ARN."
+  }
 }
 
 variable "github_oidc_thumbprints" {
@@ -226,6 +254,28 @@ variable "basic_auth_realm" {
   description = "Basic authentication realm shown by CloudFront."
   type        = string
   default     = "RAGProject Demo"
+}
+
+variable "origin_verify_header_name" {
+  description = "Secret custom header name CloudFront adds to API origin requests and the ALB listener requires before forwarding."
+  type        = string
+  default     = "X-RAGProject-Origin-Verify"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+$", var.origin_verify_header_name))
+    error_message = "origin_verify_header_name must be a valid HTTP header token using letters, digits, and hyphens."
+  }
+}
+
+variable "origin_verify_header_value" {
+  description = "Secret custom header value used to bind this CloudFront distribution to the ALB origin. Generate a random value and do not commit it."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.origin_verify_header_value) >= 32 && !can(regex("[*?]", var.origin_verify_header_value))
+    error_message = "origin_verify_header_value must be at least 32 characters and must not contain ALB wildcard characters * or ?."
+  }
 }
 
 variable "budget_alert_email" {

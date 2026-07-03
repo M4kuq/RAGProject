@@ -23,6 +23,11 @@ output "qdrant_service_name" {
   value       = aws_ecs_service.qdrant.name
 }
 
+output "migration_task_definition_arn" {
+  description = "One-off migration and seed ECS task definition ARN."
+  value       = aws_ecs_task_definition.migration.arn
+}
+
 output "qdrant_url" {
   description = "Private Qdrant URL for API and worker tasks."
   value       = local.qdrant_url

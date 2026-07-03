@@ -28,6 +28,21 @@ output "ecs_cluster_name" {
   value       = module.ecs.cluster_name
 }
 
+output "public_subnet_ids" {
+  description = "Public subnet IDs used by Fargate tasks."
+  value       = module.network.public_subnet_ids
+}
+
+output "app_security_group_id" {
+  description = "Security group ID used by API and worker Fargate tasks."
+  value       = module.network.app_security_group_id
+}
+
+output "migration_task_definition_arn" {
+  description = "One-off migration and seed ECS task definition ARN."
+  value       = module.ecs.migration_task_definition_arn
+}
+
 output "rds_endpoint" {
   description = "RDS PostgreSQL endpoint."
   value       = module.rds.endpoint

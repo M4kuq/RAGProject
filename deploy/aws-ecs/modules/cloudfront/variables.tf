@@ -38,3 +38,14 @@ variable "basic_auth_realm" {
   description = "Basic auth realm."
   type        = string
 }
+
+variable "origin_verify_header_name" {
+  description = "Secret custom header name CloudFront sends to the ALB origin."
+  type        = string
+}
+
+variable "origin_verify_header_value" {
+  description = "Secret custom header value CloudFront sends to the ALB origin."
+  type        = string
+  sensitive   = true
+}

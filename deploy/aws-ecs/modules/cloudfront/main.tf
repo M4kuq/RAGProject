@@ -59,6 +59,11 @@ resource "aws_cloudfront_distribution" "this" {
     domain_name = var.alb_dns_name
     origin_id   = local.alb_origin_id
 
+    custom_header {
+      name  = var.origin_verify_header_name
+      value = var.origin_verify_header_value
+    }
+
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -119,6 +124,20 @@ resource "aws_cloudfront_distribution" "this" {
         function_arn = aws_cloudfront_function.basic_auth.arn
       }
     }
+  }
+
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   restrictions {

@@ -18,6 +18,17 @@ variable "github_deploy_branch" {
   type        = string
 }
 
+variable "create_github_oidc_provider" {
+  description = "Whether this module creates the GitHub Actions OIDC provider."
+  type        = bool
+}
+
+variable "github_oidc_provider_arn" {
+  description = "Existing GitHub Actions OIDC provider ARN, or null to create or derive the standard provider ARN."
+  type        = string
+  default     = null
+}
+
 variable "github_oidc_thumbprints" {
   description = "Thumbprints for token.actions.githubusercontent.com."
   type        = list(string)

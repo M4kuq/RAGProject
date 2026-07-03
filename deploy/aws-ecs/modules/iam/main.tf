@@ -1,15 +1,37 @@
 data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
 
 locals {
-  ecr_repository_arns = values(var.ecr_repository_arns)
-  bedrock_model_arns = [
-    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_generation_model_id}",
-    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_embedding_model_id}",
-    "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_rerank_model_id}",
+  ecr_repository_arns              = values(var.ecr_repository_arns)
+  default_github_oidc_provider_arn = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : (
+    var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : local.default_github_oidc_provider_arn
+  )
+  bedrock_generation_model_arn = "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_generation_model_id}"
+  bedrock_embedding_model_arn  = "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_embedding_model_id}"
+  bedrock_rerank_model_arn     = "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${var.bedrock_rerank_model_id}"
+  ecs_cluster_arn              = "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.name_prefix}-cluster"
+  ecs_service_arns = [
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-api",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-worker",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-qdrant",
+  ]
+  ecs_task_definition_arns = [
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-api:*",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-worker:*",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-qdrant:*",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-migration:*",
+  ]
+  bedrock_invoke_model_arns = [
+    local.bedrock_generation_model_arn,
+    local.bedrock_embedding_model_arn,
+    local.bedrock_rerank_model_arn,
   ]
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
+  count = var.create_github_oidc_provider && var.github_oidc_provider_arn == null ? 1 : 0
+
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = var.github_oidc_thumbprints
@@ -26,7 +48,7 @@ data "aws_iam_policy_document" "github_deploy_assume" {
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
 
     condition {
@@ -112,6 +134,15 @@ resource "aws_iam_role" "ecs_task" {
   }
 }
 
+resource "aws_iam_role" "qdrant_task" {
+  name               = "${var.name_prefix}-qdrant-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+
+  tags = {
+    Name = "${var.name_prefix}-qdrant-task"
+  }
+}
+
 data "aws_iam_policy_document" "ecs_task" {
   statement {
     sid    = "InvokeSelectedBedrockModels"
@@ -119,17 +150,14 @@ data "aws_iam_policy_document" "ecs_task" {
     actions = [
       "bedrock:InvokeModel",
     ]
-    resources = [
-      local.bedrock_model_arns[0],
-      local.bedrock_model_arns[1],
-    ]
+    resources = local.bedrock_invoke_model_arns
   }
 
   statement {
     sid       = "RunSelectedBedrockRerankModel"
     effect    = "Allow"
     actions   = ["bedrock:Rerank"]
-    resources = [local.bedrock_model_arns[2]]
+    resources = ["*"]
   }
 
   statement {
@@ -222,14 +250,38 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid    = "DeployEcsTaskDefinitionsAndServices"
+    sid    = "DescribeStackEcsCluster"
     effect = "Allow"
     actions = [
       "ecs:DescribeClusters",
+    ]
+    resources = [local.ecs_cluster_arn]
+  }
+
+  statement {
+    sid    = "DeployStackEcsServices"
+    effect = "Allow"
+    actions = [
       "ecs:DescribeServices",
-      "ecs:DescribeTaskDefinition",
-      "ecs:RegisterTaskDefinition",
       "ecs:UpdateService",
+    ]
+    resources = local.ecs_service_arns
+  }
+
+  statement {
+    sid    = "DescribeStackTaskDefinitions"
+    effect = "Allow"
+    actions = [
+      "ecs:DescribeTaskDefinition",
+    ]
+    resources = local.ecs_task_definition_arns
+  }
+
+  statement {
+    sid    = "RegisterEcsTaskDefinitions"
+    effect = "Allow"
+    actions = [
+      "ecs:RegisterTaskDefinition",
     ]
     resources = ["*"]
   }
@@ -243,6 +295,7 @@ data "aws_iam_policy_document" "github_deploy" {
     resources = [
       aws_iam_role.ecs_task_execution.arn,
       aws_iam_role.ecs_task.arn,
+      aws_iam_role.qdrant_task.arn,
     ]
 
     condition {

@@ -1,11 +1,12 @@
 locals {
-  name_prefix  = "${var.project}-${var.environment}"
-  secret_arns  = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
-  api_image    = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
-  worker_image = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
+  name_prefix       = "${var.project}-${var.environment}"
+  secret_arns       = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
+  api_image         = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
+  worker_image      = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
+  app_public_origin = coalesce(var.app_public_origin, "https://${module.cloudfront.domain_name}")
   common_app_env = {
     APP_ENV                     = var.environment
-    CORS_ALLOWED_ORIGINS        = "[]"
+    CORS_ALLOWED_ORIGINS        = jsonencode([local.app_public_origin])
     SESSION_COOKIE_SECURE       = "true"
     SESSION_COOKIE_SAMESITE     = "lax"
     STORAGE_ROOT                = "/tmp/ragproject/uploads"
@@ -23,6 +24,7 @@ locals {
     BEDROCK_EMBEDDING_MODEL_ID  = var.bedrock_embedding_model_id
     BEDROCK_RERANK_MODEL_ID     = var.bedrock_rerank_model_id
     EMBEDDING_VECTOR_DIMENSION  = "1024"
+    EMBEDDING_FAKE_DIMENSION    = "1024"
     RETRIEVAL_CACHE_ENABLED     = "false"
     GRAPH_STORE_PROVIDER        = "postgres"
     NEO4J_HEALTH_CHECK_ENABLED  = "false"
@@ -83,6 +85,8 @@ module "iam" {
   region                      = var.region
   github_oidc_repo            = var.github_oidc_repo
   github_deploy_branch        = var.github_deploy_branch
+  create_github_oidc_provider = var.create_github_oidc_provider
+  github_oidc_provider_arn    = var.github_oidc_provider_arn
   github_oidc_thumbprints     = var.github_oidc_thumbprints
   ecr_repository_arns         = module.ecr.repository_arns
   documents_bucket_arn        = module.s3.documents_bucket_arn
@@ -109,10 +113,12 @@ module "rds" {
 module "alb" {
   source = "./modules/alb"
 
-  name_prefix       = local.name_prefix
-  vpc_id            = module.network.vpc_id
-  subnet_ids        = module.network.public_subnet_ids
-  security_group_id = module.network.alb_security_group_id
+  name_prefix                = local.name_prefix
+  vpc_id                     = module.network.vpc_id
+  subnet_ids                 = module.network.public_subnet_ids
+  security_group_id          = module.network.alb_security_group_id
+  origin_verify_header_name  = var.origin_verify_header_name
+  origin_verify_header_value = var.origin_verify_header_value
 }
 
 module "ecs" {
@@ -128,6 +134,7 @@ module "ecs" {
   target_group_arn         = module.alb.target_group_arn
   execution_role_arn       = module.iam.ecs_task_execution_role_arn
   task_role_arn            = module.iam.ecs_task_role_arn
+  qdrant_task_role_arn     = module.iam.qdrant_task_role_arn
   api_image                = local.api_image
   worker_image             = local.worker_image
   qdrant_image             = var.qdrant_image
@@ -165,6 +172,8 @@ module "cloudfront" {
   basic_auth_username                  = var.basic_auth_username
   basic_auth_header_sha256             = var.basic_auth_header_sha256
   basic_auth_realm                     = var.basic_auth_realm
+  origin_verify_header_name            = var.origin_verify_header_name
+  origin_verify_header_value           = var.origin_verify_header_value
 }
 
 data "aws_iam_policy_document" "frontend_oac" {

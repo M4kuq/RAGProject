@@ -48,7 +48,7 @@ root module は各 module をつなぐ orchestration だけを持ちます。例
 
 Fargate は EC2 worker node の OS patch、capacity 管理、AMI 更新を持たないため、デモ環境の運用負担を下げられます。API、worker、Qdrant は `desired_count = 0` を default にしており、普段は task 課金を止めます。
 
-必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1`、ジョブ実行時に `worker_desired_count = 1` のように増やす想定です。ECS service には `ignore_changes = [desired_count]` を入れているため、手動や pipeline で一時的に desired count を変えても Terraform が即座に 0 に戻す挙動を避けます。
+必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1`、ジョブ実行時に `worker_desired_count = 1` のように増やす想定です。ECS service は `desired_count` を ignore しないため、これらの変数変更は Terraform apply で反映されます。
 
 ## 4. NAT Gateway を使わない理由と tradeoff
 
@@ -101,8 +101,8 @@ GitHub Actions 用の deploy role は OIDC trust で `repo:owner/repo:ref:refs/h
 
 Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task role の IAM 権限で呼び出す前提です。`iam` module は次の action/resource に限定します。
 
-- `bedrock:InvokeModel`: `bedrock_generation_model_id` と `bedrock_embedding_model_id`
-- `bedrock:Rerank`: `bedrock_rerank_model_id`
+- `bedrock:InvokeModel`: `bedrock_generation_model_id`、`bedrock_embedding_model_id`、`bedrock_rerank_model_id`
+- `bedrock:Rerank`: AWS rerank prerequisites に合わせて resource は `*`
 - `secretsmanager:GetSecretValue`: 指定された Secret ARN のみ
 - `ssm:GetParameter(s)`: 指定された Parameter ARN のみ
 - S3 documents bucket と SQS job queue の必要操作のみ
@@ -173,3 +173,68 @@ merge 戦略:
 2. アプリ側で Bedrock adapter、S3 document storage、SQS worker integration の AWS 実装が揃った後に最終確認します。
 3. bootstrap を人間が承認して初回 apply し、remote state backend を確定します。
 4. root stack の plan をレビューし、コスト・IAM・network を再確認してから初回 apply します。
+
+## 11. PR #88 review follow-up
+
+この追補はアプリコードを変更せず、Terraform 側で PR #88 の review 指摘を扱うための運用前提です。
+
+### CloudFront to ALB origin binding
+
+CloudFront は ALB origin へ `origin_verify_header_name` / `origin_verify_header_value` を送ります。ALB listener は default `403` とし、この秘密 header が一致した場合だけ API target group へ forward します。ALB security group の CloudFront origin-facing managed prefix list はネットワーク層の絞り込みとして残しますが、この秘密 header が「この CloudFront distribution からの origin request」に束縛する制御です。
+
+`origin_verify_header_value` は Terraform file に実値を commit せず、外部で生成したランダム値を入力してください。CloudFront と ALB listener rule の双方が apply 時に参照するため sensitive variable として扱います。
+
+### CSRF public origin
+
+backend の CSRF 検証は `CORS_ALLOWED_ORIGINS` を許可 origin として使います。ECS task では public HTTPS origin をこの env に設定します。default ではこの stack の CloudFront default domain を使い、custom domain や段階 rollout では `app_public_origin` を指定します。
+
+```hcl
+app_public_origin = "https://d111111abcdef8.cloudfront.net"
+```
+
+### CloudFront to ALB TLS deferral
+
+この demo skeleton では CloudFront to public ALB origin は引き続き `origin_protocol_policy = "http-only"` です。ALB 側で HTTPS origin にするには、CloudFront origin hostname と一致する ACM certificate が必要です。現状は CloudFront default domain と生成 ALB DNS name を使う雛形であり、Route53/custom domain 所有を前提にしないため、この PR では CloudFront to ALB 間 TLS は意図的に defer します。
+
+残存リスク: session、CSRF、Basic Auth header が CloudFront to ALB の public origin hop では HTTP になります。秘密 origin header と CloudFront prefix-list SG は origin bypass を抑制しますが、この hop の暗号化にはなりません。
+
+prod/EKS phase 対応: custom origin hostname + ALB ACM certificate を用意して `origin_protocol_policy = "https-only"` にするか、CloudFront VPC origin / internal ALB へ移行します。
+
+### Migration and seed task
+
+新規 RDS では API を scale out する前に one-off ECS task を実行します。
+
+```bash
+terraform output -json public_subnet_ids
+terraform output app_security_group_id
+terraform output migration_task_definition_arn
+
+aws ecs run-task \
+  --cluster "$(terraform output -raw ecs_cluster_name)" \
+  --launch-type FARGATE \
+  --task-definition "$(terraform output -raw migration_task_definition_arn)" \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-REPLACE,subnet-REPLACE],securityGroups=[$(terraform output -raw app_security_group_id)],assignPublicIp=ENABLED}"
+```
+
+task command:
+
+```bash
+alembic upgrade head && python -m app.scripts.seed --skip-document-indexing
+```
+
+成功後に `api_desired_count`、`worker_desired_count`、`qdrant_desired_count` を必要数へ変更して再 apply します。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
+
+### Existing GitHub OIDC provider
+
+AWS account に `token.actions.githubusercontent.com` provider が既にある場合は重複作成を避けます。
+
+```hcl
+create_github_oidc_provider = false
+# github_oidc_provider_arn = "arn:...:oidc-provider/token.actions.githubusercontent.com"
+```
+
+`github_oidc_provider_arn` 未指定かつ作成無効の場合、IAM trust policy は現在の AWS account から導出した標準 provider ARN を使います。
+
+### Embedding demo defaults
+
+ECS demo は Bedrock adapter 有効化前の default として `EMBEDDING_PROVIDER=fake` を維持しますが、`EMBEDDING_VECTOR_DIMENSION` と `EMBEDDING_FAKE_DIMENSION` はどちらも `1024` にします。これにより `document_chunks_bedrock_titan_v2` に fake 8 次元 collection が作られ、後続の Titan V2 利用時に dimension mismatch になる事態を避けます。

@@ -12,3 +12,8 @@ output "ecs_task_role_arn" {
   description = "ECS task role ARN."
   value       = aws_iam_role.ecs_task.arn
 }
+
+output "qdrant_task_role_arn" {
+  description = "Qdrant ECS task role ARN with no application permissions attached."
+  value       = aws_iam_role.qdrant_task.arn
+}
