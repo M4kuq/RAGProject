@@ -26,7 +26,6 @@ locals {
     EMBEDDING_VECTOR_DIMENSION  = "1024"
     EMBEDDING_FAKE_DIMENSION    = "1024"
     RETRIEVAL_CACHE_ENABLED     = "false"
-    GRAPH_STORE_PROVIDER        = "postgres"
     NEO4J_HEALTH_CHECK_ENABLED  = "false"
     NEO4J_PROJECTION_ENABLED    = "false"
     LOG_LEVEL                   = "INFO"
@@ -140,6 +139,7 @@ module "ecs" {
   api_image                = local.api_image
   worker_image             = local.worker_image
   qdrant_image             = var.qdrant_image
+  graph_store_provider     = var.graph_store_provider
   api_cpu                  = var.api_cpu
   api_memory               = var.api_memory
   worker_cpu               = var.worker_cpu

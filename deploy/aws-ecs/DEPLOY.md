@@ -13,6 +13,12 @@
   - Bedrock Rerank: `bedrock_rerank_model_id`
 - `terraform apply` は CI では実行しません。CI は `terraform plan` まで、初回 bootstrap と root apply は人手でレビューして実行します。
 
+### Graph backend policy
+
+ECS 版は `graph_store_provider = "postgres"` を既定にし、API/worker task の `GRAPH_STORE_PROVIDER=postgres` で RDS PostgreSQL 上のグラフテーブルを使います。Neo4j コンテナはこの ECS stack に含めず、Neo4j は EKS 本番 HA 版で StatefulSet と永続ボリュームを使う read model / projection として扱う予定です。source of truth は Postgres のままです。
+
+Amazon Neptune はこの demo stack では採用しません。Neptune openCypher は Neo4j Cypher と完全互換ではなく、APOC や CONSTRAINT など Neo4j 前提の機能にはアプリ改修が必要です。また完全な scale-to-zero ができないため、短時間 demo のコスト方針に合いません。将来 managed graph DB を見せる場合は、`NeptuneGraphStore` のような別 provider として検討します。
+
 ## 2. Secrets Manager と秘密値
 
 RDS master password は `manage_master_user_password = true` により RDS managed secret になります。Terraform file や GitHub secrets に RDS master password は置きません。

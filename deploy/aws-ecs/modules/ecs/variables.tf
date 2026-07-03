@@ -113,6 +113,16 @@ variable "qdrant_desired_count" {
   type        = number
 }
 
+variable "graph_store_provider" {
+  description = "Graph store backend provider for API and worker tasks."
+  type        = string
+
+  validation {
+    condition     = contains(["postgres", "neo4j"], var.graph_store_provider)
+    error_message = "graph_store_provider must be either postgres or neo4j."
+  }
+}
+
 variable "common_environment" {
   description = "Non-secret environment variables shared by API and worker."
   type        = map(string)

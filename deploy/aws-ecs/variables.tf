@@ -51,6 +51,17 @@ variable "qdrant_image" {
   default     = "qdrant/qdrant:v1.12.4"
 }
 
+variable "graph_store_provider" {
+  description = "Graph store backend provider for ECS API and worker tasks. Use postgres for this ECS stack; neo4j is reserved for the EKS HA stack."
+  type        = string
+  default     = "postgres"
+
+  validation {
+    condition     = contains(["postgres", "neo4j"], var.graph_store_provider)
+    error_message = "graph_store_provider must be either postgres or neo4j."
+  }
+}
+
 variable "api_desired_count" {
   description = "Desired task count for the API service. Keep 0 for scale-to-zero demo baseline."
   type        = number

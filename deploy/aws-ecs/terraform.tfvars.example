@@ -11,6 +11,9 @@ create_github_oidc_provider = true
 api_image_tag    = "placeholder"
 worker_image_tag = "placeholder"
 
+# ECS uses the Postgres graph provider. Switch Neo4j only in the EKS stack.
+graph_store_provider = "postgres"
+
 # Store the actual values in Secrets Manager, not in Terraform files.
 database_url_secret_arn = "REPLACE_WITH_DATABASE_URL_SECRET_ARN"
 session_secret_arn      = "REPLACE_WITH_SESSION_SECRET_ARN"

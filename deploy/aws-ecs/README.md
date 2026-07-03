@@ -25,6 +25,12 @@ flowchart TD
 
 Frontend は Vite/React の build artifact を S3 に置き、CloudFront OAC だけで読める private bucket とします。API は CloudFront の `/api/*`、`/health`、`/ready` から ALB HTTP origin に流します。ALB 自体は public ですが、security group は CloudFront origin-facing managed prefix list からの HTTP のみに絞ります。
 
+### Graph backend policy
+
+ECS 版のグラフバックエンドは `GRAPH_STORE_PROVIDER=postgres` とし、RDS PostgreSQL 上のグラフテーブルを使います。この ECS stack には Neo4j コンテナや Neo4j 用インフラは含めません。Neo4j は EKS 本番 HA 版で StatefulSet と永続ボリュームを使う read model / projection として扱う予定で、source of truth は引き続き Postgres です。
+
+Amazon Neptune はこの demo stack では採用しません。Neptune openCypher は Neo4j Cypher と完全互換ではなく、APOC や CONSTRAINT など Neo4j 前提のクエリ・運用を使うにはアプリ側の移植が必要です。また完全な scale-to-zero ができず、短時間 demo の固定費に合いません。将来 managed graph DB を見せる場合は、既存 Neo4j provider の置き換えではなく `NeptuneGraphStore` のような別 provider として検討します。
+
 ## 2. モジュール構成の理由
 
 | module | 責務 | 理由 |
@@ -132,6 +138,7 @@ Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task r
 - `database_url_secret_arn` / `session_secret_arn`: secret 値は Terraform に入れず、Secrets Manager ARN だけ渡します。
 - `additional_secret_arns` / `ssm_parameter_arns`: 将来の provider token や設定値を ARN で追加できます。
 - `bedrock_generation_model_id` / `bedrock_embedding_model_id` / `bedrock_rerank_model_id`: Bedrock model 切替に対応します。
+- `graph_store_provider`: ECS 版は `postgres` を default とし、API/worker の `GRAPH_STORE_PROVIDER` に渡します。Neo4j 切替は EKS 版で扱います。
 - `basic_auth_header_sha256`: plaintext password ではなく、期待する `Authorization` header 全体の SHA-256 hex を渡します。
 - desired count: API/worker/Qdrant を demo 時だけ起動するために変数化しています。
 - log retention / ECR retention / budget amount: demo cost に合わせて調整します。

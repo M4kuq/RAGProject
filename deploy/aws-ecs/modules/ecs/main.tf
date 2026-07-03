@@ -5,6 +5,9 @@ locals {
   app_environment = merge(var.common_environment, {
     QDRANT_URL = local.qdrant_url
   })
+  api_worker_environment = merge(local.app_environment, {
+    GRAPH_STORE_PROVIDER = var.graph_store_provider
+  })
 }
 
 resource "aws_ecs_cluster" "this" {
@@ -72,7 +75,7 @@ resource "aws_ecs_task_definition" "api" {
         }
       ]
       environment = [
-        for name, value in local.app_environment : {
+        for name, value in local.api_worker_environment : {
           name  = name
           value = value
         }
@@ -122,7 +125,7 @@ resource "aws_ecs_task_definition" "worker" {
       image     = var.worker_image
       essential = true
       environment = [
-        for name, value in local.app_environment : {
+        for name, value in local.api_worker_environment : {
           name  = name
           value = value
         }
