@@ -1,4 +1,5 @@
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 data "aws_iam_policy_document" "budget_publish" {
   statement {
@@ -15,8 +16,14 @@ data "aws_iam_policy_document" "budget_publish" {
 
     condition {
       test     = "StringEquals"
-      variable = "AWS:SourceOwner"
+      variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:*"]
     }
   }
 }

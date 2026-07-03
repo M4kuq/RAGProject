@@ -16,12 +16,6 @@ locals {
     "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-worker",
     "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.name_prefix}-cluster/${var.name_prefix}-qdrant",
   ]
-  ecs_task_definition_arns = [
-    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-api:*",
-    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-worker:*",
-    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-qdrant:*",
-    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.name_prefix}-migration:*",
-  ]
   bedrock_invoke_model_arns = [
     local.bedrock_generation_model_arn,
     local.bedrock_embedding_model_arn,
@@ -269,18 +263,11 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid    = "DescribeStackTaskDefinitions"
+    sid    = "ManageEcsTaskDefinitions"
     effect = "Allow"
     actions = [
       "ecs:DescribeTaskDefinition",
-    ]
-    resources = local.ecs_task_definition_arns
-  }
-
-  statement {
-    sid    = "RegisterEcsTaskDefinitions"
-    effect = "Allow"
-    actions = [
+      "ecs:ListTaskDefinitions",
       "ecs:RegisterTaskDefinition",
     ]
     resources = ["*"]

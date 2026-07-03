@@ -1,6 +1,99 @@
 locals {
-  s3_origin_id  = "${var.name_prefix}-frontend-s3"
-  alb_origin_id = "${var.name_prefix}-api-alb"
+  s3_origin_id           = "${var.name_prefix}-frontend-s3"
+  alb_origin_id          = "${var.name_prefix}-api-alb"
+  api_path_patterns_json = jsonencode(var.api_path_patterns)
+
+  basic_auth_function_code = <<-EOT
+    var crypto = require('crypto');
+
+    function authorize(request) {
+      var authHeader = request.headers.authorization ? request.headers.authorization.value : '';
+      var suppliedHash = crypto.createHash('sha256').update(authHeader).digest('hex');
+
+      if (suppliedHash === '${var.basic_auth_header_sha256}') {
+        return null;
+      }
+
+      return {
+        statusCode: 401,
+        statusDescription: 'Unauthorized',
+        headers: {
+          'www-authenticate': { value: 'Basic realm="${var.basic_auth_realm}"' },
+          'cache-control': { value: 'no-store' }
+        }
+      };
+    }
+
+    function handler(event) {
+      var request = event.request;
+      var authResponse = authorize(request);
+      if (authResponse) {
+        return authResponse;
+      }
+      return request;
+    }
+  EOT
+
+  basic_auth_spa_rewrite_function_code = <<-EOT
+    var crypto = require('crypto');
+    var apiPathPatterns = ${local.api_path_patterns_json};
+
+    function authorize(request) {
+      var authHeader = request.headers.authorization ? request.headers.authorization.value : '';
+      var suppliedHash = crypto.createHash('sha256').update(authHeader).digest('hex');
+
+      if (suppliedHash === '${var.basic_auth_header_sha256}') {
+        return null;
+      }
+
+      return {
+        statusCode: 401,
+        statusDescription: 'Unauthorized',
+        headers: {
+          'www-authenticate': { value: 'Basic realm="${var.basic_auth_realm}"' },
+          'cache-control': { value: 'no-store' }
+        }
+      };
+    }
+
+    function hasFileExtension(uri) {
+      var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
+      return lastSegment.indexOf('.') !== -1;
+    }
+
+    function matchesApiPattern(uri, pattern) {
+      if (pattern.charAt(pattern.length - 1) === '*') {
+        return uri.indexOf(pattern.slice(0, -1)) === 0;
+      }
+      return uri === pattern;
+    }
+
+    function isApiPath(uri) {
+      if (uri === '/api' || uri.indexOf('/api/') === 0) {
+        return true;
+      }
+      for (var i = 0; i < apiPathPatterns.length; i++) {
+        if (matchesApiPattern(uri, apiPathPatterns[i])) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function handler(event) {
+      var request = event.request;
+      var authResponse = authorize(request);
+      if (authResponse) {
+        return authResponse;
+      }
+
+      if (!hasFileExtension(request.uri) && !isApiPath(request.uri)) {
+        request.uri = '/index.html';
+      }
+
+      return request;
+    }
+  EOT
 }
 
 resource "aws_cloudfront_origin_access_control" "frontend" {
@@ -17,28 +110,16 @@ resource "aws_cloudfront_function" "basic_auth" {
   comment = "Basic auth gate for ${var.basic_auth_username}"
   publish = true
 
-  code = <<-EOT
-    var crypto = require('crypto');
+  code = local.basic_auth_function_code
+}
 
-    function handler(event) {
-      var request = event.request;
-      var authHeader = request.headers.authorization ? request.headers.authorization.value : '';
-      var suppliedHash = crypto.createHash('sha256').update(authHeader).digest('hex');
+resource "aws_cloudfront_function" "basic_auth_spa_rewrite" {
+  name    = "${var.name_prefix}-basic-auth-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  comment = "Basic auth gate and S3 SPA fallback for ${var.basic_auth_username}"
+  publish = true
 
-      if (suppliedHash === '${var.basic_auth_header_sha256}') {
-        return request;
-      }
-
-      return {
-        statusCode: 401,
-        statusDescription: 'Unauthorized',
-        headers: {
-          'www-authenticate': { value: 'Basic realm="${var.basic_auth_realm}"' },
-          'cache-control': { value: 'no-store' }
-        }
-      };
-    }
-  EOT
+  code = local.basic_auth_spa_rewrite_function_code
 }
 
 resource "aws_cloudfront_distribution" "this" {
@@ -92,7 +173,7 @@ resource "aws_cloudfront_distribution" "this" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.basic_auth.arn
+      function_arn = aws_cloudfront_function.basic_auth_spa_rewrite.arn
     }
   }
 
@@ -124,20 +205,6 @@ resource "aws_cloudfront_distribution" "this" {
         function_arn = aws_cloudfront_function.basic_auth.arn
       }
     }
-  }
-
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
   }
 
   restrictions {

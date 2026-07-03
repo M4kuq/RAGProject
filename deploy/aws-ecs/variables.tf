@@ -82,6 +82,11 @@ variable "qdrant_desired_count" {
     condition     = var.qdrant_desired_count >= 0
     error_message = "qdrant_desired_count must be zero or greater."
   }
+
+  validation {
+    condition     = var.qdrant_desired_count <= 1
+    error_message = "qdrant_desired_count must be 0 or 1 because this demo stack runs a single-node Qdrant service."
+  }
 }
 
 variable "api_cpu" {

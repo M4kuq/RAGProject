@@ -158,7 +158,7 @@ module "ecs" {
   efs_file_system_id    = module.efs.file_system_id
   efs_access_point_id   = module.efs.access_point_id
 
-  depends_on = [module.alb]
+  depends_on = [module.alb, module.efs]
 }
 
 module "cloudfront" {
