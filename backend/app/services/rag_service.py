@@ -51,7 +51,12 @@ from app.rag.citations import (
     parse_generation_output,
     validate_generation_citations,
 )
-from app.rag.confidence import ConfidenceInputs, ConfidenceScores, calculate_confidence
+from app.rag.confidence import (
+    ConfidenceInputs,
+    ConfidenceScores,
+    calculate_confidence,
+    has_high_retrieval_support,
+)
 from app.rag.context_budget import (
     ContextBudgetCandidate,
     ContextBudgetDecision,
@@ -70,11 +75,13 @@ from app.rag.evidence_pack import (
     sanitize_context_compression_json,
 )
 from app.rag.generation import (
+    RAG_GENERATION_SUPPORTED_ANSWER_RETRY_INSTRUCTIONS,
     AnswerGenerationError,
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
     GenerationResult,
+    TokenUsage,
     _lmstudio_model_name,
     create_answer_generator,
 )
@@ -883,12 +890,16 @@ class RagService:
                 )
             generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
-                generation = answer_generator.generate(
+                generation = _generate_with_insufficient_evidence_retry(
+                    answer_generator,
                     GenerationRequest(
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.settings.generation_max_output_chars,
-                    )
+                    ),
+                    retrieval_score_summary=final_summary,
+                    settings=self.settings,
+                    latency_tracker=latency_tracker,
                 )
             generation_metadata = self._generation_metadata(
                 selection=generation_selection,
@@ -4430,6 +4441,91 @@ def _validate_generation_output_safety(
         context_text = _clean_context_text(item.text)
         if len(context_text) >= 80 and context_text in normalized_answer:
             raise CitationBuildError("citation_build_failed")
+
+
+def _generate_with_insufficient_evidence_retry(
+    answer_generator: AnswerGenerator,
+    request: GenerationRequest,
+    *,
+    retrieval_score_summary: RetrievalScoreSummary,
+    settings: Settings,
+    latency_tracker: LatencyTracker,
+) -> GenerationResult:
+    generation = answer_generator.generate(request)
+    if not _should_retry_insufficient_evidence_generation(
+        generation.content,
+        retrieval_score_summary=retrieval_score_summary,
+        settings=settings,
+    ):
+        return generation
+
+    retry_request = _supported_answer_retry_request(request)
+    retry_started = time.perf_counter()
+    latency_tracker.record_count("generation_retry_count")
+    try:
+        retry_generation = answer_generator.generate(retry_request)
+    except AnswerGenerationError:
+        return generation
+    finally:
+        latency_tracker.record_ms("generation_retry_ms", _elapsed_ms(retry_started))
+
+    return GenerationResult(
+        content=retry_generation.content,
+        usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+    )
+
+
+def _should_retry_insufficient_evidence_generation(
+    content: str,
+    *,
+    retrieval_score_summary: RetrievalScoreSummary,
+    settings: Settings,
+) -> bool:
+    if not settings.generation_retry_on_insufficient_evidence:
+        return False
+    parsed_generation = parse_generation_output(content)
+    return _is_insufficient_evidence_answer(
+        parsed_generation.answer_text
+    ) and has_high_retrieval_support(retrieval_score_summary)
+
+
+def _supported_answer_retry_request(request: GenerationRequest) -> GenerationRequest:
+    return GenerationRequest(
+        message=request.message,
+        context_items=request.context_items,
+        max_output_chars=request.max_output_chars,
+        system_instructions=RAG_GENERATION_SUPPORTED_ANSWER_RETRY_INSTRUCTIONS,
+        temperature=0.0,
+        response_format=request.response_format,
+    )
+
+
+def _combined_generation_usage(
+    initial_usage: TokenUsage | None,
+    retry_usage: TokenUsage | None,
+) -> TokenUsage | None:
+    if initial_usage is None and retry_usage is None:
+        return None
+    return TokenUsage(
+        input_tokens=_combined_optional_int(
+            initial_usage.input_tokens if initial_usage is not None else None,
+            retry_usage.input_tokens if retry_usage is not None else None,
+        ),
+        output_tokens=_combined_optional_int(
+            initial_usage.output_tokens if initial_usage is not None else None,
+            retry_usage.output_tokens if retry_usage is not None else None,
+        ),
+        total_tokens=_combined_optional_int(
+            initial_usage.total_tokens if initial_usage is not None else None,
+            retry_usage.total_tokens if retry_usage is not None else None,
+        ),
+    )
+
+
+def _combined_optional_int(first: int | None, second: int | None) -> int | None:
+    if first is None and second is None:
+        return None
+    return (first or 0) + (second or 0)
 
 
 def _validated_generation_or_fallback(

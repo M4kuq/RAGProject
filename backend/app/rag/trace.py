@@ -137,6 +137,10 @@ class LatencyTracker:
         safe_duration = max(0, int(duration_ms))
         self._spans_ms[name] = self._spans_ms.get(name, 0) + safe_duration
 
+    def record_count(self, name: str, count: int = 1) -> None:
+        safe_count = max(0, int(count))
+        self._spans_ms[name] = self._spans_ms.get(name, 0) + safe_count
+
     def snapshot(self) -> dict[str, object]:
         spans: dict[str, int] = dict(self._spans_ms)
         retrieval_latency_keys = _retrieval_latency_keys_for(spans)
