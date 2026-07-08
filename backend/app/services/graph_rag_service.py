@@ -491,7 +491,7 @@ class GraphRagService:
                 )
             generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
-                generation = _generate_with_insufficient_evidence_retry(
+                generation_attempt = _generate_with_insufficient_evidence_retry(
                     answer_generator,
                     GenerationRequest(
                         message=payload.message,
@@ -502,6 +502,7 @@ class GraphRagService:
                     settings=self.base.settings,
                     latency_tracker=latency_tracker,
                 )
+                generation = generation_attempt.generation
             generation_metadata = self.base._generation_metadata(
                 selection=generation_selection,
                 generation=generation,
@@ -517,6 +518,9 @@ class GraphRagService:
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
                     allow_insufficient_evidence_fallback=True,
+                    allow_validation_error_fallback=(
+                        generation_attempt.allow_validation_error_fallback
+                    ),
                 )
                 assistant_message = self.base.chat_repository.create_message(
                     db,

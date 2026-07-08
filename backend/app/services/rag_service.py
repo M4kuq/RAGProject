@@ -200,6 +200,12 @@ MODEL_KEY_SEPARATOR = ":"
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _GenerationAttempt:
+    generation: GenerationResult
+    allow_validation_error_fallback: bool = False
+
+
 class RagPipelineError(RuntimeError):
     def __init__(self, error_code: str, status_code: int) -> None:
         super().__init__(error_code)
@@ -890,7 +896,7 @@ class RagService:
                 )
             generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
-                generation = _generate_with_insufficient_evidence_retry(
+                generation_attempt = _generate_with_insufficient_evidence_retry(
                     answer_generator,
                     GenerationRequest(
                         message=payload.message,
@@ -901,6 +907,7 @@ class RagService:
                     settings=self.settings,
                     latency_tracker=latency_tracker,
                 )
+                generation = generation_attempt.generation
             generation_metadata = self._generation_metadata(
                 selection=generation_selection,
                 generation=generation,
@@ -916,6 +923,9 @@ class RagService:
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
                     allow_insufficient_evidence_fallback=True,
+                    allow_validation_error_fallback=(
+                        generation_attempt.allow_validation_error_fallback
+                    ),
                 )
                 assistant_message = self.chat_repository.create_message(
                     db,
@@ -4450,14 +4460,14 @@ def _generate_with_insufficient_evidence_retry(
     retrieval_score_summary: RetrievalScoreSummary,
     settings: Settings,
     latency_tracker: LatencyTracker,
-) -> GenerationResult:
+) -> _GenerationAttempt:
     generation = answer_generator.generate(request)
     if not _should_retry_insufficient_evidence_generation(
         generation.content,
         retrieval_score_summary=retrieval_score_summary,
         settings=settings,
     ):
-        return generation
+        return _GenerationAttempt(generation)
 
     retry_request = _supported_answer_retry_request(request)
     retry_started = time.perf_counter()
@@ -4465,13 +4475,16 @@ def _generate_with_insufficient_evidence_retry(
     try:
         retry_generation = answer_generator.generate(retry_request)
     except AnswerGenerationError:
-        return generation
+        return _GenerationAttempt(generation)
     finally:
         latency_tracker.record_ms("generation_retry_ms", _elapsed_ms(retry_started))
 
-    return GenerationResult(
-        content=retry_generation.content,
-        usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+    return _GenerationAttempt(
+        generation=GenerationResult(
+            content=retry_generation.content,
+            usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+        ),
+        allow_validation_error_fallback=True,
     )
 
 
@@ -4534,8 +4547,14 @@ def _validated_generation_or_fallback(
     context_items: list[GenerationContextItem],
     prompt_citation_sources: list[CitationSource],
     allow_insufficient_evidence_fallback: bool = False,
+    allow_validation_error_fallback: bool = False,
 ) -> tuple[ParsedGenerationOutput, list[CitationSource], bool]:
-    parsed_generation = parse_generation_output(content)
+    try:
+        parsed_generation = parse_generation_output(content)
+    except CitationBuildError:
+        if allow_validation_error_fallback:
+            return _validation_error_fallback(prompt_citation_sources)
+        raise
     if _is_insufficient_evidence_answer(parsed_generation.answer_text):
         if allow_insufficient_evidence_fallback:
             fallback_generation, fallback_sources = _insufficient_citation_fallback(
@@ -4543,22 +4562,36 @@ def _validated_generation_or_fallback(
             )
             return fallback_generation, fallback_sources, True
         raise InsufficientEvidenceAnswerError()
-    _validate_generation_output_safety(
-        parsed_generation.answer_text,
-        context_items=context_items,
-    )
+    try:
+        _validate_generation_output_safety(
+            parsed_generation.answer_text,
+            context_items=context_items,
+        )
+    except CitationBuildError:
+        if allow_validation_error_fallback:
+            return _validation_error_fallback(prompt_citation_sources)
+        raise
     try:
         cited_sources = validate_generation_citations(
             parsed_generation,
             source_map=prompt_citation_sources,
         )
     except CitationBuildError:
+        if allow_validation_error_fallback:
+            return _validation_error_fallback(prompt_citation_sources)
         repaired_generation, repaired_sources = _repair_generation_citations(
             parsed_generation,
             prompt_citation_sources=prompt_citation_sources,
         )
         return repaired_generation, repaired_sources, False
     return parsed_generation, cited_sources, False
+
+
+def _validation_error_fallback(
+    prompt_citation_sources: list[CitationSource],
+) -> tuple[ParsedGenerationOutput, list[CitationSource], bool]:
+    fallback_generation, fallback_sources = _insufficient_citation_fallback(prompt_citation_sources)
+    return fallback_generation, fallback_sources, True
 
 
 def _repair_generation_citations(

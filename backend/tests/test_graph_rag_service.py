@@ -142,6 +142,26 @@ class _HedgeThenCitationAnswerGenerator:
         )
 
 
+class _SequenceAnswerGenerator:
+    def __init__(self, contents: list[str]) -> None:
+        self.contents = contents
+        self.requests: list[GenerationRequest] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        if not request.context_items:
+            raise AnswerGenerationError()
+        index = min(self.call_count - 1, len(self.contents) - 1)
+        return GenerationResult(
+            content=self.contents[index],
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
 @pytest.fixture
 def graph_session_factory() -> Iterator[sessionmaker[Session]]:
     engine = create_engine(
@@ -529,6 +549,55 @@ def test_graph_ask_retries_once_on_insufficient_answer_when_support_is_high(
         assert run.latency_breakdown_json["generation_retry_ms"] >= 0
         assert "content_text" not in str(run.latency_breakdown_json)
         assert "FastAPI uses PostgreSQL" not in str(run.latency_breakdown_json)
+
+
+def test_graph_ask_retry_validation_error_degrades_to_low_confidence_citations(
+    graph_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_session_factory() as db:
+        seed = _seed_graph(db)
+        chat_session_id = _seed_chat_session(db, seed.user_id)
+        user = db.get(User, seed.user_id)
+        assert user is not None
+        answer_generator = _SequenceAnswerGenerator(
+            [
+                OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+                "The graph retry cites a marker that was not displayed [99].",
+            ]
+        )
+        service = GraphRagService(
+            _service(
+                _settings(),
+                [_vector_candidate(min(seed.chunk_ids))],
+                answer_generator=answer_generator,
+            )
+        )
+
+        response = service.ask(
+            db,
+            payload=RagAskRequest(
+                chat_session_id=chat_session_id,
+                client_message_id="graph-retry-bad-marker",
+                message="How does FastAPI use PostgreSQL?",
+                strategy=RagAskRequestStrategy.GRAPH,
+            ),
+            user=user,
+            request_id="req-graph-retry-bad-marker",
+        )
+
+        assert response.assistant_message.content == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+        assert response.confidence.confidence_label == "Low"
+        assert [citation.local_citation_id for citation in response.citations] == [1]
+        assert answer_generator.call_count == 2
+
+        run = db.get(RetrievalRun, response.retrieval_run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
 
 def test_explicit_graph_ask_respects_disabled_global_flag(

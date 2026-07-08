@@ -1027,6 +1027,125 @@ def test_rag_ask_retries_once_on_insufficient_answer_when_support_is_high(
         assert "alpha policy full active chunk text" not in str(run.latency_breakdown_json)
 
 
+def test_rag_ask_retry_instruction_preserves_explicit_language_request(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _SequenceAnswerGenerator(
+        [
+            OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+            "The alpha policy is confirmed by the handbook [1].",
+        ]
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="english retry hedge")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "dense-retry-explicit-english",
+            "message": "Please answer in English: what is the alpha policy?",
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == (
+        "The alpha policy is confirmed by the handbook [1]."
+    )
+    assert data["assistant_message"]["content"] != INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["confidence"]["confidence_label"] != "Low"
+    assert answer_generator.call_count == 2
+    retry_instructions = answer_generator.requests[1].system_instructions
+    assert retry_instructions is not None
+    assert (
+        "Answer in Japanese unless the user explicitly asks for another language"
+        in retry_instructions
+    )
+    assert "Answer in Japanese using only" not in retry_instructions
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.confidence_label != "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("retry_content", "client_message_id"),
+    [
+        ("The retry cites a marker that was not displayed [99].", "dense-retry-bad-marker"),
+        ("answer leaks password=verysecret [1]", "dense-retry-sensitive-output"),
+    ],
+)
+def test_rag_ask_retry_validation_errors_degrade_to_low_confidence_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    retry_content: str,
+    client_message_id: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _SequenceAnswerGenerator(
+        [OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER, retry_content]
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title=client_message_id)
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": client_message_id,
+            "message": "alpha policy retry validation fallback",
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["assistant_message"]["content"] != retry_content
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert data["generation"]["total_tokens"] == 40
+    assert answer_generator.call_count == 2
+    assert "verysecret" not in str(response.json())
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+
+
 def test_rag_ask_does_not_retry_insufficient_answer_when_support_is_low(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
@@ -3342,6 +3461,26 @@ class _StaticAnswerGenerator:
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         return GenerationResult(content=self.content)
+
+
+class _SequenceAnswerGenerator:
+    def __init__(self, contents: Sequence[str]) -> None:
+        self.contents = list(contents)
+        self.requests: list[GenerationRequest] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        if not request.context_items:
+            raise AnswerGenerationError()
+        index = min(self.call_count - 1, len(self.contents) - 1)
+        return GenerationResult(
+            content=self.contents[index],
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
 
 
 class _ObservedCitationAnswerGenerator:
