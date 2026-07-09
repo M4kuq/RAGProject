@@ -197,9 +197,7 @@ def test_mcp_http_cors_preflight_allows_mcp_headers(
         headers={
             "Origin": "http://localhost:5173",
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": (
-                "Authorization, MCP-Protocol-Version, Content-Type"
-            ),
+            "Access-Control-Request-Headers": "Authorization, MCP-Protocol-Version, Content-Type",
         },
     )
 
