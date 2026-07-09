@@ -48,7 +48,7 @@ async def mcp_post(
 
     try:
         message = await request.json()
-    except json.JSONDecodeError:
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return JSONResponse(status_code=400, content=jsonrpc_parse_error())
 
     try:

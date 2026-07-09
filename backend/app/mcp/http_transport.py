@@ -39,7 +39,12 @@ def authorize_bearer_header(authorization: str | None, expected_key: str | None)
     scheme, separator, token = authorization.partition(" ")
     if separator != " " or scheme.lower() != "bearer" or not token:
         return False
-    return secrets.compare_digest(token, expected_key)
+    try:
+        token_bytes = token.encode("ascii")
+        expected_key_bytes = expected_key.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return secrets.compare_digest(token_bytes, expected_key_bytes)
 
 
 def validate_accept_header(accept: str | None) -> None:
@@ -66,17 +71,21 @@ def validate_protocol_version_header(protocol_version: str | None) -> None:
 def validate_origin_header(origin: str | None) -> None:
     if origin is None:
         return
-    parsed = urlparse(origin)
+    try:
+        parsed = urlparse(origin)
+        hostname = parsed.hostname
+    except ValueError as exc:
+        raise McpHttpError(403, "permission_denied", "Permission denied.") from exc
     if (
         parsed.scheme not in {"http", "https"}
-        or parsed.hostname is None
+        or hostname is None
         or parsed.path not in {"", "/"}
         or parsed.params
         or parsed.query
         or parsed.fragment
     ):
         raise McpHttpError(403, "permission_denied", "Permission denied.")
-    host = parsed.hostname.rstrip(".").lower()
+    host = hostname.rstrip(".").lower()
     if host == "localhost":
         return
     try:

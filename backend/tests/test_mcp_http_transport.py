@@ -121,6 +121,23 @@ def test_mcp_http_authentication_required(mcp_http_client: TestClient) -> None:
     assert "rag_search" in {tool["name"] for tool in ok.json()["result"]["tools"]}
 
 
+def test_mcp_http_rejects_non_ascii_bearer_token(mcp_http_client: TestClient) -> None:
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    non_ascii_token = b"Bearer " + bytes([0xE9])
+
+    response = mcp_http_client.post(
+        "/mcp",
+        json=payload,
+        headers=[
+            (b"authorization", non_ascii_token),
+            (b"accept", b"application/json"),
+            (b"mcp-protocol-version", b"2025-06-18"),
+        ],
+    )
+
+    assert response.status_code == 401
+
+
 def test_mcp_http_origin_validation(mcp_http_client: TestClient) -> None:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
@@ -145,6 +162,51 @@ def test_mcp_http_origin_validation(mcp_http_client: TestClient) -> None:
     assert localhost.status_code == 200
     assert loopback.status_code == 200
     assert no_origin.status_code == 200
+
+
+def test_mcp_http_rejects_malformed_origin(mcp_http_client: TestClient) -> None:
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+    response = mcp_http_client.post(
+        "/mcp",
+        json=payload,
+        headers={**BASE_HEADERS, "Origin": "http://[::1"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_mcp_http_invalid_utf8_body_returns_parse_error(
+    mcp_http_client: TestClient,
+) -> None:
+    response = mcp_http_client.post(
+        "/mcp",
+        content=b"\xff",
+        headers={**BASE_HEADERS, "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == -32700
+
+
+def test_mcp_http_cors_preflight_allows_mcp_headers(
+    mcp_http_client: TestClient,
+) -> None:
+    response = mcp_http_client.options(
+        "/mcp",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": (
+                "Authorization, MCP-Protocol-Version, Content-Type"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    allowed_headers = response.headers["access-control-allow-headers"].lower()
+    assert "authorization" in allowed_headers
+    assert "mcp-protocol-version" in allowed_headers
 
 
 def test_mcp_http_accept_and_protocol_version_headers(mcp_http_client: TestClient) -> None:
@@ -268,6 +330,27 @@ def test_mcp_route_is_not_registered_in_stdio_mode(monkeypatch: pytest.MonkeyPat
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
             headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 404
+
+
+def test_mcp_route_is_not_registered_when_mcp_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("MCP_ENABLED", "false")
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    monkeypatch.setenv("MCP_HTTP_API_KEY", API_KEY)
+    get_settings.cache_clear()
+    try:
+        client = TestClient(create_app())
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=BASE_HEADERS,
         )
     finally:
         get_settings.cache_clear()
