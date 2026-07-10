@@ -247,6 +247,16 @@ function Get-TerraformOutput {
   }
 }
 
+function Get-TerraformJsonOutput {
+  param([Parameter(Mandatory = $true)][string]$Name)
+  Push-Location $script:TerraformDirectory
+  try {
+    return (Invoke-Native "terraform" @("output", "-json", $Name) -Capture) | ConvertFrom-Json
+  } finally {
+    Pop-Location
+  }
+}
+
 function Get-AppDeploymentConfig {
   Push-Location $script:TerraformDirectory
   try {
@@ -519,7 +529,9 @@ function Remove-AllBucketVersions {
     ) -Capture
     $listing = $json | ConvertFrom-Json
     $objects = @()
-    foreach ($item in @($listing.Versions) + @($listing.DeleteMarkers)) {
+    $listedVersions = if ($null -ne $listing.PSObject.Properties["Versions"]) { @($listing.Versions) } else { @() }
+    $deleteMarkers = if ($null -ne $listing.PSObject.Properties["DeleteMarkers"]) { @($listing.DeleteMarkers) } else { @() }
+    foreach ($item in $listedVersions + $deleteMarkers) {
       if ($null -ne $item -and $null -ne $item.Key -and $null -ne $item.VersionId) {
         $objects += [ordered]@{ Key = [string]$item.Key; VersionId = [string]$item.VersionId }
       }
@@ -550,9 +562,15 @@ function Remove-AllBucketVersions {
 }
 
 function Test-AwsResourceAbsent {
-  param([Parameter(Mandatory = $true)][string[]]$Arguments)
-  & aws @Arguments *> $null
-  return ($LASTEXITCODE -ne 0)
+  param(
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$NotFoundPattern
+  )
+  $output = & aws @Arguments 2>&1
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -eq 0) { return $false }
+  if (($output | Out-String) -match $NotFoundPattern) { return $true }
+  throw "AWS absence verification failed unexpectedly."
 }
 
 function Clear-DatabaseUrlSecret {
@@ -580,41 +598,92 @@ function Assert-NoRuntimeRemnants {
   if (-not [string]::IsNullOrWhiteSpace($state)) {
     throw "Terraform runtime state is not empty after destroy."
   }
+
   foreach ($bucket in @($Snapshot.Buckets)) {
     if (-not (Test-AwsResourceAbsent @(
       "s3api", "head-bucket", "--bucket", $bucket,
       "--region", $script:ExpectedRegion, "--no-cli-pager"
-    ))) { throw "A runtime S3 bucket still exists." }
+    ) "(404|NoSuchBucket|Not Found)")) {
+      throw "A runtime S3 bucket still exists."
+    }
   }
   foreach ($repository in @($Snapshot.EcrRepositories)) {
     if (-not (Test-AwsResourceAbsent @(
       "ecr", "describe-repositories", "--repository-names", $repository,
       "--region", $script:ExpectedRegion, "--no-cli-pager"
-    ))) { throw "A runtime ECR repository still exists." }
+    ) "RepositoryNotFoundException")) {
+      throw "A runtime ECR repository still exists."
+    }
   }
   if (-not (Test-AwsResourceAbsent @(
     "cloudfront", "get-distribution", "--id", [string]$Snapshot.CloudFrontDistributionId,
     "--no-cli-pager"
-  ))) { throw "The runtime CloudFront distribution still exists." }
+  ) "NoSuchDistribution")) {
+    throw "The runtime CloudFront distribution still exists."
+  }
+  if (-not (Test-AwsResourceAbsent @(
+    "elbv2", "describe-load-balancers", "--load-balancer-arns", [string]$Snapshot.AlbArn,
+    "--region", $script:ExpectedRegion, "--no-cli-pager"
+  ) "LoadBalancerNotFound")) {
+    throw "The runtime ALB still exists."
+  }
+  if (-not (Test-AwsResourceAbsent @(
+    "rds", "describe-db-instances", "--db-instance-identifier", [string]$Snapshot.RdsIdentifier,
+    "--region", $script:ExpectedRegion, "--no-cli-pager"
+  ) "DBInstanceNotFound")) {
+    throw "The runtime RDS instance still exists."
+  }
+  foreach ($roleName in @($Snapshot.IamRoleNames)) {
+    if (-not (Test-AwsResourceAbsent @(
+      "iam", "get-role", "--role-name", $roleName, "--no-cli-pager"
+    ) "NoSuchEntity")) {
+      throw "A runtime IAM role still exists."
+    }
+  }
+  foreach ($logGroupName in @($Snapshot.LogGroupNames)) {
+    $logsJson = Invoke-Native "aws" @(
+      "logs", "describe-log-groups",
+      "--log-group-name-prefix", $logGroupName,
+      "--region", $script:ExpectedRegion,
+      "--output", "json",
+      "--no-cli-pager"
+    ) -Capture
+    $matchingLogs = @(
+      ($logsJson | ConvertFrom-Json).logGroups |
+        Where-Object { $_.logGroupName -eq $logGroupName }
+    )
+    if ($matchingLogs.Count -gt 0) {
+      throw "A runtime CloudWatch log group still exists."
+    }
+  }
+
   $clusterJson = Invoke-Native "aws" @(
     "ecs", "describe-clusters", "--clusters", [string]$Snapshot.EcsClusterName,
     "--region", $script:ExpectedRegion, "--output", "json", "--no-cli-pager"
   ) -Capture
-  $clusterStatus = [string](($clusterJson | ConvertFrom-Json).clusters[0].status)
-  if ($clusterStatus -eq "ACTIVE") { throw "The runtime ECS cluster is still active." }
-  $taggedJson = Invoke-Native "aws" @(
-    "resourcegroupstaggingapi", "get-resources",
-    "--tag-filters",
-    "Key=Project,Values=$($Snapshot.Project)",
-    "Key=Environment,Values=$($Snapshot.Environment)",
-    "--region", $script:ExpectedRegion,
-    "--output", "json",
-    "--no-cli-pager"
-  ) -Capture
-  $tagged = @((($taggedJson | ConvertFrom-Json).ResourceTagMappingList))
-  if ($tagged.Count -gt 0) {
-    throw "Tagged AWS runtime resources remain after destroy."
+  $activeClusters = @(
+    ($clusterJson | ConvertFrom-Json).clusters |
+      Where-Object { $_.status -eq "ACTIVE" }
+  )
+  if ($activeClusters.Count -gt 0) {
+    throw "The runtime ECS cluster is still active."
   }
+
+  for ($attempt = 1; $attempt -le 12; $attempt++) {
+    $taggedJson = Invoke-Native "aws" @(
+      "resourcegroupstaggingapi", "get-resources",
+      "--tag-filters",
+      "Key=Project,Values=$($Snapshot.Project)",
+      "Key=Environment,Values=$($Snapshot.Environment)",
+      "--region", $script:ExpectedRegion,
+      "--output", "json",
+      "--no-cli-pager"
+    ) -Capture
+    $tagged = @((($taggedJson | ConvertFrom-Json).ResourceTagMappingList))
+    if ($tagged.Count -eq 0) { return }
+    if ($attempt -lt 12) { Start-Sleep -Seconds 10 }
+  }
+  throw "Tagged AWS runtime resources remain after destroy."
 }
 
 function Invoke-Down {
@@ -633,6 +702,13 @@ function Invoke-Down {
     )
     CloudFrontDistributionId = Get-TerraformOutput "cloudfront_distribution_id"
     EcsClusterName = Get-TerraformOutput "ecs_cluster_name"
+    AlbArn = Get-TerraformOutput "alb_arn"
+    RdsIdentifier = Get-TerraformOutput "rds_identifier"
+    LogGroupNames = @(Get-TerraformJsonOutput "runtime_log_group_names")
+    IamRoleNames = @(
+      Get-TerraformJsonOutput "runtime_iam_role_arns" |
+        ForEach-Object { ([string]$_ -split "/")[-1] }
+    )
     Project = if ([string]::IsNullOrWhiteSpace($env:TF_VAR_project)) { "ragproject" } else { $env:TF_VAR_project }
     Environment = if ([string]::IsNullOrWhiteSpace($env:TF_VAR_environment)) { "demo" } else { $env:TF_VAR_environment }
   }
