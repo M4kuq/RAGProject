@@ -143,11 +143,11 @@ class S3DocumentStorage:
             )
             body = response.get("Body") if isinstance(response, dict) else None
             content_length = response.get("ContentLength") if isinstance(response, dict) else None
-            if isinstance(content_length, int) and content_length > self.max_bytes:
-                raise DocumentStorageError(error_category="invalid_response")
             if body is None or not hasattr(body, "read"):
                 raise DocumentStorageError(error_category="invalid_response")
             try:
+                if isinstance(content_length, int) and content_length > self.max_bytes:
+                    raise DocumentStorageError(error_category="invalid_response")
                 content: object = body.read(self.max_bytes + 1)
             finally:
                 close = getattr(body, "close", None)

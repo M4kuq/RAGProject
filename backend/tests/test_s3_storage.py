@@ -115,6 +115,7 @@ def test_s3_storage_enforces_materialized_size_limit(tmp_path: Path) -> None:
             pass
 
     assert exc_info.value.error_category == "invalid_response"
+    assert client.bodies[0].was_closed
 
 
 @pytest.mark.parametrize("error_code", ["NoSuchKey", "404"])
