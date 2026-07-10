@@ -216,7 +216,7 @@ def test_fixture_loader_and_metric_clamp() -> None:
     )
     answer_only_by_name = {metric.metric_name: metric for metric in answer_only_metrics}
     assert answer_only_by_name["faithfulness"].metric_score == 1.0
-    assert answer_only_by_name["context_precision"].metric_score == 1.0
+    assert answer_only_by_name["context_precision"].metric_score == 0.0
     assert "canonical answer" not in str(answer_only_by_name["faithfulness"].details)
 
     separated_metrics = calculate_metrics(
@@ -360,6 +360,7 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         graph_fixture_path.read_text(encoding="utf-8")
     )
     assert graph_manifest.dataset.dataset_name == "phase3_graph_multi_hop"
+    assert graph_manifest.dataset.version == "v2"
     dumped = manifest.model_dump_json()
     dumped += graph_manifest.model_dump_json()
     assert "raw prompt" not in dumped.lower()

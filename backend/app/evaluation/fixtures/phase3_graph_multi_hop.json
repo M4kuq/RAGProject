@@ -3,7 +3,7 @@
   "dataset": {
     "dataset_name": "phase3_graph_multi_hop",
     "description": "Safe synthetic GraphRAG multi-hop strategy comparison fixture.",
-    "version": "v1",
+    "version": "v2",
     "source_type": "fixture",
     "status": "active",
     "metadata_json": {

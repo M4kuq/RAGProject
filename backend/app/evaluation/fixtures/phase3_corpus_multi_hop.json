@@ -3,7 +3,7 @@
   "dataset": {
     "dataset_name": "phase3_corpus_multi_hop",
     "description": "Corpus-grounded multi-hop GraphRAG gold fixture for LLM paper and RAGProject self-doc comparisons.",
-    "version": "v1",
+    "version": "v2",
     "source_type": "fixture",
     "status": "active",
     "metadata_json": {

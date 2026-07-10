@@ -29,6 +29,9 @@ The fixture has 14 active cases:
 | LLM paper corpus | 6 | LLM-observed relations plus extracted canonical entity hubs |
 | RAGProject self docs | 8 | extracted relations plus canonical entity hubs |
 
+The fixture dataset version is `v2`; the manifest schema remains
+`phase2.evaluation_dataset.v1`.
+
 Every case includes:
 
 - `required_citation=true`

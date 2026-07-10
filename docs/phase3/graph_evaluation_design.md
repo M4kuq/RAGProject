@@ -84,7 +84,7 @@ fallback reason codes, and not-applicable reason codes.
 
 ## PR-53 Dataset
 
-`phase3_graph_multi_hop` is a small synthetic fixture for multi-hop GraphRAG
+`phase3_graph_multi_hop` version `v2` is a small synthetic fixture for multi-hop GraphRAG
 evaluation. It intentionally uses non-private demo concepts and safe metadata
 only.
 
