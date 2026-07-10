@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     login_rate_limit_max_keys: int = Field(default=10000, ge=100)
     trusted_proxy_ips: list[str] = Field(default_factory=list)
     storage_root: Path = Path("storage/uploads")
+    storage_backend: str = "local"
+    documents_bucket_name: str | None = None
+    documents_key_prefix: str = ""
     upload_max_bytes: int = 20 * 1024 * 1024
     upload_allowed_extensions: list[str] = Field(
         default_factory=lambda: [
@@ -401,6 +404,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
             )
+        self.storage_backend = self.storage_backend.strip().lower()
+        if self.storage_backend not in {"local", "s3"}:
+            raise ValueError("STORAGE_BACKEND must be local or s3")
+        self.documents_bucket_name = (
+            self.documents_bucket_name.strip() if self.documents_bucket_name else None
+        )
+        self.documents_key_prefix = self.documents_key_prefix.strip().strip("/")
+        if "\\" in self.documents_key_prefix or any(
+            part in {"", ".", ".."} for part in self.documents_key_prefix.split("/")
+        ):
+            raise ValueError("DOCUMENTS_KEY_PREFIX must be a safe relative prefix")
+        if self.storage_backend == "s3" and not self.documents_bucket_name:
+            raise ValueError("DOCUMENTS_BUCKET_NAME is required when STORAGE_BACKEND=s3")
         self.aws_region = self.aws_region.strip()
         if not self.aws_region:
             raise ValueError("AWS_REGION must not be empty")

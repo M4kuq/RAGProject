@@ -56,7 +56,7 @@ from app.services.source_locator_service import (
     source_side_for_chunk,
 )
 from app.services.url_fetch_service import UrlFetchResult, UrlFetchService, redact_url_for_display
-from app.storage.file_storage import LocalFileStorage
+from app.storage.file_storage import DocumentStorage, create_document_storage
 from app.storage.validators import safe_title_from_file_name, validate_upload
 
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -77,13 +77,13 @@ class DocumentService:
         self,
         repository: DocumentRepository | None = None,
         job_repository: JobRepository | None = None,
-        storage: LocalFileStorage | None = None,
+        storage: DocumentStorage | None = None,
         url_fetcher: UrlFetcher | None = None,
         graph_index_service: GraphIndexService | None = None,
     ) -> None:
         self.repository = repository or DocumentRepository()
         self.job_repository = job_repository or JobRepository()
-        self.storage = storage or LocalFileStorage()
+        self.storage = storage or create_document_storage()
         self.url_fetcher = url_fetcher or UrlFetchService()
         self.graph_index_service = graph_index_service or GraphIndexService()
 
