@@ -1,6 +1,6 @@
 # AWS ECS Fargate デプロイ手順
 
-この runbook は `deploy/AWS_ECS` branch の AWS demo stack を、アプリケーションソースコードを変更せずに配備するための手順です。CI は GitHub OIDC の短期認証だけを使い、静的 AWS access key は使いません。
+このrunbookは `deploy/AWS_ECS` branchのAWS demo stackと、Bedrock/S3対応済みアプリを配備する手順です。CIはGitHub OIDCの短期認証だけを使い、アプリはECS task roleのdefault credential chainを使います。静的AWS access keyは使いません。
 
 ## 1. 前提
 
@@ -168,7 +168,7 @@ terraform apply \
   -var='worker_desired_count=0'
 ```
 
-`worker_desired_count` は S3 document storage adapter がアプリ側に入るまで `0` を維持します。
+`worker_desired_count` はscale-to-zero既定で `0` です。upload/indexingを実行するときだけ `1` へ上げます。
 
 Qdrant は NFS/EFS ではなく、ECS service-managed EBS `gp3` volume を `/qdrant/storage` に mount します。EBS は block storage なので Qdrant の storage 要件に合いますが、ECS service が管理する volume は task replacement や scale-to-zero で削除されます。Qdrant collection は永続的な source of truth ではないため、task 置換、scale-to-zero 後、Bedrock adapter 有効化後は source documents から再indexしてください。
 
@@ -208,9 +208,9 @@ terraform output -raw cloudfront_domain_name
 
 schema migration 後の bootstrap seed は deploy workflow の one-off task で実行します。`--skip-document-indexing` を付けるため、ログインユーザー、システム設定、seed DB rows は作成しますが、Qdrant への document indexing は実行しません。
 
-現時点の ECS env は安全側の default として `GENERATION_PROVIDER=fake`、`EMBEDDING_PROVIDER=fake`、`RERANK_PROVIDER=none` です。fake embedding のまま document indexing すると、Titan V2 用の `document_chunks_bedrock_titan_v2` collection に fake vector が混ざります。
+ECS envは `GENERATION_PROVIDER=bedrock`、`EMBEDDING_PROVIDER=bedrock`、`RERANK_PROVIDER=bedrock`、`STORAGE_BACKEND=s3` です。モデルIDはTerraform変数から渡し、Titan Text Embeddings V2の1024次元を `document_chunks_bedrock_titan_v2` collectionと一致させます。
 
-Bedrock 3 adapter が揃ってから、Titan Text Embeddings V2 の 1024 次元に合わせて Qdrant collection を再作成または再index してください。
+Qdrantのservice-managed EBSはtask replacement/scale-to-zeroで削除されるため、S3 source documentsから再indexしてください。初回live smokeはAPI、Qdrant、workerを起動し、upload→worker ingest→検索→回答まで確認します。
 
 ## 11. Scale-to-zero / teardown
 
@@ -229,22 +229,25 @@ terraform apply \
 - Budget alert は `monthly_budget_limit_usd` と `budget_alert_email` で設定します。
 - 完全削除は `terraform destroy` ですが、RDS/S3 のデータ喪失を伴うため、実行前に必ず手動確認してください。
 
-## 12. 今回対象外のアプリコード前提
+## 12. 残る検証と制約
 
-この PR は deploy 配管だけを追加します。backend/frontend/worker のアプリケーションソースコードは変更しません。
+実装済み:
 
-残る前提:
+1. Bedrock Runtime Converseによる回答生成
+2. Titan Text Embeddings V2（1024次元）
+3. Bedrock Agent Runtime Rerank
+4. S3 document storageをAPI/workerで共有
+5. PostgreSQL job tableのlease/retry/status維持
 
-1. Bedrock 3 adapter
-   - 生成: Bedrock Converse
-   - 埋め込み: Titan Text Embeddings V2
-   - rerank: Bedrock Rerank
-2. S3 document storage adapter
-   - 現状は `LocalFileStorage` のみです。
-   - API task と worker task の local filesystem は共有されず、Fargate の `/tmp` は task replacement や redeploy で失われます。
-   - S3 storage adapter または durable 共有マウントが入るまで、この stack で document upload/indexing は非対応です。
-   - この adapter が入るまで `worker_desired_count=0` を維持し、API の upload flow も永続化されない前提で公開しないでください。
-3. Titan 次元での Qdrant 再index
-   - Titan V2 の 1024 次元 collection を本番データで作り直します。
+このPRで未実施:
 
-これらが揃うまでは、API は起動して疎通できますが、LLM 回答パスと worker ingestion は未完です。
+- 実AWS credentialを使う `terraform plan` / `apply`
+- sandbox accountでのBedrock model accessとlive invocation
+- S3 upload→worker ingest→Qdrant→回答のend-to-end smoke
+- task replacement後のS3/RDS保持とQdrant再index手順のlive確認
+
+既知の運用制約:
+
+- CloudFront→public ALB originはHTTPです。ALB SGはCloudFront managed prefix list、listenerはsecret origin headerで制限しますが、公開本番ではcustom domain + ACMによるHTTPS origin、またはCloudFront VPC origin/internal ALBへ移行してください。
+- Qdrant service-managed EBSはtask replacementやscale-to-zeroで削除されるため、S3からの再index前提です。
+- SQS/DLQは将来のwake-up通知用にpreprovisionしていますが、現行アプリは接続せず、PostgreSQL job tableがsource of truthです。

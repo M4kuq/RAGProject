@@ -10,16 +10,21 @@ locals {
     SESSION_COOKIE_SECURE       = "true"
     SESSION_COOKIE_SAMESITE     = "lax"
     STORAGE_ROOT                = "/tmp/ragproject/uploads"
+    STORAGE_BACKEND             = "s3"
     DOCUMENTS_BUCKET_NAME       = module.s3.documents_bucket_name
+    DOCUMENTS_KEY_PREFIX        = "source"
     QDRANT_COLLECTION_NAME      = "document_chunks_bedrock_titan_v2"
     QDRANT_DISTANCE             = "Cosine"
     QDRANT_CREATE_COLLECTION    = "true"
     QDRANT_REQUIRED             = "false"
     QDRANT_UPSERT_BATCH_SIZE    = "64"
     QDRANT_TIMEOUT_SECONDS      = "5"
-    GENERATION_PROVIDER         = "fake"
-    EMBEDDING_PROVIDER          = "fake"
-    RERANK_PROVIDER             = "none"
+    GENERATION_PROVIDER         = "bedrock"
+    GENERATION_MODEL_NAME       = var.bedrock_generation_model_id
+    EMBEDDING_PROVIDER          = "bedrock"
+    EMBEDDING_MODEL             = var.bedrock_embedding_model_id
+    RERANK_PROVIDER             = "bedrock"
+    RERANKER_MODEL              = var.bedrock_rerank_model_id
     BEDROCK_GENERATION_MODEL_ID = var.bedrock_generation_model_id
     BEDROCK_EMBEDDING_MODEL_ID  = var.bedrock_embedding_model_id
     BEDROCK_RERANK_MODEL_ID     = var.bedrock_rerank_model_id
@@ -30,7 +35,6 @@ locals {
     NEO4J_PROJECTION_ENABLED    = "false"
     LOG_LEVEL                   = "INFO"
     PII_MASKING_ENABLED         = "true"
-    JOB_QUEUE_URL               = module.sqs.queue_url
     AWS_REGION                  = var.region
   }
 }
