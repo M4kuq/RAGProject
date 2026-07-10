@@ -40,7 +40,12 @@ from app.db.models import (
     EvaluationCase as EvaluationCaseModel,
 )
 from app.db.session import get_db
-from app.evaluation.fixtures import EvaluationCase, EvaluationFixtureError, load_evaluation_cases
+from app.evaluation.fixtures import (
+    EvaluationCase,
+    EvaluationFixtureError,
+    evaluation_case_snapshot_hash,
+    load_evaluation_cases,
+)
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     RetrievedEvaluationItem,
@@ -213,6 +218,76 @@ def test_fixture_loader_and_metric_clamp() -> None:
     assert answer_only_by_name["faithfulness"].metric_score == 1.0
     assert answer_only_by_name["context_precision"].metric_score == 1.0
     assert "canonical answer" not in str(answer_only_by_name["faithfulness"].details)
+
+    separated_metrics = calculate_metrics(
+        EvaluationMetricInputs(
+            case=EvaluationCase(
+                case_id="separated_signals",
+                question="Which components are required?",
+                expected_keywords=("Qdrant",),
+                required_citation=True,
+                expected_chunk_ids=(11,),
+                metadata_json={"expected_answer_slots": ["PostgreSQL", "Qdrant"]},
+            ),
+            answer_text="PostgreSQL stores relational state.",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=11,
+                    source_label="architecture.md",
+                    snippet="Qdrant stores retrieval vectors.",
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=11,
+                    logical_document_id=7,
+                    rank_order=1,
+                    snippet="Qdrant stores retrieval vectors.",
+                )
+            ],
+        )
+    )
+    separated_by_name = {metric.metric_name: metric for metric in separated_metrics}
+    assert separated_by_name["recall_at_k"].metric_score == 1.0
+    assert separated_by_name["context_precision"].metric_score == 1.0
+    assert separated_by_name["faithfulness"].metric_score == 0.0
+    assert separated_by_name["answer_completeness"].metric_score == 0.5
+    assert separated_by_name["citation_presence"].metric_score == 1.0
+    assert separated_by_name["citation_correctness"].metric_score == 1.0
+    assert separated_by_name["citation_coverage"].metric_score == 1.0
+    assert "PostgreSQL" not in str(separated_by_name["answer_completeness"].details)
+    assert "Qdrant" not in str(separated_by_name["answer_completeness"].details)
+
+    snapshot_base = evaluation_case_snapshot_hash(
+        question="Which components are required?",
+        expected_answer=None,
+        expected_keywords=("Qdrant",),
+        expected_document_ids=(),
+        expected_chunk_ids=(11,),
+        required_citation=True,
+        metadata_json={"expected_answer_slots": ["Qdrant"]},
+    )
+    snapshot_changed = evaluation_case_snapshot_hash(
+        question="Which components are required?",
+        expected_answer=None,
+        expected_keywords=("Qdrant",),
+        expected_document_ids=(),
+        expected_chunk_ids=(11,),
+        required_citation=True,
+        metadata_json={"expected_answer_slots": ["PostgreSQL", "Qdrant"]},
+    )
+    assert snapshot_base != snapshot_changed
 
     with pytest.raises(ValueError):
         EvaluationRunCreateRequest(dataset_name="phase1.smoke", case_limit=1)
@@ -5113,3 +5188,4 @@ def _logout(client: TestClient) -> None:
         headers={"X-CSRF-Token": _session_csrf(client), "Origin": ALLOWED_ORIGIN},
     )
     assert response.status_code == 200
+
