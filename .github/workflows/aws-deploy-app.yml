@@ -7,6 +7,10 @@ on:
         description: "Container image tag. Leave empty to use the workflow commit SHA."
         required: false
         type: string
+      deployment_config:
+        description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,13 +44,53 @@ jobs:
     steps:
       - name: Check deploy branch
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/${DEPLOY_BRANCH}" ]; then
-            echo "This workflow is limited to refs/heads/${DEPLOY_BRANCH}."
+          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
+            echo "This workflow is limited to refs/heads/deploy/AWS_ECS."
             exit 1
           fi
 
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate image tag
+        shell: bash
+        run: |
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "image_tag is not a valid OCI tag."
+            exit 1
+          fi
+
+      - name: Apply lifecycle deployment config
+        if: \${{ inputs.deployment_config != '' }}
+        shell: bash
+        env:
+          DEPLOYMENT_CONFIG: \${{ inputs.deployment_config }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.api_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$")) and
+            (.worker_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$")) and
+            (.ecs_cluster_name | test("^[A-Za-z0-9_-]+$")) and
+            (.ecs_public_subnet_ids | type == "array" and length > 0 and all(.[]; test("^subnet-[0-9a-f]+$"))) and
+            (.ecs_app_security_group_id | test("^sg-[0-9a-f]+$")) and
+            (.ecs_api_service_name | test("^[A-Za-z0-9_-]+$")) and
+            (.ecs_worker_service_name | test("^[A-Za-z0-9_-]+$")) and
+            (.ecs_api_task_definition | test("^[A-Za-z0-9_-]+$")) and
+            (.ecs_worker_task_definition | test("^[A-Za-z0-9_-]+$")) and
+            (.ecs_migration_task_definition | test("^[A-Za-z0-9_-]+$"))
+          ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
+          {
+            echo "API_ECR_REPOSITORY_URL=$(jq -r '.api_ecr_repository_url' <<< "$DEPLOYMENT_CONFIG")"
+            echo "WORKER_ECR_REPOSITORY_URL=$(jq -r '.worker_ecr_repository_url' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_CLUSTER_NAME=$(jq -r '.ecs_cluster_name' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_PUBLIC_SUBNET_IDS_JSON=$(jq -c '.ecs_public_subnet_ids' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_APP_SECURITY_GROUP_ID=$(jq -r '.ecs_app_security_group_id' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_API_SERVICE_NAME=$(jq -r '.ecs_api_service_name' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_WORKER_SERVICE_NAME=$(jq -r '.ecs_worker_service_name' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_API_TASK_DEFINITION=$(jq -r '.ecs_api_task_definition' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_WORKER_TASK_DEFINITION=$(jq -r '.ecs_worker_task_definition' <<< "$DEPLOYMENT_CONFIG")"
+            echo "ECS_MIGRATION_TASK_DEFINITION=$(jq -r '.ecs_migration_task_definition' <<< "$DEPLOYMENT_CONFIG")"
+          } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

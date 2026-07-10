@@ -2,6 +2,11 @@ name: AWS Deploy Frontend
 
 on:
   workflow_dispatch:
+    inputs:
+      deployment_config:
+        description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,13 +35,30 @@ jobs:
       - name: Check deploy branch
         working-directory: .
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/${DEPLOY_BRANCH}" ]; then
-            echo "This workflow is limited to refs/heads/${DEPLOY_BRANCH}."
+          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
+            echo "This workflow is limited to refs/heads/deploy/AWS_ECS."
             exit 1
           fi
 
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Apply lifecycle deployment config
+        if: \${{ inputs.deployment_config != '' }}
+        working-directory: .
+        shell: bash
+        env:
+          DEPLOYMENT_CONFIG: \${{ inputs.deployment_config }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.frontend_bucket_name | test("^[a-z0-9.-]+$")) and
+            (.cloudfront_distribution_id | test("^[A-Z0-9]+$"))
+          ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
+          {
+            echo "FRONTEND_BUCKET_NAME=$(jq -r '.frontend_bucket_name' <<< "$DEPLOYMENT_CONFIG")"
+            echo "CLOUDFRONT_DISTRIBUTION_ID=$(jq -r '.cloudfront_distribution_id' <<< "$DEPLOYMENT_CONFIG")"
+          } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
