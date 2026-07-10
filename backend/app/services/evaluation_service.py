@@ -238,9 +238,7 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
         metric_name="answer_completeness",
         display_name="Answer completeness",
-        description=(
-            "Fraction of safe expected answer slots present in generated answer text."
-        ),
+        description="Fraction of safe expected answer slots present in generated answer text.",
         higher_is_better=True,
         value_unit="ratio",
         min_value=0.0,

@@ -65,7 +65,9 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         if not expected_answer_slots
         else _ratio(answer_slot_hits, len(expected_answer_slots))
     )
-    citation_presence = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
+    citation_presence = (
+        1.0 if not inputs.case.required_citation or inputs.citations else 0.0
+    )
     citation_correctness, citation_correctness_details = _citation_correctness(
         inputs.case,
         inputs.citations,
