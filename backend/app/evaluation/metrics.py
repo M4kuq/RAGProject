@@ -44,18 +44,12 @@ class EvaluationMetricInputs:
 
 
 def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
-    retrieved_items = sorted(
-        inputs.retrieved_items or [], key=lambda item: item.rank_order
-    )
+    retrieved_items = sorted(inputs.retrieved_items or [], key=lambda item: item.rank_order)
     retrieval_evidence_text = " ".join(item.snippet for item in retrieved_items)
     if not retrieval_evidence_text:
-        retrieval_evidence_text = " ".join(
-            citation.snippet for citation in inputs.citations
-        )
+        retrieval_evidence_text = " ".join(citation.snippet for citation in inputs.citations)
 
-    answer_keyword_hits = _keyword_hits(
-        inputs.answer_text, inputs.case.expected_keywords
-    )
+    answer_keyword_hits = _keyword_hits(inputs.answer_text, inputs.case.expected_keywords)
     answer_hit = _expected_answer_hit(inputs.answer_text, inputs.case)
     expected_answer_slots = _metadata_string_values(
         inputs.case.metadata_json,
@@ -67,22 +61,16 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     )
     faithfulness = _ratio(answer_keyword_hits + answer_hit, expected_signal_count)
     answer_completeness = (
-        None
-        if not expected_answer_slots
-        else _ratio(answer_slot_hits, len(expected_answer_slots))
+        None if not expected_answer_slots else _ratio(answer_slot_hits, len(expected_answer_slots))
     )
-    citation_presence = (
-        1.0 if not inputs.case.required_citation or inputs.citations else 0.0
-    )
+    citation_presence = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
     citation_correctness, citation_correctness_details = _citation_correctness(
         inputs.case,
         inputs.citations,
         retrieved_items,
     )
     selected_count = (
-        inputs.retrieval_summary.selected_count
-        if inputs.retrieval_summary is not None
-        else 0
+        inputs.retrieval_summary.selected_count if inputs.retrieval_summary is not None else 0
     )
     groundedness = (
         inputs.confidence.groundedness_score
@@ -115,9 +103,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         metadata_details["error_code"] = inputs.error_code
 
     recall = _recall_at_k(inputs.case, retrieved_items, retrieval_evidence_text)
-    first_rank = _first_relevant_rank(
-        inputs.case, retrieved_items, retrieval_evidence_text
-    )
+    first_rank = _first_relevant_rank(inputs.case, retrieved_items, retrieval_evidence_text)
     mrr = (
         None
         if _target_count(inputs.case) <= 0
@@ -196,9 +182,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metric_score=_clamp01(groundedness),
             metric_label=_label(groundedness),
             details={
-                "source": "rag_confidence"
-                if inputs.confidence
-                else "retrieval_presence",
+                "source": "rag_confidence" if inputs.confidence else "retrieval_presence",
                 "has_confidence": inputs.confidence is not None,
                 "selected_count": selected_count,
             },
@@ -258,9 +242,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metric_name="p95_latency",
             metric_score=None,
             metric_label="ms" if inputs.latency_ms is not None else "not_applicable",
-            metric_value=float(inputs.latency_ms)
-            if inputs.latency_ms is not None
-            else None,
+            metric_value=float(inputs.latency_ms) if inputs.latency_ms is not None else None,
             details={
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "unit": "ms",
@@ -306,9 +288,7 @@ def _expected_answer_hit(text: str, case: EvaluationCase) -> int:
 
 
 def _expected_signal_hits(text: str, case: EvaluationCase) -> int:
-    return _keyword_hits(text, case.expected_keywords) + _expected_answer_hit(
-        text, case
-    )
+    return _keyword_hits(text, case.expected_keywords) + _expected_answer_hit(text, case)
 
 
 def _citation_correctness(
@@ -348,9 +328,7 @@ def _citation_correctness(
         expected_chunk_ids = set(case.expected_chunk_ids)
         gold_source = "expected_chunk_ids"
         matching_citation_count = sum(
-            1
-            for citation in citations
-            if citation.document_chunk_id in expected_chunk_ids
+            1 for citation in citations if citation.document_chunk_id in expected_chunk_ids
         )
     elif case.expected_document_ids:
         document_id_by_chunk_id = {
@@ -373,8 +351,7 @@ def _citation_correctness(
         matching_citation_count = sum(
             1
             for citation in citations
-            if document_id_by_chunk_id.get(citation.document_chunk_id)
-            in expected_document_ids
+            if document_id_by_chunk_id.get(citation.document_chunk_id) in expected_document_ids
         )
     elif case.expected_keywords:
         gold_source = "expected_keywords"
@@ -438,9 +415,7 @@ def _recall_at_k(
     expected_count = _target_count(case)
     if expected_count <= 0:
         return None
-    return _ratio(
-        _matched_target_count(case, retrieved_items, evidence_text), expected_count
-    )
+    return _ratio(_matched_target_count(case, retrieved_items, evidence_text), expected_count)
 
 
 def _target_count(case: EvaluationCase) -> int:
@@ -503,15 +478,10 @@ def _first_relevant_rank(
     if case.expected_keywords:
         for item in retrieved_items:
             haystack = item.snippet.casefold()
-            if any(
-                keyword.casefold() in haystack for keyword in case.expected_keywords
-            ):
+            if any(keyword.casefold() in haystack for keyword in case.expected_keywords):
                 return item.rank_order
         return None
-    if (
-        case.expected_answer
-        and case.expected_answer.casefold() in evidence_text.casefold()
-    ):
+    if case.expected_answer and case.expected_answer.casefold() in evidence_text.casefold():
         return retrieved_items[0].rank_order
     return None
 
@@ -546,9 +516,7 @@ def _ratio(numerator: int, denominator: int) -> float:
     return _clamp01(numerator / denominator)
 
 
-def _context_precision(
-    *, evidence_text: str, selected_count: int, keyword_hits: int
-) -> float:
+def _context_precision(*, evidence_text: str, selected_count: int, keyword_hits: int) -> float:
     if selected_count <= 0:
         return 0.0
     if not evidence_text.strip():
