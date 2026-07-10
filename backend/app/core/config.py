@@ -630,10 +630,7 @@ class Settings(BaseSettings):
                 "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, "
                 "gemini, or bedrock"
             )
-        if (
-            self.generation_provider == "bedrock"
-            and "generation_model_name" not in self.model_fields_set
-        ):
+        if self.generation_provider == "bedrock":
             self.generation_model_name = self.bedrock_generation_model_id
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
