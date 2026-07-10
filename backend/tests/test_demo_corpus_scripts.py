@@ -58,6 +58,33 @@ def test_demo_corpus_manifest_rejects_paths_outside_repo(tmp_path: Path) -> None
         raise AssertionError("outside repo paths must be rejected")
 
 
+
+def test_demo_corpus_client_applies_basic_auth_header() -> None:
+    client = DemoCorpusApiClient(
+        base_url="https://example.test",
+        admin_email="admin@example.com",
+        admin_password="not-used",
+        origin="https://example.test",
+        timeout_seconds=0.1,
+        basic_auth_header="Basic ZGVtby11c2VyOnBhc3N3b3Jk",
+    )
+    try:
+        assert client.client.headers["Authorization"] == "Basic ZGVtby11c2VyOnBhc3N3b3Jk"
+    finally:
+        client.close()
+
+
+def test_demo_corpus_client_rejects_non_basic_authorization() -> None:
+    with pytest.raises(DemoCorpusError, match="basic_auth_header_must_use_basic_scheme"):
+        DemoCorpusApiClient(
+            base_url="https://example.test",
+            admin_email="admin@example.com",
+            admin_password="not-used",
+            origin="https://example.test",
+            timeout_seconds=0.1,
+            basic_auth_header="Bearer must-not-be-used",
+        )
+
 def test_ingest_demo_corpus_dry_run_does_not_require_api_login() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     entries = load_manifest(repo_root / "docs/demo/corpus_manifest.json", repo_root=repo_root)[:2]
