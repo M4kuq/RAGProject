@@ -44,6 +44,8 @@ env:
   TF_VAR_environment: demo
   TF_VAR_github_oidc_repo: \${{ github.repository }}
   TF_VAR_github_deploy_branch: deploy/AWS_ECS
+  TF_VAR_create_github_oidc_provider: "false"
+  TF_VAR_github_oidc_provider_arn: ${{ vars.GITHUB_OIDC_PROVIDER_ARN }}
   TF_VAR_database_url_secret_arn: \${{ vars.DATABASE_URL_SECRET_ARN }}
   TF_VAR_session_secret_arn: \${{ vars.SESSION_SECRET_ARN }}
   TF_VAR_basic_auth_username: \${{ vars.BASIC_AUTH_USERNAME }}
@@ -58,7 +60,7 @@ jobs:
   lifecycle:
     name: \${{ inputs.command }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
 
     steps:
       - name: Restrict branch

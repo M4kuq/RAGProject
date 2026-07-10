@@ -126,6 +126,8 @@ function Assert-BackendEnvironment {
     "TF_LOCK_TABLE",
     "TF_VAR_github_oidc_repo",
     "TF_VAR_github_deploy_branch",
+    "TF_VAR_create_github_oidc_provider",
+    "TF_VAR_github_oidc_provider_arn",
     "TF_VAR_database_url_secret_arn",
     "TF_VAR_session_secret_arn",
     "TF_VAR_basic_auth_username",
@@ -137,6 +139,9 @@ function Assert-BackendEnvironment {
   }
   if ($env:TF_VAR_region -ne $script:ExpectedRegion) {
     throw "TF_VAR_region must be $script:ExpectedRegion."
+  }
+  if ($env:TF_VAR_create_github_oidc_provider -ne "false") {
+    throw "The lifecycle requires an external bootstrap OIDC provider."
   }
 }
 
@@ -156,6 +161,27 @@ function Initialize-DemoTerraform {
     Invoke-Native "terraform" @("validate")
   } finally {
     Pop-Location
+  }
+}
+
+function Assert-PlanPreservesBootstrapIdentity {
+  param([Parameter(Mandatory = $true)][string]$PlanPath)
+  Push-Location $script:TerraformDirectory
+  try {
+    $plan = (Invoke-Native "terraform" @("show", "-json", $PlanPath) -Capture) | ConvertFrom-Json
+  } finally {
+    Pop-Location
+  }
+  $providerChanges = @(
+    $plan.resource_changes |
+      Where-Object {
+        $_.address -match "aws_iam_openid_connect_provider" -and
+        (@($_.change.actions) -join ",") -ne "no-op"
+      }
+  )
+  if ($providerChanges.Count -gt 0) {
+    Remove-Item -LiteralPath $PlanPath -Force -ErrorAction SilentlyContinue
+    throw "Runtime plans must not create or destroy the bootstrap GitHub OIDC provider."
   }
 }
 
@@ -224,6 +250,7 @@ function New-DemoPlan {
   } finally {
     Pop-Location
   }
+  Assert-PlanPreservesBootstrapIdentity $PlanPath
   Write-PlanManifest $PlanPath $ManifestPath $Kind $Context
 }
 
@@ -723,6 +750,7 @@ function Invoke-Down {
   } finally {
     Pop-Location
   }
+  Assert-PlanPreservesBootstrapIdentity $script:DestroyPlanPath
   Write-PlanManifest $script:DestroyPlanPath $script:DestroyManifestPath "runtime-destroy" $context
   Assert-SavedPlan $script:DestroyPlanPath $script:DestroyManifestPath "runtime-destroy" $context
   Write-Step "apply exact destroy plan; bootstrap state and lock resources are outside this stack"

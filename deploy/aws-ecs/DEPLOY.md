@@ -296,7 +296,7 @@ The `AWS Demo Lifecycle` workflow is `workflow_dispatch` only and is hard-bound 
 repo:<OWNER>/<REPO>:ref:refs/heads/deploy/AWS_ECS
 ```
 
-Also configure `AWS_DEMO_ALLOWED_ACCOUNT_IDS`, the remote-state variables, the existing Terraform variables/secrets, and these runtime secrets: `BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD`. The lifecycle role must be limited to this sandbox stack and must be able to create and destroy the root Terraform resources, update the external database URL secret, and read the bootstrap state/lock resources.
+Also configure `GITHUB_OIDC_PROVIDER_ARN` for the separately managed provider, `AWS_DEMO_ALLOWED_ACCOUNT_IDS`, the remote-state variables, the existing Terraform variables/secrets, and these runtime secrets: `BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD`. The root tfvars must set `create_github_oidc_provider = false`; the script inspects saved plan JSON and rejects any runtime plan that would create or destroy the bootstrap provider. The lifecycle role must be limited to this sandbox stack and must be able to create and destroy the root Terraform resources, update the external database URL secret, and read the bootstrap state/lock resources.
 
 The credential-free test is:
 

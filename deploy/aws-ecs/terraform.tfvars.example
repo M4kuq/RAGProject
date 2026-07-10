@@ -4,9 +4,9 @@ environment = "demo"
 
 github_oidc_repo     = "OWNER/REPO"
 github_deploy_branch = "deploy/AWS_ECS"
-# Set false when the account already has token.actions.githubusercontent.com.
-create_github_oidc_provider = true
-# github_oidc_provider_arn = "REPLACE_WITH_EXISTING_GITHUB_OIDC_PROVIDER_ARN"
+# The lifecycle role and provider are bootstrap prerequisites outside the runtime root stack.
+create_github_oidc_provider = false
+github_oidc_provider_arn = "REPLACE_WITH_EXISTING_GITHUB_OIDC_PROVIDER_ARN"
 
 api_image_tag    = "placeholder"
 worker_image_tag = "placeholder"
