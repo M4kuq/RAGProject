@@ -9,6 +9,7 @@ from app.core.config import Settings
 class McpSettings:
     enabled: bool
     transport: str
+    http_api_key: str | None
     local_only: bool
     actor_mode: str
     snippet_max_chars: int
@@ -26,6 +27,7 @@ def get_mcp_settings(settings: Settings | None = None) -> McpSettings:
     mcp_settings = McpSettings(
         enabled=source.mcp_enabled,
         transport=source.mcp_transport,
+        http_api_key=source.mcp_http_api_key,
         local_only=source.mcp_local_only,
         actor_mode=source.mcp_actor_mode,
         snippet_max_chars=source.mcp_snippet_max_chars,
@@ -42,8 +44,10 @@ def get_mcp_settings(settings: Settings | None = None) -> McpSettings:
 
 
 def validate_mcp_settings(settings: McpSettings) -> None:
-    if settings.transport != "stdio":
-        raise ValueError("remote MCP transports are not implemented in Phase1")
+    if settings.transport not in {"stdio", "http"}:
+        raise ValueError("MCP_TRANSPORT must be stdio or http")
+    if settings.transport == "http" and not settings.http_api_key:
+        raise ValueError("MCP_HTTP_API_KEY is required when MCP_TRANSPORT=http")
     if not settings.local_only:
         raise ValueError("MCP must remain local-only in Phase1")
     if settings.actor_mode != "mcp_local":

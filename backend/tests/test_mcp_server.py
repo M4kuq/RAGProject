@@ -145,8 +145,19 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_allow_write_tools=True)
     with pytest.raises(ValueError, match="MCP_LOCAL_ONLY"):
         Settings(_env_file=None, app_env="test", mcp_local_only=False)
-    with pytest.raises(ValueError, match="MCP_TRANSPORT"):
+    http_settings = get_mcp_settings(
+        Settings(
+            _env_file=None,
+            app_env="test",
+            mcp_transport="http",
+            mcp_http_api_key="test-mcp-key",
+        ),
+    )
+    assert http_settings.transport == "http"
+    with pytest.raises(ValueError, match="MCP_HTTP_API_KEY"):
         Settings(_env_file=None, app_env="test", mcp_transport="http")
+    with pytest.raises(ValueError, match="MCP_TRANSPORT"):
+        Settings(_env_file=None, app_env="test", mcp_transport="sse")
     with pytest.raises(ValueError, match="MCP_ACTOR_MODE"):
         Settings(_env_file=None, app_env="test", mcp_actor_mode="admin")
     with pytest.raises(ValueError):
