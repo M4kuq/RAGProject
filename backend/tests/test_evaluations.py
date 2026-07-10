@@ -72,6 +72,7 @@ from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSea
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import (
+    DEFAULT_EVALUATION_METRICS,
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
     EvaluationDatasetManifest,
@@ -154,6 +155,9 @@ def evaluation_client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
 
 
 def test_fixture_loader_and_metric_clamp() -> None:
+    default_request = EvaluationRunCreateRequest()
+    assert default_request.metrics == list(DEFAULT_EVALUATION_METRICS)
+
     cases = load_evaluation_cases("phase1_smoke", case_limit=1)
     assert [case.case_id for case in cases] == ["phase1_seed_stack"]
 
@@ -935,8 +939,11 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "recall_at_k",
                 "mrr",
                 "citation_coverage",
+                "citation_presence",
+                "citation_correctness",
                 "groundedness",
                 "faithfulness",
+                "answer_completeness",
                 "no_context_rate",
                 "p95_latency",
                 "strategy_selection_accuracy",
@@ -2549,12 +2556,14 @@ def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
             "acceptable_strategies": ["graph", "hybrid"],
             "expected_entity_labels": ["FastAPI", "PostgreSQL", "FastAPI"],
             "expected_relation_types": ["uses", "stores"],
+            "expected_answer_slots": ["PostgreSQL", "Qdrant", "PostgreSQL"],
             "required_hop_count": 2,
         },
     )
 
     assert metadata["expected_entity_labels"] == ["FastAPI", "PostgreSQL"]
     assert metadata["expected_relation_types"] == ["uses", "stores"]
+    assert metadata["expected_answer_slots"] == ["PostgreSQL", "Qdrant"]
     assert metadata["required_hop_count"] == 2
 
 

@@ -414,7 +414,7 @@ class EvaluationRunCreateRequest(BaseModel):
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
-        max_length=20,
+        max_length=32,
     )
     cache_modes: list[EvaluationCacheMode] | None = Field(
         default=None,

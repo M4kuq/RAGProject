@@ -149,7 +149,11 @@ PROVIDER_SKIP_BASE_METRICS = frozenset(
         "no_context_rate",
     }
 )
-GRAPH_PROMOTION_STRING_HINT_KEYS = ("expected_entity_labels", "expected_relation_types")
+GRAPH_PROMOTION_STRING_HINT_KEYS = (
+    "expected_entity_labels",
+    "expected_relation_types",
+    "expected_answer_slots",
+)
 GRAPH_PROMOTION_INT_HINT_KEYS = ("required_hop_count",)
 GRAPH_PROMOTION_HINT_FORBIDDEN_PARTS = (
     "api_key",
