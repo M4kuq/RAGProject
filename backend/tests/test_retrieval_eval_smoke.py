@@ -645,6 +645,37 @@ def test_threshold_uses_p95_latency_value() -> None:
     ]
 
 
+def test_threshold_checks_graph_quality_metrics() -> None:
+    artifact: dict[str, object] = {
+        "summary": {"failed_count": 0},
+        "metrics_by_strategy": [
+            {
+                "strategy": "graph_postgres",
+                "metrics": {
+                    "graph_path_relevance": {"average": 0.2},
+                    "graph_citation_coverage": {"average": 1.0},
+                    "multi_hop_answerability": {"average": 0.0},
+                },
+            }
+        ],
+    }
+    result = evaluate_thresholds(
+        artifact,
+        SmokeThresholds(
+            graph_path_relevance_min=0.7,
+            graph_citation_coverage_min=0.9,
+            multi_hop_answerability_min=1.0,
+        ),
+        "fail",
+    )
+
+    assert result.passed is False
+    assert [item["metric"] for item in result.violations] == [
+        "graph_path_relevance",
+        "multi_hop_answerability",
+    ]
+
+
 def test_threshold_flags_failed_evaluation_items() -> None:
     artifact: dict[str, object] = {
         "summary": {"failed_count": 2},
@@ -759,3 +790,4 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
             pytest.skip("local wrapper scripts are not copied into the backend Docker test image")
         wrapper = wrapper_path.read_text(encoding="utf-8")
         assert 'uv run --with "sentence-transformers>=2.7.0,<4" python' in wrapper
+

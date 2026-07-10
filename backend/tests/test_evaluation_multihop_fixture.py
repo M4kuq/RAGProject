@@ -71,6 +71,8 @@ def test_phase3_corpus_multi_hop_fixture_loads_with_required_metadata() -> None:
         assert _string_list(raw_relation_types)
         assert isinstance(raw_relation_types, list)
         assert set(raw_relation_types).issubset(EMITTED_RELATION_TYPES)
+        raw_answer_slots = case.metadata_json.get("expected_answer_slots")
+        assert _non_empty_string_list(raw_answer_slots)
         if "paper" in case.tags:
             assert raw_relation_types
             assert set(raw_relation_types).issubset(LLM_OBSERVED_RELATION_TYPES)
@@ -304,3 +306,4 @@ def _iter_manifest_texts() -> Iterator[tuple[str, str]]:
         path = REPO_ROOT / source_path
         if path.is_file():
             yield source_path, path.read_text(encoding="utf-8")
+

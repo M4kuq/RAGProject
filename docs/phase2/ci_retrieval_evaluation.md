@@ -101,6 +101,9 @@ Supported threshold fields include:
 - `budget_exhausted_rate_max`
 - `sufficiency_score_avg_min`
 - `retrieval_call_count_avg_max`
+- `graph_path_relevance_min`
+- `graph_citation_coverage_min`
+- `multi_hop_answerability_min`
 
 In `warn` mode, threshold violations and failed evaluation items are written to the JSON artifact and Markdown summary, but the workflow exits successfully. In `fail` mode, threshold violations or any failed evaluation item make the script exit non-zero after artifacts and summary are written. The `p95_latency_ms_max` threshold is compared against each strategy's p95 value, not its mean latency.
 
@@ -144,3 +147,4 @@ smoke script attaches only a safe export status to artifacts by default, and
 external LangSmith export remains disabled unless explicit trace export settings
 and a secret are provided. Production online evaluation, alerting, and trace
 sampling remain separate later work.
+

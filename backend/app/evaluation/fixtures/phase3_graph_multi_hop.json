@@ -25,6 +25,7 @@
         "acceptable_strategies": ["graph", "hybrid"],
         "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
         "expected_relation_types": ["uses", "stores"],
+        "expected_answer_slots": ["PostgreSQL", "Qdrant"],
         "required_hop_count": 2
       },
       "status": "active"
@@ -43,6 +44,7 @@
         "acceptable_strategies": ["graph", "agentic_router"],
         "expected_entity_labels": ["worker", "retrieval cache"],
         "expected_relation_types": ["records", "evaluates"],
+        "expected_answer_slots": ["worker", "retrieval cache"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -50,3 +52,4 @@
   ],
   "metric_specs": []
 }
+

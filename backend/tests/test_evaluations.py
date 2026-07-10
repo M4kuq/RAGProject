@@ -315,6 +315,7 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "acceptable_strategies": ["graph", "hybrid"],
         "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
         "expected_relation_types": ["uses", "stores"],
+        "expected_answer_slots": ["PostgreSQL", "Qdrant"],
         "required_hop_count": 2,
     }
 
@@ -333,8 +334,11 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "recall_at_k",
         "mrr",
         "citation_coverage",
+        "citation_presence",
+        "citation_correctness",
         "groundedness",
         "faithfulness",
+        "answer_completeness",
         "no_context_rate",
         "p95_latency",
         "strategy_selection_accuracy",

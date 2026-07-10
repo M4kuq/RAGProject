@@ -118,6 +118,9 @@ class SmokeThresholds:
     budget_exhausted_rate_max: float = 1.0
     sufficiency_score_avg_min: float = 0.0
     retrieval_call_count_avg_max: float = 3.0
+    graph_path_relevance_min: float = 0.0
+    graph_citation_coverage_min: float = 0.0
+    multi_hop_answerability_min: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -609,6 +612,9 @@ def evaluate_thresholds(
         "budget_exhausted_rate": ("max", thresholds.budget_exhausted_rate_max),
         "sufficiency_score_avg": ("min", thresholds.sufficiency_score_avg_min),
         "retrieval_call_count_avg": ("max", thresholds.retrieval_call_count_avg_max),
+        "graph_path_relevance": ("min", thresholds.graph_path_relevance_min),
+        "graph_citation_coverage": ("min", thresholds.graph_citation_coverage_min),
+        "multi_hop_answerability": ("min", thresholds.multi_hop_answerability_min),
     }
     violations: list[dict[str, object]] = []
     summary = _dict_or_empty(artifact.get("summary"))
@@ -1355,3 +1361,4 @@ def _redact_string(value: str) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

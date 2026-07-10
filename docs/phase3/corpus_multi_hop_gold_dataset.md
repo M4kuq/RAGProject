@@ -36,6 +36,12 @@ Every case includes:
 - `metadata_json.acceptable_strategies`
 - `metadata_json.expected_entity_labels`
 - `metadata_json.expected_relation_types`
+- `metadata_json.expected_answer_slots`
+
+`expected_answer_slots` are short safe terms that must appear in the generated
+answer text, not merely in retrieved snippets or citations. They catch cases
+where Graph retrieval finds the right path but generation omits the relation
+target or another essential answer element.
 
 Paper cases now use non-empty `expected_relation_types` based on the #82 LLM
 graph extraction validation. The old deterministic rule-based extractor still
@@ -85,10 +91,11 @@ conservative because LLM extraction is non-deterministic.
 
 `graph_path_relevance` uses intersection scoring: expected entity labels and
 expected relation types receive credit when the observed graph path contains a
-matching safe label or type. The corpus eval runbook remains a manual/demo
-workflow with warn thresholds so LLM non-determinism does not make CI flaky. CI
-continues to use Fake paths and fixture/schema/metric-logic tests; it does not
-require a live LLM graph index or the full corpus index.
+matching safe label or type. `answer_completeness` matches `expected_answer_slots` against answer text only.\n`faithfulness` now checks expected keyword or answer signals against generated\nanswer text only, so retrieved snippets cannot inflate generation quality.
+The corpus eval runbook remains a manual/demo workflow with warn thresholds so
+LLM non-determinism does not make CI flaky. CI continues to use Fake paths and
+fixture/schema/metric-logic tests; it does not require a live LLM graph index or
+the full corpus index.
 
 Paper multi-source hubs used by the fixture:
 
@@ -318,3 +325,4 @@ This C2 dataset update records the LLM-observed paper relation behavior without
 making CI depend on a live LLM, full corpus indexing, or a specific local DB
 state. Future scoring changes should keep the same redaction boundary: safe
 labels, relation types, hashes, IDs, counts, and aggregate metrics only.
+

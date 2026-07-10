@@ -119,6 +119,7 @@ Future datasets should include safe synthetic or demo cases with:
 
 - explicit entity names
 - relation labels
+- answer slots for relation targets or other required answer elements
 - multi-hop expected paths
 - version-specific comparisons
 - no-context graph queries
@@ -167,3 +168,4 @@ Graph evaluation reports should include:
 - graph path citation coverage
 
 They should not include raw evidence payloads.
+
