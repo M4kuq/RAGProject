@@ -270,7 +270,11 @@ class BedrockTitanEmbeddingAdapter:
                 ),
             )
             body = response.get("body") if isinstance(response, dict) else None
-            raw_payload = body.read() if hasattr(body, "read") else None
+            if body is None or not hasattr(body, "read"):
+                raise ValueError("Bedrock response body is missing")
+            raw_payload: object = body.read()
+            if not isinstance(raw_payload, (str, bytes, bytearray)):
+                raise ValueError("Bedrock response body is invalid")
             payload = json.loads(raw_payload)
         except (TypeError, ValueError) as exc:
             raise EmbeddingAdapterError(error_category="invalid_response") from exc

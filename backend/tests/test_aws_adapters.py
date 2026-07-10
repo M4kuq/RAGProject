@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -67,7 +67,7 @@ class _Rerank:
 
 
 def _settings(**updates: object) -> Settings:
-    return Settings(_env_file=None, **updates)
+    return Settings(_env_file=None, **cast(Any, updates))
 
 
 def _request() -> GenerationRequest:
@@ -137,7 +137,7 @@ def test_bedrock_titan_embedding_maps_request_and_vector() -> None:
         client=client,
     )
     assert adapter.embed_texts(["alpha"]) == [vector]
-    body = json.loads(client.calls[0][1]["body"])
+    body = json.loads(cast(str, client.calls[0][1]["body"]))
     assert body == {"inputText": "alpha", "dimensions": 256, "normalize": True}
 
 
@@ -174,8 +174,9 @@ def test_bedrock_rerank_maps_original_indexes() -> None:
     ]
     results = reranker.rerank(query="query", candidates=candidates)
     assert [item.document_chunk_id for item in results] == [20, 10]
-    model = client.calls[0]["rerankingConfiguration"]
-    assert model["bedrockRerankingConfiguration"]["modelConfiguration"] == {
+    configuration = cast(dict[str, Any], client.calls[0]["rerankingConfiguration"])
+    bedrock_configuration = cast(dict[str, Any], configuration["bedrockRerankingConfiguration"])
+    assert bedrock_configuration["modelConfiguration"] == {
         "modelArn": ("arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.rerank-v1:0")
     }
 
