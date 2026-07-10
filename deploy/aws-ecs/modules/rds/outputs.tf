@@ -18,3 +18,8 @@ output "master_user_secret_arn" {
   value       = one(aws_db_instance.this.master_user_secret[*].secret_arn)
   sensitive   = true
 }
+
+output "identifier" {
+  description = "RDS instance identifier."
+  value       = aws_db_instance.this.identifier
+}

@@ -103,3 +103,33 @@ output "github_deploy_role_arn" {
   description = "GitHub OIDC deploy role ARN."
   value       = module.iam.github_deploy_role_arn
 }
+
+output "alb_arn" {
+  description = "ALB ARN used for post-destroy verification."
+  value       = module.alb.arn
+}
+
+output "rds_identifier" {
+  description = "RDS instance identifier used for post-destroy verification."
+  value       = module.rds.identifier
+}
+
+output "runtime_log_group_names" {
+  description = "CloudWatch log groups owned by this runtime stack."
+  value = [
+    module.observability.api_log_group_name,
+    module.observability.worker_log_group_name,
+    module.observability.qdrant_log_group_name,
+  ]
+}
+
+output "runtime_iam_role_arns" {
+  description = "IAM roles owned by this runtime stack."
+  value = [
+    module.iam.github_deploy_role_arn,
+    module.iam.ecs_task_execution_role_arn,
+    module.iam.ecs_task_role_arn,
+    module.iam.qdrant_task_role_arn,
+    module.iam.ecs_infrastructure_role_arn,
+  ]
+}
