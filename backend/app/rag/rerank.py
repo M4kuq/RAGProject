@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from app.aws.client import aws_error_category, bedrock_model_arn, create_aws_client
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class RerankError(RuntimeError):
@@ -14,9 +18,12 @@ class RerankError(RuntimeError):
         self,
         error_code: str = "rerank_failed",
         message: str = "Rerank failed.",
+        *,
+        error_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        self.error_category = error_category
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,86 @@ class LocalRerankerClient:
         return self._model
 
 
+class BedrockRerankerClient:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        model_name: str,
+        client: Any | None = None,
+    ) -> None:
+        self.model_arn = bedrock_model_arn(model_name, settings.aws_region)
+        self.client = client or create_aws_client("bedrock-agent-runtime", settings)
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: Sequence[RerankCandidate],
+    ) -> list[RerankResult]:
+        if not query.strip():
+            raise RerankError(error_category="invalid_request")
+        if not candidates:
+            return []
+        try:
+            payload = self.client.rerank(
+                queries=[{"type": "TEXT", "textQuery": {"text": query}}],
+                sources=[
+                    {
+                        "type": "INLINE",
+                        "inlineDocumentSource": {
+                            "type": "TEXT",
+                            "textDocument": {"text": candidate.text},
+                        },
+                    }
+                    for candidate in candidates
+                ],
+                rerankingConfiguration={
+                    "type": "BEDROCK_RERANKING_MODEL",
+                    "bedrockRerankingConfiguration": {
+                        "numberOfResults": len(candidates),
+                        "modelConfiguration": {"modelArn": self.model_arn},
+                    },
+                },
+            )
+        except Exception as exc:
+            category = aws_error_category(exc)
+            logger.warning(
+                "bedrock rerank failed",
+                extra={"error_category": category},
+            )
+            raise RerankError(error_category=category) from exc
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(results, list) or len(results) != len(candidates):
+            raise RerankError(error_category="invalid_response")
+        mapped: list[tuple[int, float]] = []
+        seen: set[int] = set()
+        for item in results:
+            index = item.get("index") if isinstance(item, dict) else None
+            score = item.get("relevanceScore") if isinstance(item, dict) else None
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 0
+                or index >= len(candidates)
+                or index in seen
+                or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+            ):
+                raise RerankError(error_category="invalid_response")
+            seen.add(index)
+            mapped.append((index, float(score)))
+        return [
+            RerankResult(
+                document_chunk_id=candidates[index].document_chunk_id,
+                rerank_score=score,
+                rerank_order=order,
+            )
+            for order, (index, score) in enumerate(mapped, start=1)
+        ]
+
+
 def create_reranker(settings: Settings) -> RerankerClient:
     if settings.rerank_provider == "none":
         return NoopRerankerClient()
@@ -152,6 +239,11 @@ def create_reranker(settings: Settings) -> RerankerClient:
             model_name=settings.reranker_model,
             score_min=settings.rerank_score_min,
             score_max=settings.rerank_score_max,
+        )
+    if settings.rerank_provider == "bedrock":
+        return BedrockRerankerClient(
+            settings=settings,
+            model_name=settings.bedrock_rerank_model_id,
         )
     raise RerankError()
 

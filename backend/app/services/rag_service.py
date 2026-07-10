@@ -2786,7 +2786,7 @@ class RagService:
         if provider == "google":
             provider = "gemini"
         if (
-            provider not in {"lmstudio", "openai", "anthropic", "gemini"}
+            provider not in {"lmstudio", "openai", "anthropic", "gemini", "bedrock"}
             or not separator
             or not model_name
         ):

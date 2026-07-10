@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
+from app.aws.client import aws_error_category, create_aws_client
 from app.core.config import Settings
 from app.rag.insufficient import is_insufficient_evidence_answer
 
@@ -440,6 +441,54 @@ class GeminiAnswerGenerator:
         )
 
 
+class BedrockConverseAnswerGenerator:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        model_name: str,
+        max_output_tokens: int,
+        client: Any | None = None,
+    ) -> None:
+        self.model_name = model_name
+        self.max_output_tokens = max_output_tokens
+        self.client = client or create_aws_client("bedrock-runtime", settings)
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        if not request.context_items:
+            raise AnswerGenerationError()
+        inference_config: dict[str, float | int] = {
+            "maxTokens": _request_max_output_tokens(request, self.max_output_tokens)
+        }
+        if request.temperature is not None:
+            inference_config["temperature"] = request.temperature
+        try:
+            payload = self.client.converse(
+                modelId=self.model_name,
+                system=[{"text": _system_instructions(request)}],
+                messages=[
+                    {"role": "user", "content": [{"text": _openai_input(request)}]}
+                ],
+                inferenceConfig=inference_config,
+            )
+        except Exception as exc:
+            category = aws_error_category(exc)
+            logger.warning(
+                "bedrock answer generation failed",
+                extra={"error_category": category},
+            )
+            raise AnswerGenerationError(error_category=category) from exc
+        if not isinstance(payload, dict):
+            raise AnswerGenerationError(error_category="invalid_response")
+        content = _extract_bedrock_output_text(payload)
+        if not content:
+            raise AnswerGenerationError(error_category="invalid_response")
+        return GenerationResult(
+            content=_generation_output_text(content, request),
+            usage=_extract_bedrock_usage(payload),
+        )
+
+
 def create_answer_generator(
     settings: Settings,
     *,
@@ -450,6 +499,12 @@ def create_answer_generator(
 ) -> AnswerGenerator:
     generation_provider = (provider or settings.generation_provider).lower()
     generation_model_name = model_name or settings.generation_model_name
+    if generation_provider == "bedrock":
+        return BedrockConverseAnswerGenerator(
+            settings=settings,
+            model_name=model_name or settings.bedrock_generation_model_id,
+            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+        )
     if generation_provider == "fake":
         return FakeAnswerGenerator()
     if generation_provider == "ollama":
@@ -731,6 +786,22 @@ def _context_block(request: GenerationRequest) -> str:
     return "\n\n".join(context_lines)
 
 
+def _extract_bedrock_output_text(payload: dict[str, Any]) -> str:
+    output = payload.get("output")
+    message = output.get("message") if isinstance(output, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        block["text"].strip()
+        for block in content
+        if isinstance(block, dict)
+        and isinstance(block.get("text"), str)
+        and block["text"].strip()
+    ]
+    return "\n".join(parts).strip()
+
+
 def _extract_openai_output_text(payload: dict[str, Any]) -> str:
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
@@ -863,6 +934,18 @@ def _extract_gemini_usage(payload: dict[str, Any]) -> TokenUsage | None:
         input_tokens=input_count,
         output_tokens=candidate_count + thoughts_count,
         total_tokens=total_count,
+    )
+
+
+def _extract_bedrock_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _usage_from_values(
+        input_tokens=usage.get("inputTokens"),
+        output_tokens=usage.get("outputTokens"),
+        total_tokens=usage.get("totalTokens"),
+        derive_total=True,
     )
 
 

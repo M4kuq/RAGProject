@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     embedding_vector_dimension: int = Field(default=1024, ge=1)
     embedding_fake_dimension: int = Field(default=8, ge=1)
     embedding_batch_size: int = Field(default=32, ge=1)
+    aws_region: str = "ap-northeast-1"
+    aws_sdk_connect_timeout_seconds: float = Field(default=3.0, gt=0.0, le=60.0)
+    aws_sdk_read_timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    aws_sdk_max_attempts: int = Field(default=3, ge=1, le=10)
+    bedrock_embedding_model_id: str = "amazon.titan-embed-text-v2:0"
     retrieval_top_k_default: int = Field(default=20, ge=1, le=20)
     retrieval_top_k_max: int = Field(default=20, ge=1, le=20)
     retrieval_cache_enabled: bool = False
@@ -273,6 +278,7 @@ class Settings(BaseSettings):
     rerank_score_min: float = 0.0
     rerank_score_max: float = 1.0
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    bedrock_rerank_model_id: str = "amazon.rerank-v1:0"
     search_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
     ask_top_k_default: int = Field(default=20, ge=1, le=20)
     ask_rerank_top_n_default: int = Field(default=5, ge=1, le=20)
@@ -281,6 +287,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    bedrock_generation_model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
@@ -394,15 +401,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
             )
+        self.aws_region = self.aws_region.strip()
+        if not self.aws_region:
+            raise ValueError("AWS_REGION must not be empty")
+        self.bedrock_generation_model_id = self.bedrock_generation_model_id.strip()
+        self.bedrock_embedding_model_id = self.bedrock_embedding_model_id.strip()
+        self.bedrock_rerank_model_id = self.bedrock_rerank_model_id.strip()
+        if (
+            not self.bedrock_generation_model_id
+            or not self.bedrock_embedding_model_id
+            or not self.bedrock_rerank_model_id
+        ):
+            raise ValueError("Bedrock model IDs must not be empty")
         self.embedding_provider = self.embedding_provider.lower()
-        if self.embedding_provider not in {"fake", "local", "lmstudio"}:
-            raise ValueError("EMBEDDING_PROVIDER must be fake, local, or lmstudio")
+        if self.embedding_provider not in {"fake", "local", "lmstudio", "bedrock"}:
+            raise ValueError("EMBEDDING_PROVIDER must be fake, local, lmstudio, or bedrock")
+        if self.embedding_provider == "bedrock":
+            if self.embedding_vector_dimension not in {256, 512, 1024}:
+                raise ValueError(
+                    "EMBEDDING_VECTOR_DIMENSION must be 256, 512, or 1024 "
+                    "for Bedrock Titan V2"
+                )
+            if "embedding_model" not in self.model_fields_set:
+                self.embedding_model = self.bedrock_embedding_model_id
         self.retrieval_cache_namespace = self.retrieval_cache_namespace.strip()
         if not self.retrieval_cache_namespace:
             raise ValueError("RETRIEVAL_CACHE_NAMESPACE must not be empty")
         self.rerank_provider = self.rerank_provider.lower()
-        if self.rerank_provider not in {"none", "fake", "local"}:
-            raise ValueError("RERANK_PROVIDER must be none, fake, or local")
+        if self.rerank_provider not in {"none", "fake", "local", "bedrock"}:
+            raise ValueError("RERANK_PROVIDER must be none, fake, local, or bedrock")
+        if self.rerank_provider == "bedrock" and "reranker_model" not in self.model_fields_set:
+            self.reranker_model = self.bedrock_rerank_model_id
         if self.retrieval_top_k_default > self.retrieval_top_k_max:
             raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")
         self.hybrid_fusion_method = self.hybrid_fusion_method.lower()
@@ -431,10 +460,11 @@ class Settings(BaseSettings):
             "openai",
             "anthropic",
             "gemini",
+            "bedrock",
         }:
             raise ValueError(
                 "GRAPH_EXTRACTION_PROVIDER must be fake, ollama, lmstudio, openai, "
-                "anthropic, gemini, or unset"
+                "anthropic, gemini, bedrock, or unset"
             )
         self.graph_extraction_model_name = (
             self.graph_extraction_model_name.strip() if self.graph_extraction_model_name else None
@@ -579,10 +609,17 @@ class Settings(BaseSettings):
             "openai",
             "anthropic",
             "gemini",
+            "bedrock",
         }:
             raise ValueError(
-                "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, or gemini"
+                "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, "
+                "gemini, or bedrock"
             )
+        if (
+            self.generation_provider == "bedrock"
+            and "generation_model_name" not in self.model_fields_set
+        ):
+            self.generation_model_name = self.bedrock_generation_model_id
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
         self.openai_api_key = self.openai_api_key.strip() if self.openai_api_key else None
