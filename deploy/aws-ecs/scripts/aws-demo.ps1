@@ -247,34 +247,32 @@ function Get-TerraformOutput {
   }
 }
 
-function Sync-GitHubVariables {
-  Assert-CommandAvailable "gh"
+function Get-AppDeploymentConfig {
   Push-Location $script:TerraformDirectory
   try {
-    $publicSubnets = Invoke-Native "terraform" @("output", "-json", "public_subnet_ids") -Capture
+    $publicSubnets = (Invoke-Native "terraform" @("output", "-json", "public_subnet_ids") -Capture) | ConvertFrom-Json
   } finally {
     Pop-Location
   }
-  $values = [ordered]@{
-    AWS_REGION = $script:ExpectedRegion
-    DEPLOY_BRANCH = $script:ExpectedBranch
-    API_ECR_REPOSITORY_URL = Get-TerraformOutput "api_ecr_repository_url"
-    WORKER_ECR_REPOSITORY_URL = Get-TerraformOutput "worker_ecr_repository_url"
-    ECS_CLUSTER_NAME = Get-TerraformOutput "ecs_cluster_name"
-    ECS_PUBLIC_SUBNET_IDS_JSON = $publicSubnets
-    ECS_APP_SECURITY_GROUP_ID = Get-TerraformOutput "app_security_group_id"
-    ECS_API_SERVICE_NAME = Get-TerraformOutput "api_service_name"
-    ECS_WORKER_SERVICE_NAME = Get-TerraformOutput "worker_service_name"
-    ECS_API_TASK_DEFINITION = Get-TerraformOutput "api_task_definition_family"
-    ECS_WORKER_TASK_DEFINITION = Get-TerraformOutput "worker_task_definition_family"
-    ECS_MIGRATION_TASK_DEFINITION = Get-TerraformOutput "migration_task_definition_family"
-    FRONTEND_BUCKET_NAME = Get-TerraformOutput "frontend_bucket_name"
-    CLOUDFRONT_DISTRIBUTION_ID = Get-TerraformOutput "cloudfront_distribution_id"
-    AWS_DEPLOY_ROLE_ARN = Get-TerraformOutput "github_deploy_role_arn"
-  }
-  foreach ($entry in $values.GetEnumerator()) {
-    Invoke-Native "gh" @("variable", "set", $entry.Key, "--body", [string]$entry.Value)
-  }
+  return ([ordered]@{
+    api_ecr_repository_url = Get-TerraformOutput "api_ecr_repository_url"
+    worker_ecr_repository_url = Get-TerraformOutput "worker_ecr_repository_url"
+    ecs_cluster_name = Get-TerraformOutput "ecs_cluster_name"
+    ecs_public_subnet_ids = @($publicSubnets)
+    ecs_app_security_group_id = Get-TerraformOutput "app_security_group_id"
+    ecs_api_service_name = Get-TerraformOutput "api_service_name"
+    ecs_worker_service_name = Get-TerraformOutput "worker_service_name"
+    ecs_api_task_definition = Get-TerraformOutput "api_task_definition_family"
+    ecs_worker_task_definition = Get-TerraformOutput "worker_task_definition_family"
+    ecs_migration_task_definition = Get-TerraformOutput "migration_task_definition_family"
+  } | ConvertTo-Json -Depth 4 -Compress)
+}
+
+function Get-FrontendDeploymentConfig {
+  return ([ordered]@{
+    frontend_bucket_name = Get-TerraformOutput "frontend_bucket_name"
+    cloudfront_distribution_id = Get-TerraformOutput "cloudfront_distribution_id"
+  } | ConvertTo-Json -Compress)
 }
 
 function Update-DatabaseUrlSecret {
@@ -372,12 +370,15 @@ function Invoke-Up {
   Apply-SavedPlan $script:PlanPath
   Write-Step "refresh app DATABASE_URL without printing credentials"
   Update-DatabaseUrlSecret
-  Write-Step "publish Terraform outputs to GitHub Actions variables"
-  Sync-GitHubVariables
   Write-Step "build, migrate, and deploy application images"
-  Invoke-GitHubWorkflow "aws-deploy-app.yml" @{ image_tag = $context.GitSha }
+  $appConfig = Get-AppDeploymentConfig
+  Invoke-GitHubWorkflow "aws-deploy-app.yml" @{
+    image_tag = $context.GitSha
+    deployment_config = $appConfig
+  }
   Write-Step "build and deploy frontend"
-  Invoke-GitHubWorkflow "aws-deploy-frontend.yml"
+  $frontendConfig = Get-FrontendDeploymentConfig
+  Invoke-GitHubWorkflow "aws-deploy-frontend.yml" @{ deployment_config = $frontendConfig }
   Write-Step "create and apply exact scale-up plan"
   New-DemoPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context 1 1 1
   Assert-SavedPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context

@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $scriptPath = Join-Path $PSScriptRoot "aws-demo.ps1"
 $tokens = $null
 $errors = $null
-[Management.Automation.Language.Parser]::ParseFile(
+[System.Management.Automation.Language.Parser]::ParseFile(
   $scriptPath,
   [ref]$tokens,
   [ref]$errors
