@@ -8,8 +8,12 @@ describe("MetricHelp", () => {
 
     expect(screen.getByRole("button", { name: "citation_coverage の説明" })).toHaveTextContent("?");
     expect(screen.getByText("citation_coverage")).toBeInTheDocument();
-    expect(screen.getByText("回答が必要な引用を満たしているかを示します。")).toBeInTheDocument();
-    expect(screen.getByText("高いほど良好です。")).toHaveClass("metric-help-direction");
+    expect(
+      screen.getByText("citation_presence と同じ値を返す後方互換用の指標です。")
+    ).toBeInTheDocument();
+    expect(screen.getByText("新しい比較では citation_presence を使用します。")).toHaveClass(
+      "metric-help-direction"
+    );
   });
 
   test.each([

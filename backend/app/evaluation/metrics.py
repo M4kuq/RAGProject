@@ -8,7 +8,8 @@ from app.evaluation.fixtures import (
     evaluation_case_question_hash,
     evaluation_case_snapshot_hash,
 )
-from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
+from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSumm
+mary
 
 EVALUATION_DETAIL_SCHEMA_VERSION: Final = "phase2.eval.v1"
 EVALUATION_METRIC_SEMANTICS_VERSION: Final = "rag.eval.metric.v2"
@@ -43,45 +44,56 @@ class EvaluationMetricInputs:
     error_code: str | None = None
 
 
-def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
-    retrieved_items = sorted(inputs.retrieved_items or [], key=lambda item: item.rank_order)
+def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:     
+    retrieved_items = sorted(
+        inputs.retrieved_items or [], key=lambda item: item.rank_order
+    )
     retrieval_evidence_text = " ".join(item.snippet for item in retrieved_items)
     if not retrieval_evidence_text:
-        retrieval_evidence_text = " ".join(citation.snippet for citation in inputs.citations)
+        retrieval_evidence_text = " ".join(
+            citation.snippet for citation in inputs.citations
+        )
 
-    answer_keyword_hits = _keyword_hits(inputs.answer_text, inputs.case.expected_keywords)
+    answer_keyword_hits = _keyword_hits(
+        inputs.answer_text, inputs.case.expected_keywords
+    )
     answer_hit = _expected_answer_hit(inputs.answer_text, inputs.case)
     expected_answer_slots = _metadata_string_values(
         inputs.case.metadata_json,
         "expected_answer_slots",
     )
-    answer_slot_hits = _keyword_hits(inputs.answer_text, expected_answer_slots)
+    answer_slot_hits = _keyword_hits(inputs.answer_text, expected_answer_slots) 
     expected_signal_count = len(inputs.case.expected_keywords) + (
-        1 if inputs.case.expected_answer and not inputs.case.expected_keywords else 0
+        1 if inputs.case.expected_answer and not inputs.case.expected_keywords e
+else 0
     )
-    faithfulness = _ratio(answer_keyword_hits + answer_hit, expected_signal_count)
+    faithfulness = _ratio(answer_keyword_hits + answer_hit, expected_signal_coun
+nt)
     answer_completeness = (
         None
         if not expected_answer_slots
         else _ratio(answer_slot_hits, len(expected_answer_slots))
     )
     citation_presence = (
-        1.0 if not inputs.case.required_citation or inputs.citations else 0.0
+        1.0 if not inputs.case.required_citation or inputs.citations else 0.0   
     )
-    citation_correctness, citation_correctness_details = _citation_correctness(
+    citation_correctness, citation_correctness_details = _citation_correctness( 
         inputs.case,
         inputs.citations,
         retrieved_items,
     )
     selected_count = (
-        inputs.retrieval_summary.selected_count if inputs.retrieval_summary is not None else 0
+        inputs.retrieval_summary.selected_count
+        if inputs.retrieval_summary is not None
+        else 0
     )
     groundedness = (
         inputs.confidence.groundedness_score
         if inputs.confidence
         else (1.0 if selected_count > 0 else 0.0)
     )
-    retrieval_signal_hits = _expected_signal_hits(retrieval_evidence_text, inputs.case)
+    retrieval_signal_hits = _expected_signal_hits(retrieval_evidence_text, input
+ts.case)
     context_precision = _context_precision(
         evidence_text=retrieval_evidence_text,
         selected_count=(selected_count),
@@ -89,7 +101,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     )
     metadata_details: dict[str, object] = {
         "case_id": inputs.case.case_id,
-        "question_hash": evaluation_case_question_hash(inputs.case.question),
+        "question_hash": evaluation_case_question_hash(inputs.case.question),   
         "case_snapshot_hash": evaluation_case_snapshot_hash(
             question=inputs.case.question,
             expected_answer=inputs.case.expected_answer,
@@ -107,11 +119,13 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         metadata_details["error_code"] = inputs.error_code
 
     recall = _recall_at_k(inputs.case, retrieved_items, retrieval_evidence_text)
-    first_rank = _first_relevant_rank(inputs.case, retrieved_items, retrieval_evidence_text)
+    first_rank = _first_relevant_rank(
+        inputs.case, retrieved_items, retrieval_evidence_text
+    )
     mrr = (
         None
         if _target_count(inputs.case) <= 0
-        else (0.0 if first_rank is None else round(1.0 / first_rank, 6))
+        else (0.0 if first_rank is None else round(1.0 / first_rank, 6))        
     )
     no_context_rate = 1.0 if selected_count <= 0 else 0.0
 
@@ -164,7 +178,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 "evidence_scope": "answer_text_only",
                 "matched_expected_keywords": answer_keyword_hits,
                 "matched_expected_answer": bool(answer_hit),
-                "expected_keyword_count": len(inputs.case.expected_keywords),
+                "expected_keyword_count": len(inputs.case.expected_keywords),   
                 "expected_signal_count": expected_signal_count,
             },
         ),
@@ -176,7 +190,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
                 "evidence_scope": "answer_text_only",
-                "expected_answer_slot_count": len(expected_answer_slots),
+                "expected_answer_slot_count": len(expected_answer_slots),       
                 "matched_answer_slot_count": answer_slot_hits,
                 "not_applicable": answer_completeness is None,
             },
@@ -186,7 +200,9 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metric_score=_clamp01(groundedness),
             metric_label=_label(groundedness),
             details={
-                "source": "rag_confidence" if inputs.confidence else "retrieval_presence",
+                "source": "rag_confidence"
+                if inputs.confidence
+                else "retrieval_presence",
                 "has_confidence": inputs.confidence is not None,
                 "selected_count": selected_count,
             },
@@ -245,8 +261,11 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         MetricValue(
             metric_name="p95_latency",
             metric_score=None,
-            metric_label="ms" if inputs.latency_ms is not None else "not_applicable",
-            metric_value=float(inputs.latency_ms) if inputs.latency_ms is not None else None,
+            metric_label="ms" if inputs.latency_ms is not None else "not_applica
+able",
+            metric_value=float(inputs.latency_ms)
+            if inputs.latency_ms is not None
+            else None,
             details={
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "unit": "ms",
@@ -267,7 +286,8 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     ]
 
 
-def failure_metrics(case: EvaluationCase, *, error_code: str) -> list[MetricValue]:
+def failure_metrics(case: EvaluationCase, *, error_code: str) -> list[MetricValu
+ue]:
     return calculate_metrics(
         EvaluationMetricInputs(
             case=case,
@@ -280,19 +300,22 @@ def failure_metrics(case: EvaluationCase, *, error_code: str) -> list[MetricValu
     )
 
 
-def _keyword_hits(text: str, expected_keywords: tuple[str, ...]) -> int:
+def _keyword_hits(text: str, expected_keywords: tuple[str, ...]) -> int:        
     haystack = text.casefold()
-    return sum(1 for keyword in expected_keywords if keyword.casefold() in haystack)
+    return sum(1 for keyword in expected_keywords if keyword.casefold() in hayst
+tack)
 
 
 def _expected_answer_hit(text: str, case: EvaluationCase) -> int:
     if case.expected_keywords or not case.expected_answer:
         return 0
-    return 1 if case.expected_answer.casefold() in text.casefold() else 0
+    return 1 if case.expected_answer.casefold() in text.casefold() else 0       
 
 
 def _expected_signal_hits(text: str, case: EvaluationCase) -> int:
-    return _keyword_hits(text, case.expected_keywords) + _expected_answer_hit(text, case)
+    return _keyword_hits(text, case.expected_keywords) + _expected_answer_hit(  
+        text, case
+    )
 
 
 def _citation_correctness(
@@ -302,7 +325,7 @@ def _citation_correctness(
 ) -> tuple[float | None, dict[str, object]]:
     details: dict[str, object] = {
         "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
-        "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+        "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,        
         "citation_count": len(citations),
     }
     if not citations:
@@ -332,7 +355,9 @@ def _citation_correctness(
         expected_chunk_ids = set(case.expected_chunk_ids)
         gold_source = "expected_chunk_ids"
         matching_citation_count = sum(
-            1 for citation in citations if citation.document_chunk_id in expected_chunk_ids
+            1
+            for citation in citations
+            if citation.document_chunk_id in expected_chunk_ids
         )
     elif case.expected_document_ids:
         document_id_by_chunk_id = {
@@ -344,7 +369,7 @@ def _citation_correctness(
             details.update(
                 {
                     "not_applicable": True,
-                    "reason_code": "citation_document_mapping_unavailable",
+                    "reason_code": "citation_document_mapping_unavailable",     
                     "gold_source": "expected_document_ids",
                     "matched_citation_count": 0,
                 }
@@ -363,14 +388,14 @@ def _citation_correctness(
         matching_citation_count = sum(
             1
             for citation in citations
-            if _keyword_hits(citation.snippet, case.expected_keywords) > 0
+            if _keyword_hits(citation.snippet, case.expected_keywords) > 0      
         )
     elif case.expected_answer:
         gold_source = "expected_answer"
         matching_citation_count = sum(
             1
             for citation in citations
-            if case.expected_answer.casefold() in citation.snippet.casefold()
+            if case.expected_answer.casefold() in citation.snippet.casefold()   
         )
     else:
         details.update(
@@ -420,7 +445,10 @@ def _recall_at_k(
     expected_count = _target_count(case)
     if expected_count <= 0:
         return None
-    return _ratio(_matched_target_count(case, retrieved_items, evidence_text), expected_count)
+    return _ratio(
+        _matched_target_count(case, retrieved_items, evidence_text), expected_co
+ount
+    )
 
 
 def _target_count(case: EvaluationCase) -> int:
@@ -439,15 +467,18 @@ def _matched_target_count(
     evidence_text: str,
 ) -> int:
     if case.expected_chunk_ids:
-        retrieved_chunk_ids = {item.document_chunk_id for item in retrieved_items}
-        return len(set(case.expected_chunk_ids).intersection(retrieved_chunk_ids))
+        retrieved_chunk_ids = {item.document_chunk_id for item in retrieved_item
+ms}
+        return len(set(case.expected_chunk_ids).intersection(retrieved_chunk_ids
+s))
     if case.expected_document_ids:
         retrieved_document_ids = {
             item.logical_document_id
             for item in retrieved_items
             if item.logical_document_id is not None
         }
-        return len(set(case.expected_document_ids).intersection(retrieved_document_ids))
+        return len(set(case.expected_document_ids).intersection(retrieved_docume
+ent_ids))
     if case.expected_keywords:
         return _keyword_hits(evidence_text, case.expected_keywords)
     return _expected_answer_hit(evidence_text, case)
@@ -483,10 +514,16 @@ def _first_relevant_rank(
     if case.expected_keywords:
         for item in retrieved_items:
             haystack = item.snippet.casefold()
-            if any(keyword.casefold() in haystack for keyword in case.expected_keywords):
+            if any(
+                keyword.casefold() in haystack for keyword in case.expected_keyw
+words
+            ):
                 return item.rank_order
         return None
-    if case.expected_answer and case.expected_answer.casefold() in evidence_text.casefold():
+    if (
+        case.expected_answer
+        and case.expected_answer.casefold() in evidence_text.casefold()
+    ):
         return retrieved_items[0].rank_order
     return None
 
@@ -521,7 +558,9 @@ def _ratio(numerator: int, denominator: int) -> float:
     return _clamp01(numerator / denominator)
 
 
-def _context_precision(*, evidence_text: str, selected_count: int, keyword_hits: int) -> float:
+def _context_precision(
+    *, evidence_text: str, selected_count: int, keyword_hits: int
+) -> float:
     if selected_count <= 0:
         return 0.0
     if not evidence_text.strip():
