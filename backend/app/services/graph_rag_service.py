@@ -56,6 +56,7 @@ from app.services.rag_service import (
     _context_refs_for_citation_sources,
     _decimal_score,
     _elapsed_ms,
+    _generate_with_insufficient_evidence_retry,
     _low_confidence_for_insufficient_evidence,
     _optional_decimal_score,
     _payload_snapshot,
@@ -490,13 +491,18 @@ class GraphRagService:
                 )
             generation_started = time.perf_counter()
             with latency_tracker.span("generation_ms"):
-                generation = answer_generator.generate(
+                generation_attempt = _generate_with_insufficient_evidence_retry(
+                    answer_generator,
                     GenerationRequest(
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.base.settings.generation_max_output_chars,
-                    )
+                    ),
+                    retrieval_score_summary=final_summary,
+                    settings=self.base.settings,
+                    latency_tracker=latency_tracker,
                 )
+                generation = generation_attempt.generation
             generation_metadata = self.base._generation_metadata(
                 selection=generation_selection,
                 generation=generation,
@@ -512,6 +518,9 @@ class GraphRagService:
                     context_items=context_items,
                     prompt_citation_sources=prompt_citation_sources,
                     allow_insufficient_evidence_fallback=True,
+                    allow_validation_error_fallback=(
+                        generation_attempt.allow_validation_error_fallback
+                    ),
                 )
                 assistant_message = self.base.chat_repository.create_message(
                     db,

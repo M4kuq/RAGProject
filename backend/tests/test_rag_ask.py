@@ -969,6 +969,275 @@ def test_rag_ask_hybrid_opt_in_generates_answer_with_hybrid_trace(
 @pytest.mark.parametrize(
     ("strategy", "client_message_id"),
     [
+        ("dense", "dense-retry-insufficient-high-support"),
+        ("hybrid", "hybrid-retry-insufficient-high-support"),
+    ],
+)
+def test_rag_ask_retries_once_on_insufficient_answer_when_support_is_high(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    strategy: str,
+    client_message_id: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _HedgeThenCitationAnswerGenerator()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title=f"{strategy} retry hedge")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": client_message_id,
+            "message": "alpha policy retry generated answer",
+            "strategy": strategy,
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == OBSERVED_CITED_ANSWER
+    assert data["assistant_message"]["content"] != INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["confidence"]["confidence_label"] != "Low"
+    assert data["generation"]["total_tokens"] == 40
+    assert answer_generator.call_count == 2
+    assert answer_generator.requests[0].system_instructions is None
+    retry_instructions = answer_generator.requests[1].system_instructions
+    assert retry_instructions is not None
+    assert "Do not use the insufficient-evidence sentence" in retry_instructions
+    assert answer_generator.requests[1].temperature == 0.0
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.confidence_label != "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+        assert run.latency_breakdown_json["generation_retry_ms"] >= 0
+        assert "content_text" not in str(run.latency_breakdown_json)
+        assert "alpha policy full active chunk text" not in str(run.latency_breakdown_json)
+
+
+def test_rag_ask_retry_instruction_preserves_explicit_language_request(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _SequenceAnswerGenerator(
+        [
+            OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+            "The alpha policy is confirmed by the handbook [1].",
+        ]
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="english retry hedge")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "dense-retry-explicit-english",
+            "message": "Please answer in English: what is the alpha policy?",
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == (
+        "The alpha policy is confirmed by the handbook [1]."
+    )
+    assert data["assistant_message"]["content"] != INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["confidence"]["confidence_label"] != "Low"
+    assert answer_generator.call_count == 2
+    retry_instructions = answer_generator.requests[1].system_instructions
+    assert retry_instructions is not None
+    assert (
+        "Answer in Japanese unless the user explicitly asks for another language"
+        in retry_instructions
+    )
+    assert "Answer in Japanese using only" not in retry_instructions
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.confidence_label != "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("retry_content", "client_message_id"),
+    [
+        ("The retry cites a marker that was not displayed [99].", "dense-retry-bad-marker"),
+        ("answer leaks password=verysecret [1]", "dense-retry-sensitive-output"),
+    ],
+)
+def test_rag_ask_retry_validation_errors_degrade_to_low_confidence_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    retry_content: str,
+    client_message_id: str,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _SequenceAnswerGenerator(
+        [OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER, retry_content]
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title=client_message_id)
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": client_message_id,
+            "message": "alpha policy retry validation fallback",
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["assistant_message"]["content"] != retry_content
+    assert data["citations"][0]["local_citation_id"] == 1
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert data["generation"]["total_tokens"] == 40
+    assert answer_generator.call_count == 2
+    assert "verysecret" not in str(response.json())
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+
+
+def test_rag_ask_does_not_retry_insufficient_answer_when_support_is_low(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = [_candidate(100, 0.1, 1)]
+    answer_generator = _HedgeThenCitationAnswerGenerator()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=NoopRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="dense weak support")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "dense-no-retry-insufficient-low-support",
+            "message": "alpha policy weak support generated answer",
+            "strategy": "dense",
+            "top_k": 1,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert answer_generator.call_count == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.confidence_label == "Low"
+        assert run.retrieval_score_summary is not None
+        assert run.retrieval_score_summary["top1_retrieval_score"] == 0.1
+        assert run.retrieval_score_summary["top1_rerank_score"] == 0.1
+        assert run.latency_breakdown_json is not None
+        assert "generation_retry_count" not in run.latency_breakdown_json
+        assert "generation_retry_ms" not in run.latency_breakdown_json
+
+
+def test_rag_ask_retry_flag_off_preserves_insufficient_fallback(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    answer_generator = _HedgeThenCitationAnswerGenerator()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=_lmstudio_test_settings(generation_retry_on_insufficient_evidence=False),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=answer_generator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="retry off")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "dense-retry-disabled",
+            "message": "alpha policy retry disabled",
+            "strategy": "dense",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["confidence"]["confidence_label"] == "Low"
+    assert answer_generator.call_count == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.confidence_label == "Low"
+        assert run.latency_breakdown_json is not None
+        assert "generation_retry_count" not in run.latency_breakdown_json
+
+
+@pytest.mark.parametrize(
+    ("strategy", "client_message_id"),
+    [
         ("dense", "dense-insufficient-with-context"),
         ("hybrid", "hybrid-insufficient-with-context"),
     ],
@@ -980,12 +1249,13 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
     settings = _lmstudio_test_settings()
+    answer_generator = _ObservedInsufficientEvidenceAnswerGenerator()
     cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
         settings=settings,
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
-        answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
+        answer_generator=answer_generator,
     )
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title=f"{strategy} weak answer")
@@ -1012,6 +1282,7 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
     assert data["confidence"]["confidence_label"] == "Low"
     assert data["confidence"]["answer_confidence"] < settings.confidence_medium_threshold
     assert "content_text" not in str(response.json())
+    assert answer_generator.call_count == 2
 
     with session_factory() as db:
         run = db.get(RetrievalRun, data["retrieval_run_id"])
@@ -1020,6 +1291,9 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
         assert run.error_code is None
         assert run.strategy_type == strategy
         assert run.confidence_label == "Low"
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["generation_retry_count"] == 1
+        assert run.latency_breakdown_json["generation_retry_ms"] >= 0
         assert run.context_compression_json is not None
         assert run.context_compression_json["output"]["evidence_item_count"] == 1
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
@@ -1028,7 +1302,7 @@ def test_rag_ask_with_context_and_insufficient_answer_returns_low_confidence_cit
 
 
 @pytest.mark.integration
-def test_rag_ask_live_lmstudio_insufficient_answer_with_context_returns_citations(
+def test_rag_ask_live_lmstudio_generation_does_not_fall_back_to_fake(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
     if os.getenv("RAG_LIVE_LLM") != "1":
@@ -1065,12 +1339,16 @@ def test_rag_ask_live_lmstudio_insufficient_answer_with_context_returns_citation
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["assistant_message"]["content"] != OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER
     assert data["generation"]["provider"] == "lmstudio"
+    assert data["generation"]["provider"] != "fake"
     assert data["citations"][0]["local_citation_id"] == 1
     assert data["citations"][0]["document_chunk_id"] == 100
-    assert data["confidence"]["confidence_label"] == "Low"
-    assert data["confidence"]["answer_confidence"] < settings.confidence_medium_threshold
+    if data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER:
+        assert data["confidence"]["confidence_label"] == "Low"
+        assert data["confidence"]["answer_confidence"] < settings.confidence_medium_threshold
+    else:
+        assert data["confidence"]["confidence_label"] in {"High", "Medium", "Low"}
     assert "content_text" not in str(response.json())
 
     with session_factory() as db:
@@ -1078,9 +1356,10 @@ def test_rag_ask_live_lmstudio_insufficient_answer_with_context_returns_citation
         assert run is not None
         assert run.status == "succeeded"
         assert run.error_code is None
-        assert run.confidence_label == "Low"
+        assert run.confidence_label == data["confidence"]["confidence_label"]
         assert run.retrieval_settings_json is not None
         assert run.retrieval_settings_json["generation_provider"] == "lmstudio"
+        assert run.retrieval_settings_json["generation_provider"] != "fake"
         assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
 
 
@@ -3184,6 +3463,26 @@ class _StaticAnswerGenerator:
         return GenerationResult(content=self.content)
 
 
+class _SequenceAnswerGenerator:
+    def __init__(self, contents: Sequence[str]) -> None:
+        self.contents = list(contents)
+        self.requests: list[GenerationRequest] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        if not request.context_items:
+            raise AnswerGenerationError()
+        index = min(self.call_count - 1, len(self.contents) - 1)
+        return GenerationResult(
+            content=self.contents[index],
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
 class _ObservedCitationAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
@@ -3195,11 +3494,40 @@ class _ObservedCitationAnswerGenerator:
 
 
 class _ObservedInsufficientEvidenceAnswerGenerator:
+    def __init__(self) -> None:
+        self.requests: list[GenerationRequest] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
     def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
         if not request.context_items:
             raise AnswerGenerationError()
         return GenerationResult(
             content=OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER,
+            usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+        )
+
+
+class _HedgeThenCitationAnswerGenerator:
+    def __init__(self) -> None:
+        self.requests: list[GenerationRequest] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.requests.append(request)
+        if not request.context_items:
+            raise AnswerGenerationError()
+        content = (
+            OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER if self.call_count == 1 else OBSERVED_CITED_ANSWER
+        )
+        return GenerationResult(
+            content=content,
             usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
         )
 

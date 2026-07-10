@@ -281,6 +281,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    generation_retry_on_insufficient_evidence: bool = True
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
