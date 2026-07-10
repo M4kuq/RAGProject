@@ -102,10 +102,11 @@ class S3DocumentStorage:
     def save_bytes(self, *, storage_key: str, content: bytes) -> None:
         if len(content) > self.max_bytes:
             raise DocumentStorageError(error_category="invalid_request")
+        object_key = self._object_key(storage_key)
         try:
             self.client.put_object(
                 Bucket=self.bucket_name,
-                Key=self._object_key(storage_key),
+                Key=object_key,
                 Body=content,
                 ContentLength=len(content),
             )

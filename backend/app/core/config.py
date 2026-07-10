@@ -438,15 +438,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "EMBEDDING_VECTOR_DIMENSION must be 256, 512, or 1024 for Bedrock Titan V2"
                 )
-            if "embedding_model" not in self.model_fields_set:
-                self.embedding_model = self.bedrock_embedding_model_id
+            self.embedding_model = self.bedrock_embedding_model_id
         self.retrieval_cache_namespace = self.retrieval_cache_namespace.strip()
         if not self.retrieval_cache_namespace:
             raise ValueError("RETRIEVAL_CACHE_NAMESPACE must not be empty")
         self.rerank_provider = self.rerank_provider.lower()
         if self.rerank_provider not in {"none", "fake", "local", "bedrock"}:
             raise ValueError("RERANK_PROVIDER must be none, fake, local, or bedrock")
-        if self.rerank_provider == "bedrock" and "reranker_model" not in self.model_fields_set:
+        if self.rerank_provider == "bedrock":
             self.reranker_model = self.bedrock_rerank_model_id
         if self.retrieval_top_k_default > self.retrieval_top_k_max:
             raise ValueError("RETRIEVAL_TOP_K_DEFAULT must be <= RETRIEVAL_TOP_K_MAX")

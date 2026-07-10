@@ -66,14 +66,14 @@ class _S3:
 
 
 def _settings(tmp_path: Path, **updates: Any) -> Settings:
-    return Settings(
-        _env_file=None,
-        storage_root=tmp_path,
-        storage_backend="s3",
-        documents_bucket_name="documents-test",
-        documents_key_prefix="source",
-        **updates,
-    )
+    values: dict[str, Any] = {
+        "storage_root": tmp_path,
+        "storage_backend": "s3",
+        "documents_bucket_name": "documents-test",
+        "documents_key_prefix": "source",
+    }
+    values.update(updates)
+    return Settings(_env_file=None, **values)
 
 
 def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
