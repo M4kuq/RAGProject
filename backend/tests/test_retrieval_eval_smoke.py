@@ -53,6 +53,9 @@ def test_parse_metrics_defaults_and_rejects_unknown() -> None:
     defaults = parse_metrics(None)
     assert "recall_at_k" in defaults
     assert "retrieval_call_count_avg" in defaults
+    assert "answer_completeness" in defaults
+    assert "citation_presence" in defaults
+    assert "citation_correctness" in defaults
 
     assert parse_metrics("recall_at_k,mrr,recall_at_k") == ["recall_at_k", "mrr"]
     with pytest.raises(SmokeError, match="invalid_metric:raw_prompt"):
@@ -64,6 +67,23 @@ def test_config_defaults_to_real_local_retrieval_strategies() -> None:
 
     assert config.mode == "local"
     assert config.strategies == ["dense", "hybrid", "agentic_router"]
+
+
+def test_config_parses_graph_quality_thresholds() -> None:
+    config = config_from_args(
+        [
+            "--graph-path-relevance-min",
+            "0.7",
+            "--graph-citation-coverage-min",
+            "0.8",
+            "--multi-hop-answerability-min",
+            "0.9",
+        ]
+    )
+
+    assert config.thresholds.graph_path_relevance_min == 0.7
+    assert config.thresholds.graph_citation_coverage_min == 0.8
+    assert config.thresholds.multi_hop_answerability_min == 0.9
 
 
 @pytest.mark.parametrize(
@@ -790,4 +810,3 @@ def test_retrieval_eval_workflow_is_manual_scheduled_and_secret_free() -> None:
             pytest.skip("local wrapper scripts are not copied into the backend Docker test image")
         wrapper = wrapper_path.read_text(encoding="utf-8")
         assert 'uv run --with "sentence-transformers>=2.7.0,<4" python' in wrapper
-

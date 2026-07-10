@@ -1361,4 +1361,3 @@ def _redact_string(value: str) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

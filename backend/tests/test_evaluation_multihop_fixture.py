@@ -306,4 +306,3 @@ def _iter_manifest_texts() -> Iterator[tuple[str, str]]:
         path = REPO_ROOT / source_path
         if path.is_file():
             yield source_path, path.read_text(encoding="utf-8")
-

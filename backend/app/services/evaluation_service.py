@@ -4607,4 +4607,3 @@ def _int_list(value: object) -> list[int]:
     if not isinstance(value, list):
         return []
     return [int(item) for item in value if isinstance(item, int) and not isinstance(item, bool)]
-

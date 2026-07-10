@@ -343,4 +343,3 @@ jobs:
             artifacts/retrieval_eval_smoke.md
             artifacts/retrieval_eval_smoke.exitcode
           if-no-files-found: error
-

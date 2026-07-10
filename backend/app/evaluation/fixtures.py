@@ -293,4 +293,3 @@ def _optional_positive_ids(value: dict[str, Any], key: str) -> tuple[int, ...]:
 def _contains_sensitive_word(value: str) -> bool:
     lowered = value.lower()
     return any(word in lowered for word in ("api_key", "apikey", "secret", "password", "token"))
-

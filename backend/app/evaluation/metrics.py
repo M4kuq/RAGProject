@@ -544,4 +544,3 @@ def _optional_label(value: float | None) -> str:
     if value is None:
         return "not_applicable"
     return _label(value)
-

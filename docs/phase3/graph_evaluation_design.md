@@ -168,4 +168,3 @@ Graph evaluation reports should include:
 - graph path citation coverage
 
 They should not include raw evidence payloads.
-

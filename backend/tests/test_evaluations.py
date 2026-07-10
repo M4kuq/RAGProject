@@ -5192,4 +5192,3 @@ def _logout(client: TestClient) -> None:
         headers={"X-CSRF-Token": _session_csrf(client), "Origin": ALLOWED_ORIGIN},
     )
     assert response.status_code == 200
-
