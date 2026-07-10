@@ -130,7 +130,11 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 matched_count=(
                     None
                     if recall is None
-                    else _matched_target_count(inputs.case, retrieved_items, evidence_text)
+                    else _matched_target_count(
+                        inputs.case,
+                        retrieved_items,
+                        retrieval_evidence_text,
+                    )
                 ),
                 rank=None,
                 not_applicable=recall is None,
