@@ -256,3 +256,8 @@ create_github_oidc_provider = false
 ### Embedding demo defaults
 
 ECS demo は Bedrock adapter 有効化前の安全側 default として `EMBEDDING_PROVIDER=fake` を維持しますが、`EMBEDDING_VECTOR_DIMENSION` と `EMBEDDING_FAKE_DIMENSION` はどちらも `1024` にします。fake embedding は CI/ローカル用途の default であり、本番 document indexing は Bedrock Titan V2 を有効化した後に実行してください。これにより fake provider を使う検証時も `document_chunks_bedrock_titan_v2` の vector dimension は Titan V2 想定と揃いますが、fake vector 自体を本番データとして扱うことは避けます。
+
+
+## One-command demo lifecycle
+
+Use `scripts/aws-demo.ps1` for `doctor`, `plan`, `up`, `load-data`, `smoke`, `status`, and explicitly confirmed `down`. The entrypoint is restricted to the `deploy/AWS_ECS` branch, `ap-northeast-1`, a clean worktree, and an allowlisted sandbox account. See [DEPLOY.md](./DEPLOY.md#aws-demo-lifecycle-entrypoint) for required repository variables/secrets, the persistent bootstrap lifecycle role, saved-plan checks, and verified teardown behavior.

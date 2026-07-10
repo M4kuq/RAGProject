@@ -261,3 +261,47 @@ terraform apply \
 - CloudFront→public ALB originはHTTPです。ALB SGはCloudFront managed prefix list、listenerはsecret origin headerで制限しますが、公開本番ではcustom domain + ACMによるHTTPS origin、またはCloudFront VPC origin/internal ALBへ移行してください。
 - Qdrant service-managed EBSはtask replacementやscale-to-zeroで削除されるため、S3からの再index前提です。
 - SQS/DLQは将来のwake-up通知用にpreprovisionしていますが、現行アプリは接続せず、PostgreSQL job tableがsource of truthです。
+
+
+## AWS demo lifecycle entrypoint
+
+Runtime operations use one entrypoint from the repository root:
+
+```powershell
+./deploy/aws-ecs/scripts/aws-demo.ps1 doctor
+./deploy/aws-ecs/scripts/aws-demo.ps1 plan
+./deploy/aws-ecs/scripts/aws-demo.ps1 up
+./deploy/aws-ecs/scripts/aws-demo.ps1 load-data
+./deploy/aws-ecs/scripts/aws-demo.ps1 smoke
+./deploy/aws-ecs/scripts/aws-demo.ps1 status
+./deploy/aws-ecs/scripts/aws-demo.ps1 down -ConfirmDestroy -DestroyConfirmation DESTROY-RUNTIME
+```
+
+The script fails closed unless all of these conditions hold:
+
+- the checked-out branch is exactly `deploy/AWS_ECS`;
+- the worktree is clean;
+- the region is exactly `ap-northeast-1`;
+- the active 12-digit account is listed in comma-separated `AWS_DEMO_ALLOWED_ACCOUNT_IDS`;
+- the remote-state variables `TF_STATE_BUCKET`, `TF_STATE_KEY`, and `TF_LOCK_TABLE` are present;
+- Terraform apply consumes a hashed saved plan whose branch, commit, account, and region match the current context.
+
+`up` first applies the saved zero-task infrastructure plan, refreshes the external `DATABASE_URL` secret without printing it, dispatches the existing app/frontend deployment workflows with fresh Terraform outputs, then creates and applies an exact saved scale-up plan. `load-data` uses `RAG_DEMO_BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD` from the environment; do not pass those values on the command line.
+
+`down` is intentionally destructive and requires both confirmation switches. It empties every version and delete marker from the document/frontend buckets, applies an exact saved destroy plan, clears the stale database URL, and checks Terraform state plus S3, ECR, CloudFront, ECS, and project/environment tags for remnants. It never targets `deploy/aws-ecs/bootstrap`. The bootstrap state bucket, lock table, and separately managed lifecycle OIDC role remain so the runtime can be recreated.
+
+The `AWS Demo Lifecycle` workflow is `workflow_dispatch` only and is hard-bound to `refs/heads/deploy/AWS_ECS`. Configure `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` as a repository variable. That role is an account/bootstrap prerequisite outside the root runtime stack and its OIDC subject must be exactly:
+
+```text
+repo:<OWNER>/<REPO>:ref:refs/heads/deploy/AWS_ECS
+```
+
+Also configure `AWS_DEMO_ALLOWED_ACCOUNT_IDS`, the remote-state variables, the existing Terraform variables/secrets, and these runtime secrets: `BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD`. The lifecycle role must be limited to this sandbox stack and must be able to create and destroy the root Terraform resources, update the external database URL secret, and read the bootstrap state/lock resources.
+
+The credential-free test is:
+
+```powershell
+./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
+```
+
+It parses the PowerShell and verifies the branch, region, account allowlist, saved-plan, S3 cleanup, explicit-destroy, and post-destroy guardrails. CI does not run `up` or `down`.
