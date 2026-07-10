@@ -411,8 +411,9 @@ class Settings(BaseSettings):
             self.documents_bucket_name.strip() if self.documents_bucket_name else None
         )
         self.documents_key_prefix = self.documents_key_prefix.strip().strip("/")
-        if "\\" in self.documents_key_prefix or any(
-            part in {"", ".", ".."} for part in self.documents_key_prefix.split("/")
+        if self.documents_key_prefix and (
+            "\\" in self.documents_key_prefix
+            or any(part in {"", ".", ".."} for part in self.documents_key_prefix.split("/"))
         ):
             raise ValueError("DOCUMENTS_KEY_PREFIX must be a safe relative prefix")
         if self.storage_backend == "s3" and not self.documents_bucket_name:

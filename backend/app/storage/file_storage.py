@@ -4,7 +4,7 @@ import logging
 import tempfile
 import uuid
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -147,7 +147,13 @@ class S3DocumentStorage:
                 raise DocumentStorageError(error_category="invalid_response")
             if body is None or not hasattr(body, "read"):
                 raise DocumentStorageError(error_category="invalid_response")
-            content: object = body.read(self.max_bytes + 1)
+            try:
+                content: object = body.read(self.max_bytes + 1)
+            finally:
+                close = getattr(body, "close", None)
+                if callable(close):
+                    with suppress(Exception):
+                        close()
             if not isinstance(content, bytes) or len(content) > self.max_bytes:
                 raise DocumentStorageError(error_category="invalid_response")
         except DocumentStorageError:

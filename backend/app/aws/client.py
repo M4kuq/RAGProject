@@ -43,7 +43,7 @@ def aws_error_category(exc: Exception) -> str:
         return "rate_limited"
     if code in {"modeltimeoutexception", "requesttimeout", "requesttimeoutexception"}:
         return "timeout"
-    if code in {"nosuchkey", "notfound", "resourcenotfoundexception"}:
+    if code in {"404", "nosuchkey", "notfound", "resourcenotfoundexception"}:
         return "not_found"
     if code in {"validationexception", "invalidparameter", "invalidrequest"}:
         return "invalid_request"

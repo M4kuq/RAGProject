@@ -22,10 +22,20 @@ class _AwsError(RuntimeError):
         self.response = {"Error": {"Code": code, "Message": message}}
 
 
+class _Body(io.BytesIO):
+    was_closed = False
+
+    def close(self) -> None:
+        self.was_closed = True
+        super().close()
+
+
 class _S3:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.bodies: list[_Body] = []
+        self.missing_error_code = "NoSuchKey"
 
     def put_object(self, **kwargs: object) -> None:
         self.calls.append(("put", kwargs))
@@ -35,16 +45,18 @@ class _S3:
         self.calls.append(("head", kwargs))
         key = (str(kwargs["Bucket"]), str(kwargs["Key"]))
         if key not in self.objects:
-            raise _AwsError("NoSuchKey")
+            raise _AwsError(self.missing_error_code)
         return {"ContentLength": len(self.objects[key])}
 
     def get_object(self, **kwargs: object) -> dict[str, object]:
         self.calls.append(("get", kwargs))
         key = (str(kwargs["Bucket"]), str(kwargs["Key"]))
         if key not in self.objects:
-            raise _AwsError("NoSuchKey")
+            raise _AwsError(self.missing_error_code)
         value = self.objects[key]
-        return {"ContentLength": len(value), "Body": io.BytesIO(value)}
+        body = _Body(value)
+        self.bodies.append(body)
+        return {"ContentLength": len(value), "Body": body}
 
     def delete_object(self, **kwargs: object) -> None:
         self.calls.append(("delete", kwargs))
@@ -75,6 +87,7 @@ def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
         assert path.read_bytes() == b"hello"
         temporary_path = path
     assert not temporary_path.exists()
+    assert client.bodies[0].was_closed
 
     storage.delete(storage_key=key)
     assert not storage.exists(storage_key=key)
@@ -104,8 +117,14 @@ def test_s3_storage_enforces_materialized_size_limit(tmp_path: Path) -> None:
     assert exc_info.value.error_category == "invalid_response"
 
 
-def test_s3_storage_missing_object_is_safe(tmp_path: Path) -> None:
-    storage = S3DocumentStorage(settings=_settings(tmp_path), client=_S3())
+@pytest.mark.parametrize("error_code", ["NoSuchKey", "404"])
+def test_s3_storage_missing_object_is_safe(
+    tmp_path: Path,
+    error_code: str,
+) -> None:
+    client = _S3()
+    client.missing_error_code = error_code
+    storage = S3DocumentStorage(settings=_settings(tmp_path), client=client)
 
     assert not storage.exists(storage_key="documents/aa/missing.txt")
     with pytest.raises(DocumentStorageError) as exc_info:
@@ -124,6 +143,13 @@ def test_document_storage_factory_preserves_local_default(tmp_path: Path) -> Non
 
     s3 = create_document_storage(_settings(tmp_path), s3_client=_S3())
     assert isinstance(s3, S3DocumentStorage)
+
+
+def test_default_settings_allow_empty_document_prefix() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.documents_key_prefix == ""
+    assert settings.storage_backend == "local"
 
 
 def test_s3_storage_requires_bucket_and_safe_prefix(tmp_path: Path) -> None:
