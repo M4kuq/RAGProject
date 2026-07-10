@@ -247,9 +247,9 @@ variable "github_oidc_thumbprints" {
 }
 
 variable "bedrock_generation_model_id" {
-  description = "Bedrock generation foundation model ID, for example an Anthropic Claude Sonnet model."
+  description = "Active Bedrock generation foundation model ID. The demo default uses Amazon Nova Lite."
   type        = string
-  default     = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  default     = "amazon.nova-lite-v1:0"
 }
 
 variable "bedrock_embedding_model_id" {

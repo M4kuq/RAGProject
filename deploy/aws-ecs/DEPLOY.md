@@ -8,9 +8,19 @@
 - Region は `ap-northeast-1` を使います。
 - GitHub Actions の deploy 対象 branch は Terraform 変数 `github_deploy_branch` で固定します。PR #88 の branch で動かす場合は `deploy/AWS_ECS` にします。
 - AWS Console で Bedrock model access を有効化します。
-  - Claude generation model: `bedrock_generation_model_id`
+  - Amazon Nova Lite generation model: `bedrock_generation_model_id`
   - Titan Text Embeddings V2: `amazon.titan-embed-text-v2:0`
   - Bedrock Rerank: `bedrock_rerank_model_id`
+- apply前にgeneration modelのlifecycleを確認し、`ACTIVE` でない既定値は現行active modelへ更新します。
+
+```bash
+aws bedrock get-foundation-model \
+  --region ap-northeast-1 \
+  --model-identifier amazon.nova-lite-v1:0 \
+  --query 'modelDetails.modelLifecycle.status' \
+  --output text
+```
+
 - `terraform apply` は CI では実行しません。PR CI は認証なしで `terraform fmt`、`terraform init -backend=false`、`terraform validate` まで実行します。AWS 認証と remote state を使う `terraform plan` は `workflow_dispatch` の手動実行だけで扱い、初回 bootstrap と root apply は人手でレビューして実行します。
 
 ### Graph backend policy

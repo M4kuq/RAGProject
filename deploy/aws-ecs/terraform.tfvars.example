@@ -28,7 +28,7 @@ origin_verify_header_name  = "X-RAGProject-Origin-Verify"
 origin_verify_header_value = "replace-with-random-32-plus-character-value"
 # app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
-bedrock_generation_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+bedrock_generation_model_id = "amazon.nova-lite-v1:0"
 bedrock_embedding_model_id  = "amazon.titan-embed-text-v2:0"
 bedrock_rerank_model_id     = "amazon.rerank-v1:0"
 

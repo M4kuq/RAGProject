@@ -19,7 +19,7 @@ flowchart TD
   API --> Docs[S3 documents bucket<br/>shared durable source]
   Worker --> Docs
   Qdrant --> EBS[(service-managed EBS volume<br/>block storage)]
-  API --> Bedrock[Amazon Bedrock<br/>Claude / Titan Embeddings V2 / Rerank]
+  API --> Bedrock[Amazon Bedrock<br/>Nova Lite / Titan Embeddings V2 / Rerank]
   Worker --> Bedrock
 ```
 
@@ -106,15 +106,15 @@ GitHub Actions 用の deploy role は OIDC trust で `repo:owner/repo:ref:refs/h
 
 ## 7. Bedrock keyless 設計
 
-Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task role の IAM 権限で呼び出す前提です。`iam` module は次の action/resource に限定します。
+Nova Lite、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task role の IAM 権限で呼び出します。`iam` module は次の action/resource に限定します。
 
-- `bedrock:InvokeModel`: `bedrock_generation_model_id`、`bedrock_embedding_model_id`、`bedrock_rerank_model_id`
-- `bedrock:Rerank`: AWS rerank prerequisites に合わせて resource は `*`
+- `bedrock:InvokeModel`: generation と embedding の選択済み foundation model ARN のみ
+- `bedrock:Rerank`: Amazon Bedrock Rerank API は resource-level permission を提供しないため `Resource = "*"`
 - `secretsmanager:GetSecretValue`: 指定された Secret ARN のみ
 - `ssm:GetParameter(s)`: 指定された Parameter ARN のみ
-- S3 documents bucket と SQS job queue の必要操作のみ
+- S3 documents bucket の `source/*` object CRUD のみ
 
-現在のアプリ側 provider enum には `bedrock` がまだ無いため、ECS env の default は `GENERATION_PROVIDER=fake`、`EMBEDDING_PROVIDER=fake`、`RERANK_PROVIDER=none` にしています。Bedrock adapter 実装後に provider env を切り替える想定です。
+ECS env は `GENERATION_PROVIDER=bedrock`、`EMBEDDING_PROVIDER=bedrock`、`RERANK_PROVIDER=bedrock` です。generation の demo default は Tokyo で利用できる Amazon Nova Lite とし、apply 前に `GetFoundationModel` の `modelLifecycle.status` が `ACTIVE` であることを確認します。
 
 ## 8. コンポーネント別の利点・コスト・retention
 
@@ -127,11 +127,11 @@ Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task r
 | ECR | image scan と lifecycle で最小限保持 | default 最新 10 images のみ保持 |
 | RDS PostgreSQL | source of truth。managed password で平文 secret 不要 | single-AZ、`db.t4g.micro`、backup 1 day |
 | Qdrant + EBS | Qdrant 要件に合う block storage を task に attach | Qdrant task は 0/1、EBS volume は task 稼働中に service-managed で作成され、停止/置換時は再index前提 |
-| SQS + DLQ | worker retry と失敗隔離 | request 数に応じた従量課金 |
+| SQS + DLQ | 将来のwake-up通知用。現行アプリは未接続 | 未使用時はrequest課金なし |
 | S3 documents | source documents の private storage | AES256、versioning enabled |
 | CloudWatch Logs | task log の集約 | retention default 7 days |
 | AWS Budgets + SNS | 月次 guardrail | Budget 自体は低コスト。email subscription は要承認 |
-| Bedrock | keyless IAM 呼び出し | model invocation 分のみ。adapter 実装後に有効化 |
+| Bedrock | keyless IAM 呼び出し | Nova/Titan/Rerank の実行分のみ |
 
 ## 9. パラメータ化した箇所
 
@@ -144,7 +144,7 @@ Claude、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task r
 - desired count: API/worker/Qdrant を demo 時だけ起動するために変数化しています。
 - log retention / ECR retention / budget amount: demo cost に合わせて調整します。
 
-Titan Text Embeddings V2 は既存 local embedding と vector dimension が異なる可能性があります。`QDRANT_COLLECTION_NAME` は `document_chunks_bedrock_titan_v2` を default にして混在を避けていますが、adapter 実装後に実 dimension を確認し、既存 Qdrant collection は re-index してください。
+Titan Text Embeddings V2 は1024次元で使い、`QDRANT_COLLECTION_NAME=document_chunks_bedrock_titan_v2` と一致させます。既存の異なるdimensionのcollectionは混用せず、S3 source documentsから再indexしてください。
 
 ## 10. 実行手順と merge 戦略
 

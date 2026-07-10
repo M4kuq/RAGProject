@@ -194,7 +194,7 @@ data "aws_iam_policy_document" "ecs_task" {
       "s3:PutObject",
       "s3:DeleteObject",
     ]
-    resources = ["${var.documents_bucket_arn}/*"]
+    resources = ["${var.documents_bucket_arn}/${var.documents_key_prefix}/*"]
   }
 
   dynamic "statement" {

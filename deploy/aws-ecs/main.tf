@@ -3,7 +3,8 @@ locals {
   secret_arns       = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
   api_image         = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
   worker_image      = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
-  app_public_origin = coalesce(var.app_public_origin, "https://${module.cloudfront.domain_name}")
+  app_public_origin    = coalesce(var.app_public_origin, "https://${module.cloudfront.domain_name}")
+  documents_key_prefix = "source"
   common_app_env = {
     APP_ENV                     = var.environment
     CORS_ALLOWED_ORIGINS        = jsonencode([local.app_public_origin])
@@ -12,7 +13,7 @@ locals {
     STORAGE_ROOT                = "/tmp/ragproject/uploads"
     STORAGE_BACKEND             = "s3"
     DOCUMENTS_BUCKET_NAME       = module.s3.documents_bucket_name
-    DOCUMENTS_KEY_PREFIX        = "source"
+    DOCUMENTS_KEY_PREFIX        = local.documents_key_prefix
     QDRANT_COLLECTION_NAME      = "document_chunks_bedrock_titan_v2"
     QDRANT_DISTANCE             = "Cosine"
     QDRANT_CREATE_COLLECTION    = "true"
@@ -85,9 +86,9 @@ module "iam" {
   github_oidc_thumbprints     = var.github_oidc_thumbprints
   ecr_repository_arns         = module.ecr.repository_arns
   documents_bucket_arn        = module.s3.documents_bucket_arn
+  documents_key_prefix        = local.documents_key_prefix
   frontend_bucket_arn         = module.s3.frontend_bucket_arn
   cloudfront_distribution_arn = module.cloudfront.distribution_arn
-  sqs_queue_arn               = module.sqs.queue_arn
   secret_arns                 = local.secret_arns
   ssm_parameter_arns          = var.ssm_parameter_arns
   bedrock_generation_model_id = var.bedrock_generation_model_id

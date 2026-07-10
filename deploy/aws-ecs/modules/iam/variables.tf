@@ -44,6 +44,22 @@ variable "documents_bucket_arn" {
   type        = string
 }
 
+variable "documents_key_prefix" {
+  description = "Relative S3 key prefix used by the document storage adapter."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9/_-]*$", var.documents_key_prefix)) &&
+      alltrue([
+        for part in split("/", var.documents_key_prefix) :
+        !contains(["", ".", ".."], part)
+      ])
+    )
+    error_message = "documents_key_prefix must be a safe non-empty relative S3 prefix."
+  }
+}
+
 variable "frontend_bucket_arn" {
   description = "Frontend bucket ARN."
   type        = string
@@ -51,11 +67,6 @@ variable "frontend_bucket_arn" {
 
 variable "cloudfront_distribution_arn" {
   description = "CloudFront distribution ARN used for frontend invalidations."
-  type        = string
-}
-
-variable "sqs_queue_arn" {
-  description = "SQS queue ARN."
   type        = string
 }
 

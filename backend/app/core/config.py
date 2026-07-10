@@ -290,7 +290,7 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
-    bedrock_generation_model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    bedrock_generation_model_id: str = "amazon.nova-lite-v1:0"
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
