@@ -39,7 +39,9 @@ class _S3:
 
     def put_object(self, **kwargs: object) -> None:
         self.calls.append(("put", kwargs))
-        self.objects[(str(kwargs["Bucket"]), str(kwargs["Key"]))] = bytes(kwargs["Body"])
+        body = kwargs["Body"]
+        assert isinstance(body, (bytes, bytearray))
+        self.objects[(str(kwargs["Bucket"]), str(kwargs["Key"]))] = bytes(body)
 
     def head_object(self, **kwargs: object) -> dict[str, object]:
         self.calls.append(("head", kwargs))
