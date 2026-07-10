@@ -1,0 +1,275 @@
+{
+  "schema_version": "phase3.gold_source_catalog.v1",
+  "sources": [
+    {
+      "source_key": "architecture_stack",
+      "title": "Application architecture",
+      "facts": [
+        {
+          "fact_id": "arch_api",
+          "statement": "The API layer is implemented with FastAPI."
+        },
+        {
+          "fact_id": "arch_relational",
+          "statement": "PostgreSQL stores relational application state."
+        },
+        {
+          "fact_id": "arch_vector",
+          "statement": "Qdrant stores vector search data."
+        }
+      ]
+    },
+    {
+      "source_key": "retrieval_modes",
+      "title": "Retrieval modes",
+      "facts": [
+        {
+          "fact_id": "retrieval_dense",
+          "statement": "Dense retrieval uses semantic vector similarity."
+        },
+        {
+          "fact_id": "retrieval_sparse",
+          "statement": "Sparse retrieval uses term-based matching."
+        },
+        {
+          "fact_id": "retrieval_hybrid",
+          "statement": "Hybrid retrieval combines dense and sparse candidates."
+        }
+      ]
+    },
+    {
+      "source_key": "agentic_bounds",
+      "title": "Agentic retrieval boundaries",
+      "facts": [
+        {
+          "fact_id": "agentic_budget",
+          "statement": "Agentic retrieval is bounded by a retrieval call budget."
+        },
+        {
+          "fact_id": "agentic_fallback",
+          "statement": "Agentic retrieval records bounded fallback reason codes."
+        },
+        {
+          "fact_id": "agentic_tools",
+          "statement": "Agentic tools are retrieval-only and do not expose write operations."
+        }
+      ]
+    },
+    {
+      "source_key": "citation_pipeline",
+      "title": "Citation pipeline",
+      "facts": [
+        {
+          "fact_id": "cite_chunk",
+          "statement": "Answer citations resolve to stored document chunks."
+        },
+        {
+          "fact_id": "cite_local",
+          "statement": "Local citation identifiers are scoped to one answer."
+        },
+        {
+          "fact_id": "cite_old",
+          "statement": "Citations can flag evidence from an old document version."
+        }
+      ]
+    },
+    {
+      "source_key": "confidence_semantics",
+      "title": "Confidence semantics",
+      "facts": [
+        {
+          "fact_id": "conf_heuristic",
+          "statement": "Answer confidence is a local heuristic."
+        },
+        {
+          "fact_id": "conf_ground",
+          "statement": "Groundedness estimates support from retrieved evidence."
+        },
+        {
+          "fact_id": "conf_not_prob",
+          "statement": "Confidence is not a calibrated probability of correctness."
+        }
+      ]
+    },
+    {
+      "source_key": "evaluation_runs",
+      "title": "Evaluation runs",
+      "facts": [
+        {
+          "fact_id": "eval_dataset",
+          "statement": "Evaluation datasets contain reusable cases."
+        },
+        {
+          "fact_id": "eval_compare",
+          "statement": "Evaluation runs can compare retrieval strategies."
+        },
+        {
+          "fact_id": "eval_promote",
+          "statement": "Failed evaluation cases can be promoted into a dataset."
+        }
+      ]
+    },
+    {
+      "source_key": "graph_store",
+      "title": "Graph storage",
+      "facts": [
+        {
+          "fact_id": "graph_postgres",
+          "statement": "PostgreSQL is the durable graph source of truth."
+        },
+        {
+          "fact_id": "graph_neo4j",
+          "statement": "Neo4j is an optional graph projection."
+        },
+        {
+          "fact_id": "graph_labels",
+          "statement": "Graph comparison labels distinguish PostgreSQL and Neo4j providers."
+        }
+      ]
+    },
+    {
+      "source_key": "retrieval_cache",
+      "title": "Retrieval cache",
+      "facts": [
+        {
+          "fact_id": "cache_key",
+          "statement": "Retrieval cache entries are isolated by retrieval settings."
+        },
+        {
+          "fact_id": "cache_modes",
+          "statement": "Evaluation supports cold and warm cache modes."
+        },
+        {
+          "fact_id": "cache_metrics",
+          "statement": "Cache evaluation records hit rate and saved latency."
+        }
+      ]
+    },
+    {
+      "source_key": "security_boundary",
+      "title": "Security boundary",
+      "facts": [
+        {
+          "fact_id": "sec_untrusted",
+          "statement": "Retrieved content is treated as untrusted evidence, not instructions."
+        },
+        {
+          "fact_id": "sec_redaction",
+          "statement": "Safe evaluation artifacts omit raw prompts, full contexts, and raw chunks."
+        },
+        {
+          "fact_id": "sec_hidden",
+          "statement": "The system must not reveal hidden prompts or secrets."
+        }
+      ]
+    },
+    {
+      "source_key": "mcp_transport",
+      "title": "MCP transport",
+      "facts": [
+        {
+          "fact_id": "mcp_stdio",
+          "statement": "The default MCP transport is stdio."
+        },
+        {
+          "fact_id": "mcp_http",
+          "statement": "Streamable HTTP transport is optional for local clients."
+        },
+        {
+          "fact_id": "mcp_auth",
+          "statement": "HTTP MCP mode requires a configured bearer API key and loopback origin checks."
+        }
+      ]
+    },
+    {
+      "source_key": "worker_jobs",
+      "title": "Worker jobs",
+      "facts": [
+        {
+          "fact_id": "worker_poll",
+          "statement": "Workers poll PostgreSQL-backed job records."
+        },
+        {
+          "fact_id": "worker_lease",
+          "statement": "Job leases support bounded retry and recovery."
+        },
+        {
+          "fact_id": "worker_async",
+          "statement": "Workers execute asynchronous ingestion and evaluation jobs."
+        }
+      ]
+    },
+    {
+      "source_key": "generation_controls",
+      "title": "Generation controls",
+      "facts": [
+        {
+          "fact_id": "gen_fake",
+          "statement": "Fake generation keeps CI deterministic."
+        },
+        {
+          "fact_id": "gen_provider",
+          "statement": "Generation providers are selected through application settings."
+        },
+        {
+          "fact_id": "gen_retry",
+          "statement": "Generation retry is gated by strong retrieval support."
+        }
+      ]
+    },
+    {
+      "source_key": "graph_metrics",
+      "title": "Graph evaluation metrics",
+      "facts": [
+        {
+          "fact_id": "gm_path",
+          "statement": "Graph path relevance checks expected safe entity and relation hints."
+        },
+        {
+          "fact_id": "gm_citation",
+          "statement": "Graph citation coverage checks whether graph paths resolve to citable sources."
+        },
+        {
+          "fact_id": "gm_hop",
+          "statement": "Multi-hop answerability checks required path depth."
+        }
+      ]
+    },
+    {
+      "source_key": "evaluation_safety",
+      "title": "Evaluation safety",
+      "facts": [
+        {
+          "fact_id": "es_hash",
+          "statement": "Evaluation case snapshots use hashes for comparison."
+        },
+        {
+          "fact_id": "es_aggregate",
+          "statement": "Evaluation artifacts store aggregate metrics and safe reason codes."
+        },
+        {
+          "fact_id": "es_no_raw",
+          "statement": "Evaluation artifacts exclude raw answers and raw retrieved text."
+        }
+      ]
+    },
+    {
+      "source_key": "strategy_router",
+      "title": "Strategy routing",
+      "facts": [
+        {
+          "fact_id": "router_hint",
+          "statement": "Evaluation cases can carry an expected strategy hint."
+        },
+        {
+          "fact_id": "router_hybrid",
+          "statement": "Hybrid strategy is suitable for mixed semantic and keyword evidence."
+        },
+        {
+          "fact_id": "router_agentic",
+          "statement": "Agentic routing can adapt retrieval within bounded controls."
+        }
+      ]
+    }
+  ]
+}
