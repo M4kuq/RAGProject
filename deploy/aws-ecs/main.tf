@@ -1,8 +1,8 @@
 locals {
-  name_prefix       = "${var.project}-${var.environment}"
-  secret_arns       = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
-  api_image         = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
-  worker_image      = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
+  name_prefix          = "${var.project}-${var.environment}"
+  secret_arns          = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
+  api_image            = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
+  worker_image         = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
   app_public_origin    = coalesce(var.app_public_origin, "https://${module.cloudfront.domain_name}")
   documents_key_prefix = "source"
   common_app_env = {
