@@ -419,8 +419,7 @@ class Settings(BaseSettings):
         if self.embedding_provider == "bedrock":
             if self.embedding_vector_dimension not in {256, 512, 1024}:
                 raise ValueError(
-                    "EMBEDDING_VECTOR_DIMENSION must be 256, 512, or 1024 "
-                    "for Bedrock Titan V2"
+                    "EMBEDDING_VECTOR_DIMENSION must be 256, 512, or 1024 for Bedrock Titan V2"
                 )
             if "embedding_model" not in self.model_fields_set:
                 self.embedding_model = self.bedrock_embedding_model_id

@@ -90,9 +90,7 @@ def test_bedrock_converse_maps_output_and_usage() -> None:
     client = _Runtime(
         [
             {
-                "output": {
-                    "message": {"content": [{"text": "Bedrock is supported [1]."}]}
-                },
+                "output": {"message": {"content": [{"text": "Bedrock is supported [1]."}]}},
                 "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
             }
         ]
@@ -131,9 +129,7 @@ def test_bedrock_errors_are_categorized_and_redacted(
 
 def test_bedrock_titan_embedding_maps_request_and_vector() -> None:
     vector = [0.1] * 256
-    client = _Runtime(
-        [{"body": io.BytesIO(json.dumps({"embedding": vector}).encode())}]
-    )
+    client = _Runtime([{"body": io.BytesIO(json.dumps({"embedding": vector}).encode())}])
     adapter = BedrockTitanEmbeddingAdapter(
         settings=_settings(),
         model_name="amazon.titan-embed-text-v2:0",
@@ -146,9 +142,7 @@ def test_bedrock_titan_embedding_maps_request_and_vector() -> None:
 
 
 def test_bedrock_titan_rejects_malformed_vector() -> None:
-    client = _Runtime(
-        [{"body": io.BytesIO(json.dumps({"embedding": [0.1]}).encode())}]
-    )
+    client = _Runtime([{"body": io.BytesIO(json.dumps({"embedding": [0.1]}).encode())}])
     adapter = BedrockTitanEmbeddingAdapter(
         settings=_settings(),
         model_name="amazon.titan-embed-text-v2:0",
@@ -182,10 +176,7 @@ def test_bedrock_rerank_maps_original_indexes() -> None:
     assert [item.document_chunk_id for item in results] == [20, 10]
     model = client.calls[0]["rerankingConfiguration"]
     assert model["bedrockRerankingConfiguration"]["modelConfiguration"] == {
-        "modelArn": (
-            "arn:aws:bedrock:ap-northeast-1::"
-            "foundation-model/amazon.rerank-v1:0"
-        )
+        "modelArn": ("arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.rerank-v1:0")
     }
 
 

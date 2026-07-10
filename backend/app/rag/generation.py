@@ -466,9 +466,7 @@ class BedrockConverseAnswerGenerator:
             payload = self.client.converse(
                 modelId=self.model_name,
                 system=[{"text": _system_instructions(request)}],
-                messages=[
-                    {"role": "user", "content": [{"text": _openai_input(request)}]}
-                ],
+                messages=[{"role": "user", "content": [{"text": _openai_input(request)}]}],
                 inferenceConfig=inference_config,
             )
         except Exception as exc:
@@ -795,9 +793,7 @@ def _extract_bedrock_output_text(payload: dict[str, Any]) -> str:
     parts = [
         block["text"].strip()
         for block in content
-        if isinstance(block, dict)
-        and isinstance(block.get("text"), str)
-        and block["text"].strip()
+        if isinstance(block, dict) and isinstance(block.get("text"), str) and block["text"].strip()
     ]
     return "\n".join(parts).strip()
 
