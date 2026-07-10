@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from app.evaluation.gold_v2 import (
     GROUNDED_ANSWER_RUBRIC_VERSION,
     AuxiliaryJudgeDecision,
@@ -22,6 +20,7 @@ from app.evaluation.gold_v2 import (
     requires_human_review,
     validate_dataset_against_catalog,
 )
+from pydantic import ValidationError
 
 
 def _decision_for(case: GoldCaseV2, *, confidence: float = 0.95) -> AuxiliaryJudgeDecision:

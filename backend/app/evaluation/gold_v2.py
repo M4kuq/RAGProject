@@ -528,7 +528,7 @@ def deterministic_audit_bucket(case_id: str, evaluation_fingerprint: str) -> flo
     safe_case_id = _safe_key(case_id)
     if not evaluation_fingerprint or len(evaluation_fingerprint) > 256:
         raise ValueError("evaluation_fingerprint is invalid")
-    digest = hashlib.sha256(f"{safe_case_id}:{evaluation_fingerprint}".encode("utf-8")).digest()
+    digest = hashlib.sha256(f"{safe_case_id}:{evaluation_fingerprint}".encode()).digest()
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
