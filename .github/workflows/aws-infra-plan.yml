@@ -36,6 +36,11 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
+      - name: PowerShell parser and credential-free tests
+        working-directory: .
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
+
       - name: Terraform fmt
         run: terraform fmt -check -recursive
 
