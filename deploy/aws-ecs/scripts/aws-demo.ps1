@@ -619,7 +619,7 @@ function Remove-ActiveTaskDefinitions {
 
   foreach ($family in $Families) {
     $remaining = @()
-    for ($attempt = 1; $attempt -le 6; $attempt++) {
+    for ($attempt = 1; $attempt -le 7; $attempt++) {
       $listJson = Invoke-Native "aws" @(
         "ecs", "list-task-definitions",
         "--family-prefix", $family,
@@ -635,6 +635,7 @@ function Remove-ActiveTaskDefinitions {
           Where-Object { [string]$_ -match $exactPattern }
       )
       if ($remaining.Count -eq 0) { break }
+      if ($attempt -eq 7) { break }
 
       foreach ($taskDefinitionArn in $remaining) {
         Invoke-Native "aws" @(
@@ -645,7 +646,7 @@ function Remove-ActiveTaskDefinitions {
           "--no-cli-pager"
         ) -Capture | Out-Null
       }
-      if ($attempt -lt 6) { Start-Sleep -Seconds 2 }
+      Start-Sleep -Seconds 2
     }
     if ($remaining.Count -gt 0) {
       throw "Active task definition revisions remain for a runtime family."
