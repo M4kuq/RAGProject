@@ -58,7 +58,6 @@ def test_demo_corpus_manifest_rejects_paths_outside_repo(tmp_path: Path) -> None
         raise AssertionError("outside repo paths must be rejected")
 
 
-
 def test_demo_corpus_client_applies_basic_auth_header() -> None:
     client = DemoCorpusApiClient(
         base_url="https://example.test",
@@ -84,6 +83,7 @@ def test_demo_corpus_client_rejects_non_basic_authorization() -> None:
             timeout_seconds=0.1,
             basic_auth_header="Bearer must-not-be-used",
         )
+
 
 def test_ingest_demo_corpus_dry_run_does_not_require_api_login() -> None:
     repo_root = Path(__file__).resolve().parents[2]
