@@ -49,7 +49,7 @@ Terraform sensitive variable または GitHub Actions secret として渡す値:
 | `basic_auth_header_sha256` | CloudFront Function の Basic 認証判定。`Authorization` header 全体の SHA-256 hex | `secrets.BASIC_AUTH_HEADER_SHA256` |
 | `origin_verify_header_value` | CloudFront から ALB origin への private header 値 | `secrets.ORIGIN_VERIFY_HEADER_VALUE` |
 
-これらの plaintext は commit しません。Basic 認証 password、origin verify header value、`.env`、cookie、token は PR や workflow log に出さないでください。
+これらのplaintextはcommitしません。Basic認証password、origin verify header value、`.env`、cookie、tokenはPRやworkflow logに出さないでください。Secrets Manager ARNの読取はECS task execution roleだけに許可し、API/worker containerのtask roleからは`secretsmanager:GetSecretValue`を除外します。
 
 ## 3. GitHub Actions variables / secrets
 
@@ -172,7 +172,7 @@ CI workflow `AWS Infra Plan` は PR では `terraform fmt`、`init -backend=fals
 2. `image_tag` を空にすると workflow 実行コミット SHA が使われます。任意の tag を指定することもできます。
 3. workflow は API image と worker image を `backend/Dockerfile` の `backend` / `worker` target で build し、ECR に push します。
 4. workflow は Terraform が作った migration task definition family を base に、新しい API image tag の revision を登録します。
-5. migration one-off task で `alembic upgrade head` の後に `APP_ENV=local python -m app.scripts.seed --skip-document-indexing --deployed-admin-from-env` を実行します。管理者passwordは専用のSecrets Manager secretからmigration taskだけへ注入し、既知passwordのlocal viewerは作成しません。停止を待って`migration` containerのexit codeが`0`であることを確認します。
+5. migration one-off task で `alembic upgrade head` の後に `APP_ENV=local python -m app.scripts.seed --skip-document-indexing --deployed-admin-from-env` を実行します。管理者passwordは専用のSecrets Manager secretからmigration taskだけへ注入します。既知passwordのlocal viewerは作成せず、以前のseedで残っているlocal admin/viewerは無効化してpasswordも無作為化します。停止を待って`migration` containerのexit codeが`0`であることを確認します。
 6. migration と seed bootstrap 成功後に API/worker task definition revision を登録し、API/worker service を新 revision に更新します。
 7. この workflow は `desired_count` を変更しません。scale-to-zero demo 方針に合わせ、起動が必要な時だけ Terraform 変数または AWS CLI で明示的に増やします。
 

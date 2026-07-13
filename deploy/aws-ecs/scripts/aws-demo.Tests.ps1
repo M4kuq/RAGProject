@@ -52,6 +52,7 @@ $albContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/alb/ma
 $networkContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/network/main.tf") -Raw
 $cloudFrontContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/cloudfront/main.tf") -Raw
 $rootContent = Get-Content -LiteralPath (Join-Path $terraformRoot "main.tf") -Raw
+$iamContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/iam/main.tf") -Raw
 
 Assert-True ($albContent -match 'protocol\s+=\s+"HTTPS"') "ALB listener must use HTTPS"
 Assert-True ($albContent -match 'port\s+=\s+443') "ALB listener must use port 443"
@@ -98,6 +99,7 @@ Assert-True ($frontendWorkflow -match 'git merge-base --is-ancestor "\$SOURCE_SH
 Assert-True ($appWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "app workflow must checkout the validated planned commit"
 Assert-True ($frontendWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "frontend workflow must checkout the validated planned commit"
 Assert-True ($rootContent -match 'RAG_DEMO_ADMIN_PASSWORD\s+=\s+var\.demo_admin_password_secret_arn') "migration must receive the deployed admin password from Secrets Manager"
+Assert-True (($iamContent -split 'secretsmanager:GetSecretValue').Count -eq 2) "only the ECS task execution role may read configured Secrets Manager values"
 Assert-True ($planWorkflow -match "github\.ref == 'refs/heads/deploy/AWS_ECS'") "manual Terraform plan must be restricted to deploy/AWS_ECS"
 
 Write-Host "aws-demo parser and credential-free tests passed."

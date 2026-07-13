@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
-from app.core.security import verify_password
+from app.core.security import hash_password, verify_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
 from app.db.models import (
@@ -615,12 +615,13 @@ def test_deployed_seed_users_omit_known_local_accounts() -> None:
     from app.services.seed import _seed_users
 
     class FakeSession:
-        def __init__(self) -> None:
+        def __init__(self, scalar_results: list[User | None]) -> None:
             self.users: list[User] = []
+            self.scalar_results = scalar_results
 
-        def scalar(self, statement: object) -> None:
+        def scalar(self, statement: object) -> User | None:
             del statement
-            return None
+            return self.scalar_results.pop(0)
 
         def add(self, item: object) -> None:
             if isinstance(item, User):
@@ -633,7 +634,21 @@ def test_deployed_seed_users_omit_known_local_accounts() -> None:
             del model, key
             return object()
 
-    fake_db = FakeSession()
+    old_admin = User(
+        role_id=1,
+        email="admin@example.com",
+        display_name="Local Admin",
+        password_hash=hash_password("password"),
+        status="active",
+    )
+    old_viewer = User(
+        role_id=2,
+        email="viewer@example.com",
+        display_name="Local Viewer",
+        password_hash=hash_password("password"),
+        status="active",
+    )
+    fake_db = FakeSession([old_admin, old_viewer, None])
     roles = {
         "admin": Role(role_id=1, role_name="admin", description="Admin"),
         "viewer": Role(role_id=2, role_name="viewer", description="Viewer"),
@@ -647,6 +662,10 @@ def test_deployed_seed_users_omit_known_local_accounts() -> None:
     )
 
     assert [user.email for user in fake_db.users] == ["aws-admin@example.com"]
+    assert old_admin.status == "disabled"
+    assert old_viewer.status == "disabled"
+    assert not verify_password("password", old_admin.password_hash)
+    assert not verify_password("password", old_viewer.password_hash)
     assert verify_password("strong-deployed-password", fake_db.users[0].password_hash)
     assert not verify_password("password", fake_db.users[0].password_hash)
 

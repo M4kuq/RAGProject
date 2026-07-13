@@ -106,11 +106,11 @@ GitHub Actions 用の deploy role は OIDC trust で `repo:owner/repo:ref:refs/h
 
 ## 7. Bedrock keyless 設計
 
-Nova Lite、Titan Text Embeddings V2、Rerank は API key を持たず、ECS task role の IAM 権限で呼び出します。`iam` module は次の action/resource に限定します。
+Nova Lite、Titan Text Embeddings V2、Rerank はAPI keyを持たず、ECS task roleのIAM権限で呼び出します。アプリtask roleは次のaction/resourceに限定し、Secrets Managerの読取権限は持ちません。task definitionのsecret注入だけは、containerへ公開されないECS task execution roleが行います。
 
 - `bedrock:InvokeModel`: generation と embedding の選択済み foundation model ARN のみ
 - `bedrock:Rerank`: Amazon Bedrock Rerank API は resource-level permission を提供しないため `Resource = "*"`
-- `secretsmanager:GetSecretValue`: 指定された Secret ARN のみ
+- `secretsmanager:GetSecretValue`: ECS task execution roleだけに許可し、task definitionが参照する指定Secret ARNのみに限定
 - `ssm:GetParameter(s)`: 指定された Parameter ARN のみ
 - S3 documents bucket の `source/*` object CRUD のみ
 
@@ -239,10 +239,10 @@ aws ecs run-task \
 task command:
 
 ```bash
-sh -c 'alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing'
+sh -c 'alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing --deployed-admin-from-env'
 ```
 
-seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。AWS migrationでは `--deployed-admin-from-env` を併用し、Secrets Managerから注入された16文字以上の管理者passwordを使って管理者だけを作成します。既知のlocal demo passwordを持つviewerは作成しません。`--skip-document-indexing` によりmigration時はQdrantへ書き込まず、runtime起動後にS3のsource documentsをBedrock Titan V2でindexします。
+seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。AWS migrationでは `--deployed-admin-from-env` を併用し、Secrets Managerから注入された16文字以上の管理者passwordを使って管理者だけを作成します。既知のlocal demo passwordを持つviewerは作成せず、以前のseedで残っているlocal admin/viewerは無効化してpasswordも無作為化します。`--skip-document-indexing` によりmigration時はQdrantへ書き込まず、runtime起動後にS3のsource documentsをBedrock Titan V2でindexします。
 
 成功後に `api_desired_count` と `qdrant_desired_count` を必要数へ変更して再 apply します。`worker_desired_count` はdocument indexingを行う間だけ増やし、処理後はscale-to-zeroへ戻してください。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
 

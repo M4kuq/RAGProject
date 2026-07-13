@@ -199,17 +199,6 @@ data "aws_iam_policy_document" "ecs_task" {
   }
 
   dynamic "statement" {
-    for_each = length(var.secret_arns) > 0 ? [1] : []
-
-    content {
-      sid       = "ReadConfiguredSecrets"
-      effect    = "Allow"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = var.secret_arns
-    }
-  }
-
-  dynamic "statement" {
     for_each = length(var.ssm_parameter_arns) > 0 ? [1] : []
 
     content {

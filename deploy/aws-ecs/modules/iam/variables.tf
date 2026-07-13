@@ -71,7 +71,7 @@ variable "cloudfront_distribution_arn" {
 }
 
 variable "secret_arns" {
-  description = "Secrets Manager ARNs readable by ECS tasks and task execution."
+  description = "Secrets Manager ARNs injectable by the ECS task execution role. Application task credentials cannot read them directly."
   type        = list(string)
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -250,6 +251,13 @@ def _seed_users(
     if deployed_mode:
         assert deployed_admin_email is not None
         assert deployed_admin_password is not None
+        for local_email in ("admin@example.com", "viewer@example.com"):
+            if local_email == deployed_admin_email:
+                continue
+            local_user = db.scalar(select(User).where(User.email == local_email))
+            if local_user is not None:
+                local_user.status = "disabled"
+                local_user.password_hash = hash_password(secrets.token_urlsafe(32))
         users = [(deployed_admin_email, "Admin", "admin", deployed_admin_password)]
     else:
         users = [
@@ -269,7 +277,10 @@ def _seed_users(
             db.add(user)
             db.flush()
         elif deployed_mode:
+            user.role_id = roles["admin"].role_id
+            user.display_name = display_name
             user.password_hash = hash_password(password)
+            user.status = "active"
         if not db.get(UserSetting, user.user_id):
             db.add(UserSetting(user_id=user.user_id))
 

@@ -232,7 +232,7 @@ variable "route53_hosted_zone_id" {
 }
 
 variable "additional_secret_arns" {
-  description = "Additional Secrets Manager ARNs the ECS tasks may read."
+  description = "Additional Secrets Manager ARNs the ECS task execution role may inject. They are not granted to the application task role."
   type        = list(string)
   default     = []
 }
