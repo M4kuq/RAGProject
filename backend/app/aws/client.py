@@ -8,13 +8,22 @@ from botocore.config import Config
 from app.core.config import Settings
 
 
-def create_aws_client(service_name: str, settings: Settings) -> Any:
+def create_aws_client(
+    service_name: str,
+    settings: Settings,
+    *,
+    read_timeout_seconds: float | None = None,
+) -> Any:
     return boto3.client(
         service_name,
         region_name=settings.aws_region,
         config=Config(
             connect_timeout=settings.aws_sdk_connect_timeout_seconds,
-            read_timeout=settings.aws_sdk_read_timeout_seconds,
+            read_timeout=(
+                settings.aws_sdk_read_timeout_seconds
+                if read_timeout_seconds is None
+                else read_timeout_seconds
+            ),
             retries={"mode": "standard", "total_max_attempts": settings.aws_sdk_max_attempts},
             user_agent_extra="ragproject",
         ),

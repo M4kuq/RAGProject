@@ -143,6 +143,11 @@ variable "secret_environment" {
   type        = map(string)
 }
 
+variable "migration_secret_environment" {
+  description = "Secret environment variables for the one-off migration task, mapping env name to Secrets Manager ARN."
+  type        = map(string)
+}
+
 variable "api_log_group_name" {
   description = "API log group name."
   type        = string

@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
+from app.core.security import verify_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
 from app.db.models import (
@@ -608,6 +609,46 @@ def test_phase2_evaluation_dataset_strategy_orm_fields() -> None:
     assert all(value in run_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
     assert all(value in item_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
     assert all(value in result_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
+
+
+def test_deployed_seed_users_omit_known_local_accounts() -> None:
+    from app.services.seed import _seed_users
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.users: list[User] = []
+
+        def scalar(self, statement: object) -> None:
+            del statement
+            return None
+
+        def add(self, item: object) -> None:
+            if isinstance(item, User):
+                self.users.append(item)
+
+        def flush(self) -> None:
+            return None
+
+        def get(self, model: object, key: object) -> object:
+            del model, key
+            return object()
+
+    fake_db = FakeSession()
+    roles = {
+        "admin": Role(role_id=1, role_name="admin", description="Admin"),
+        "viewer": Role(role_id=2, role_name="viewer", description="Viewer"),
+    }
+
+    _seed_users(
+        cast(Any, fake_db),
+        roles,
+        deployed_admin_email="aws-admin@example.com",
+        deployed_admin_password="strong-deployed-password",
+    )
+
+    assert [user.email for user in fake_db.users] == ["aws-admin@example.com"]
+    assert verify_password("strong-deployed-password", fake_db.users[0].password_hash)
+    assert not verify_password("password", fake_db.users[0].password_hash)
 
 
 def test_seed_can_run_twice_without_duplicates(

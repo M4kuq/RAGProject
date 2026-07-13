@@ -207,8 +207,14 @@ def test_bedrock_rerank_rejects_duplicate_indexes() -> None:
 def test_bedrock_settings_and_factories(monkeypatch: pytest.MonkeyPatch) -> None:
     clients: list[str] = []
 
-    def fake_client(service_name: str, settings: Settings) -> Any:
-        clients.append(service_name)
+    def fake_client(
+        service_name: str,
+        settings: Settings,
+        *,
+        read_timeout_seconds: float | None = None,
+    ) -> Any:
+        del settings
+        clients.append(f"{service_name}:{read_timeout_seconds}")
         if service_name == "bedrock-agent-runtime":
             return _Rerank({"results": []})
         return _Runtime([])
@@ -226,13 +232,20 @@ def test_bedrock_settings_and_factories(monkeypatch: pytest.MonkeyPatch) -> None
         rerank_provider="bedrock",
         embedding_vector_dimension=1024,
     )
-    assert isinstance(create_answer_generator(settings), BedrockConverseAnswerGenerator)
+    assert isinstance(
+        create_answer_generator(settings, timeout_seconds=123),
+        BedrockConverseAnswerGenerator,
+    )
     assert isinstance(create_embedding_adapter(settings), BedrockTitanEmbeddingAdapter)
     assert isinstance(create_reranker(settings), BedrockRerankerClient)
     assert settings.generation_model_name == settings.bedrock_generation_model_id
     assert settings.embedding_model == settings.bedrock_embedding_model_id
     assert settings.reranker_model == settings.bedrock_rerank_model_id
-    assert clients == ["bedrock-runtime", "bedrock-runtime", "bedrock-agent-runtime"]
+    assert clients == [
+        "bedrock-runtime:123",
+        "bedrock-runtime:None",
+        "bedrock-agent-runtime:None",
+    ]
 
 
 def test_bedrock_embedding_dimension_is_restricted() -> None:

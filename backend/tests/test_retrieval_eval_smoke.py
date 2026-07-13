@@ -588,6 +588,40 @@ def test_seed_script_can_skip_document_indexing(monkeypatch: pytest.MonkeyPatch)
     assert calls == [False]
 
 
+def test_seed_script_reads_deployed_admin_only_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.scripts.seed as seed_script
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSession:
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    monkeypatch.setenv("RAG_DEMO_ADMIN_EMAIL", "aws-admin@example.com")
+    monkeypatch.setenv("RAG_DEMO_ADMIN_PASSWORD", "strong-deployed-password")
+    monkeypatch.setattr(seed_script, "SessionLocal", FakeSession)
+    monkeypatch.setattr(
+        seed_script,
+        "seed",
+        lambda db, **kwargs: calls.append(kwargs),
+    )
+
+    seed_script.main(["--skip-document-indexing", "--deployed-admin-from-env"])
+
+    assert calls == [
+        {
+            "index_documents": False,
+            "deployed_admin_email": "aws-admin@example.com",
+            "deployed_admin_password": "strong-deployed-password",
+        }
+    ]
+
+
 def test_threshold_warn_result_does_not_depend_on_mode() -> None:
     artifact: dict[str, object] = {
         "summary": {"failed_count": 0},

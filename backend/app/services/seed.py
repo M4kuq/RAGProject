@@ -169,16 +169,32 @@ DEMO_DOCUMENTS: tuple[DemoDocument, ...] = (
 )
 
 
-def seed(db: Session, *, index_documents: bool = True) -> None:
+def seed(
+    db: Session,
+    *,
+    index_documents: bool = True,
+    deployed_admin_email: str | None = None,
+    deployed_admin_password: str | None = None,
+) -> None:
     settings = get_settings()
     if settings.app_env.lower() not in {"local", "ci", "test"}:
         raise RuntimeError("Seed is only allowed in local, ci, or test environments.")
+    if (deployed_admin_email is None) != (deployed_admin_password is None):
+        raise ValueError("Deployed admin email and password must be provided together.")
+    if deployed_admin_password is not None and len(deployed_admin_password) < 16:
+        raise ValueError("Deployed admin password must contain at least 16 characters.")
 
     roles = _seed_roles(db)
-    _seed_users(db, roles)
+    _seed_users(
+        db,
+        roles,
+        deployed_admin_email=deployed_admin_email,
+        deployed_admin_password=deployed_admin_password,
+    )
     _seed_system_settings(db)
 
-    admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+    admin_email = deployed_admin_email or "admin@example.com"
+    admin = db.scalar(select(User).where(User.email == admin_email))
     if admin:
         for document in DEMO_DOCUMENTS:
             _seed_demo_document(
@@ -222,23 +238,38 @@ def _seed_roles(db: Session) -> dict[str, Role]:
     return roles
 
 
-def _seed_users(db: Session, roles: dict[str, Role]) -> None:
-    users = [
-        ("admin@example.com", "Admin", "admin"),
-        ("viewer@example.com", "Viewer", "viewer"),
-    ]
-    for email, display_name, role_name in users:
+def _seed_users(
+    db: Session,
+    roles: dict[str, Role],
+    *,
+    deployed_admin_email: str | None,
+    deployed_admin_password: str | None,
+) -> None:
+    deployed_mode = deployed_admin_email is not None and deployed_admin_password is not None
+    users: list[tuple[str, str, str, str]]
+    if deployed_mode:
+        assert deployed_admin_email is not None
+        assert deployed_admin_password is not None
+        users = [(deployed_admin_email, "Admin", "admin", deployed_admin_password)]
+    else:
+        users = [
+            ("admin@example.com", "Admin", "admin", DEMO_PASSWORD),
+            ("viewer@example.com", "Viewer", "viewer", DEMO_PASSWORD),
+        ]
+    for email, display_name, role_name, password in users:
         user = db.scalar(select(User).where(User.email == email))
         if not user:
             user = User(
                 role_id=roles[role_name].role_id,
                 email=email,
                 display_name=display_name,
-                password_hash=hash_password(DEMO_PASSWORD),
+                password_hash=hash_password(password),
                 status="active",
             )
             db.add(user)
             db.flush()
+        elif deployed_mode:
+            user.password_hash = hash_password(password)
         if not db.get(UserSetting, user.user_id):
             db.add(UserSetting(user_id=user.user_id))
 

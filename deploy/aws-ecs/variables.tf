@@ -181,6 +181,11 @@ variable "session_secret_arn" {
   type        = string
 }
 
+variable "demo_admin_password_secret_arn" {
+  description = "Secrets Manager ARN containing the deployed demo administrator password. The plaintext value is never stored in Terraform files."
+  type        = string
+}
+
 variable "app_public_origin" {
   description = "Public HTTPS origin allowed by backend CSRF checks, for example https://d111111abcdef8.cloudfront.net. Leave null to use this stack's CloudFront default domain."
   type        = string

@@ -49,6 +49,7 @@ env:
   TF_VAR_github_oidc_provider_arn: ${{ vars.GITHUB_OIDC_PROVIDER_ARN }}
   TF_VAR_database_url_secret_arn: ${{ vars.DATABASE_URL_SECRET_ARN }}
   TF_VAR_session_secret_arn: ${{ vars.SESSION_SECRET_ARN }}
+  TF_VAR_demo_admin_password_secret_arn: ${{ vars.DEMO_ADMIN_PASSWORD_SECRET_ARN }}
   TF_VAR_alb_origin_domain_name: ${{ vars.ALB_ORIGIN_DOMAIN_NAME }}
   TF_VAR_alb_certificate_arn: ${{ vars.ALB_CERTIFICATE_ARN }}
   TF_VAR_route53_hosted_zone_id: ${{ vars.ROUTE53_HOSTED_ZONE_ID }}
@@ -86,12 +87,12 @@ jobs:
             gh run list \
               --workflow aws-demo.yml \
               --branch deploy/AWS_ECS \
-              --status in_progress \
               --limit 100 \
-              --json databaseId,displayTitle |
+              --json databaseId,displayTitle,status |
               jq --arg run_id "$GITHUB_RUN_ID" '
                 [.[] |
                   select((.databaseId | tostring) != $run_id) |
+                  select(.status != "completed") |
                   select(.displayTitle == "AWS Demo up" or .displayTitle == "AWS Demo down")
                 ] | length
               '

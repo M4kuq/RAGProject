@@ -66,10 +66,23 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout planned commit
+      - name: Checkout trusted deploy branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: deploy/AWS_ECS
+          fetch-depth: 0
+
+      - name: Verify planned commit belongs to deploy branch
+        shell: bash
+        run: |
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "origin/deploy/AWS_ECS"; then
+            echo "source_sha must be the deploy branch head or one of its ancestors."
+            exit 1
+          fi
+
+      - name: Checkout planned commit
+        shell: bash
+        run: git checkout --detach "$SOURCE_SHA"
 
       - name: Validate image tag
         shell: bash

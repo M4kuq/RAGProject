@@ -461,11 +461,21 @@ class BedrockConverseAnswerGenerator:
         settings: Settings,
         model_name: str,
         max_output_tokens: int,
+        timeout_seconds: float | None = None,
         client: Any | None = None,
     ) -> None:
         self.model_name = model_name
         self.max_output_tokens = max_output_tokens
-        self.client = client or create_aws_client("bedrock-runtime", settings)
+        if client is not None:
+            self.client = client
+        elif timeout_seconds is None:
+            self.client = create_aws_client("bedrock-runtime", settings)
+        else:
+            self.client = create_aws_client(
+                "bedrock-runtime",
+                settings,
+                read_timeout_seconds=timeout_seconds,
+            )
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
@@ -515,6 +525,7 @@ def create_answer_generator(
             settings=settings,
             model_name=model_name or settings.bedrock_generation_model_id,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+            timeout_seconds=timeout_seconds,
         )
     if generation_provider == "fake":
         return FakeAnswerGenerator()

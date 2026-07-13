@@ -130,6 +130,7 @@ function Assert-BackendEnvironment {
     "TF_VAR_github_oidc_provider_arn",
     "TF_VAR_database_url_secret_arn",
     "TF_VAR_session_secret_arn",
+    "TF_VAR_demo_admin_password_secret_arn",
     "TF_VAR_alb_origin_domain_name",
     "TF_VAR_alb_certificate_arn",
     "TF_VAR_route53_hosted_zone_id",

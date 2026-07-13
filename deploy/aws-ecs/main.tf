@@ -7,7 +7,7 @@ check "alb_certificate_region" {
 
 locals {
   name_prefix          = "${var.project}-${var.environment}"
-  secret_arns          = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
+  secret_arns          = distinct(concat([var.database_url_secret_arn, var.session_secret_arn, var.demo_admin_password_secret_arn], var.additional_secret_arns))
   api_image            = "${module.ecr.repository_urls["api"]}:${var.api_image_tag}"
   worker_image         = "${module.ecr.repository_urls["worker"]}:${var.worker_image_tag}"
   app_public_origin    = coalesce(var.app_public_origin, "https://${module.cloudfront.domain_name}")
@@ -33,6 +33,7 @@ locals {
     EMBEDDING_MODEL             = var.bedrock_embedding_model_id
     RERANK_PROVIDER             = "bedrock"
     RERANKER_MODEL              = var.bedrock_rerank_model_id
+    RAG_DEMO_ADMIN_EMAIL        = "admin@example.com"
     BEDROCK_GENERATION_MODEL_ID = var.bedrock_generation_model_id
     BEDROCK_EMBEDDING_MODEL_ID  = var.bedrock_embedding_model_id
     BEDROCK_RERANK_MODEL_ID     = var.bedrock_rerank_model_id
@@ -172,6 +173,11 @@ module "ecs" {
   secret_environment = {
     DATABASE_URL   = var.database_url_secret_arn
     SESSION_SECRET = var.session_secret_arn
+  }
+  migration_secret_environment = {
+    DATABASE_URL            = var.database_url_secret_arn
+    SESSION_SECRET          = var.session_secret_arn
+    RAG_DEMO_ADMIN_PASSWORD = var.demo_admin_password_secret_arn
   }
   api_log_group_name    = module.observability.api_log_group_name
   worker_log_group_name = module.observability.worker_log_group_name

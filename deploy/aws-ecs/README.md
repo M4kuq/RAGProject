@@ -53,7 +53,7 @@ root module は各 module をつなぐ orchestration だけを持ちます。例
 
 Fargate は EC2 worker node の OS patch、capacity 管理、AMI 更新を持たないため、デモ環境の運用負担を下げられます。API、worker、Qdrant は `desired_count = 0` を default にしており、普段は task 課金を止めます。
 
-必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1` のように増やす想定です。Qdrant の `/qdrant/storage` は NFS/EFS ではなく、ECS service-managed EBS の `gp3` block storage を mount します。これは Qdrant の storage 要件に合わせるためです。ただし ECS service が管理する EBS volume は task replacement や scale-to-zero で削除されるため、Qdrant collection は永続的な source of truth ではありません。task 置換、scale-to-zero 後の再起動、Bedrock adapter 有効化後は source documents から再indexしてください。
+必要なときだけ `api_desired_count = 1`、`qdrant_desired_count = 1` のように増やす想定です。Qdrant の `/qdrant/storage` は NFS/EFS ではなく、ECS service-managed EBS の `gp3` block storage を mount します。これは Qdrant の storage 要件に合わせるためです。ただし ECS service が管理する EBS volume は task replacement や scale-to-zero で削除されるため、Qdrant collection は永続的な source of truth ではありません。task 置換またはscale-to-zero後の再起動では、S3のsource documentsからBedrock Titan V2で再indexしてください。
 
 `worker_desired_count` の既定値はscale-to-zeroのため `0` です。document upload/indexingを行う時間だけ `1` に上げられます。APIとworkerは同じS3 objectを参照し、job state/lease/retryは既存PostgreSQL job tableを使います。
 
@@ -167,7 +167,7 @@ terraform validate
 - `terraform apply`
 - 実 AWS resource 作成
 - secret 値の投入
-- app code の Bedrock adapter 実装
+- 実AWSでのBedrock model access/lifecycle確認とend-to-end smoke
 
 初回 apply 前の注意:
 
@@ -242,7 +242,7 @@ task command:
 sh -c 'alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing'
 ```
 
-seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。`--skip-document-indexing` により Qdrant への document indexing は実行しないため、Bedrock adapter 未実装または fake provider のままでも `document_chunks_bedrock_titan_v2` に fake vector は入りません。Bedrock Titan V2 を有効化した後、document indexing だけを別途実行してください。
+seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。AWS migrationでは `--deployed-admin-from-env` を併用し、Secrets Managerから注入された16文字以上の管理者passwordを使って管理者だけを作成します。既知のlocal demo passwordを持つviewerは作成しません。`--skip-document-indexing` によりmigration時はQdrantへ書き込まず、runtime起動後にS3のsource documentsをBedrock Titan V2でindexします。
 
 成功後に `api_desired_count` と `qdrant_desired_count` を必要数へ変更して再 apply します。`worker_desired_count` はdocument indexingを行う間だけ増やし、処理後はscale-to-zeroへ戻してください。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
 
@@ -259,7 +259,7 @@ create_github_oidc_provider = false
 
 ### Embedding demo defaults
 
-ECS demo は Bedrock adapter 有効化前の安全側 default として `EMBEDDING_PROVIDER=fake` を維持しますが、`EMBEDDING_VECTOR_DIMENSION` と `EMBEDDING_FAKE_DIMENSION` はどちらも `1024` にします。fake embedding は CI/ローカル用途の default であり、本番 document indexing は Bedrock Titan V2 を有効化した後に実行してください。これにより fake provider を使う検証時も `document_chunks_bedrock_titan_v2` の vector dimension は Titan V2 想定と揃いますが、fake vector 自体を本番データとして扱うことは避けます。
+ECS demo は `EMBEDDING_PROVIDER=bedrock` と `BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0` を既定にし、vector dimensionは`1024`です。CI/ローカルでは引き続きfake embeddingを選択できますが、AWS runtimeのdocument indexingはBedrock Titan V2を呼び出します。初回起動前にBedrock model accessを確認し、Qdrant再作成後はS3のsource documentsを再indexしてください。
 
 
 ## One-command demo lifecycle

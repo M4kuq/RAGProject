@@ -224,7 +224,7 @@ resource "aws_ecs_task_definition" "migration" {
       name      = "migration"
       image     = var.api_image
       essential = true
-      command   = ["sh", "-c", "alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing"]
+      command   = ["sh", "-c", "alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing --deployed-admin-from-env"]
       environment = [
         for name, value in local.app_environment : {
           name  = name
@@ -232,7 +232,7 @@ resource "aws_ecs_task_definition" "migration" {
         }
       ]
       secrets = [
-        for name, value_from in var.secret_environment : {
+        for name, value_from in var.migration_secret_environment : {
           name      = name
           valueFrom = value_from
         }

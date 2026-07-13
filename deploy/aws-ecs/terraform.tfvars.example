@@ -15,8 +15,9 @@ worker_image_tag = "placeholder"
 graph_store_provider = "postgres"
 
 # Store the actual values in Secrets Manager, not in Terraform files.
-database_url_secret_arn = "REPLACE_WITH_DATABASE_URL_SECRET_ARN"
-session_secret_arn      = "REPLACE_WITH_SESSION_SECRET_ARN"
+database_url_secret_arn        = "REPLACE_WITH_DATABASE_URL_SECRET_ARN"
+session_secret_arn             = "REPLACE_WITH_SESSION_SECRET_ARN"
+demo_admin_password_secret_arn = "REPLACE_WITH_DEMO_ADMIN_PASSWORD_SECRET_ARN"
 
 # Bootstrap prerequisites: public Route 53 zone and an Issued ACM certificate in ap-northeast-1.
 alb_origin_domain_name = "origin.example.com"
