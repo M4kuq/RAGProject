@@ -93,7 +93,6 @@ def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
     assert client.bodies[0].was_closed
 
     storage.delete(storage_key=key, version_id=version_id)
-    assert not storage.exists(storage_key=key)
     assert client.calls[-1] == (
         "delete",
         {
@@ -102,6 +101,7 @@ def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
             "VersionId": "version-1",
         },
     )
+    assert not storage.exists(storage_key=key)
 
 
 @pytest.mark.parametrize(
