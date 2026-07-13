@@ -291,6 +291,7 @@ class Settings(BaseSettings):
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
     bedrock_generation_model_id: str = "amazon.nova-lite-v1:0"
+    generation_retry_on_insufficient_evidence: bool = True
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
@@ -312,6 +313,7 @@ class Settings(BaseSettings):
     groundedness_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     mcp_enabled: bool = True
     mcp_transport: str = "stdio"
+    mcp_http_api_key: str | None = None
     mcp_local_only: bool = True
     mcp_actor_mode: str = "mcp_local"
     mcp_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
@@ -652,9 +654,12 @@ class Settings(BaseSettings):
             raise ValueError("GEMINI_BASE_URL is required when GENERATION_PROVIDER=gemini")
         if self.generation_provider == "gemini" and not self.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is required when GENERATION_PROVIDER=gemini")
-        self.mcp_transport = self.mcp_transport.lower()
-        if self.mcp_transport != "stdio":
-            raise ValueError("MCP_TRANSPORT must be stdio in Phase1")
+        self.mcp_transport = self.mcp_transport.strip().lower()
+        self.mcp_http_api_key = self.mcp_http_api_key.strip() if self.mcp_http_api_key else None
+        if self.mcp_transport not in {"stdio", "http"}:
+            raise ValueError("MCP_TRANSPORT must be stdio or http")
+        if self.mcp_transport == "http" and not self.mcp_http_api_key:
+            raise ValueError("MCP_HTTP_API_KEY is required when MCP_TRANSPORT=http")
         if not self.mcp_local_only:
             raise ValueError("MCP_LOCAL_ONLY must be true in Phase1")
         if self.mcp_actor_mode != "mcp_local":

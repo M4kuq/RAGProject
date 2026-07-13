@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.error_handlers import register_error_handlers
 from app.api.middleware import RequestIdMiddleware
-from app.api.routers import admin, auth, chat, documents, health, jobs, rag
+from app.api.routers import admin, auth, chat, documents, health, jobs, mcp, rag
 from app.core.config import get_settings
+from app.mcp.http_transport import MCP_PROTOCOL_VERSION_HEADER
+from app.mcp.settings import get_mcp_settings
 
 
 def create_app() -> FastAPI:
@@ -18,7 +20,13 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", settings.csrf_header_name, "X-Request-ID"],
+        allow_headers=[
+            "Content-Type",
+            settings.csrf_header_name,
+            "X-Request-ID",
+            "Authorization",
+            MCP_PROTOCOL_VERSION_HEADER,
+        ],
     )
     register_error_handlers(app)
     app.include_router(health.router)
@@ -28,6 +36,9 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
     app.include_router(rag.router, prefix="/api/v1/rag", tags=["rag"])
     app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
+    mcp_settings = get_mcp_settings(settings)
+    if mcp_settings.enabled and mcp_settings.transport == "http":
+        app.include_router(mcp.router, tags=["mcp"])
     return app
 
 

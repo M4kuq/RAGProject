@@ -109,6 +109,17 @@ def calculate_confidence(inputs: ConfidenceInputs, settings: Settings) -> Confid
     )
 
 
+def has_high_retrieval_support(summary: RetrievalScoreSummary) -> bool:
+    """Return whether retrieval/rerank support is strong enough for High gating."""
+    return (
+        _retrieval_support_score(
+            summary.top1_retrieval_score,
+            summary.top1_rerank_score,
+        )
+        >= _HIGH_RETRIEVAL_SUPPORT_FLOOR
+    )
+
+
 def _confidence_label(
     *,
     answer_confidence: float,
