@@ -79,6 +79,7 @@ Assert-True ($content -match 'if \(\$attempt -eq 7\) \{ break \}') "the final cl
 Assert-True ($content -match 'Smoke search returned no results') "smoke must fail on an empty retrieval result"
 Assert-True ($content -match 'Get-TerraformOutput "database_name"') "database URL must use the configured database name"
 Assert-True (($content -split 'source_sha = \$context\.GitSha').Count -eq 3) "both deploy workflows must receive the exact planned commit"
+Assert-True (($content -split 'github_deploy_role_arn = Get-TerraformOutput "github_deploy_role_arn"').Count -eq 3) "both deploy workflows must receive the freshly-created deploy role"
 Assert-True ($content -match 'Key=Lifecycle,Values=runtime') "remnant checks must exclude persistent bootstrap resources"
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $terraformRoot "../.."))
@@ -98,6 +99,10 @@ Assert-True ($appWorkflow -match 'git merge-base --is-ancestor "\$SOURCE_SHA" "o
 Assert-True ($frontendWorkflow -match 'git merge-base --is-ancestor "\$SOURCE_SHA" "origin/deploy/AWS_ECS"') "frontend workflow must restrict source_sha to the deploy branch history"
 Assert-True ($appWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "app workflow must checkout the validated planned commit"
 Assert-True ($frontendWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "frontend workflow must checkout the validated planned commit"
+Assert-True ($appWorkflow -match 'role-to-assume: \$\{\{ env\.AWS_DEPLOY_ROLE_ARN \}\}') "app workflow must use the deploy role supplied by fresh Terraform output"
+Assert-True ($frontendWorkflow -match 'role-to-assume: \$\{\{ env\.AWS_DEPLOY_ROLE_ARN \}\}') "frontend workflow must use the deploy role supplied by fresh Terraform output"
+Assert-True (($appWorkflow -split 'github_deploy_role_arn').Count -ge 3) "app workflow must validate and export the fresh deploy role"
+Assert-True (($frontendWorkflow -split 'github_deploy_role_arn').Count -ge 3) "frontend workflow must validate and export the fresh deploy role"
 Assert-True ($rootContent -match 'RAG_DEMO_ADMIN_PASSWORD\s+=\s+var\.demo_admin_password_secret_arn') "migration must receive the deployed admin password from Secrets Manager"
 Assert-True (($iamContent -split 'secretsmanager:GetSecretValue').Count -eq 2) "only the ECS task execution role may read configured Secrets Manager values"
 Assert-True ($iamContent -match 'local\.bedrock_rerank_model_arn') "rerank model ARN must be included in bedrock InvokeModel resources"

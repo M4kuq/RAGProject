@@ -194,15 +194,15 @@ def seed(
     )
     _seed_system_settings(db)
 
-    admin_email = deployed_admin_email or "admin@example.com"
-    admin = db.scalar(select(User).where(User.email == admin_email))
-    if admin:
-        for document in DEMO_DOCUMENTS:
-            _seed_demo_document(
-                db,
-                owner_user_id=admin.user_id,
-                document=document,
-            )
+    if deployed_admin_email is None:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        if admin:
+            for document in DEMO_DOCUMENTS:
+                _seed_demo_document(
+                    db,
+                    owner_user_id=admin.user_id,
+                    document=document,
+                )
 
     db.commit()
     if index_documents:

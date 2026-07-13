@@ -25,6 +25,7 @@ env:
   SOURCE_SHA: ${{ inputs.source_sha }}
   FRONTEND_BUCKET_NAME: ${{ vars.FRONTEND_BUCKET_NAME }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
   DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
 
 jobs:
@@ -84,18 +85,20 @@ jobs:
           set -euo pipefail
           jq -e '
             (.frontend_bucket_name | test("^[a-z0-9.-]+$")) and
-            (.cloudfront_distribution_id | test("^[A-Z0-9]+$"))
+            (.cloudfront_distribution_id | test("^[A-Z0-9]+$")) and
+            (.github_deploy_role_arn | test("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+-github-deploy$"))
           ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
           {
             echo "FRONTEND_BUCKET_NAME=$(jq -r '.frontend_bucket_name' <<< "$DEPLOYMENT_CONFIG")"
             echo "CLOUDFRONT_DISTRIBUTION_ID=$(jq -r '.cloudfront_distribution_id' <<< "$DEPLOYMENT_CONFIG")"
+            echo "AWS_DEPLOY_ROLE_ARN=$(jq -r '.github_deploy_role_arn' <<< "$DEPLOYMENT_CONFIG")"
           } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

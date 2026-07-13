@@ -242,7 +242,7 @@ task command:
 sh -c 'alembic upgrade head && APP_ENV=local python -m app.scripts.seed --skip-document-indexing --deployed-admin-from-env'
 ```
 
-seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。AWS migrationでは `--deployed-admin-from-env` を併用し、Secrets Managerから注入された16文字以上の管理者passwordを使って管理者だけを作成します。既知のlocal demo passwordを持つviewerは作成せず、以前のseedで残っているlocal admin/viewerは無効化してpasswordも無作為化します。`--skip-document-indexing` によりmigration時はQdrantへ書き込まず、runtime起動後にS3のsource documentsをBedrock Titan V2でindexします。
+seed の `APP_ENV=local` は seed CLI の安全ガードを通すため、この command の seed 実行だけに限定します。AWS migrationでは `--deployed-admin-from-env` を併用し、Secrets Managerから注入された16文字以上の管理者passwordを使って管理者だけを作成します。既知のlocal demo passwordを持つviewerと、Qdrant未投入のままreadyになるdemo documentsは作成せず、以前のseedで残っているlocal admin/viewerは無効化してpasswordも無作為化します。`--skip-document-indexing` によりmigration時はQdrantへ書き込まず、runtime起動後にS3のsource documentsをBedrock Titan V2でindexします。
 
 成功後に `api_desired_count` と `qdrant_desired_count` を必要数へ変更して再 apply します。`worker_desired_count` はdocument indexingを行う間だけ増やし、処理後はscale-to-zeroへ戻してください。ECS service は `desired_count` を ignore しないため、変数変更が反映されます。
 

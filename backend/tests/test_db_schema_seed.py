@@ -1147,3 +1147,42 @@ class _CapturingIndexingService:
 class _CleanupCall:
     document_version_id: int
     chunk_ids: list[int]
+
+
+def test_deployed_seed_omits_unindexed_demo_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.seed as seed_module
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.committed = False
+
+        def commit(self) -> None:
+            self.committed = True
+
+    fake_db = FakeSession()
+    seeded_documents: list[object] = []
+    monkeypatch.setattr(
+        seed_module,
+        "get_settings",
+        lambda: type("FakeSettings", (), {"app_env": "local"})(),
+    )
+    monkeypatch.setattr(seed_module, "_seed_roles", lambda db: {})
+    monkeypatch.setattr(seed_module, "_seed_users", lambda db, roles, **kwargs: None)
+    monkeypatch.setattr(seed_module, "_seed_system_settings", lambda db: None)
+    monkeypatch.setattr(
+        seed_module,
+        "_seed_demo_document",
+        lambda db, **kwargs: seeded_documents.append(kwargs),
+    )
+
+    seed_module.seed(
+        cast(Any, fake_db),
+        index_documents=False,
+        deployed_admin_email="aws-admin@example.com",
+        deployed_admin_password="strong-deployed-password",
+    )
+
+    assert fake_db.committed is True
+    assert seeded_documents == []

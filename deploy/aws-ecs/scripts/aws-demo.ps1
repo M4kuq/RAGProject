@@ -310,6 +310,7 @@ function Get-AppDeploymentConfig {
     ecs_api_task_definition = Get-TerraformOutput "api_task_definition_family"
     ecs_worker_task_definition = Get-TerraformOutput "worker_task_definition_family"
     ecs_migration_task_definition = Get-TerraformOutput "migration_task_definition_family"
+    github_deploy_role_arn = Get-TerraformOutput "github_deploy_role_arn"
   } | ConvertTo-Json -Depth 4 -Compress)
 }
 
@@ -317,6 +318,7 @@ function Get-FrontendDeploymentConfig {
   return ([ordered]@{
     frontend_bucket_name = Get-TerraformOutput "frontend_bucket_name"
     cloudfront_distribution_id = Get-TerraformOutput "cloudfront_distribution_id"
+    github_deploy_role_arn = Get-TerraformOutput "github_deploy_role_arn"
   } | ConvertTo-Json -Compress)
 }
 

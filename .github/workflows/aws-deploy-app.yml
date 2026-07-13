@@ -38,6 +38,7 @@ env:
   ECS_API_TASK_DEFINITION: ${{ vars.ECS_API_TASK_DEFINITION }}
   ECS_WORKER_TASK_DEFINITION: ${{ vars.ECS_WORKER_TASK_DEFINITION }}
   ECS_MIGRATION_TASK_DEFINITION: ${{ vars.ECS_MIGRATION_TASK_DEFINITION }}
+  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
   DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
 
 jobs:
@@ -109,7 +110,8 @@ jobs:
             (.ecs_worker_service_name | test("^[A-Za-z0-9_-]+$")) and
             (.ecs_api_task_definition | test("^[A-Za-z0-9_-]+$")) and
             (.ecs_worker_task_definition | test("^[A-Za-z0-9_-]+$")) and
-            (.ecs_migration_task_definition | test("^[A-Za-z0-9_-]+$"))
+            (.ecs_migration_task_definition | test("^[A-Za-z0-9_-]+$")) and
+            (.github_deploy_role_arn | test("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+-github-deploy$"))
           ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
           {
             echo "API_ECR_REPOSITORY_URL=$(jq -r '.api_ecr_repository_url' <<< "$DEPLOYMENT_CONFIG")"
@@ -122,13 +124,14 @@ jobs:
             echo "ECS_API_TASK_DEFINITION=$(jq -r '.ecs_api_task_definition' <<< "$DEPLOYMENT_CONFIG")"
             echo "ECS_WORKER_TASK_DEFINITION=$(jq -r '.ecs_worker_task_definition' <<< "$DEPLOYMENT_CONFIG")"
             echo "ECS_MIGRATION_TASK_DEFINITION=$(jq -r '.ecs_migration_task_definition' <<< "$DEPLOYMENT_CONFIG")"
+            echo "AWS_DEPLOY_ROLE_ARN=$(jq -r '.github_deploy_role_arn' <<< "$DEPLOYMENT_CONFIG")"
           } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2

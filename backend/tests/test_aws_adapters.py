@@ -111,6 +111,27 @@ def test_bedrock_converse_maps_output_and_usage() -> None:
     }
 
 
+def test_bedrock_nova_lite_caps_max_output_tokens() -> None:
+    client = _Runtime(
+        [
+            {
+                "output": {"message": {"content": [{"text": "Bedrock is supported [1]."}]}},
+                "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
+            }
+        ]
+    )
+    generator = BedrockConverseAnswerGenerator(
+        settings=_settings(),
+        model_name="amazon.nova-lite-v1:0",
+        max_output_tokens=8192,
+        client=client,
+    )
+
+    generator.generate(_request())
+
+    assert client.calls[0][1]["inferenceConfig"]["maxTokens"] == 5000
+
+
 def test_bedrock_errors_are_categorized_and_redacted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
