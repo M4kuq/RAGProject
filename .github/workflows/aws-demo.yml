@@ -48,6 +48,9 @@ env:
   TF_VAR_github_oidc_provider_arn: ${{ vars.GITHUB_OIDC_PROVIDER_ARN }}
   TF_VAR_database_url_secret_arn: \${{ vars.DATABASE_URL_SECRET_ARN }}
   TF_VAR_session_secret_arn: \${{ vars.SESSION_SECRET_ARN }}
+  TF_VAR_alb_origin_domain_name: \${{ vars.ALB_ORIGIN_DOMAIN_NAME }}
+  TF_VAR_alb_certificate_arn: \${{ vars.ALB_CERTIFICATE_ARN }}
+  TF_VAR_route53_hosted_zone_id: \${{ vars.ROUTE53_HOSTED_ZONE_ID }}
   TF_VAR_basic_auth_username: \${{ vars.BASIC_AUTH_USERNAME }}
   TF_VAR_basic_auth_header_sha256: \${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
   TF_VAR_origin_verify_header_value: \${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
