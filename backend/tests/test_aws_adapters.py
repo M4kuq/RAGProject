@@ -129,7 +129,8 @@ def test_bedrock_nova_lite_caps_max_output_tokens() -> None:
 
     generator.generate(_request())
 
-    assert client.calls[0][1]["inferenceConfig"]["maxTokens"] == 5000
+    inference_config = cast(dict[str, object], client.calls[0][1]["inferenceConfig"])
+    assert inference_config["maxTokens"] == 5000
 
 
 def test_bedrock_errors_are_categorized_and_redacted(
