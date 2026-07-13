@@ -63,6 +63,16 @@ Assert-True ($cloudFrontContent -match 'domain_name\s+=\s+var\.alb_origin_domain
 Assert-True ($rootContent -match 'resource\s+"aws_route53_record"\s+"alb_origin"') "runtime must manage the ALB origin alias"
 Assert-True ($content -match 'TF_VAR_alb_certificate_arn') "lifecycle must require the ALB certificate ARN"
 
+$ecrContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/ecr/main.tf") -Raw
+$providerContent = Get-Content -LiteralPath (Join-Path $terraformRoot "providers.tf") -Raw
+Assert-True ($ecrContent -match 'force_delete\s+=\s+true') "runtime ECR repositories must be removable after image pushes"
+Assert-True ($providerContent -match 'Lifecycle\s+=\s+"runtime"') "runtime resources need a teardown-only tag"
+Assert-True ($content -match '"-var=api_image_tag=$ApiImageTag"') "scale plan must keep the deployed API image tag"
+Assert-True ($content -match '"-var=worker_image_tag=$WorkerImageTag"') "scale plan must keep the deployed worker image tag"
+Assert-True ($content -match 'Remove-ActiveTaskDefinitions') "down must deregister CI-created task definitions"
+Assert-True ($content -match 'Smoke search returned no results') "smoke must fail on an empty retrieval result"
+Assert-True ($content -match 'Key=Lifecycle,Values=runtime') "remnant checks must exclude persistent bootstrap resources"
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $terraformRoot "../.."))
 $lifecycleWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-demo.yml") -Raw
 $planWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-infra-plan.yml") -Raw

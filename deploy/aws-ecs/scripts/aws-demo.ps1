@@ -239,7 +239,9 @@ function New-DemoPlan {
     [Parameter(Mandatory = $true)]$Context,
     [Parameter(Mandatory = $true)][int]$ApiCount,
     [Parameter(Mandatory = $true)][int]$WorkerCount,
-    [Parameter(Mandatory = $true)][int]$QdrantCount
+    [Parameter(Mandatory = $true)][int]$QdrantCount,
+    [string]$ApiImageTag = "placeholder",
+    [string]$WorkerImageTag = "placeholder"
   )
   Push-Location $script:TerraformDirectory
   try {
@@ -248,7 +250,9 @@ function New-DemoPlan {
       "-out=$PlanPath",
       "-var=api_desired_count=$ApiCount",
       "-var=worker_desired_count=$WorkerCount",
-      "-var=qdrant_desired_count=$QdrantCount"
+      "-var=qdrant_desired_count=$QdrantCount",
+      "-var=api_image_tag=$ApiImageTag",
+      "-var=worker_image_tag=$WorkerImageTag"
     )
   } finally {
     Pop-Location
@@ -420,7 +424,7 @@ function Invoke-Up {
   $frontendConfig = Get-FrontendDeploymentConfig
   Invoke-GitHubWorkflow "aws-deploy-frontend.yml" @{ deployment_config = $frontendConfig }
   Write-Step "create and apply exact scale-up plan"
-  New-DemoPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context 1 1 1
+  New-DemoPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context 1 1 1 $context.GitSha $context.GitSha
   Assert-SavedPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context
   Apply-SavedPlan $script:ScalePlanPath
   Write-Host "AWS demo runtime is up."
@@ -435,6 +439,8 @@ function Get-DemoBaseUrl {
 
 function Invoke-LoadData {
   Assert-DemoContext | Out-Null
+  Assert-BackendEnvironment
+  Initialize-DemoTerraform
   Assert-CommandAvailable "uv"
   Assert-RequiredEnvironment @(
     "RAG_DEMO_ADMIN_EMAIL",
@@ -464,6 +470,8 @@ function Invoke-LoadData {
 
 function Invoke-Smoke {
   Assert-DemoContext | Out-Null
+  Assert-BackendEnvironment
+  Initialize-DemoTerraform
   Assert-RequiredEnvironment @(
     "RAG_DEMO_ADMIN_EMAIL",
     "RAG_DEMO_ADMIN_PASSWORD",
@@ -504,6 +512,9 @@ function Invoke-Smoke {
   $resultDir = Join-Path $script:ArtifactDirectory "results"
   New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
   $resultCount = if ($null -ne $search.data.results) { @($search.data.results).Count } else { 0 }
+  if ($resultCount -le 0) {
+    throw "Smoke search returned no results."
+  }
   [ordered]@{
     schema_version = 1
     checked_at_utc = [DateTimeOffset]::UtcNow.ToString("O")
@@ -601,6 +612,45 @@ function Test-AwsResourceAbsent {
   if ($exitCode -eq 0) { return $false }
   if (($output | Out-String) -match $NotFoundPattern) { return $true }
   throw "AWS absence verification failed unexpectedly."
+}
+
+function Remove-ActiveTaskDefinitions {
+  param([Parameter(Mandatory = $true)][string[]]$Families)
+
+  foreach ($family in $Families) {
+    $remaining = @()
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+      $listJson = Invoke-Native "aws" @(
+        "ecs", "list-task-definitions",
+        "--family-prefix", $family,
+        "--status", "ACTIVE",
+        "--sort", "DESC",
+        "--region", $script:ExpectedRegion,
+        "--output", "json",
+        "--no-cli-pager"
+      ) -Capture
+      $exactPattern = "/" + [Regex]::Escape($family) + ":[0-9]+$"
+      $remaining = @(
+        ($listJson | ConvertFrom-Json).taskDefinitionArns |
+          Where-Object { [string]$_ -match $exactPattern }
+      )
+      if ($remaining.Count -eq 0) { break }
+
+      foreach ($taskDefinitionArn in $remaining) {
+        Invoke-Native "aws" @(
+          "ecs", "deregister-task-definition",
+          "--task-definition", [string]$taskDefinitionArn,
+          "--region", $script:ExpectedRegion,
+          "--output", "json",
+          "--no-cli-pager"
+        ) -Capture | Out-Null
+      }
+      if ($attempt -lt 6) { Start-Sleep -Seconds 2 }
+    }
+    if ($remaining.Count -gt 0) {
+      throw "Active task definition revisions remain for a runtime family."
+    }
+  }
 }
 
 function Clear-DatabaseUrlSecret {
@@ -705,6 +755,7 @@ function Assert-NoRuntimeRemnants {
       "--tag-filters",
       "Key=Project,Values=$($Snapshot.Project)",
       "Key=Environment,Values=$($Snapshot.Environment)",
+      "Key=Lifecycle,Values=runtime",
       "--region", $script:ExpectedRegion,
       "--output", "json",
       "--no-cli-pager"
@@ -729,6 +780,11 @@ function Invoke-Down {
     EcrRepositories = @(
       ((Get-TerraformOutput "api_ecr_repository_url") -split "/", 2)[1]
       ((Get-TerraformOutput "worker_ecr_repository_url") -split "/", 2)[1]
+    )
+    TaskDefinitionFamilies = @(
+      Get-TerraformOutput "api_task_definition_family"
+      Get-TerraformOutput "worker_task_definition_family"
+      Get-TerraformOutput "migration_task_definition_family"
     )
     CloudFrontDistributionId = Get-TerraformOutput "cloudfront_distribution_id"
     EcsClusterName = Get-TerraformOutput "ecs_cluster_name"
@@ -758,6 +814,8 @@ function Invoke-Down {
   Assert-SavedPlan $script:DestroyPlanPath $script:DestroyManifestPath "runtime-destroy" $context
   Write-Step "apply exact destroy plan; bootstrap state and lock resources are outside this stack"
   Apply-SavedPlan $script:DestroyPlanPath
+  Write-Step "deregister CI-created task definition revisions"
+  Remove-ActiveTaskDefinitions $snapshot.TaskDefinitionFamilies
   Clear-DatabaseUrlSecret
   Write-Step "verify that no runtime resources remain"
   Assert-NoRuntimeRemnants $snapshot
