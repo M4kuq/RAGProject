@@ -33,35 +33,35 @@ concurrency:
 env:
   AWS_REGION: ap-northeast-1
   AWS_DEFAULT_REGION: ap-northeast-1
-  AWS_DEMO_ALLOWED_ACCOUNT_IDS: \${{ vars.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+  AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ vars.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TF_STATE_BUCKET: \${{ vars.TF_STATE_BUCKET }}
-  TF_STATE_KEY: \${{ vars.TF_STATE_KEY }}
-  TF_LOCK_TABLE: \${{ vars.TF_LOCK_TABLE }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
   TF_VAR_region: ap-northeast-1
   TF_VAR_project: ragproject
   TF_VAR_environment: demo
-  TF_VAR_github_oidc_repo: \${{ github.repository }}
+  TF_VAR_github_oidc_repo: ${{ github.repository }}
   TF_VAR_github_deploy_branch: deploy/AWS_ECS
   TF_VAR_create_github_oidc_provider: "false"
   TF_VAR_github_oidc_provider_arn: ${{ vars.GITHUB_OIDC_PROVIDER_ARN }}
-  TF_VAR_database_url_secret_arn: \${{ vars.DATABASE_URL_SECRET_ARN }}
-  TF_VAR_session_secret_arn: \${{ vars.SESSION_SECRET_ARN }}
-  TF_VAR_alb_origin_domain_name: \${{ vars.ALB_ORIGIN_DOMAIN_NAME }}
-  TF_VAR_alb_certificate_arn: \${{ vars.ALB_CERTIFICATE_ARN }}
-  TF_VAR_route53_hosted_zone_id: \${{ vars.ROUTE53_HOSTED_ZONE_ID }}
-  TF_VAR_basic_auth_username: \${{ vars.BASIC_AUTH_USERNAME }}
-  TF_VAR_basic_auth_header_sha256: \${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
-  TF_VAR_origin_verify_header_value: \${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
-  RAG_DEMO_ADMIN_EMAIL: \${{ secrets.RAG_DEMO_ADMIN_EMAIL }}
-  RAG_DEMO_ADMIN_PASSWORD: \${{ secrets.RAG_DEMO_ADMIN_PASSWORD }}
-  RAG_DEMO_BASIC_AUTH_HEADER: \${{ secrets.BASIC_AUTH_HEADER }}
-  GH_TOKEN: \${{ github.token }}
+  TF_VAR_database_url_secret_arn: ${{ vars.DATABASE_URL_SECRET_ARN }}
+  TF_VAR_session_secret_arn: ${{ vars.SESSION_SECRET_ARN }}
+  TF_VAR_alb_origin_domain_name: ${{ vars.ALB_ORIGIN_DOMAIN_NAME }}
+  TF_VAR_alb_certificate_arn: ${{ vars.ALB_CERTIFICATE_ARN }}
+  TF_VAR_route53_hosted_zone_id: ${{ vars.ROUTE53_HOSTED_ZONE_ID }}
+  TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}
+  TF_VAR_basic_auth_header_sha256: ${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
+  TF_VAR_origin_verify_header_value: ${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
+  RAG_DEMO_ADMIN_EMAIL: ${{ secrets.RAG_DEMO_ADMIN_EMAIL }}
+  RAG_DEMO_ADMIN_PASSWORD: ${{ secrets.RAG_DEMO_ADMIN_PASSWORD }}
+  RAG_DEMO_BASIC_AUTH_HEADER: ${{ secrets.BASIC_AUTH_HEADER }}
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   lifecycle:
-    name: \${{ inputs.command }}
+    name: ${{ inputs.command }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -75,10 +75,10 @@ jobs:
           fi
 
       - name: Validate explicit destroy confirmation
-        if: \${{ inputs.command == 'down' }}
+        if: ${{ inputs.command == 'down' }}
         shell: bash
         env:
-          DESTROY_CONFIRMATION: \${{ inputs.destroy_confirmation }}
+          DESTROY_CONFIRMATION: ${{ inputs.destroy_confirmation }}
         run: |
           if [ "$DESTROY_CONFIRMATION" != "DESTROY-RUNTIME" ]; then
             echo "down requires the exact destroy confirmation."
@@ -94,13 +94,13 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-northeast-1
-          role-to-assume: \${{ vars.AWS_TERRAFORM_LIFECYCLE_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_TERRAFORM_LIFECYCLE_ROLE_ARN }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
       - name: Set up uv
-        if: \${{ inputs.command == 'load-data' }}
+        if: ${{ inputs.command == 'load-data' }}
         uses: astral-sh/setup-uv@v6
 
       - name: Credential-free script tests
@@ -108,30 +108,30 @@ jobs:
         run: ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
 
       - name: Create saved runtime plan
-        if: \${{ inputs.command == 'up' }}
+        if: ${{ inputs.command == 'up' }}
         shell: pwsh
         run: ./deploy/aws-ecs/scripts/aws-demo.ps1 plan
 
       - name: Run lifecycle command
-        if: \${{ inputs.command != 'down' }}
+        if: ${{ inputs.command != 'down' }}
         shell: pwsh
-        run: ./deploy/aws-ecs/scripts/aws-demo.ps1 "\${{ inputs.command }}"
+        run: ./deploy/aws-ecs/scripts/aws-demo.ps1 "${{ inputs.command }}"
 
       - name: Destroy runtime
-        if: \${{ inputs.command == 'down' }}
+        if: ${{ inputs.command == 'down' }}
         shell: pwsh
         env:
-          DESTROY_CONFIRMATION: \${{ inputs.destroy_confirmation }}
+          DESTROY_CONFIRMATION: ${{ inputs.destroy_confirmation }}
         run: >
           ./deploy/aws-ecs/scripts/aws-demo.ps1 down
           -ConfirmDestroy
           -DestroyConfirmation "$env:DESTROY_CONFIRMATION"
 
       - name: Upload redacted smoke result
-        if: \${{ inputs.command == 'smoke' && always() }}
+        if: ${{ inputs.command == 'smoke' && always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: aws-demo-smoke-\${{ github.run_id }}
+          name: aws-demo-smoke-${{ github.run_id }}
           path: deploy/aws-ecs/.aws-demo/results/smoke.json
           if-no-files-found: ignore
           retention-days: 7
