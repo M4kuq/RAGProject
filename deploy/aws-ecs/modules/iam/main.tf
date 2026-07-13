@@ -25,6 +25,7 @@ locals {
   bedrock_invoke_model_arns = [
     local.bedrock_generation_model_arn,
     local.bedrock_embedding_model_arn,
+    local.bedrock_rerank_model_arn,
   ]
 }
 
@@ -184,6 +185,19 @@ data "aws_iam_policy_document" "ecs_task" {
     effect    = "Allow"
     actions   = ["bedrock:Rerank"]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "ListDocumentsBucketPrefix"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.documents_bucket_arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${var.documents_key_prefix}/*"]
+    }
   }
 
   statement {

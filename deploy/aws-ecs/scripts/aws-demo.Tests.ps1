@@ -100,6 +100,10 @@ Assert-True ($appWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "app wo
 Assert-True ($frontendWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "frontend workflow must checkout the validated planned commit"
 Assert-True ($rootContent -match 'RAG_DEMO_ADMIN_PASSWORD\s+=\s+var\.demo_admin_password_secret_arn') "migration must receive the deployed admin password from Secrets Manager"
 Assert-True (($iamContent -split 'secretsmanager:GetSecretValue').Count -eq 2) "only the ECS task execution role may read configured Secrets Manager values"
+Assert-True ($iamContent -match 'local\.bedrock_rerank_model_arn') "rerank model ARN must be included in bedrock InvokeModel resources"
+Assert-True ($iamContent -match 'actions\s+=\s+\["s3:ListBucket"\]') "missing-object checks need bucket-level ListBucket"
+Assert-True ($iamContent -match 'values\s+=\s+\["\$\{var\.documents_key_prefix\}/\*"\]') "ListBucket must be constrained to the documents prefix"
+Assert-True ($rootContent -match 'GENERATION_MAX_OUTPUT_TOKENS\s+=\s+"5000"') "Nova Lite generation must stay within its 5K output limit"
 Assert-True ($planWorkflow -match "github\.ref == 'refs/heads/deploy/AWS_ECS'") "manual Terraform plan must be restricted to deploy/AWS_ECS"
 
 Write-Host "aws-demo parser and credential-free tests passed."

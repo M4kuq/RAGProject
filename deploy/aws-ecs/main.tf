@@ -29,6 +29,7 @@ locals {
     QDRANT_TIMEOUT_SECONDS      = "5"
     GENERATION_PROVIDER         = "bedrock"
     GENERATION_MODEL_NAME       = var.bedrock_generation_model_id
+    GENERATION_MAX_OUTPUT_TOKENS = "5000"
     EMBEDDING_PROVIDER          = "bedrock"
     EMBEDDING_MODEL             = var.bedrock_embedding_model_id
     RERANK_PROVIDER             = "bedrock"

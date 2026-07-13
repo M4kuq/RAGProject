@@ -11,7 +11,7 @@
   - Amazon Nova Lite generation model: `bedrock_generation_model_id`
   - Titan Text Embeddings V2: `amazon.titan-embed-text-v2:0`
   - Bedrock Rerank: `bedrock_rerank_model_id`
-- apply前にgeneration modelのlifecycleを確認し、`ACTIVE` でない既定値は現行active modelへ更新します。
+- apply前にgeneration modelのlifecycleを確認し、`ACTIVE`でない既定値は現行active modelへ更新します。Nova Liteのmax output 5Kに合わせ、ECSは`GENERATION_MAX_OUTPUT_TOKENS=5000`を設定します。
 
 ```bash
 aws bedrock get-foundation-model \

@@ -108,13 +108,13 @@ GitHub Actions 用の deploy role は OIDC trust で `repo:owner/repo:ref:refs/h
 
 Nova Lite、Titan Text Embeddings V2、Rerank はAPI keyを持たず、ECS task roleのIAM権限で呼び出します。アプリtask roleは次のaction/resourceに限定し、Secrets Managerの読取権限は持ちません。task definitionのsecret注入だけは、containerへ公開されないECS task execution roleが行います。
 
-- `bedrock:InvokeModel`: generation と embedding の選択済み foundation model ARN のみ
+- `bedrock:InvokeModel`: generation、embedding、rerankの選択済みfoundation model ARNのみ
 - `bedrock:Rerank`: Amazon Bedrock Rerank API は resource-level permission を提供しないため `Resource = "*"`
 - `secretsmanager:GetSecretValue`: ECS task execution roleだけに許可し、task definitionが参照する指定Secret ARNのみに限定
 - `ssm:GetParameter(s)`: 指定された Parameter ARN のみ
-- S3 documents bucket の `source/*` object CRUD のみ
+- S3 documents bucketの`source/*` object CRUDと、missing-object判定用に`source/*`へprefix制約したbucket-level `ListBucket`のみ
 
-ECS env は `GENERATION_PROVIDER=bedrock`、`EMBEDDING_PROVIDER=bedrock`、`RERANK_PROVIDER=bedrock` です。generation の demo default は Tokyo で利用できる Amazon Nova Lite とし、apply 前に `GetFoundationModel` の `modelLifecycle.status` が `ACTIVE` であることを確認します。
+ECS envは`GENERATION_PROVIDER=bedrock`、`EMBEDDING_PROVIDER=bedrock`、`RERANK_PROVIDER=bedrock`です。generationのdemo defaultはTokyoで利用できるAmazon Nova Liteとし、model上限に合わせて`GENERATION_MAX_OUTPUT_TOKENS=5000`を設定します。apply前に`GetFoundationModel`の`modelLifecycle.status`が`ACTIVE`であることを確認します。
 
 ## 8. コンポーネント別の利点・コスト・retention
 
