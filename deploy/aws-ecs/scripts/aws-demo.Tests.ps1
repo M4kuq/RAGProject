@@ -47,4 +47,20 @@ Assert-True ($content -match 'ap-northeast-1') "the region guard is required"
 Assert-True ($content -match 'Remove-AllBucketVersions') "versioned S3 cleanup is required"
 Assert-True ($content -match 'Assert-NoRuntimeRemnants') "post-destroy verification is required"
 
+$terraformRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$albContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/alb/main.tf") -Raw
+$networkContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/network/main.tf") -Raw
+$cloudFrontContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/cloudfront/main.tf") -Raw
+$rootContent = Get-Content -LiteralPath (Join-Path $terraformRoot "main.tf") -Raw
+
+Assert-True ($albContent -match 'protocol\s+=\s+"HTTPS"') "ALB listener must use HTTPS"
+Assert-True ($albContent -match 'port\s+=\s+443') "ALB listener must use port 443"
+Assert-True ($albContent -match 'certificate_arn\s+=\s+var\.certificate_arn') "ALB listener must use the supplied ACM certificate"
+Assert-True ($albContent -notmatch 'resource\s+"aws_lb_listener"\s+"http"') "ALB must not expose an HTTP listener"
+Assert-True ($networkContent -match 'from_port\s+=\s+443') "ALB security group must allow CloudFront on 443"
+Assert-True ($cloudFrontContent -match 'origin_protocol_policy\s+=\s+"https-only"') "CloudFront must require HTTPS to the ALB origin"
+Assert-True ($cloudFrontContent -match 'domain_name\s+=\s+var\.alb_origin_domain_name') "CloudFront must use the certificate-matching origin domain"
+Assert-True ($rootContent -match 'resource\s+"aws_route53_record"\s+"alb_origin"') "runtime must manage the ALB origin alias"
+Assert-True ($content -match 'TF_VAR_alb_certificate_arn') "lifecycle must require the ALB certificate ARN"
+
 Write-Host "aws-demo parser and credential-free tests passed."

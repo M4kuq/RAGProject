@@ -1,3 +1,10 @@
+check "alb_certificate_region" {
+  assert {
+    condition     = split(":", var.alb_certificate_arn)[3] == var.region
+    error_message = "alb_certificate_arn must be issued in the same region as the ALB."
+  }
+}
+
 locals {
   name_prefix          = "${var.project}-${var.environment}"
   secret_arns          = distinct(concat([var.database_url_secret_arn, var.session_secret_arn], var.additional_secret_arns))
@@ -117,6 +124,19 @@ module "alb" {
   security_group_id          = module.network.alb_security_group_id
   origin_verify_header_name  = var.origin_verify_header_name
   origin_verify_header_value = var.origin_verify_header_value
+  certificate_arn            = var.alb_certificate_arn
+}
+
+resource "aws_route53_record" "alb_origin" {
+  zone_id = var.route53_hosted_zone_id
+  name    = var.alb_origin_domain_name
+  type    = "A"
+
+  alias {
+    name                   = module.alb.dns_name
+    zone_id                = module.alb.zone_id
+    evaluate_target_health = false
+  }
 }
 
 module "ecs" {
@@ -168,7 +188,7 @@ module "cloudfront" {
 
   name_prefix                          = local.name_prefix
   frontend_bucket_regional_domain_name = module.s3.frontend_bucket_regional_domain_name
-  alb_dns_name                         = module.alb.dns_name
+  alb_origin_domain_name               = var.alb_origin_domain_name
   api_path_patterns                    = var.api_path_patterns
   price_class                          = var.frontend_price_class
   basic_auth_username                  = var.basic_auth_username
@@ -176,6 +196,8 @@ module "cloudfront" {
   basic_auth_realm                     = var.basic_auth_realm
   origin_verify_header_name            = var.origin_verify_header_name
   origin_verify_header_value           = var.origin_verify_header_value
+
+  depends_on = [aws_route53_record.alb_origin]
 }
 
 data "aws_iam_policy_document" "frontend_oac" {

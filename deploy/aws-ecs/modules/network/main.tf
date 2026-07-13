@@ -60,7 +60,7 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb-sg"
-  description = "Allow CloudFront origin-facing HTTP traffic to the ALB"
+  description = "Allow CloudFront origin-facing HTTPS traffic to the ALB"
   vpc_id      = aws_vpc.this.id
 
   tags = {
@@ -100,11 +100,11 @@ resource "aws_security_group" "rds" {
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
   security_group_id = aws_security_group.alb.id
-  description       = "HTTP from CloudFront origin-facing edge locations"
+  description       = "HTTPS from CloudFront origin-facing edge locations"
   prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
   ip_protocol       = "tcp"
-  from_port         = 80
-  to_port           = 80
+  from_port         = 443
+  to_port           = 443
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_api" {

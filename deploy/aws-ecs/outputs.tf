@@ -9,8 +9,13 @@ output "cloudfront_domain_name" {
 }
 
 output "alb_dns_name" {
-  description = "ALB DNS name used as the CloudFront API origin."
+  description = "AWS-generated ALB DNS name."
   value       = module.alb.dns_name
+}
+
+output "alb_origin_domain_name" {
+  description = "Route 53 domain name used by CloudFront for the HTTPS ALB origin."
+  value       = var.alb_origin_domain_name
 }
 
 output "api_ecr_repository_url" {

@@ -18,6 +18,11 @@ variable "security_group_id" {
   type        = string
 }
 
+variable "certificate_arn" {
+  description = "ACM certificate ARN for the ALB HTTPS listener."
+  type        = string
+}
+
 variable "origin_verify_header_name" {
   description = "Secret custom header name required before the listener forwards to the API target group."
   type        = string

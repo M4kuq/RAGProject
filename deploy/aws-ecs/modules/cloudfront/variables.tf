@@ -8,8 +8,8 @@ variable "frontend_bucket_regional_domain_name" {
   type        = string
 }
 
-variable "alb_dns_name" {
-  description = "ALB DNS name for API origin."
+variable "alb_origin_domain_name" {
+  description = "Public DNS name whose ACM certificate is presented by the ALB origin."
   type        = string
 }
 
