@@ -264,4 +264,4 @@ ECS demo は Bedrock adapter 有効化前の安全側 default として `EMBEDDI
 
 ## One-command demo lifecycle
 
-Use `scripts/aws-demo.ps1` for `doctor`, `plan`, `up`, `load-data`, `smoke`, `status`, and explicitly confirmed `down`. The entrypoint is restricted to the `deploy/AWS_ECS` branch, `ap-northeast-1`, a clean worktree, and an allowlisted sandbox account. See [DEPLOY.md](./DEPLOY.md#aws-demo-lifecycle-entrypoint) for required repository variables/secrets, the persistent bootstrap lifecycle role, saved-plan checks, and verified teardown behavior.
+Use `scripts/aws-demo.ps1` for `doctor`, `plan`, `up`, `load-data`, `smoke`, `status`, and explicitly confirmed `down`. The scale plan preserves the deployed Git SHA, smoke rejects empty retrieval, and down removes runtime ECR images plus CI-created task definition revisions. The entrypoint is restricted to the `deploy/AWS_ECS` branch, `ap-northeast-1`, a clean worktree, and an allowlisted sandbox account. See [DEPLOY.md](./DEPLOY.md#aws-demo-lifecycle-entrypoint) for required repository variables/secrets, the persistent bootstrap lifecycle role, saved-plan checks, and verified teardown behavior.

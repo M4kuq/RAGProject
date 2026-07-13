@@ -185,16 +185,13 @@ terraform apply \
 
 Qdrant は NFS/EFS ではなく、ECS service-managed EBS `gp3` volume を `/qdrant/storage` に mount します。EBS は block storage なので Qdrant の storage 要件に合いますが、ECS service が管理する volume は task replacement や scale-to-zero で削除されます。Qdrant collection は永続的な source of truth ではないため、task 置換、scale-to-zero 後、Bedrock adapter 有効化後は source documents から再indexしてください。
 
-## 8. Task definition 所有権
+## 8. Task definition とimage tagの整合
 
-Terraform は ECS task definition family と baseline revision を所有します。CI はその family の最新 ACTIVE revision を `describe-task-definition` し、container image だけを差し替えた deploy revision を `register-task-definition` します。
+`up`はアプリworkflowへ渡したGit SHAと同じ値を、scale-up用の保存済みTerraform planへ`api_image_tag` / `worker_image_tag`として渡します。これにより、workflowが登録したrevisionの後でTerraformがserviceを更新しても、`placeholder`や古いimageへ戻りません。
 
-このため、次回 `terraform apply` で `api_image_tag` / `worker_image_tag` が古いままだと、Terraform が service を Terraform 管理 revision に戻す可能性があります。運用方針は次のどちらかに統一します。
+Terraformはbaseline task definitionを所有し、workflowはmigration/API/workerのdeploy revisionを追加します。`down`はruntime stackのdestroy後に、対象familyに残るACTIVE revisionを列挙してderegisterします。別projectのfamilyは対象にしません。
 
-- CI deploy 後に、次回 apply 前へ `api_image_tag` / `worker_image_tag` を同じ tag に更新する。
-- demo 中は Terraform を infrastructure baseline 管理に使い、アプリ image revision は CI 側の一時 revision として扱う。
-
-どちらの場合も schema migration と seed bootstrap は service 更新より先に実行します。
+schema migrationとseed bootstrapは、API/workerのservice更新とscale-upより先に完了させます。
 
 ## 9. フロント配信
 
@@ -291,7 +288,7 @@ The script fails closed unless all of these conditions hold:
 
 `up` first applies the saved zero-task infrastructure plan, refreshes the external `DATABASE_URL` secret without printing it, dispatches the existing app/frontend deployment workflows with fresh Terraform outputs, then creates and applies an exact saved scale-up plan. `load-data` uses `RAG_DEMO_BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD` from the environment; do not pass those values on the command line.
 
-`down` is intentionally destructive and requires both confirmation switches. It empties every version and delete marker from the document/frontend buckets, applies an exact saved destroy plan, clears the stale database URL, and checks Terraform state plus S3, ECR, CloudFront, ECS, and project/environment tags for remnants. It never targets `deploy/aws-ecs/bootstrap`. The bootstrap state bucket, lock table, and separately managed lifecycle OIDC role remain so the runtime can be recreated.
+`down` is intentionally destructive and requires both confirmation switches. It empties every version and delete marker from the document/frontend buckets, applies an exact saved destroy plan, deregisters CI-created task definition revisions, clears the stale database URL, and checks Terraform state plus S3, ECR, CloudFront, ECS, and `Lifecycle=runtime` tags for remnants. Runtime ECR repositories use `force_delete = true`; bootstrap resources do not carry the runtime lifecycle tag. It never targets `deploy/aws-ecs/bootstrap`. The bootstrap state bucket, lock table, and separately managed lifecycle OIDC role remain so the runtime can be recreated.
 
 The `AWS Demo Lifecycle` workflow is `workflow_dispatch` only and is hard-bound to `refs/heads/deploy/AWS_ECS`. Configure `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` as a repository variable. That role is an account/bootstrap prerequisite outside the root runtime stack and its OIDC subject must be exactly:
 
@@ -307,4 +304,4 @@ The credential-free test is:
 ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
 ```
 
-It parses the PowerShell and verifies the branch, region, account allowlist, saved-plan, S3 cleanup, explicit-destroy, and post-destroy guardrails. CI does not run `up` or `down`.
+It parses the PowerShell and verifies the branch, region, account allowlist, saved-plan, HTTPS origin, deployed image tag preservation, S3/ECR/task-definition cleanup, runtime-only remnant filter, explicit destroy, and empty-search failure. CI does not run `up` or `down`.
