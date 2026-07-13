@@ -11,18 +11,23 @@ on:
         description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
         required: false
         type: string
+      source_sha:
+        description: "Exact planned commit SHA to build and deploy."
+        required: true
+        type: string
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: aws-deploy-app-${{ github.ref }}
+  group: aws-demo-runtime-deploy-AWS_ECS
   cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
-  IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+  IMAGE_TAG: ${{ inputs.image_tag || inputs.source_sha }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
   API_ECR_REPOSITORY_URL: ${{ vars.API_ECR_REPOSITORY_URL }}
   WORKER_ECR_REPOSITORY_URL: ${{ vars.WORKER_ECR_REPOSITORY_URL }}
   ECS_CLUSTER_NAME: ${{ vars.ECS_CLUSTER_NAME }}
@@ -49,8 +54,22 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout
+      - name: Validate planned commit
+        shell: bash
+        run: |
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase commit SHA."
+            exit 1
+          fi
+          if [ "$IMAGE_TAG" != "$SOURCE_SHA" ]; then
+            echo "image_tag must match source_sha."
+            exit 1
+          fi
+
+      - name: Checkout planned commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
 
       - name: Validate image tag
         shell: bash
@@ -61,10 +80,10 @@ jobs:
           fi
 
       - name: Apply lifecycle deployment config
-        if: \${{ inputs.deployment_config != '' }}
+        if: ${{ inputs.deployment_config != '' }}
         shell: bash
         env:
-          DEPLOYMENT_CONFIG: \${{ inputs.deployment_config }}
+          DEPLOYMENT_CONFIG: ${{ inputs.deployment_config }}
         run: |
           set -euo pipefail
           jq -e '

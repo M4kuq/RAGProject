@@ -60,6 +60,9 @@ Assert-True ($albContent -notmatch 'resource\s+"aws_lb_listener"\s+"http"') "ALB
 Assert-True ($networkContent -match 'from_port\s+=\s+443') "ALB security group must allow CloudFront on 443"
 Assert-True ($cloudFrontContent -match 'origin_protocol_policy\s+=\s+"https-only"') "CloudFront must require HTTPS to the ALB origin"
 Assert-True ($cloudFrontContent -match 'domain_name\s+=\s+var\.alb_origin_domain_name') "CloudFront must use the certificate-matching origin domain"
+Assert-True ($cloudFrontContent -match 'header_behavior\s+=\s+"allExcept"') "API origin policy must exclude selected viewer headers"
+Assert-True ($cloudFrontContent -match 'items\s+=\s+\["Host"\]') "API origin policy must not forward the viewer Host"
+Assert-True ($cloudFrontContent -notmatch 'headers\s+=\s+\["\*"\]') "API behavior must not forward every viewer header"
 Assert-True ($rootContent -match 'resource\s+"aws_route53_record"\s+"alb_origin"') "runtime must manage the ALB origin alias"
 Assert-True ($content -match 'TF_VAR_alb_certificate_arn') "lifecycle must require the ALB certificate ARN"
 
@@ -73,12 +76,24 @@ Assert-True ($content -match 'Remove-ActiveTaskDefinitions') "down must deregist
 Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 7; \$attempt\+\+\)') "task definition cleanup must include a final verification pass"
 Assert-True ($content -match 'if \(\$attempt -eq 7\) \{ break \}') "the final cleanup pass must only verify convergence"
 Assert-True ($content -match 'Smoke search returned no results') "smoke must fail on an empty retrieval result"
+Assert-True ($content -match 'Get-TerraformOutput "database_name"') "database URL must use the configured database name"
+Assert-True (($content -split 'source_sha = \$context\.GitSha').Count -eq 3) "both deploy workflows must receive the exact planned commit"
 Assert-True ($content -match 'Key=Lifecycle,Values=runtime') "remnant checks must exclude persistent bootstrap resources"
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $terraformRoot "../.."))
 $lifecycleWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-demo.yml") -Raw
+$appWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-app.yml") -Raw
+$frontendWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-frontend.yml") -Raw
 $planWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-infra-plan.yml") -Raw
 Assert-True ($lifecycleWorkflow -notmatch '\\\$\{\{') "GitHub workflow expressions must not contain literal backslashes"
+Assert-True ($appWorkflow -notmatch '\\\$\{\{') "app workflow expressions must not contain literal backslashes"
+Assert-True ($frontendWorkflow -notmatch '\\\$\{\{') "frontend workflow expressions must not contain literal backslashes"
+Assert-True ($appWorkflow -match 'group: aws-demo-runtime-deploy-AWS_ECS') "app deploy must share the runtime teardown lock"
+Assert-True ($frontendWorkflow -match 'group: aws-demo-runtime-deploy-AWS_ECS') "frontend deploy must share the runtime teardown lock"
+Assert-True ($lifecycleWorkflow -match 'aws-demo-up-orchestrator-deploy-AWS_ECS') "up orchestration must avoid deadlocking dispatched deploy workflows"
+Assert-True ($lifecycleWorkflow -match 'Another AWS Demo up/down run is active') "up and down must reject conflicting lifecycle runs"
+Assert-True ($appWorkflow -match 'ref: \$\{\{ inputs\.source_sha \}\}') "app workflow must checkout the planned commit"
+Assert-True ($frontendWorkflow -match 'ref: \$\{\{ inputs\.source_sha \}\}') "frontend workflow must checkout the planned commit"
 Assert-True ($planWorkflow -match "github\.ref == 'refs/heads/deploy/AWS_ECS'") "manual Terraform plan must be restricted to deploy/AWS_ECS"
 
 Write-Host "aws-demo parser and credential-free tests passed."

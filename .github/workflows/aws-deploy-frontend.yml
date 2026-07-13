@@ -7,17 +7,22 @@ on:
         description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
         required: false
         type: string
+      source_sha:
+        description: "Exact planned commit SHA to build and deploy."
+        required: true
+        type: string
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: aws-deploy-frontend-${{ github.ref }}
+  group: aws-demo-runtime-deploy-AWS_ECS
   cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
   FRONTEND_BUCKET_NAME: ${{ vars.FRONTEND_BUCKET_NAME }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
   DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
@@ -40,15 +45,26 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout
+      - name: Validate planned commit
+        working-directory: .
+        shell: bash
+        run: |
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase commit SHA."
+            exit 1
+          fi
+
+      - name: Checkout planned commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
 
       - name: Apply lifecycle deployment config
-        if: \${{ inputs.deployment_config != '' }}
+        if: ${{ inputs.deployment_config != '' }}
         working-directory: .
         shell: bash
         env:
-          DEPLOYMENT_CONFIG: \${{ inputs.deployment_config }}
+          DEPLOYMENT_CONFIG: ${{ inputs.deployment_config }}
         run: |
           set -euo pipefail
           jq -e '

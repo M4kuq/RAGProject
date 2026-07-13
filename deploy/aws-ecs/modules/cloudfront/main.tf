@@ -122,6 +122,27 @@ resource "aws_cloudfront_function" "basic_auth_spa_rewrite" {
   code = local.basic_auth_spa_rewrite_function_code
 }
 
+resource "aws_cloudfront_origin_request_policy" "api" {
+  name    = "${var.name_prefix}-api-no-viewer-host"
+  comment = "Forward API request data while using the ALB origin host for TLS"
+
+  cookies_config {
+    cookie_behavior = "all"
+  }
+
+  headers_config {
+    header_behavior = "allExcept"
+
+    headers {
+      items = ["Host"]
+    }
+  }
+
+  query_strings_config {
+    query_string_behavior = "all"
+  }
+}
+
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -191,14 +212,7 @@ resource "aws_cloudfront_distribution" "this" {
       min_ttl                = 0
       max_ttl                = 0
 
-      forwarded_values {
-        query_string = true
-        headers      = ["*"]
-
-        cookies {
-          forward = "all"
-        }
-      }
+      origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
 
       function_association {
         event_type   = "viewer-request"

@@ -1,4 +1,5 @@
 name: AWS Demo Lifecycle
+run-name: AWS Demo ${{ inputs.command }}
 
 on:
   workflow_dispatch:
@@ -27,7 +28,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: aws-demo-lifecycle-deploy-AWS_ECS
+  group: ${{ inputs.command == 'up' && 'aws-demo-up-orchestrator-deploy-AWS_ECS' || 'aws-demo-runtime-deploy-AWS_ECS' }}
   cancel-in-progress: false
 
 env:
@@ -71,6 +72,32 @@ jobs:
         run: |
           if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
             echo "This workflow is restricted to refs/heads/deploy/AWS_ECS."
+            exit 1
+          fi
+
+      - name: Reject conflicting create or destroy
+        if: ${{ inputs.command == 'up' || inputs.command == 'down' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conflict_count="$(
+            gh run list \
+              --workflow aws-demo.yml \
+              --branch deploy/AWS_ECS \
+              --status in_progress \
+              --limit 100 \
+              --json databaseId,displayTitle |
+              jq --arg run_id "$GITHUB_RUN_ID" '
+                [.[] |
+                  select((.databaseId | tostring) != $run_id) |
+                  select(.displayTitle == "AWS Demo up" or .displayTitle == "AWS Demo down")
+                ] | length
+              '
+          )"
+          if [ "$conflict_count" != "0" ]; then
+            echo "Another AWS Demo up/down run is active; refusing a conflicting lifecycle operation."
             exit 1
           fi
 

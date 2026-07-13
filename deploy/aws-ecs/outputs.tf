@@ -138,3 +138,8 @@ output "runtime_iam_role_arns" {
     module.iam.ecs_infrastructure_role_arn,
   ]
 }
+
+output "database_name" {
+  description = "PostgreSQL database name used by the application"
+  value       = var.database_name
+}

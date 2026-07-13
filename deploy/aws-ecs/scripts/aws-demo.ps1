@@ -331,9 +331,10 @@ function Update-DatabaseUrlSecret {
   ) -Capture
   $secret = $secretJson | ConvertFrom-Json
   $endpoint = Get-TerraformOutput "rds_endpoint"
+  $databaseName = [Uri]::EscapeDataString((Get-TerraformOutput "database_name"))
   $username = [Uri]::EscapeDataString([string]$secret.username)
   $password = [Uri]::EscapeDataString([string]$secret.password)
-  $databaseUrl = "postgresql+psycopg://$($username):$($password)@$endpoint/rag"
+  $databaseUrl = "postgresql+psycopg://$($username):$($password)@$endpoint/$databaseName"
   $secretFile = Join-Path $script:ArtifactDirectory "database-url.secret"
   try {
     Set-Content -LiteralPath $secretFile -Value $databaseUrl -Encoding UTF8 -NoNewline
@@ -418,11 +419,15 @@ function Invoke-Up {
   $appConfig = Get-AppDeploymentConfig
   Invoke-GitHubWorkflow "aws-deploy-app.yml" @{
     image_tag = $context.GitSha
+    source_sha = $context.GitSha
     deployment_config = $appConfig
   }
   Write-Step "build and deploy frontend"
   $frontendConfig = Get-FrontendDeploymentConfig
-  Invoke-GitHubWorkflow "aws-deploy-frontend.yml" @{ deployment_config = $frontendConfig }
+  Invoke-GitHubWorkflow "aws-deploy-frontend.yml" @{
+    source_sha = $context.GitSha
+    deployment_config = $frontendConfig
+  }
   Write-Step "create and apply exact scale-up plan"
   New-DemoPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context 1 1 1 $context.GitSha $context.GitSha
   Assert-SavedPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context
