@@ -37,11 +37,12 @@ class _S3:
         self.bodies: list[_Body] = []
         self.missing_error_code = "NoSuchKey"
 
-    def put_object(self, **kwargs: object) -> None:
+    def put_object(self, **kwargs: object) -> dict[str, str]:
         self.calls.append(("put", kwargs))
         body = kwargs["Body"]
         assert isinstance(body, (bytes, bytearray))
         self.objects[(str(kwargs["Bucket"]), str(kwargs["Key"]))] = bytes(body)
+        return {"VersionId": "version-1"}
 
     def head_object(self, **kwargs: object) -> dict[str, object]:
         self.calls.append(("head", kwargs))
@@ -81,7 +82,7 @@ def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
     storage = S3DocumentStorage(settings=_settings(tmp_path), client=client)
     key = storage.build_storage_key(file_name="guide.txt")
 
-    storage.save_bytes(storage_key=key, content=b"hello")
+    version_id = storage.save_bytes(storage_key=key, content=b"hello")
 
     assert storage.exists(storage_key=key)
     assert ("documents-test", f"source/{key}") in client.objects
@@ -91,8 +92,16 @@ def test_s3_storage_save_exists_materialize_delete(tmp_path: Path) -> None:
     assert not temporary_path.exists()
     assert client.bodies[0].was_closed
 
-    storage.delete(storage_key=key)
+    storage.delete(storage_key=key, version_id=version_id)
     assert not storage.exists(storage_key=key)
+    assert client.calls[-1] == (
+        "delete",
+        {
+            "Bucket": "documents-test",
+            "Key": f"source/{key}",
+            "VersionId": "version-1",
+        },
+    )
 
 
 @pytest.mark.parametrize(

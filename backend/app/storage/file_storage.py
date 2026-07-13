@@ -31,11 +31,11 @@ class DocumentStorageError(RuntimeError):
 class DocumentStorage(Protocol):
     def build_storage_key(self, *, file_name: str) -> str: ...
 
-    def save_bytes(self, *, storage_key: str, content: bytes) -> None: ...
+    def save_bytes(self, *, storage_key: str, content: bytes) -> str | None: ...
 
     def exists(self, *, storage_key: str) -> bool: ...
 
-    def delete(self, *, storage_key: str) -> None: ...
+    def delete(self, *, storage_key: str, version_id: str | None = None) -> None: ...
 
     def materialize(self, *, storage_key: str) -> AbstractContextManager[Path]: ...
 
@@ -47,10 +47,11 @@ class LocalFileStorage:
     def build_storage_key(self, *, file_name: str) -> str:
         return _build_storage_key(file_name)
 
-    def save_bytes(self, *, storage_key: str, content: bytes) -> None:
+    def save_bytes(self, *, storage_key: str, content: bytes) -> str | None:
         target = self._safe_path(storage_key)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
+        return None
 
     def resolve_path(self, *, storage_key: str) -> Path:
         return self._safe_path(storage_key)
@@ -58,7 +59,8 @@ class LocalFileStorage:
     def exists(self, *, storage_key: str) -> bool:
         return self._safe_path(storage_key).is_file()
 
-    def delete(self, *, storage_key: str) -> None:
+    def delete(self, *, storage_key: str, version_id: str | None = None) -> None:
+        del version_id
         target = self._safe_path(storage_key)
         if target.is_file():
             target.unlink()
@@ -99,12 +101,12 @@ class S3DocumentStorage:
     def build_storage_key(self, *, file_name: str) -> str:
         return _build_storage_key(file_name)
 
-    def save_bytes(self, *, storage_key: str, content: bytes) -> None:
+    def save_bytes(self, *, storage_key: str, content: bytes) -> str | None:
         if len(content) > self.max_bytes:
             raise DocumentStorageError(error_category="invalid_request")
         object_key = self._object_key(storage_key)
         try:
-            self.client.put_object(
+            response = self.client.put_object(
                 Bucket=self.bucket_name,
                 Key=object_key,
                 Body=content,
@@ -112,6 +114,8 @@ class S3DocumentStorage:
             )
         except Exception as exc:
             raise self._error(exc, operation="put") from exc
+        version_id = response.get("VersionId") if isinstance(response, dict) else None
+        return version_id if isinstance(version_id, str) and version_id else None
 
     def exists(self, *, storage_key: str) -> bool:
         try:
@@ -125,12 +129,15 @@ class S3DocumentStorage:
             raise self._error(exc, operation="head") from exc
         return True
 
-    def delete(self, *, storage_key: str) -> None:
+    def delete(self, *, storage_key: str, version_id: str | None = None) -> None:
+        request: dict[str, object] = {
+            "Bucket": self.bucket_name,
+            "Key": self._object_key(storage_key),
+        }
+        if version_id:
+            request["VersionId"] = version_id
         try:
-            self.client.delete_object(
-                Bucket=self.bucket_name,
-                Key=self._object_key(storage_key),
-            )
+            self.client.delete_object(**request)
         except Exception as exc:
             raise self._error(exc, operation="delete") from exc
 

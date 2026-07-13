@@ -163,6 +163,7 @@ class DocumentService:
         content_hash = hashlib.sha256(content).hexdigest()
         storage_key = self.storage.build_storage_key(file_name=upload.file_name)
         storage_saved = False
+        storage_version_id: str | None = None
         committed = False
         try:
             document = self.repository.create_logical_document(
@@ -181,7 +182,10 @@ class DocumentService:
                 storage_key=storage_key,
                 created_by=user.user_id,
             )
-            self.storage.save_bytes(storage_key=storage_key, content=content)
+            storage_version_id = self.storage.save_bytes(
+                storage_key=storage_key,
+                content=content,
+            )
             storage_saved = True
             job = self._create_ingest_job(db, user=user, document=document, version=version)
             audit(
@@ -207,7 +211,10 @@ class DocumentService:
             db.rollback()
             if storage_saved and not committed:
                 with suppress(Exception):
-                    self.storage.delete(storage_key=storage_key)
+                    self.storage.delete(
+                        storage_key=storage_key,
+                        version_id=storage_version_id,
+                    )
             raise
         document_item = self._document_items(db, [document])[0]
         version_detail = self._version_detail(document, version, chunk_count=0)
@@ -247,6 +254,7 @@ class DocumentService:
         storage_key = self.storage.build_storage_key(file_name=upload.file_name)
         version_metadata = _url_version_metadata(fetched)
         storage_saved = False
+        storage_version_id: str | None = None
         committed = False
         try:
             document = self.repository.create_logical_document(
@@ -266,7 +274,10 @@ class DocumentService:
                 created_by=user.user_id,
                 metadata_json=version_metadata,
             )
-            self.storage.save_bytes(storage_key=storage_key, content=fetched.content)
+            storage_version_id = self.storage.save_bytes(
+                storage_key=storage_key,
+                content=fetched.content,
+            )
             storage_saved = True
             job = self._create_ingest_job(db, user=user, document=document, version=version)
             audit(
@@ -295,7 +306,10 @@ class DocumentService:
             db.rollback()
             if storage_saved and not committed:
                 with suppress(Exception):
-                    self.storage.delete(storage_key=storage_key)
+                    self.storage.delete(
+                        storage_key=storage_key,
+                        version_id=storage_version_id,
+                    )
             raise
         document_item = self._document_items(db, [document])[0]
         version_detail = self._version_detail(document, version, chunk_count=0)
@@ -323,6 +337,7 @@ class DocumentService:
     ) -> tuple[DocumentVersionCreateResponse, bool]:
         storage_key: str | None = None
         storage_saved = False
+        storage_version_id: str | None = None
         committed = False
         try:
             document = self.repository.get_document(
@@ -391,7 +406,10 @@ class DocumentService:
                 created_by=user.user_id,
             )
             self.repository.touch_document(db, document=document, updated_at=now)
-            self.storage.save_bytes(storage_key=storage_key, content=content)
+            storage_version_id = self.storage.save_bytes(
+                storage_key=storage_key,
+                content=content,
+            )
             storage_saved = True
             job = self._create_ingest_job(db, user=user, document=document, version=version)
             audit(
@@ -417,7 +435,10 @@ class DocumentService:
             db.rollback()
             if storage_saved and storage_key is not None and not committed:
                 with suppress(Exception):
-                    self.storage.delete(storage_key=storage_key)
+                    self.storage.delete(
+                        storage_key=storage_key,
+                        version_id=storage_version_id,
+                    )
             raise
         return (
             DocumentVersionCreateResponse(
