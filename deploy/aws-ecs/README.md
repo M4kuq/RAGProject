@@ -1,6 +1,6 @@
 # RAGProject AWS ECS Fargate demo
 
-このディレクトリは、RAGProjectをAWS ECS Fargate上で動かすdemo stackです。アプリはBedrock generation、Titan Embeddings V2、Bedrock Rerank、S3 document storageに対応済みです。認証不要CIでは `terraform fmt`、`init -backend=false`、`validate` だけを実行し、このPRでは実AWSの `terraform plan` / `apply` は実行しません。
+このディレクトリは、RAGProjectをAWS ECS Fargate上で動かすdemo stackです。アカウント作成とクレジット運用は [AWS_PAID_PLAN_CREDIT_SETUP.md](./AWS_PAID_PLAN_CREDIT_SETUP.md) を参照してください。アプリはBedrock generation、Titan Embeddings V2、Bedrock Rerank、S3 document storageに対応済みです。認証不要CIでは `terraform fmt`、`init -backend=false`、`validate` だけを実行し、このPRでは実AWSの `terraform plan` / `apply` は実行しません。
 
 ## 1. 全体アーキテクチャ
 
@@ -8,7 +8,7 @@
 flowchart TD
   User[User] --> CF[CloudFront default domain<br/>CloudFront Function Basic Auth]
   CF --> S3Front[S3 frontend bucket<br/>private + OAC]
-  CF --> ALB[Public ALB<br/>HTTP origin]
+  CF --> ALB[Public ALB<br/>HTTPS 443 origin + ACM]
   ALB --> API[ECS Fargate API<br/>desired_count = 0]
   API --> RDS[(RDS PostgreSQL<br/>single-AZ)]
   API --> Qdrant[ECS Fargate Qdrant<br/>desired_count = 0 or 1]
@@ -23,7 +23,7 @@ flowchart TD
   Worker --> Bedrock
 ```
 
-Frontend は Vite/React の build artifact を S3 に置き、CloudFront OAC だけで読める private bucket とします。API は CloudFront の `/api/*`、`/health`、`/ready` から ALB HTTP origin に流します。ALB 自体は public ですが、security group は CloudFront origin-facing managed prefix list からの HTTP のみに絞ります。
+Frontend は Vite/React の build artifact を S3 に置き、CloudFront OAC だけで読める private bucket とします。API は CloudFront の `/api/*`、`/health`、`/ready` から証明書名と一致する Route 53 origin domain を経由して ALB HTTPS 443へ流します。ALB 自体は public ですが、security group は CloudFront origin-facing managed prefix listからのHTTPSのみに絞り、secret origin headerが一致した場合だけAPIへforwardします。
 
 ### Graph backend policy
 
@@ -208,13 +208,17 @@ app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
 job queueはSQSへ置き換えません。PostgreSQL job tableのlease/retry/statusがsource of truthです。SQS/DLQは将来のwake-up通知用に未接続で、task roleにも現時点ではSQS権限を付与しません。
 
-### CloudFront to ALB TLS deferral
+### CloudFront to ALB TLS
 
-この demo skeleton では CloudFront to public ALB origin は引き続き `origin_protocol_policy = "http-only"` です。ALB 側で HTTPS origin にするには、CloudFront origin hostname と一致する ACM certificate が必要です。現状は CloudFront default domain と生成 ALB DNS name を使う雛形であり、Route53/custom domain 所有を前提にしないため、この PR では CloudFront to ALB 間 TLS は意図的に defer します。
+CloudFrontからpublic ALB originへの通信はHTTPS onlyです。runtime stackは次を必須入力として受け取ります。
 
-残存リスク: session、CSRF、Basic Auth header が CloudFront to ALB の public origin hop では HTTP になります。秘密 origin header と CloudFront prefix-list SG は origin bypass を抑制しますが、この hop の暗号化にはなりません。
+- `alb_origin_domain_name`: 例 `origin.example.com`
+- `alb_certificate_arn`: `ap-northeast-1`で発行済みのACM certificate ARN
+- `route53_hosted_zone_id`: origin domainを所有するpublic hosted zone
 
-prod/EKS phase 対応: custom origin hostname + ALB ACM certificate を用意して `origin_protocol_policy = "https-only"` にするか、CloudFront VPC origin / internal ALB へ移行します。
+runtimeはRoute 53 aliasを現在のALBへ向け、ALBは443 listenerでACM certificateを提示します。CloudFrontは`origin_protocol_policy = "https-only"`とTLS 1.2で接続します。ALBのdefault actionは403を維持し、CloudFrontのsecret origin headerが一致した場合だけAPI target groupへforwardします。
+
+CloudFrontのdefault domainはviewer HTTPSを既に提供します。独自viewer domain用の`us-east-1` certificateとCloudFront aliasは任意の後続対応です。ACM certificateとDNS validation recordはbootstrapとして保持し、runtime destroyへ含めません。
 
 ### Migration task
 

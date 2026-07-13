@@ -73,9 +73,9 @@ HTTPSにはLet's Encryptではなく、AWS Certificate Managerの非export型公
 
 証明書:
 
-1. `us-east-1`で`app.<your-domain>`用CloudFront viewer証明書をDNS validationで作る。
-2. `ap-northeast-1`で`origin.<your-domain>`用ALB証明書をDNS validationで作る。
-3. 両方が`Issued`になるまでapplyしない。
+1. 必須: `ap-northeast-1`で`origin.<your-domain>`用ALB証明書をDNS validationで作る。
+2. 任意: 独自viewer domainを使う場合だけ、`us-east-1`で`app.<your-domain>`用CloudFront証明書を作る。CloudFront default domainは追加証明書なしでHTTPSを提供する。
+3. 必須のALB証明書が`Issued`になるまでapplyしない。
 4. DNS validation CNAMEを削除しない。
 5. ACM証明書とvalidation recordはbootstrap資源として保持し、runtime destroyへ含めない。
 
