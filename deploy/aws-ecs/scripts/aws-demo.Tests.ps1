@@ -70,6 +70,8 @@ Assert-True ($providerContent -match 'Lifecycle\s+=\s+"runtime"') "runtime resou
 Assert-True ($content -match '"-var=api_image_tag=$ApiImageTag"') "scale plan must keep the deployed API image tag"
 Assert-True ($content -match '"-var=worker_image_tag=$WorkerImageTag"') "scale plan must keep the deployed worker image tag"
 Assert-True ($content -match 'Remove-ActiveTaskDefinitions') "down must deregister CI-created task definitions"
+Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 7; \$attempt\+\+\)') "task definition cleanup must include a final verification pass"
+Assert-True ($content -match 'if \(\$attempt -eq 7\) \{ break \}') "the final cleanup pass must only verify convergence"
 Assert-True ($content -match 'Smoke search returned no results') "smoke must fail on an empty retrieval result"
 Assert-True ($content -match 'Key=Lifecycle,Values=runtime') "remnant checks must exclude persistent bootstrap resources"
 
