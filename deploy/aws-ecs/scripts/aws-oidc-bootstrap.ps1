@@ -60,8 +60,14 @@ function Invoke-OidcBootstrapAwsJson {
     "--output", "json",
     "--no-cli-pager"
   )
-  $output = & aws @arguments 2>&1
-  $exitCode = $LASTEXITCODE
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = & aws @arguments 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
   $text = (($output | Out-String).Trim())
   if ($exitCode -ne 0) {
     if ($AllowNotFound -and $text -match "NoSuchEntity") {

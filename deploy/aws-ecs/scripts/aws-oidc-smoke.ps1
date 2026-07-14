@@ -35,8 +35,14 @@ function Get-OidcSmokeRoleDescriptor {
 }
 
 function Invoke-OidcSmokeAwsJson {
-  $output = & aws sts get-caller-identity --output json --no-cli-pager 2>&1
-  $exitCode = $LASTEXITCODE
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = & aws sts get-caller-identity --output json --no-cli-pager 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
   $text = (($output | Out-String).Trim())
   if ($exitCode -ne 0) {
     throw "AWS STS verification failed with exit code $exitCode; output is suppressed to protect identifiers."
