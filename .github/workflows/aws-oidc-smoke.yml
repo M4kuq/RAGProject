@@ -22,36 +22,40 @@ jobs:
     env:
       AWS_REGION: ap-northeast-1
       AWS_DEFAULT_REGION: ap-northeast-1
-      AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ vars.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
-      AWS_OIDC_SMOKE_ROLE_ARN: ${{ vars.AWS_OIDC_SMOKE_ROLE_ARN }}
 
     steps:
-      - name: Validate required variables
+      - name: Validate required masked identifiers
         shell: pwsh
+        env:
+          AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+          AWS_OIDC_SMOKE_ROLE_ARN: ${{ secrets.AWS_OIDC_SMOKE_ROLE_ARN }}
         run: |
           foreach ($name in @("AWS_DEMO_ALLOWED_ACCOUNT_IDS", "AWS_OIDC_SMOKE_ROLE_ARN")) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Required repository variable is missing: $name"
+              throw "Required masked workflow input is missing: $name"
             }
           }
 
       - name: Checkout exact branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: deploy/AWS_ECS
           persist-credentials: false
 
       - name: Configure permissionless OIDC credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-region: ap-northeast-1
-          role-to-assume: ${{ env.AWS_OIDC_SMOKE_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_OIDC_SMOKE_ROLE_ARN }}
           role-session-name: ragproject-oidc-smoke-${{ github.run_id }}
           role-duration-seconds: 900
-          allowed-account-ids: ${{ env.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
           mask-aws-account-id: true
           unset-current-credentials: true
 
       - name: Verify OIDC role session
         shell: pwsh
+        env:
+          AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+          AWS_OIDC_SMOKE_ROLE_ARN: ${{ secrets.AWS_OIDC_SMOKE_ROLE_ARN }}
         run: ./deploy/aws-ecs/scripts/aws-oidc-smoke.ps1
