@@ -102,6 +102,8 @@ Assert-OidcTestTrue ($workflow -match 'AWS_OIDC_SMOKE_ROLE_ARN') "OIDC smoke mus
 Assert-OidcTestTrue ($workflow -match 'allowed-account-ids:') "OIDC smoke must restrict the expected account"
 Assert-OidcTestTrue ($workflow -match 'mask-aws-account-id:\s*true') "OIDC smoke must mask the account ID"
 Assert-OidcTestTrue ($workflow -match 'unset-current-credentials:\s*true') "OIDC smoke must discard inherited credentials"
+Assert-OidcTestTrue ($workflow -match 'actions/checkout@v5') "OIDC smoke checkout must use the Node 24 action"
+Assert-OidcTestTrue ($workflow -match 'aws-actions/configure-aws-credentials@v6\.1\.0') "OIDC smoke credentials must support account allowlisting on Node 24"
 Assert-OidcTestTrue ($workflow -match 'aws-oidc-smoke\.ps1') "OIDC smoke must run the redacted verifier"
 Assert-OidcTestTrue ($workflow -notmatch '\$\{\{\s*secrets\.') "OIDC smoke must not load repository secrets"
 Assert-OidcTestTrue ($workflow -notmatch 'terraform|\bapply\b|\bdestroy\b|create-open-id-connect-provider|create-role') "OIDC smoke must not mutate AWS or run Terraform"
