@@ -89,6 +89,7 @@ Assert-OidcTestTrue ($bootstrapContent -match 'ValidateSet\("plan", "apply"\)') 
 Assert-OidcTestTrue ($bootstrapContent -match 'CREATE-GITHUB-OIDC-SMOKE') "bootstrap apply must require the exact confirmation"
 Assert-OidcTestTrue ($bootstrapContent -notmatch 'attach-role-policy|put-role-policy') "smoke role must not receive permission policies"
 Assert-OidcTestTrue ($bootstrapContent -notmatch 'aws\s+configure|--debug|export-credentials') "bootstrap must not export or debug credentials"
+Assert-OidcTestTrue ($bootstrapContent -match 'finally\s*\{[\s\S]*Remove-Item -LiteralPath \$policyPath') "temporary trust policy must always be removed"
 Assert-OidcTestTrue ($smokeContent -notmatch 'Write-Host\s+"Account:|Write-Host[^\r\n]*\$(identity|roleArn|accountId|expected)') "smoke must not print account IDs or ARNs"
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))

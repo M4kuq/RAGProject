@@ -178,6 +178,38 @@ function Test-OidcBootstrapTrustPolicy {
   )
 }
 
+function New-OidcBootstrapRole {
+  param(
+    [Parameter(Mandatory = $true)][string]$ProviderArn,
+    [Parameter(Mandatory = $true)][string]$Repo,
+    [Parameter(Mandatory = $true)][string]$DeployBranch,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$AwsProfile
+  )
+  $trustPolicy = New-OidcBootstrapTrustPolicy $ProviderArn $Repo $DeployBranch
+  $trustPolicyJson = $trustPolicy | ConvertTo-Json -Depth 10 -Compress
+  $policyPath = Join-Path (
+    [IO.Path]::GetTempPath()
+  ) "ragproject-oidc-$([Guid]::NewGuid().ToString('N')).json"
+  try {
+    [IO.File]::WriteAllText(
+      $policyPath,
+      $trustPolicyJson,
+      [Text.UTF8Encoding]::new($false)
+    )
+    Invoke-OidcBootstrapAwsJson @(
+      "iam", "create-role",
+      "--role-name", $Name,
+      "--description", "GitHub Actions OIDC smoke role without attached permissions",
+      "--assume-role-policy-document", "file://$policyPath"
+    ) $AwsProfile | Out-Null
+  } finally {
+    if (Test-Path -LiteralPath $policyPath) {
+      Remove-Item -LiteralPath $policyPath -Force
+    }
+  }
+}
+
 function Invoke-OidcBootstrap {
   Assert-OidcBootstrapCommandAvailable "aws"
   $allowlist = [Environment]::GetEnvironmentVariable("AWS_DEMO_ALLOWED_ACCOUNT_IDS")
@@ -243,14 +275,7 @@ function Invoke-OidcBootstrap {
     ) $Profile | Out-Null
   }
   if (-not $roleExists) {
-    $trustPolicy = New-OidcBootstrapTrustPolicy $providerArn $Repository $Branch
-    $trustPolicyJson = $trustPolicy | ConvertTo-Json -Depth 10 -Compress
-    Invoke-OidcBootstrapAwsJson @(
-      "iam", "create-role",
-      "--role-name", $RoleName,
-      "--description", "GitHub Actions OIDC smoke role without attached permissions",
-      "--assume-role-policy-document", $trustPolicyJson
-    ) $Profile | Out-Null
+    New-OidcBootstrapRole $providerArn $Repository $Branch $RoleName $Profile
   }
   Write-Host "GitHub OIDC provider and permissionless smoke role are ready."
   Write-Host "Set AWS_OIDC_SMOKE_ROLE_ARN as a GitHub repository variable without printing it to logs."
