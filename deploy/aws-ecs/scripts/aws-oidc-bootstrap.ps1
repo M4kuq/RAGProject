@@ -64,7 +64,10 @@ function Invoke-OidcBootstrapAwsJson {
   $exitCode = $LASTEXITCODE
   $text = (($output | Out-String).Trim())
   if ($exitCode -ne 0) {
-    if ($AllowNotFound -and $text -match "NoSuchEntity") { return $null }
+    if ($AllowNotFound -and $text -match "NoSuchEntity") {
+      $global:LASTEXITCODE = 0
+      return $null
+    }
     throw "AWS CLI request failed with exit code $exitCode; output is suppressed to protect identifiers."
   }
   if ([string]::IsNullOrWhiteSpace($text)) { return $null }
