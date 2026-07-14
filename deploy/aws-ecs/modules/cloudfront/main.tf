@@ -124,7 +124,7 @@ resource "aws_cloudfront_function" "basic_auth_spa_rewrite" {
 
 resource "aws_cloudfront_origin_request_policy" "api" {
   name    = "${var.name_prefix}-api-no-viewer-host"
-  comment = "Forward API request data while using the ALB origin host for TLS"
+  comment = "Forward API request data while using the internal ALB origin host"
 
   cookies_config {
     cookie_behavior = "all"
@@ -143,6 +143,27 @@ resource "aws_cloudfront_origin_request_policy" "api" {
   }
 }
 
+resource "aws_cloudfront_vpc_origin" "api" {
+  vpc_origin_endpoint_config {
+    name                   = "${var.name_prefix}-api-alb"
+    arn                    = var.alb_arn
+    http_port              = 80
+    https_port             = 443
+    origin_protocol_policy = "http-only"
+
+    origin_ssl_protocols {
+      items    = ["TLSv1.2"]
+      quantity = 1
+    }
+  }
+
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "30m"
+  }
+}
+
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -158,7 +179,7 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   origin {
-    domain_name = var.alb_origin_domain_name
+    domain_name = var.alb_dns_name
     origin_id   = local.alb_origin_id
 
     custom_header {
@@ -166,11 +187,10 @@ resource "aws_cloudfront_distribution" "this" {
       value = var.origin_verify_header_value
     }
 
-    custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "https-only"
-      origin_ssl_protocols   = ["TLSv1.2"]
+    vpc_origin_config {
+      vpc_origin_id            = aws_cloudfront_vpc_origin.api.id
+      origin_keepalive_timeout = 5
+      origin_read_timeout      = 30
     }
   }
 

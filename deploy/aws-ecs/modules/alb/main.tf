@@ -1,7 +1,7 @@
 resource "aws_lb" "this" {
   name                       = "${var.name_prefix}-alb"
   load_balancer_type         = "application"
-  internal                   = false
+  internal                   = true
   security_groups            = [var.security_group_id]
   subnets                    = var.subnet_ids
   enable_deletion_protection = false
@@ -35,12 +35,10 @@ resource "aws_lb_target_group" "api" {
   }
 }
 
-resource "aws_lb_listener" "https" {
+resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
-  port              = 443
-  protocol          = "HTTPS"
-  certificate_arn   = var.certificate_arn
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  port              = 80
+  protocol          = "HTTP"
 
   default_action {
     type = "fixed-response"
@@ -54,7 +52,7 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_rule" "cloudfront_origin_verify" {
-  listener_arn = aws_lb_listener.https.arn
+  listener_arn = aws_lb_listener.http.arn
   priority     = 10
 
   action {

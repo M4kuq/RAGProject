@@ -239,6 +239,13 @@ resource "aws_iam_role_policy_attachment" "ecs_task" {
 
 data "aws_iam_policy_document" "github_deploy" {
   statement {
+    sid       = "ReadDeploymentConfig"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [var.deployment_config_secret_arn]
+  }
+
+  statement {
     sid       = "GetEcrAuthorization"
     effect    = "Allow"
     actions   = ["ecr:GetAuthorizationToken"]

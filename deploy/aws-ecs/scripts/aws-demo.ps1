@@ -131,9 +131,6 @@ function Assert-BackendEnvironment {
     "TF_VAR_database_url_secret_arn",
     "TF_VAR_session_secret_arn",
     "TF_VAR_demo_admin_password_secret_arn",
-    "TF_VAR_alb_origin_domain_name",
-    "TF_VAR_alb_certificate_arn",
-    "TF_VAR_route53_hosted_zone_id",
     "TF_VAR_basic_auth_username",
     "TF_VAR_basic_auth_header_sha256",
     "TF_VAR_origin_verify_header_value"
@@ -292,7 +289,7 @@ function Get-TerraformJsonOutput {
   }
 }
 
-function Get-AppDeploymentConfig {
+function Get-DeploymentConfig {
   Push-Location $script:TerraformDirectory
   try {
     $publicSubnets = (Invoke-Native "terraform" @("output", "-json", "public_subnet_ids") -Capture) | ConvertFrom-Json
@@ -310,16 +307,26 @@ function Get-AppDeploymentConfig {
     ecs_api_task_definition = Get-TerraformOutput "api_task_definition_family"
     ecs_worker_task_definition = Get-TerraformOutput "worker_task_definition_family"
     ecs_migration_task_definition = Get-TerraformOutput "migration_task_definition_family"
-    github_deploy_role_arn = Get-TerraformOutput "github_deploy_role_arn"
+    frontend_bucket_name = Get-TerraformOutput "frontend_bucket_name"
+    cloudfront_distribution_id = Get-TerraformOutput "cloudfront_distribution_id"
   } | ConvertTo-Json -Depth 4 -Compress)
 }
 
-function Get-FrontendDeploymentConfig {
-  return ([ordered]@{
-    frontend_bucket_name = Get-TerraformOutput "frontend_bucket_name"
-    cloudfront_distribution_id = Get-TerraformOutput "cloudfront_distribution_id"
-    github_deploy_role_arn = Get-TerraformOutput "github_deploy_role_arn"
-  } | ConvertTo-Json -Compress)
+function Update-DeploymentConfigSecret {
+  $secretName = Get-TerraformOutput "deployment_config_secret_name"
+  $configFile = Join-Path $script:ArtifactDirectory "deployment-config.secret.json"
+  try {
+    Set-Content -LiteralPath $configFile -Value (Get-DeploymentConfig) -Encoding UTF8 -NoNewline
+    Invoke-Native "aws" @(
+      "secretsmanager", "put-secret-value",
+      "--secret-id", $secretName,
+      "--secret-string", "file://$configFile",
+      "--region", $script:ExpectedRegion,
+      "--no-cli-pager"
+    ) -Capture | Out-Null
+  } finally {
+    Remove-Item -LiteralPath $configFile -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Update-DatabaseUrlSecret {
@@ -418,18 +425,16 @@ function Invoke-Up {
   Apply-SavedPlan $script:PlanPath
   Write-Step "refresh app DATABASE_URL without printing credentials"
   Update-DatabaseUrlSecret
+  Write-Step "publish deployment identifiers to the runtime secret"
+  Update-DeploymentConfigSecret
   Write-Step "build, migrate, and deploy application images"
-  $appConfig = Get-AppDeploymentConfig
   Invoke-GitHubWorkflow "aws-deploy-app.yml" @{
     image_tag = $context.GitSha
     source_sha = $context.GitSha
-    deployment_config = $appConfig
   }
   Write-Step "build and deploy frontend"
-  $frontendConfig = Get-FrontendDeploymentConfig
   Invoke-GitHubWorkflow "aws-deploy-frontend.yml" @{
     source_sha = $context.GitSha
-    deployment_config = $frontendConfig
   }
   Write-Step "create and apply exact scale-up plan"
   New-DemoPlan $script:ScalePlanPath $script:ScaleManifestPath "runtime-scale-up" $context 1 1 1 $context.GitSha $context.GitSha
@@ -711,6 +716,12 @@ function Assert-NoRuntimeRemnants {
     throw "The runtime CloudFront distribution still exists."
   }
   if (-not (Test-AwsResourceAbsent @(
+    "cloudfront", "get-vpc-origin", "--id", [string]$Snapshot.CloudFrontVpcOriginId,
+    "--no-cli-pager"
+  ) "EntityNotFound")) {
+    throw "The runtime CloudFront VPC origin still exists."
+  }
+  if (-not (Test-AwsResourceAbsent @(
     "elbv2", "describe-load-balancers", "--load-balancer-arns", [string]$Snapshot.AlbArn,
     "--region", $script:ExpectedRegion, "--no-cli-pager"
   ) "LoadBalancerNotFound")) {
@@ -796,6 +807,7 @@ function Invoke-Down {
       Get-TerraformOutput "migration_task_definition_family"
     )
     CloudFrontDistributionId = Get-TerraformOutput "cloudfront_distribution_id"
+    CloudFrontVpcOriginId = Get-TerraformOutput "cloudfront_vpc_origin_id"
     EcsClusterName = Get-TerraformOutput "ecs_cluster_name"
     AlbArn = Get-TerraformOutput "alb_arn"
     RdsIdentifier = Get-TerraformOutput "rds_identifier"

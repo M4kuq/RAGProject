@@ -8,6 +8,11 @@ output "public_subnet_ids" {
   value       = aws_subnet.public[*].id
 }
 
+output "private_subnet_ids" {
+  description = "Private subnet IDs for the internal ALB and CloudFront VPC origin."
+  value       = aws_subnet.private[*].id
+}
+
 output "alb_security_group_id" {
   description = "ALB security group ID."
   value       = aws_security_group.alb.id

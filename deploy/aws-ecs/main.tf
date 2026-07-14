@@ -1,10 +1,3 @@
-check "alb_certificate_region" {
-  assert {
-    condition     = split(":", var.alb_certificate_arn)[3] == var.region
-    error_message = "alb_certificate_arn must be issued in the same region as the ALB."
-  }
-}
-
 locals {
   name_prefix          = "${var.project}-${var.environment}"
   secret_arns          = distinct(concat([var.database_url_secret_arn, var.session_secret_arn, var.demo_admin_password_secret_arn], var.additional_secret_arns))
@@ -52,9 +45,10 @@ locals {
 module "network" {
   source = "./modules/network"
 
-  name_prefix         = local.name_prefix
-  vpc_cidr            = var.vpc_cidr
-  public_subnet_cidrs = var.public_subnet_cidrs
+  name_prefix          = local.name_prefix
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
 }
 
 module "ecr" {
@@ -76,6 +70,12 @@ module "s3" {
   name_prefix = local.name_prefix
 }
 
+resource "aws_secretsmanager_secret" "deployment_config" {
+  name                    = "${local.name_prefix}-deployment-config"
+  description             = "Short-lived deployment identifiers read by trusted GitHub Actions workflows."
+  recovery_window_in_days = 0
+}
+
 module "observability" {
   source = "./modules/observability"
 
@@ -86,23 +86,24 @@ module "observability" {
 module "iam" {
   source = "./modules/iam"
 
-  name_prefix                 = local.name_prefix
-  region                      = var.region
-  github_oidc_repo            = var.github_oidc_repo
-  github_deploy_branch        = var.github_deploy_branch
-  create_github_oidc_provider = var.create_github_oidc_provider
-  github_oidc_provider_arn    = var.github_oidc_provider_arn
-  github_oidc_thumbprints     = var.github_oidc_thumbprints
-  ecr_repository_arns         = module.ecr.repository_arns
-  documents_bucket_arn        = module.s3.documents_bucket_arn
-  documents_key_prefix        = local.documents_key_prefix
-  frontend_bucket_arn         = module.s3.frontend_bucket_arn
-  cloudfront_distribution_arn = module.cloudfront.distribution_arn
-  secret_arns                 = local.secret_arns
-  ssm_parameter_arns          = var.ssm_parameter_arns
-  bedrock_generation_model_id = var.bedrock_generation_model_id
-  bedrock_embedding_model_id  = var.bedrock_embedding_model_id
-  bedrock_rerank_model_id     = var.bedrock_rerank_model_id
+  name_prefix                  = local.name_prefix
+  region                       = var.region
+  github_oidc_repo             = var.github_oidc_repo
+  github_deploy_branch         = var.github_deploy_branch
+  create_github_oidc_provider  = var.create_github_oidc_provider
+  github_oidc_provider_arn     = var.github_oidc_provider_arn
+  github_oidc_thumbprints      = var.github_oidc_thumbprints
+  ecr_repository_arns          = module.ecr.repository_arns
+  documents_bucket_arn         = module.s3.documents_bucket_arn
+  documents_key_prefix         = local.documents_key_prefix
+  frontend_bucket_arn          = module.s3.frontend_bucket_arn
+  cloudfront_distribution_arn  = module.cloudfront.distribution_arn
+  deployment_config_secret_arn = aws_secretsmanager_secret.deployment_config.arn
+  secret_arns                  = local.secret_arns
+  ssm_parameter_arns           = var.ssm_parameter_arns
+  bedrock_generation_model_id  = var.bedrock_generation_model_id
+  bedrock_embedding_model_id   = var.bedrock_embedding_model_id
+  bedrock_rerank_model_id      = var.bedrock_rerank_model_id
 }
 
 module "rds" {
@@ -122,23 +123,10 @@ module "alb" {
 
   name_prefix                = local.name_prefix
   vpc_id                     = module.network.vpc_id
-  subnet_ids                 = module.network.public_subnet_ids
+  subnet_ids                 = module.network.private_subnet_ids
   security_group_id          = module.network.alb_security_group_id
   origin_verify_header_name  = var.origin_verify_header_name
   origin_verify_header_value = var.origin_verify_header_value
-  certificate_arn            = var.alb_certificate_arn
-}
-
-resource "aws_route53_record" "alb_origin" {
-  zone_id = var.route53_hosted_zone_id
-  name    = var.alb_origin_domain_name
-  type    = "A"
-
-  alias {
-    name                   = module.alb.dns_name
-    zone_id                = module.alb.zone_id
-    evaluate_target_health = false
-  }
 }
 
 module "ecs" {
@@ -195,7 +183,8 @@ module "cloudfront" {
 
   name_prefix                          = local.name_prefix
   frontend_bucket_regional_domain_name = module.s3.frontend_bucket_regional_domain_name
-  alb_origin_domain_name               = var.alb_origin_domain_name
+  alb_arn                              = module.alb.arn
+  alb_dns_name                         = module.alb.dns_name
   api_path_patterns                    = var.api_path_patterns
   price_class                          = var.frontend_price_class
   basic_auth_username                  = var.basic_auth_username
@@ -203,8 +192,6 @@ module "cloudfront" {
   basic_auth_realm                     = var.basic_auth_realm
   origin_verify_header_name            = var.origin_verify_header_name
   origin_verify_header_value           = var.origin_verify_header_value
-
-  depends_on = [aws_route53_record.alb_origin]
 }
 
 data "aws_iam_policy_document" "frontend_oac" {

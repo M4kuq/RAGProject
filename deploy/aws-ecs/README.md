@@ -8,7 +8,8 @@
 flowchart TD
   User[User] --> CF[CloudFront default domain<br/>CloudFront Function Basic Auth]
   CF --> S3Front[S3 frontend bucket<br/>private + OAC]
-  CF --> ALB[Public ALB<br/>HTTPS 443 origin + ACM]
+  CF --> VPCO[CloudFront VPC Origin]
+  VPCO --> ALB[Internal ALB<br/>private HTTP 80]
   ALB --> API[ECS Fargate API<br/>desired_count = 0]
   API --> RDS[(RDS PostgreSQL<br/>single-AZ)]
   API --> Qdrant[ECS Fargate Qdrant<br/>desired_count = 0 or 1]
@@ -23,7 +24,7 @@ flowchart TD
   Worker --> Bedrock
 ```
 
-Frontend は Vite/React の build artifact を S3 に置き、CloudFront OAC だけで読める private bucket とします。API は CloudFront の `/api/*`、`/health`、`/ready` から証明書名と一致する Route 53 origin domain を経由して ALB HTTPS 443へ流します。ALB 自体は public ですが、security group は CloudFront origin-facing managed prefix listからのHTTPSのみに絞り、secret origin headerが一致した場合だけAPIへforwardします。
+Frontend は Vite/React の build artifact を S3 に置き、CloudFront OAC だけで読める private bucket とします。API は CloudFront の `/api/*`、`/health`、`/ready` から VPC Origin を経由し、private subnet の internal ALB HTTP 80へ流します。viewer TLS は CloudFront default domain で終端し、ALB はインターネットから直接到達できません。security group は CloudFront origin-facing managed prefix listからのHTTPだけに絞り、secret origin headerが一致した場合だけAPIへforwardします。
 
 ### Graph backend policy
 
@@ -35,7 +36,7 @@ Amazon Neptune はこの demo stack では採用しません。Neptune openCyphe
 
 | module | 責務 | 理由 |
 |---|---|---|
-| `network` | VPC、public subnet、IGW、route table、SG | NAT なし構成の境界と通信制御を一箇所で確認できる |
+| `network` | VPC、public/private subnet、IGW、route table、SG | NAT なし構成の境界とCloudFront VPC Origin用のprivate ALB経路を一箇所で確認できる |
 | `alb` | ALB、target group、listener | ECS service と CloudFront origin から独立してレビューできる |
 | `ecr` | API/worker ECR repository、lifecycle | image retention と push 先を明確化する |
 | `ecs` | cluster、task definition、service、Cloud Map | compute と service discovery をまとめ、desired count を一元管理する |
@@ -64,7 +65,7 @@ Fargate は EC2 worker node の OS patch、capacity 管理、AMI 更新を持た
 tradeoff は次のとおりです。
 
 - task に public IP が付きます。ただし inbound は security group で閉じ、API は ALB 経由、Qdrant/RDS は内部 SG 参照だけに制限します。
-- private subnet + NAT/VPC endpoints よりも network isolation は弱いです。本番化フェーズでは private subnet、VPC endpoints、WAF、Route53/ACM を追加する余地があります。
+- Fargate task は public subnet のままですが、viewerから到達するALBはprivate subnetに置きます。本番化フェーズではtask側もprivate subnetへ移し、VPC endpointsやWAFを追加する余地があります。
 - RDS は `publicly_accessible = false` で public IP を持たせず、SG は ECS app SG からの 5432 のみ許可します。DB subnet group は小構成のため public subnets を使います。
 
 ## 5. Terraform state を S3 + DynamoDB にする理由
@@ -208,17 +209,11 @@ app_public_origin = "https://d111111abcdef8.cloudfront.net"
 
 job queueはSQSへ置き換えません。PostgreSQL job tableのlease/retry/statusがsource of truthです。SQS/DLQは将来のwake-up通知用に未接続で、task roleにも現時点ではSQS権限を付与しません。
 
-### CloudFront to ALB TLS
+### CloudFront VPC Origin と internal ALB
 
-CloudFrontからpublic ALB originへの通信はHTTPS onlyです。runtime stackは次を必須入力として受け取ります。
+CloudFront default domain が viewer HTTPS を提供し、API origin は CloudFront VPC Origin から private subnet の internal ALBへHTTPで接続します。ALB用の独自ドメイン、Route 53 hosted zone、ACM certificateは不要です。private subnetのroute tableにはInternet GatewayやNAT Gatewayへのdefault routeを作りません。
 
-- `alb_origin_domain_name`: 例 `origin.example.com`
-- `alb_certificate_arn`: `ap-northeast-1`で発行済みのACM certificate ARN
-- `route53_hosted_zone_id`: origin domainを所有するpublic hosted zone
-
-runtimeはRoute 53 aliasを現在のALBへ向け、ALBは443 listenerでACM certificateを提示します。CloudFrontは`origin_protocol_policy = "https-only"`とTLS 1.2で接続します。ALBのdefault actionは403を維持し、CloudFrontのsecret origin headerが一致した場合だけAPI target groupへforwardします。
-
-CloudFrontのdefault domainはviewer HTTPSを既に提供します。独自viewer domain用の`us-east-1` certificateとCloudFront aliasは任意の後続対応です。ACM certificateとDNS validation recordはbootstrapとして保持し、runtime destroyへ含めません。
+東京リージョンのVPC Originで未対応のAZ ID `apne1-az3` はsubnet選択から除外します。ALBのdefault actionは403を維持し、CloudFrontのsecret origin headerが一致した場合だけAPI target groupへforwardします。独自viewer domainが必要になった場合だけ、`us-east-1` certificateとCloudFront aliasを別途追加します。
 
 ### Migration task
 
