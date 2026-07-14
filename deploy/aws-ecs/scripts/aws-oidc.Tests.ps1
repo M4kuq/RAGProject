@@ -106,6 +106,7 @@ Assert-OidcTestTrue ($workflow -match 'actions/checkout@v5') "OIDC smoke checkou
 Assert-OidcTestTrue ($workflow -match 'aws-actions/configure-aws-credentials@v6\.1\.0') "OIDC smoke credentials must support account allowlisting on Node 24"
 Assert-OidcTestTrue ($workflow -match 'aws-oidc-smoke\.ps1') "OIDC smoke must run the redacted verifier"
 Assert-OidcTestTrue ($workflow -notmatch 'vars\.AWS_(DEMO_ALLOWED_ACCOUNT_IDS|OIDC_SMOKE_ROLE_ARN)') "OIDC identifiers must not use unmasked repository variables"
+Assert-OidcTestTrue ($workflow -notmatch 'repository variable is missing') "OIDC validation errors must describe the masked workflow inputs"
 $secretReferences = @(
   [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
     ForEach-Object { $_.Groups[1].Value } |
