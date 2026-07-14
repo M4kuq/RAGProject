@@ -102,8 +102,18 @@ Assert-OidcTestTrue ($workflow -match 'AWS_OIDC_SMOKE_ROLE_ARN') "OIDC smoke mus
 Assert-OidcTestTrue ($workflow -match 'allowed-account-ids:') "OIDC smoke must restrict the expected account"
 Assert-OidcTestTrue ($workflow -match 'mask-aws-account-id:\s*true') "OIDC smoke must mask the account ID"
 Assert-OidcTestTrue ($workflow -match 'unset-current-credentials:\s*true') "OIDC smoke must discard inherited credentials"
+Assert-OidcTestTrue ($workflow -match 'actions/checkout@v5') "OIDC smoke checkout must use the Node 24 action"
+Assert-OidcTestTrue ($workflow -match 'aws-actions/configure-aws-credentials@v6\.1\.0') "OIDC smoke credentials must support account allowlisting on Node 24"
 Assert-OidcTestTrue ($workflow -match 'aws-oidc-smoke\.ps1') "OIDC smoke must run the redacted verifier"
-Assert-OidcTestTrue ($workflow -notmatch '\$\{\{\s*secrets\.') "OIDC smoke must not load repository secrets"
+Assert-OidcTestTrue ($workflow -notmatch 'vars\.AWS_(DEMO_ALLOWED_ACCOUNT_IDS|OIDC_SMOKE_ROLE_ARN)') "OIDC identifiers must not use unmasked repository variables"
+$secretReferences = @(
+  [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
+    ForEach-Object { $_.Groups[1].Value } |
+    Sort-Object -Unique
+)
+Assert-OidcTestTrue ($secretReferences.Count -eq 2) "OIDC smoke must reference only its two masked identifier secrets"
+Assert-OidcTestTrue ($secretReferences -contains 'AWS_DEMO_ALLOWED_ACCOUNT_IDS') "OIDC smoke must mask the account allowlist as a secret"
+Assert-OidcTestTrue ($secretReferences -contains 'AWS_OIDC_SMOKE_ROLE_ARN') "OIDC smoke must mask the role ARN as a secret"
 Assert-OidcTestTrue ($workflow -notmatch 'terraform|\bapply\b|\bdestroy\b|create-open-id-connect-provider|create-role') "OIDC smoke must not mutate AWS or run Terraform"
 
 $demoScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "aws-demo.ps1") -Raw

@@ -144,7 +144,7 @@ runtime 用の広い権限を作る前に、GitHub OIDC の成立だけを確認
   -Confirmation CREATE-GITHUB-OIDC-SMOKE
 ```
 
-既存 provider の audience または既存 role の trust が期待値と異なる場合、script は上書きせず停止します。新規 provider の thumbprint は AWS IAM に取得させます。作成後は role ARN を表示せずに repository variable `AWS_OIDC_SMOKE_ROLE_ARN` へ設定し、同じ allowlist を `AWS_DEMO_ALLOWED_ACCOUNT_IDS` へ設定します。
+既存 provider の audience または既存 role の trust が期待値と異なる場合、script は上書きせず停止します。新規 provider の thumbprint は AWS IAM に取得させます。作成後は role ARN を表示せずに Actions secret `AWS_OIDC_SMOKE_ROLE_ARN` へ設定し、同じ allowlist を `AWS_DEMO_ALLOWED_ACCOUNT_IDS` へ設定します。これらはAWS credentialではありませんが、repository variableではstep開始時の`env` / `with`表示に値が出るため、GitHubの自動maskを得る目的でsecretとして保存します。
 
 `AWS OIDC Smoke` workflow は default branch に存在してから手動実行し、ref には `deploy/AWS_ECS` を選択します。workflow は15分の短期認証を取得し、account ID を mask して専用 verifier で role session を照合します。これは `AWS_TERRAFORM_PLAN_ROLE_ARN` や `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` の代替ではありません。
 
