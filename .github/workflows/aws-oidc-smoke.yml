@@ -24,7 +24,7 @@ jobs:
       AWS_DEFAULT_REGION: ap-northeast-1
 
     steps:
-      - name: Validate required variables
+      - name: Validate required masked identifiers
         shell: pwsh
         env:
           AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
@@ -32,7 +32,7 @@ jobs:
         run: |
           foreach ($name in @("AWS_DEMO_ALLOWED_ACCOUNT_IDS", "AWS_OIDC_SMOKE_ROLE_ARN")) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Required repository variable is missing: $name"
+              throw "Required masked workflow input is missing: $name"
             }
           }
 
