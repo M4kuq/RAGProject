@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/aws-infra-plan.yml"
+      - ".github/workflows/aws-oidc-smoke.yml"
       - "deploy/aws-ecs/**"
   workflow_dispatch:
 
@@ -40,6 +41,11 @@ jobs:
         working-directory: .
         shell: pwsh
         run: ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
+
+      - name: OIDC parser and credential-free tests
+        working-directory: .
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-oidc.Tests.ps1
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive
@@ -84,6 +90,7 @@ jobs:
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          mask-aws-account-id: true
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3

@@ -99,6 +99,7 @@ jobs:
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          mask-aws-account-id: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

@@ -126,6 +126,34 @@ create_github_oidc_provider = false
 
 account ID や実 ARN は workflow file に書かず、GitHub variables か Terraform output から渡します。
 
+### 4.1 最小 OIDC smoke
+
+runtime 用の広い権限を作る前に、GitHub OIDC の成立だけを確認できます。この経路は IAM OIDC provider と権限ポリシーを持たない専用 role だけを対象にし、Terraform、ECS、RDS、ECR、Bedrock は実行しません。`sts:GetCallerIdentity` は権限ポリシーなしで呼び出せるため、この role に AWS service 権限を追加しないでください。
+
+まず `AWS_DEMO_ALLOWED_ACCOUNT_IDS` を安全な環境変数として設定し、read-only の review を実行します。Account ID や ARN を端末ログへ出力しません。
+
+```powershell
+./deploy/aws-ecs/scripts/aws-oidc-bootstrap.ps1 plan -Repository "OWNER/REPO"
+```
+
+表示内容を確認し、IAM resource 作成が別途明示承認された場合だけ、完全一致の確認語を付けて実行します。
+
+```powershell
+./deploy/aws-ecs/scripts/aws-oidc-bootstrap.ps1 apply `
+  -Repository "OWNER/REPO" `
+  -Confirmation CREATE-GITHUB-OIDC-SMOKE
+```
+
+既存 provider の audience または既存 role の trust が期待値と異なる場合、script は上書きせず停止します。新規 provider の thumbprint は AWS IAM に取得させます。作成後は role ARN を表示せずに repository variable `AWS_OIDC_SMOKE_ROLE_ARN` へ設定し、同じ allowlist を `AWS_DEMO_ALLOWED_ACCOUNT_IDS` へ設定します。
+
+`AWS OIDC Smoke` workflow は default branch に存在してから手動実行し、ref には `deploy/AWS_ECS` を選択します。workflow は15分の短期認証を取得し、account ID を mask して専用 verifier で role session を照合します。これは `AWS_TERRAFORM_PLAN_ROLE_ARN` や `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` の代替ではありません。
+
+公式情報:
+
+- [GitHub Actions から AWS へ OIDC 接続](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
+- [IAM OIDC provider の作成](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html)
+- [STS GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
+
 ## 5. State bootstrap
 
 remote state backend は root stack 自身からは作れないため、先に `bootstrap/` を local backend で apply します。

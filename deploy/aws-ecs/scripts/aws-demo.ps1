@@ -395,11 +395,11 @@ function Invoke-GitHubWorkflow {
 }
 
 function Invoke-Doctor {
-  $context = Assert-DemoContext
+  Assert-DemoContext | Out-Null
   Write-Host "AWS demo context is valid."
   Write-Host "Branch: $script:ExpectedBranch"
   Write-Host "Region: $script:ExpectedRegion"
-  Write-Host "Account: $($context.Identity.AccountId)"
+  Write-Host "AWS account allowlist check passed without printing the account ID."
 }
 
 function Invoke-Plan {
@@ -536,7 +536,7 @@ function Invoke-Smoke {
 }
 
 function Invoke-Status {
-  $context = Assert-DemoContext
+  Assert-DemoContext | Out-Null
   Assert-BackendEnvironment
   Initialize-DemoTerraform
   $cluster = Get-TerraformOutput "ecs_cluster_name"
@@ -549,7 +549,7 @@ function Invoke-Status {
     $services +
     @("--region", $script:ExpectedRegion, "--output", "json", "--no-cli-pager")
   $status = (Invoke-Native "aws" $arguments -Capture) | ConvertFrom-Json
-  Write-Host "Account: $($context.Identity.AccountId)"
+  Write-Host "AWS account allowlist check passed without printing the account ID."
   Write-Host "Endpoint: https://$(Get-TerraformOutput 'cloudfront_domain_name')"
   foreach ($service in @($status.services)) {
     Write-Host "$($service.serviceName): desired=$($service.desiredCount) running=$($service.runningCount) pending=$($service.pendingCount)"
