@@ -82,6 +82,7 @@ jobs:
           set -euo pipefail
           conflict_count="$(
             gh run list \
+              --repo "$GITHUB_REPOSITORY" \
               --workflow aws-demo.yml \
               --branch deploy/AWS_ECS \
               --limit 100 \
