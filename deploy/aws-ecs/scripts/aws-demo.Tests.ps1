@@ -96,6 +96,7 @@ $lifecycleWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/work
 $appWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-app.yml") -Raw
 $frontendWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-frontend.yml") -Raw
 $planWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-infra-plan.yml") -Raw
+$providerLock = Get-Content -LiteralPath (Join-Path $terraformRoot ".terraform.lock.hcl") -Raw
 $bootstrapAccess = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/access.tf") -Raw
 $bootstrapLifecycle = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/lifecycle.tf") -Raw
 $bootstrapSecrets = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/secrets.tf") -Raw
@@ -103,6 +104,7 @@ Assert-True ($lifecycleWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') 
 Assert-True ($planWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "plan workflow must use a GitHub-compatible OIDC provider secret name"
 Assert-True ($lifecycleWorkflow -notmatch 'secrets\.GITHUB_') "lifecycle workflow must not use the reserved GITHUB_ secret prefix"
 Assert-True ($planWorkflow -notmatch 'secrets\.GITHUB_') "plan workflow must not use the reserved GITHUB_ secret prefix"
+Assert-True (($providerLock -split '"h1:').Count -ge 3) "provider lock must include checksums for Windows and Linux runners"
 Assert-True ($bootstrapAccess -match 'iam::aws:policy/ReadOnlyAccess') "Terraform plan role must use the AWS read-only managed policy"
 Assert-True ($bootstrapAccess -match '"dynamodb:PutItem"') "Terraform plan role must be able to acquire the state lock"
 Assert-True ($bootstrapAccess -match '"dynamodb:DeleteItem"') "Terraform plan role must be able to release the state lock"
