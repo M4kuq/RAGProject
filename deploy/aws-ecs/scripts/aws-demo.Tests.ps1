@@ -88,7 +88,9 @@ Assert-True ($content.Contains('"-var=worker_image_tag=$WorkerImageTag"')) "scal
 Assert-True ($content -match 'Remove-ActiveTaskDefinitions') "down must deregister CI-created task definitions"
 Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 7; \$attempt\+\+\)') "task definition cleanup must include a final verification pass"
 Assert-True ($content -match 'if \(\$attempt -eq 7\) \{ break \}') "the final cleanup pass must only verify convergence"
-Assert-True ($content -match 'Smoke search returned no results') "smoke must fail on an empty retrieval result"
+Assert-True ($content -match 'RAG_DEMO_REQUIRE_SEARCH_RESULTS') "smoke must expose an explicit no-data result policy"
+Assert-True ($content -match '\$requireSearchResults\s+-and\s+\$resultCount\s+-le\s+0') "smoke must only require retrieval results when requested"
+Assert-True ($content -match 'Smoke search returned no results') "strict smoke must fail on an empty retrieval result"
 Assert-True ($content -match 'Get-TerraformOutput "database_name"') "database URL must use the configured database name"
 Assert-True (($content -split 'source_sha = \$context\.GitSha').Count -eq 3) "both deploy workflows must receive the exact planned commit"
 Assert-True ($content -match 'Update-DeploymentConfigSecret') "fresh Terraform outputs must be stored in the runtime deployment config secret"
@@ -105,6 +107,8 @@ $bootstrapAccess = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs
 $bootstrapLifecycle = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/lifecycle.tf") -Raw
 $bootstrapSecrets = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/secrets.tf") -Raw
 Assert-True ($lifecycleWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "lifecycle workflow must use a GitHub-compatible OIDC provider secret name"
+Assert-True ($lifecycleWorkflow -match 'require_search_results:') "lifecycle workflow must expose the no-data smoke switch"
+Assert-True ($lifecycleWorkflow -match 'RAG_DEMO_REQUIRE_SEARCH_RESULTS:\s+\$\{\{ inputs\.require_search_results \}\}') "lifecycle workflow must pass the no-data smoke switch to the script"
 Assert-True ($planWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "plan workflow must use a GitHub-compatible OIDC provider secret name"
 Assert-True ($lifecycleWorkflow -notmatch 'secrets\.GITHUB_') "lifecycle workflow must not use the reserved GITHUB_ secret prefix"
 Assert-True ($planWorkflow -notmatch 'secrets\.GITHUB_') "plan workflow must not use the reserved GITHUB_ secret prefix"
