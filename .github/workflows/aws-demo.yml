@@ -46,7 +46,7 @@ env:
   TF_VAR_github_oidc_repo: ${{ github.repository }}
   TF_VAR_github_deploy_branch: deploy/AWS_ECS
   TF_VAR_create_github_oidc_provider: "false"
-  TF_VAR_github_oidc_provider_arn: ${{ secrets.GITHUB_OIDC_PROVIDER_ARN }}
+  TF_VAR_github_oidc_provider_arn: ${{ secrets.AWS_GITHUB_OIDC_PROVIDER_ARN }}
   TF_VAR_database_url_secret_arn: ${{ secrets.DATABASE_URL_SECRET_ARN }}
   TF_VAR_session_secret_arn: ${{ secrets.SESSION_SECRET_ARN }}
   TF_VAR_demo_admin_password_secret_arn: ${{ secrets.DEMO_ADMIN_PASSWORD_SECRET_ARN }}

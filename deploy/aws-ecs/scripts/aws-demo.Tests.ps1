@@ -96,6 +96,18 @@ $lifecycleWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/work
 $appWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-app.yml") -Raw
 $frontendWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-frontend.yml") -Raw
 $planWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-infra-plan.yml") -Raw
+$bootstrapAccess = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/access.tf") -Raw
+$bootstrapSecrets = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/secrets.tf") -Raw
+Assert-True ($lifecycleWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "lifecycle workflow must use a GitHub-compatible OIDC provider secret name"
+Assert-True ($planWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "plan workflow must use a GitHub-compatible OIDC provider secret name"
+Assert-True ($lifecycleWorkflow -notmatch 'secrets\.GITHUB_') "lifecycle workflow must not use the reserved GITHUB_ secret prefix"
+Assert-True ($planWorkflow -notmatch 'secrets\.GITHUB_') "plan workflow must not use the reserved GITHUB_ secret prefix"
+Assert-True ($bootstrapAccess -match 'iam::aws:policy/ReadOnlyAccess') "Terraform plan role must use the AWS read-only managed policy"
+Assert-True ($bootstrapAccess -match '"dynamodb:PutItem"') "Terraform plan role must be able to acquire the state lock"
+Assert-True ($bootstrapAccess -match '"dynamodb:DeleteItem"') "Terraform plan role must be able to release the state lock"
+Assert-True ($bootstrapAccess -notmatch 'AdministratorAccess|iam:PassRole|secretsmanager:GetSecretValue') "Terraform plan role must not gain lifecycle or secret-value permissions"
+Assert-True ($bootstrapSecrets -notmatch 'aws_secretsmanager_secret_version|secret_string') "bootstrap must create secret containers without secret values"
+Assert-True (($bootstrapSecrets -split 'prevent_destroy\s*=\s*true').Count -eq 2) "bootstrap input secret containers must be protected from destroy"
 Assert-True ($lifecycleWorkflow -notmatch '\\\$\{\{') "GitHub workflow expressions must not contain literal backslashes"
 Assert-True ($appWorkflow -notmatch '\\\$\{\{') "app workflow expressions must not contain literal backslashes"
 Assert-True ($frontendWorkflow -notmatch '\\\$\{\{') "frontend workflow expressions must not contain literal backslashes"

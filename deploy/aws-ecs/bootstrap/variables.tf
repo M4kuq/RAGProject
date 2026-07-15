@@ -27,3 +27,42 @@ variable "lock_table_name" {
   type        = string
   default     = "ragproject-demo-terraform-locks"
 }
+
+variable "state_key" {
+  description = "S3 object key for the runtime Terraform state."
+  type        = string
+  default     = "ragproject/aws-ecs/terraform.tfstate"
+}
+
+variable "github_oidc_repo" {
+  description = "GitHub repository allowed to assume the Terraform plan role."
+  type        = string
+  default     = "M4kuq/RAGProject"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_oidc_repo))
+    error_message = "github_oidc_repo must use the owner/repository format."
+  }
+}
+
+variable "github_deploy_branch" {
+  description = "GitHub branch allowed to assume the Terraform plan role."
+  type        = string
+  default     = "deploy/AWS_ECS"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._/-]+$", var.github_deploy_branch))
+    error_message = "github_deploy_branch contains unsupported characters."
+  }
+}
+
+variable "github_oidc_provider_arn" {
+  description = "Existing GitHub Actions OIDC provider ARN. The standard account-local ARN is derived when null."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_oidc_provider_arn == null || can(regex("^arn:[^:]+:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.github_oidc_provider_arn))
+    error_message = "github_oidc_provider_arn must identify the standard GitHub Actions OIDC provider."
+  }
+}
