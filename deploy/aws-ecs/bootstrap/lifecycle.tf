@@ -214,6 +214,7 @@ data "aws_iam_policy_document" "terraform_lifecycle_iam" {
         "ecs.amazonaws.com",
         "elasticloadbalancing.amazonaws.com",
         "rds.amazonaws.com",
+        "vpcorigin.cloudfront.amazonaws.com",
       ]
     }
   }
@@ -517,8 +518,20 @@ data "aws_iam_policy_document" "terraform_lifecycle_global" {
     effect = "Allow"
     actions = [
       "budgets:ModifyBudget",
+      "budgets:TagResource",
+      "budgets:UntagResource",
     ]
     resources = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:budget/${local.runtime_name_prefix}-monthly"]
+  }
+
+  statement {
+    sid    = "CreateOnlyRdsManagedMasterSecret"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:TagResource",
+    ]
+    resources = [local.rds_master_secret_arn]
   }
 
   statement {
