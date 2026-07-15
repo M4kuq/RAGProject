@@ -97,6 +97,7 @@ $appWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/
 $frontendWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-deploy-frontend.yml") -Raw
 $planWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github/workflows/aws-infra-plan.yml") -Raw
 $bootstrapAccess = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/access.tf") -Raw
+$bootstrapLifecycle = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/lifecycle.tf") -Raw
 $bootstrapSecrets = Get-Content -LiteralPath (Join-Path $repoRoot "deploy/aws-ecs/bootstrap/secrets.tf") -Raw
 Assert-True ($lifecycleWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "lifecycle workflow must use a GitHub-compatible OIDC provider secret name"
 Assert-True ($planWorkflow -match 'secrets\.AWS_GITHUB_OIDC_PROVIDER_ARN') "plan workflow must use a GitHub-compatible OIDC provider secret name"
@@ -106,6 +107,14 @@ Assert-True ($bootstrapAccess -match 'iam::aws:policy/ReadOnlyAccess') "Terrafor
 Assert-True ($bootstrapAccess -match '"dynamodb:PutItem"') "Terraform plan role must be able to acquire the state lock"
 Assert-True ($bootstrapAccess -match '"dynamodb:DeleteItem"') "Terraform plan role must be able to release the state lock"
 Assert-True ($bootstrapAccess -notmatch 'AdministratorAccess|iam:PassRole|secretsmanager:GetSecretValue') "Terraform plan role must not gain lifecycle or secret-value permissions"
+Assert-True ($bootstrapLifecycle -notmatch 'AdministratorAccess|PowerUserAccess|iam:CreateUser|iam:CreateAccessKey|ec2:RunInstances') "Terraform lifecycle role must not gain administrator, IAM-user, access-key, or EC2-instance permissions"
+Assert-True ($bootstrapLifecycle -match 'PassOnlyRuntimeEcsRoles') "Terraform lifecycle role must scope iam:PassRole to runtime ECS roles"
+Assert-True ($bootstrapLifecycle -match 'ecs-tasks\.amazonaws\.com' -and $bootstrapLifecycle -match 'ecs\.amazonaws\.com') "Terraform lifecycle role must restrict passed roles to ECS services"
+Assert-True (($bootstrapLifecycle -split 'secretsmanager:GetSecretValue').Count -eq 2) "Terraform lifecycle role may read only the RDS-managed master secret pattern"
+Assert-True ($bootstrapLifecycle -match 'secret:rds!db-\*') "Terraform lifecycle role must scope secret-value reads to RDS-managed master secrets"
+Assert-True ($bootstrapLifecycle -match 'aws_secretsmanager_secret\.input\["database_url"\]\.arn') "Terraform lifecycle role must scope DATABASE_URL writes to the bootstrap secret ARN"
+Assert-True ($bootstrapLifecycle -notmatch 'iam:CreateOpenIDConnectProvider|iam:DeleteOpenIDConnectProvider|iam:UpdateOpenIDConnectProviderThumbprint') "Terraform lifecycle role must not mutate the bootstrap OIDC provider"
+Assert-True ($bootstrapLifecycle -match 'prevent_destroy\s*=\s*true') "Terraform lifecycle role and policies must be protected from destroy"
 Assert-True ($bootstrapSecrets -notmatch 'aws_secretsmanager_secret_version|secret_string') "bootstrap must create secret containers without secret values"
 Assert-True (($bootstrapSecrets -split 'prevent_destroy\s*=\s*true').Count -eq 2) "bootstrap input secret containers must be protected from destroy"
 Assert-True ($lifecycleWorkflow -notmatch '\\\$\{\{') "GitHub workflow expressions must not contain literal backslashes"

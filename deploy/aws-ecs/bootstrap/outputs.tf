@@ -25,6 +25,12 @@ output "terraform_plan_role_arn" {
   sensitive   = true
 }
 
+output "terraform_lifecycle_role_arn" {
+  description = "GitHub OIDC role ARN for reviewed runtime Terraform apply and destroy operations."
+  value       = aws_iam_role.terraform_lifecycle.arn
+  sensitive   = true
+}
+
 output "github_oidc_provider_arn" {
   description = "Existing GitHub Actions OIDC provider ARN used by the plan role."
   value       = data.aws_iam_openid_connect_provider.github.arn
