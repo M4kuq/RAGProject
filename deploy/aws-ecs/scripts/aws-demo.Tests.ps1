@@ -125,6 +125,7 @@ Assert-True ($frontendWorkflow -match 'group: aws-demo-runtime-deploy-AWS_ECS') 
 Assert-True ($lifecycleWorkflow -match 'aws-demo-up-orchestrator-deploy-AWS_ECS') "up orchestration must avoid deadlocking dispatched deploy workflows"
 Assert-True ($lifecycleWorkflow -match 'Another AWS Demo up/down run is active') "up and down must reject conflicting lifecycle runs"
 Assert-True ($lifecycleWorkflow -match 'select\(\.status != "completed"\)') "lifecycle conflict detection must include queued and waiting runs"
+Assert-True ($lifecycleWorkflow.Contains('--repo "$GITHUB_REPOSITORY"')) "pre-checkout lifecycle conflict detection must identify the repository explicitly"
 Assert-True ($appWorkflow -match 'git merge-base --is-ancestor "\$SOURCE_SHA" "origin/deploy/AWS_ECS"') "app workflow must restrict source_sha to the deploy branch history"
 Assert-True ($frontendWorkflow -match 'git merge-base --is-ancestor "\$SOURCE_SHA" "origin/deploy/AWS_ECS"') "frontend workflow must restrict source_sha to the deploy branch history"
 Assert-True ($appWorkflow -match 'git checkout --detach "\$SOURCE_SHA"') "app workflow must checkout the validated planned commit"
