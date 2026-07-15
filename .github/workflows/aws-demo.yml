@@ -1,0 +1,164 @@
+name: AWS Demo Lifecycle
+run-name: AWS Demo ${{ inputs.command }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Lifecycle command. up creates an exact saved plan before applying it."
+        required: true
+        default: doctor
+        type: choice
+        options:
+          - doctor
+          - plan
+          - up
+          - load-data
+          - smoke
+          - status
+          - down
+      destroy_confirmation:
+        description: "For down only, enter DESTROY-RUNTIME exactly."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
+
+concurrency:
+  group: ${{ inputs.command == 'up' && 'aws-demo-up-orchestrator-deploy-AWS_ECS' || 'aws-demo-runtime-deploy-AWS_ECS' }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  AWS_DEFAULT_REGION: ap-northeast-1
+  AWS_DEMO_ALLOWED_ACCOUNT_IDS: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+  TF_LOCK_TABLE: ${{ secrets.TF_LOCK_TABLE }}
+  TF_VAR_region: ap-northeast-1
+  TF_VAR_project: ragproject
+  TF_VAR_environment: demo
+  TF_VAR_github_oidc_repo: ${{ github.repository }}
+  TF_VAR_github_deploy_branch: deploy/AWS_ECS
+  TF_VAR_create_github_oidc_provider: "false"
+  TF_VAR_github_oidc_provider_arn: ${{ secrets.AWS_GITHUB_OIDC_PROVIDER_ARN }}
+  TF_VAR_database_url_secret_arn: ${{ secrets.DATABASE_URL_SECRET_ARN }}
+  TF_VAR_session_secret_arn: ${{ secrets.SESSION_SECRET_ARN }}
+  TF_VAR_demo_admin_password_secret_arn: ${{ secrets.DEMO_ADMIN_PASSWORD_SECRET_ARN }}
+  TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}
+  TF_VAR_basic_auth_header_sha256: ${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
+  TF_VAR_origin_verify_header_value: ${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
+  RAG_DEMO_ADMIN_EMAIL: ${{ secrets.RAG_DEMO_ADMIN_EMAIL }}
+  RAG_DEMO_ADMIN_PASSWORD: ${{ secrets.RAG_DEMO_ADMIN_PASSWORD }}
+  RAG_DEMO_BASIC_AUTH_HEADER: ${{ secrets.BASIC_AUTH_HEADER }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  lifecycle:
+    name: ${{ inputs.command }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Restrict branch
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
+            echo "This workflow is restricted to refs/heads/deploy/AWS_ECS."
+            exit 1
+          fi
+
+      - name: Reject conflicting create or destroy
+        if: ${{ inputs.command == 'up' || inputs.command == 'down' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conflict_count="$(
+            gh run list \
+              --workflow aws-demo.yml \
+              --branch deploy/AWS_ECS \
+              --limit 100 \
+              --json databaseId,displayTitle,status |
+              jq --arg run_id "$GITHUB_RUN_ID" '
+                [.[] |
+                  select((.databaseId | tostring) != $run_id) |
+                  select(.status != "completed") |
+                  select(.displayTitle == "AWS Demo up" or .displayTitle == "AWS Demo down")
+                ] | length
+              '
+          )"
+          if [ "$conflict_count" != "0" ]; then
+            echo "Another AWS Demo up/down run is active; refusing a conflicting lifecycle operation."
+            exit 1
+          fi
+
+      - name: Validate explicit destroy confirmation
+        if: ${{ inputs.command == 'down' }}
+        shell: bash
+        env:
+          DESTROY_CONFIRMATION: ${{ inputs.destroy_confirmation }}
+        run: |
+          if [ "$DESTROY_CONFIRMATION" != "DESTROY-RUNTIME" ]; then
+            echo "down requires the exact destroy confirmation."
+            exit 1
+          fi
+
+      - name: Checkout exact branch
+        uses: actions/checkout@v6
+        with:
+          ref: deploy/AWS_ECS
+
+      - name: Configure lifecycle AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-region: ap-northeast-1
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_LIFECYCLE_ROLE_ARN }}
+          mask-aws-account-id: true
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Set up uv
+        if: ${{ inputs.command == 'load-data' }}
+        uses: astral-sh/setup-uv@v6
+
+      - name: Credential-free script tests
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
+
+      - name: Create saved runtime plan
+        if: ${{ inputs.command == 'up' }}
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-demo.ps1 plan
+
+      - name: Run lifecycle command
+        if: ${{ inputs.command != 'down' }}
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-demo.ps1 "${{ inputs.command }}"
+
+      - name: Destroy runtime
+        if: ${{ inputs.command == 'down' }}
+        shell: pwsh
+        env:
+          DESTROY_CONFIRMATION: ${{ inputs.destroy_confirmation }}
+        run: >
+          ./deploy/aws-ecs/scripts/aws-demo.ps1 down
+          -ConfirmDestroy
+          -DestroyConfirmation "$env:DESTROY_CONFIRMATION"
+
+      - name: Upload redacted smoke result
+        if: ${{ inputs.command == 'smoke' && always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: aws-demo-smoke-${{ github.run_id }}
+          path: deploy/aws-ecs/.aws-demo/results/smoke.json
+          if-no-files-found: ignore
+          retention-days: 7
