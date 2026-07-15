@@ -23,13 +23,24 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "Two public subnet CIDR blocks for ALB, Fargate tasks, and the RDS subnet group."
+  description = "Two public subnet CIDR blocks for Fargate tasks and the RDS subnet group."
   type        = list(string)
   default     = ["10.40.0.0/24", "10.40.1.0/24"]
 
   validation {
     condition     = length(var.public_subnet_cidrs) == 2
     error_message = "Exactly two public subnet CIDRs are required."
+  }
+}
+
+variable "private_subnet_cidrs" {
+  description = "Two private subnet CIDR blocks for the internal ALB and CloudFront VPC origin."
+  type        = list(string)
+  default     = ["10.40.10.0/24", "10.40.11.0/24"]
+
+  validation {
+    condition     = length(var.private_subnet_cidrs) == 2
+    error_message = "Exactly two private subnet CIDRs are required."
   }
 }
 
@@ -194,40 +205,6 @@ variable "app_public_origin" {
   validation {
     condition     = var.app_public_origin == null || can(regex("^https://[^/]+$", var.app_public_origin))
     error_message = "app_public_origin must be an HTTPS origin without a path, for example https://d111111abcdef8.cloudfront.net."
-  }
-}
-
-variable "alb_origin_domain_name" {
-  description = "Public DNS name used by CloudFront for the HTTPS ALB origin. Its certificate must cover this exact name."
-  type        = string
-
-  validation {
-    condition = (
-      length(var.alb_origin_domain_name) <= 253 &&
-      can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$", var.alb_origin_domain_name)) &&
-      can(regex("\\.", var.alb_origin_domain_name))
-    )
-    error_message = "alb_origin_domain_name must be a fully qualified DNS hostname without a scheme or path."
-  }
-}
-
-variable "alb_certificate_arn" {
-  description = "ACM certificate ARN in the runtime region for the ALB HTTPS listener. The certificate must cover alb_origin_domain_name."
-  type        = string
-
-  validation {
-    condition     = can(regex("^arn:[^:]+:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9A-Fa-f-]+$", var.alb_certificate_arn))
-    error_message = "alb_certificate_arn must be an ACM certificate ARN."
-  }
-}
-
-variable "route53_hosted_zone_id" {
-  description = "Public Route 53 hosted zone ID that owns alb_origin_domain_name."
-  type        = string
-
-  validation {
-    condition     = can(regex("^Z[A-Z0-9]+$", var.route53_hosted_zone_id))
-    error_message = "route53_hosted_zone_id must be a Route 53 hosted zone ID."
   }
 }
 

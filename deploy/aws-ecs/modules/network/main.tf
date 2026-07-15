@@ -6,6 +6,21 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
+locals {
+  # CloudFront VPC origins do not support apne1-az3 in ap-northeast-1.
+  vpc_origin_availability_zones = [
+    for index, name in data.aws_availability_zones.available.names : name
+    if data.aws_availability_zones.available.zone_ids[index] != "apne1-az3"
+  ]
+}
+
+check "vpc_origin_availability_zones" {
+  assert {
+    condition     = length(local.vpc_origin_availability_zones) >= length(var.private_subnet_cidrs)
+    error_message = "Not enough CloudFront VPC origin-compatible availability zones are available."
+  }
+}
+
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -38,6 +53,20 @@ resource "aws_subnet" "public" {
   }
 }
 
+resource "aws_subnet" "private" {
+  count = length(var.private_subnet_cidrs)
+
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.private_subnet_cidrs[count.index]
+  availability_zone       = local.vpc_origin_availability_zones[count.index]
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "${var.name_prefix}-private-${count.index + 1}"
+    Tier = "private"
+  }
+}
+
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
 
@@ -58,9 +87,24 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.name_prefix}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count = length(aws_subnet.private)
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb-sg"
-  description = "Allow CloudFront origin-facing HTTPS traffic to the ALB"
+  description = "Allow CloudFront VPC origin HTTP traffic to the internal ALB"
   vpc_id      = aws_vpc.this.id
 
   tags = {
@@ -100,11 +144,11 @@ resource "aws_security_group" "rds" {
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
   security_group_id = aws_security_group.alb.id
-  description       = "HTTPS from CloudFront origin-facing edge locations"
+  description       = "HTTP from CloudFront VPC origin infrastructure"
   prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
   ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
+  from_port         = 80
+  to_port           = 80
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_api" {

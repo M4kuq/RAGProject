@@ -3,10 +3,6 @@ name: AWS Deploy Frontend
 on:
   workflow_dispatch:
     inputs:
-      deployment_config:
-        description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
-        required: false
-        type: string
       source_sha:
         description: "Exact planned commit SHA to build and deploy."
         required: true
@@ -23,10 +19,7 @@ concurrency:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   SOURCE_SHA: ${{ inputs.source_sha }}
-  FRONTEND_BUCKET_NAME: ${{ vars.FRONTEND_BUCKET_NAME }}
-  CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-  DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+  DEPLOYMENT_CONFIG_SECRET_NAME: ragproject-demo-deployment-config
 
 jobs:
   deploy:
@@ -55,8 +48,20 @@ jobs:
             exit 1
           fi
 
+      - name: Validate and mask AWS account
+        working-directory: .
+        shell: bash
+        env:
+          AWS_DEMO_ACCOUNT_ID: ${{ secrets.AWS_DEMO_ACCOUNT_ID }}
+        run: |
+          if [[ ! "$AWS_DEMO_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "AWS_DEMO_ACCOUNT_ID must be a 12-digit repository secret."
+            exit 1
+          fi
+          echo "::add-mask::$AWS_DEMO_ACCOUNT_ID"
+
       - name: Checkout trusted deploy branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: deploy/AWS_ECS
           fetch-depth: 0
@@ -75,36 +80,42 @@ jobs:
         shell: bash
         run: git checkout --detach "$SOURCE_SHA"
 
-      - name: Apply lifecycle deployment config
-        if: ${{ inputs.deployment_config != '' }}
-        working-directory: .
-        shell: bash
-        env:
-          DEPLOYMENT_CONFIG: ${{ inputs.deployment_config }}
-        run: |
-          set -euo pipefail
-          jq -e '
-            (.frontend_bucket_name | test("^[a-z0-9.-]+$")) and
-            (.cloudfront_distribution_id | test("^[A-Z0-9]+$")) and
-            (.github_deploy_role_arn | test("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+-github-deploy$"))
-          ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
-          {
-            echo "FRONTEND_BUCKET_NAME=$(jq -r '.frontend_bucket_name' <<< "$DEPLOYMENT_CONFIG")"
-            echo "CLOUDFRONT_DISTRIBUTION_ID=$(jq -r '.cloudfront_distribution_id' <<< "$DEPLOYMENT_CONFIG")"
-            echo "AWS_DEPLOY_ROLE_ARN=$(jq -r '.github_deploy_role_arn' <<< "$DEPLOYMENT_CONFIG")"
-          } >> "$GITHUB_ENV"
-
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEMO_ACCOUNT_ID }}:role/ragproject-demo-github-deploy
           mask-aws-account-id: true
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+
+      - name: Load runtime deployment config
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          config_file="${RUNNER_TEMP}/deployment-config.json"
+          trap 'rm -f "$config_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$DEPLOYMENT_CONFIG_SECRET_NAME" \
+            --query SecretString \
+            --output text > "$config_file"
+          jq -e '
+            (.frontend_bucket_name | test("^[a-z0-9.-]+$")) and
+            (.cloudfront_distribution_id | test("^[A-Z0-9]+$"))
+          ' "$config_file" > /dev/null
+          jq -r '[.frontend_bucket_name, .cloudfront_distribution_id][]' "$config_file" |
+            while IFS= read -r value; do
+              echo "::add-mask::$value"
+            done
+          {
+            echo "FRONTEND_BUCKET_NAME=$(jq -r '.frontend_bucket_name' "$config_file")"
+            echo "CLOUDFRONT_DISTRIBUTION_ID=$(jq -r '.cloudfront_distribution_id' "$config_file")"
+          } >> "$GITHUB_ENV"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -120,14 +131,12 @@ jobs:
       - name: Invalidate CloudFront
         working-directory: .
         run: |
-          invalidation_id="$(aws cloudfront create-invalidation \
+          aws cloudfront create-invalidation \
             --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
             --paths "/*" \
             --query "Invalidation.Id" \
-            --output text)"
+            --output text > /dev/null
           {
             echo "### Frontend deployment"
-            echo "- Bucket: ${FRONTEND_BUCKET_NAME}"
-            echo "- Distribution: ${CLOUDFRONT_DISTRIBUTION_ID}"
-            echo "- Invalidation: ${invalidation_id}"
+            echo "- Asset sync and CloudFront invalidation completed successfully."
           } >> "$GITHUB_STEP_SUMMARY"

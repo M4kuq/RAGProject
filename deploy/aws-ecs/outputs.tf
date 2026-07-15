@@ -8,14 +8,14 @@ output "cloudfront_domain_name" {
   value       = module.cloudfront.domain_name
 }
 
+output "cloudfront_vpc_origin_id" {
+  description = "CloudFront VPC origin ID used for post-destroy verification."
+  value       = module.cloudfront.vpc_origin_id
+}
+
 output "alb_dns_name" {
   description = "AWS-generated ALB DNS name."
   value       = module.alb.dns_name
-}
-
-output "alb_origin_domain_name" {
-  description = "Route 53 domain name used by CloudFront for the HTTPS ALB origin."
-  value       = var.alb_origin_domain_name
 }
 
 output "api_ecr_repository_url" {
@@ -107,6 +107,11 @@ output "job_queue_url" {
 output "github_deploy_role_arn" {
   description = "GitHub OIDC deploy role ARN."
   value       = module.iam.github_deploy_role_arn
+}
+
+output "deployment_config_secret_name" {
+  description = "Secrets Manager name used to hand deployment identifiers to trusted workflows."
+  value       = aws_secretsmanager_secret.deployment_config.name
 }
 
 output "alb_arn" {

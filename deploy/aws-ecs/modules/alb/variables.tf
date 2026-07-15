@@ -9,17 +9,12 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "Public subnet IDs for the ALB."
+  description = "Private subnet IDs for the internal ALB."
   type        = list(string)
 }
 
 variable "security_group_id" {
   description = "Security group ID for the ALB."
-  type        = string
-}
-
-variable "certificate_arn" {
-  description = "ACM certificate ARN for the ALB HTTPS listener."
   type        = string
 }
 

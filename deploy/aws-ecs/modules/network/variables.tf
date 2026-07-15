@@ -12,3 +12,8 @@ variable "public_subnet_cidrs" {
   description = "Public subnet CIDR blocks."
   type        = list(string)
 }
+
+variable "private_subnet_cidrs" {
+  description = "Private subnet CIDR blocks reserved for the internal ALB and CloudFront VPC origin."
+  type        = list(string)
+}

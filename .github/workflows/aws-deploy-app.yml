@@ -7,10 +7,6 @@ on:
         description: "Container image tag. Leave empty to use the workflow commit SHA."
         required: false
         type: string
-      deployment_config:
-        description: "Optional JSON outputs supplied by aws-demo.ps1 after a fresh apply."
-        required: false
-        type: string
       source_sha:
         description: "Exact planned commit SHA to build and deploy."
         required: true
@@ -28,18 +24,7 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   IMAGE_TAG: ${{ inputs.image_tag || inputs.source_sha }}
   SOURCE_SHA: ${{ inputs.source_sha }}
-  API_ECR_REPOSITORY_URL: ${{ vars.API_ECR_REPOSITORY_URL }}
-  WORKER_ECR_REPOSITORY_URL: ${{ vars.WORKER_ECR_REPOSITORY_URL }}
-  ECS_CLUSTER_NAME: ${{ vars.ECS_CLUSTER_NAME }}
-  ECS_PUBLIC_SUBNET_IDS_JSON: ${{ vars.ECS_PUBLIC_SUBNET_IDS_JSON }}
-  ECS_APP_SECURITY_GROUP_ID: ${{ vars.ECS_APP_SECURITY_GROUP_ID }}
-  ECS_API_SERVICE_NAME: ${{ vars.ECS_API_SERVICE_NAME }}
-  ECS_WORKER_SERVICE_NAME: ${{ vars.ECS_WORKER_SERVICE_NAME }}
-  ECS_API_TASK_DEFINITION: ${{ vars.ECS_API_TASK_DEFINITION }}
-  ECS_WORKER_TASK_DEFINITION: ${{ vars.ECS_WORKER_TASK_DEFINITION }}
-  ECS_MIGRATION_TASK_DEFINITION: ${{ vars.ECS_MIGRATION_TASK_DEFINITION }}
-  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-  DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+  DEPLOYMENT_CONFIG_SECRET_NAME: ragproject-demo-deployment-config
 
 jobs:
   deploy:
@@ -67,8 +52,19 @@ jobs:
             exit 1
           fi
 
+      - name: Validate and mask AWS account
+        shell: bash
+        env:
+          AWS_DEMO_ACCOUNT_ID: ${{ secrets.AWS_DEMO_ACCOUNT_ID }}
+        run: |
+          if [[ ! "$AWS_DEMO_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "AWS_DEMO_ACCOUNT_ID must be a 12-digit repository secret."
+            exit 1
+          fi
+          echo "::add-mask::$AWS_DEMO_ACCOUNT_ID"
+
       - name: Checkout trusted deploy branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: deploy/AWS_ECS
           fetch-depth: 0
@@ -93,16 +89,29 @@ jobs:
             exit 1
           fi
 
-      - name: Apply lifecycle deployment config
-        if: ${{ inputs.deployment_config != '' }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEMO_ACCOUNT_ID }}:role/ragproject-demo-github-deploy
+          mask-aws-account-id: true
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+
+      - name: Load runtime deployment config
         shell: bash
         env:
-          DEPLOYMENT_CONFIG: ${{ inputs.deployment_config }}
+          AWS_DEMO_ACCOUNT_ID: ${{ secrets.AWS_DEMO_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          jq -e '
-            (.api_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$")) and
-            (.worker_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$")) and
+          config_file="${RUNNER_TEMP}/deployment-config.json"
+          trap 'rm -f "$config_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$DEPLOYMENT_CONFIG_SECRET_NAME" \
+            --query SecretString \
+            --output text > "$config_file"
+          jq -e --arg account "$AWS_DEMO_ACCOUNT_ID" '
+            (.api_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$") and startswith($account + ".dkr.ecr.ap-northeast-1.amazonaws.com/")) and
+            (.worker_ecr_repository_url | test("^[0-9]+[.]dkr[.]ecr[.]ap-northeast-1[.]amazonaws[.]com/[A-Za-z0-9._/-]+$") and startswith($account + ".dkr.ecr.ap-northeast-1.amazonaws.com/")) and
             (.ecs_cluster_name | test("^[A-Za-z0-9_-]+$")) and
             (.ecs_public_subnet_ids | type == "array" and length > 0 and all(.[]; test("^subnet-[0-9a-f]+$"))) and
             (.ecs_app_security_group_id | test("^sg-[0-9a-f]+$")) and
@@ -110,38 +119,43 @@ jobs:
             (.ecs_worker_service_name | test("^[A-Za-z0-9_-]+$")) and
             (.ecs_api_task_definition | test("^[A-Za-z0-9_-]+$")) and
             (.ecs_worker_task_definition | test("^[A-Za-z0-9_-]+$")) and
-            (.ecs_migration_task_definition | test("^[A-Za-z0-9_-]+$")) and
-            (.github_deploy_role_arn | test("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+-github-deploy$"))
-          ' <<< "$DEPLOYMENT_CONFIG" > /dev/null
+            (.ecs_migration_task_definition | test("^[A-Za-z0-9_-]+$"))
+          ' "$config_file" > /dev/null
+          jq -r '[
+            .api_ecr_repository_url,
+            .worker_ecr_repository_url,
+            .ecs_cluster_name,
+            .ecs_public_subnet_ids[],
+            .ecs_app_security_group_id,
+            .ecs_api_service_name,
+            .ecs_worker_service_name,
+            .ecs_api_task_definition,
+            .ecs_worker_task_definition,
+            .ecs_migration_task_definition
+          ][]' "$config_file" | while IFS= read -r value; do
+            echo "::add-mask::$value"
+          done
           {
-            echo "API_ECR_REPOSITORY_URL=$(jq -r '.api_ecr_repository_url' <<< "$DEPLOYMENT_CONFIG")"
-            echo "WORKER_ECR_REPOSITORY_URL=$(jq -r '.worker_ecr_repository_url' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_CLUSTER_NAME=$(jq -r '.ecs_cluster_name' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_PUBLIC_SUBNET_IDS_JSON=$(jq -c '.ecs_public_subnet_ids' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_APP_SECURITY_GROUP_ID=$(jq -r '.ecs_app_security_group_id' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_API_SERVICE_NAME=$(jq -r '.ecs_api_service_name' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_WORKER_SERVICE_NAME=$(jq -r '.ecs_worker_service_name' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_API_TASK_DEFINITION=$(jq -r '.ecs_api_task_definition' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_WORKER_TASK_DEFINITION=$(jq -r '.ecs_worker_task_definition' <<< "$DEPLOYMENT_CONFIG")"
-            echo "ECS_MIGRATION_TASK_DEFINITION=$(jq -r '.ecs_migration_task_definition' <<< "$DEPLOYMENT_CONFIG")"
-            echo "AWS_DEPLOY_ROLE_ARN=$(jq -r '.github_deploy_role_arn' <<< "$DEPLOYMENT_CONFIG")"
+            echo "API_ECR_REPOSITORY_URL=$(jq -r '.api_ecr_repository_url' "$config_file")"
+            echo "WORKER_ECR_REPOSITORY_URL=$(jq -r '.worker_ecr_repository_url' "$config_file")"
+            echo "ECS_CLUSTER_NAME=$(jq -r '.ecs_cluster_name' "$config_file")"
+            echo "ECS_PUBLIC_SUBNET_IDS_JSON=$(jq -c '.ecs_public_subnet_ids' "$config_file")"
+            echo "ECS_APP_SECURITY_GROUP_ID=$(jq -r '.ecs_app_security_group_id' "$config_file")"
+            echo "ECS_API_SERVICE_NAME=$(jq -r '.ecs_api_service_name' "$config_file")"
+            echo "ECS_WORKER_SERVICE_NAME=$(jq -r '.ecs_worker_service_name' "$config_file")"
+            echo "ECS_API_TASK_DEFINITION=$(jq -r '.ecs_api_task_definition' "$config_file")"
+            echo "ECS_WORKER_TASK_DEFINITION=$(jq -r '.ecs_worker_task_definition' "$config_file")"
+            echo "ECS_MIGRATION_TASK_DEFINITION=$(jq -r '.ecs_migration_task_definition' "$config_file")"
           } >> "$GITHUB_ENV"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
-          mask-aws-account-id: true
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and push API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
@@ -153,7 +167,7 @@ jobs:
           cache-to: type=gha,scope=aws-api,mode=max
 
       - name: Build and push worker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
@@ -233,7 +247,7 @@ jobs:
           }
 
           migration_task_definition_arn="$(register_task_definition "${ECS_MIGRATION_TASK_DEFINITION}" migration "${api_image}")"
-          echo "Registered migration task definition ${migration_task_definition_arn}"
+          echo "Registered migration task definition."
 
           run_task_json="$(aws ecs run-task \
             --cluster "${ECS_CLUSTER_NAME}" \
@@ -245,11 +259,10 @@ jobs:
           migration_task_arn="$(jq -r '.tasks[0].taskArn // empty' <<< "${run_task_json}")"
           if [ -z "${migration_task_arn}" ]; then
             echo "Migration task failed to start."
-            jq -c '.failures // []' <<< "${run_task_json}"
             exit 1
           fi
 
-          echo "Waiting for migration task ${migration_task_arn}"
+          echo "Waiting for migration task."
           aws ecs wait tasks-stopped \
             --cluster "${ECS_CLUSTER_NAME}" \
             --tasks "${migration_task_arn}"
@@ -260,8 +273,6 @@ jobs:
           migration_exit_code="$(jq -r '.tasks[0].containers[] | select(.name == "migration") | .exitCode // empty' "${RUNNER_TEMP}/migration-task.json")"
           if [ "${migration_exit_code}" != "0" ]; then
             echo "Migration failed with exit code ${migration_exit_code:-missing}."
-            jq -r '.tasks[0].stoppedReason // "no stoppedReason"' "${RUNNER_TEMP}/migration-task.json"
-            jq -c '.tasks[0].containers[] | {name, exitCode, reason}' "${RUNNER_TEMP}/migration-task.json"
             exit 1
           fi
 
@@ -273,13 +284,13 @@ jobs:
             --service "${ECS_API_SERVICE_NAME}" \
             --task-definition "${api_task_definition_arn}" \
             --query "service.taskDefinition" \
-            --output text
+            --output text > /dev/null
           aws ecs update-service \
             --cluster "${ECS_CLUSTER_NAME}" \
             --service "${ECS_WORKER_SERVICE_NAME}" \
             --task-definition "${worker_task_definition_arn}" \
             --query "service.taskDefinition" \
-            --output text
+            --output text > /dev/null
 
           aws ecs wait services-stable \
             --cluster "${ECS_CLUSTER_NAME}" \
@@ -288,7 +299,5 @@ jobs:
           {
             echo "### ECS deployment"
             echo "- Image tag: ${IMAGE_TAG}"
-            echo "- API task definition: ${api_task_definition_arn}"
-            echo "- Worker task definition: ${worker_task_definition_arn}"
-            echo "- Migration task: ${migration_task_arn}"
+            echo "- Migration and service rollout completed successfully."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -70,6 +70,11 @@ variable "cloudfront_distribution_arn" {
   type        = string
 }
 
+variable "deployment_config_secret_arn" {
+  description = "Secrets Manager ARN containing deployment identifiers for trusted GitHub Actions workflows."
+  type        = string
+}
+
 variable "secret_arns" {
   description = "Secrets Manager ARNs injectable by the ECS task execution role. Application task credentials cannot read them directly."
   type        = list(string)

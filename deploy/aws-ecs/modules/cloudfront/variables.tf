@@ -8,8 +8,13 @@ variable "frontend_bucket_regional_domain_name" {
   type        = string
 }
 
-variable "alb_origin_domain_name" {
-  description = "Public DNS name whose ACM certificate is presented by the ALB origin."
+variable "alb_arn" {
+  description = "Internal ALB ARN used by the CloudFront VPC origin."
+  type        = string
+}
+
+variable "alb_dns_name" {
+  description = "AWS-generated internal ALB DNS name."
   type        = string
 }
 
