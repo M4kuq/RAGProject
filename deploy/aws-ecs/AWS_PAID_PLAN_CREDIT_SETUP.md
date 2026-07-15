@@ -111,7 +111,7 @@ root/IAM password、MFA code、Access Key、Secret Access Key、Session tokenは
 - Terraform state用S3
 - Terraform lock
 - GitHub OIDC provider
-- lifecycle/deploy role
+- plan/lifecycle/deploy role
 - Secrets Managerのsecret container
 
 GitHubにはAccess Keyを登録せずOIDCを使う。trustは`M4kuq/RAGProject`、`refs/heads/deploy/AWS_ECS`、手動`workflow_dispatch`に限定する。
