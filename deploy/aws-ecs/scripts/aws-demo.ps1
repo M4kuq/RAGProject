@@ -289,6 +289,40 @@ function Get-TerraformJsonOutput {
   }
 }
 
+function Get-OptionalTerraformOutput {
+  param([Parameter(Mandatory = $true)][string]$Name)
+  Push-Location $script:TerraformDirectory
+  try {
+    $output = & terraform output -raw $Name 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+  if ($exitCode -eq 0) { return (($output | Out-String).Trim()) }
+  $message = $output | Out-String
+  if ($message -match '(?i)(No outputs found|Output "[^"]+" not found|output variable requested could not be found)') {
+    return $null
+  }
+  throw "terraform output failed unexpectedly."
+}
+
+function Get-OptionalTerraformJsonOutput {
+  param([Parameter(Mandatory = $true)][string]$Name)
+  Push-Location $script:TerraformDirectory
+  try {
+    $output = & terraform output -json $Name 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+  if ($exitCode -eq 0) { return (($output | Out-String).Trim() | ConvertFrom-Json) }
+  $message = $output | Out-String
+  if ($message -match '(?i)(No outputs found|Output "[^"]+" not found|output variable requested could not be found)') {
+    return $null
+  }
+  throw "terraform output failed unexpectedly."
+}
+
 function Get-DeploymentConfig {
   Push-Location $script:TerraformDirectory
   try {
@@ -709,29 +743,37 @@ function Assert-NoRuntimeRemnants {
       throw "A runtime ECR repository still exists."
     }
   }
-  if (-not (Test-AwsResourceAbsent @(
-    "cloudfront", "get-distribution", "--id", [string]$Snapshot.CloudFrontDistributionId,
-    "--no-cli-pager"
-  ) "NoSuchDistribution")) {
-    throw "The runtime CloudFront distribution still exists."
+  if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.CloudFrontDistributionId)) {
+    if (-not (Test-AwsResourceAbsent @(
+      "cloudfront", "get-distribution", "--id", [string]$Snapshot.CloudFrontDistributionId,
+      "--no-cli-pager"
+    ) "NoSuchDistribution")) {
+      throw "The runtime CloudFront distribution still exists."
+    }
   }
-  if (-not (Test-AwsResourceAbsent @(
-    "cloudfront", "get-vpc-origin", "--id", [string]$Snapshot.CloudFrontVpcOriginId,
-    "--no-cli-pager"
-  ) "EntityNotFound")) {
-    throw "The runtime CloudFront VPC origin still exists."
+  if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.CloudFrontVpcOriginId)) {
+    if (-not (Test-AwsResourceAbsent @(
+      "cloudfront", "get-vpc-origin", "--id", [string]$Snapshot.CloudFrontVpcOriginId,
+      "--no-cli-pager"
+    ) "EntityNotFound")) {
+      throw "The runtime CloudFront VPC origin still exists."
+    }
   }
-  if (-not (Test-AwsResourceAbsent @(
-    "elbv2", "describe-load-balancers", "--load-balancer-arns", [string]$Snapshot.AlbArn,
-    "--region", $script:ExpectedRegion, "--no-cli-pager"
-  ) "LoadBalancerNotFound")) {
-    throw "The runtime ALB still exists."
+  if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.AlbArn)) {
+    if (-not (Test-AwsResourceAbsent @(
+      "elbv2", "describe-load-balancers", "--load-balancer-arns", [string]$Snapshot.AlbArn,
+      "--region", $script:ExpectedRegion, "--no-cli-pager"
+    ) "LoadBalancerNotFound")) {
+      throw "The runtime ALB still exists."
+    }
   }
-  if (-not (Test-AwsResourceAbsent @(
-    "rds", "describe-db-instances", "--db-instance-identifier", [string]$Snapshot.RdsIdentifier,
-    "--region", $script:ExpectedRegion, "--no-cli-pager"
-  ) "DBInstanceNotFound")) {
-    throw "The runtime RDS instance still exists."
+  if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.RdsIdentifier)) {
+    if (-not (Test-AwsResourceAbsent @(
+      "rds", "describe-db-instances", "--db-instance-identifier", [string]$Snapshot.RdsIdentifier,
+      "--region", $script:ExpectedRegion, "--no-cli-pager"
+    ) "DBInstanceNotFound")) {
+      throw "The runtime RDS instance still exists."
+    }
   }
   foreach ($roleName in @($Snapshot.IamRoleNames)) {
     if (-not (Test-AwsResourceAbsent @(
@@ -757,16 +799,18 @@ function Assert-NoRuntimeRemnants {
     }
   }
 
-  $clusterJson = Invoke-Native "aws" @(
-    "ecs", "describe-clusters", "--clusters", [string]$Snapshot.EcsClusterName,
-    "--region", $script:ExpectedRegion, "--output", "json", "--no-cli-pager"
-  ) -Capture
-  $activeClusters = @(
-    ($clusterJson | ConvertFrom-Json).clusters |
-      Where-Object { $_.status -eq "ACTIVE" }
-  )
-  if ($activeClusters.Count -gt 0) {
-    throw "The runtime ECS cluster is still active."
+  if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.EcsClusterName)) {
+    $clusterJson = Invoke-Native "aws" @(
+      "ecs", "describe-clusters", "--clusters", [string]$Snapshot.EcsClusterName,
+      "--region", $script:ExpectedRegion, "--output", "json", "--no-cli-pager"
+    ) -Capture
+    $activeClusters = @(
+      ($clusterJson | ConvertFrom-Json).clusters |
+        Where-Object { $_.status -eq "ACTIVE" }
+    )
+    if ($activeClusters.Count -gt 0) {
+      throw "The runtime ECS cluster is still active."
+    }
   }
 
   for ($attempt = 1; $attempt -le 12; $attempt++) {
@@ -792,30 +836,37 @@ function Invoke-Down {
   $context = Assert-DemoContext
   Assert-BackendEnvironment
   Initialize-DemoTerraform
+  $apiEcrUrl = Get-OptionalTerraformOutput "api_ecr_repository_url"
+  $workerEcrUrl = Get-OptionalTerraformOutput "worker_ecr_repository_url"
+  $buckets = @(
+    Get-OptionalTerraformOutput "documents_bucket_name"
+    Get-OptionalTerraformOutput "frontend_bucket_name"
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+  $ecrRepositories = @($apiEcrUrl, $workerEcrUrl) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    ForEach-Object { ([string]$_ -split "/", 2)[1] }
+  $taskDefinitionFamilies = @(
+    Get-OptionalTerraformOutput "api_task_definition_family"
+    Get-OptionalTerraformOutput "worker_task_definition_family"
+    Get-OptionalTerraformOutput "migration_task_definition_family"
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+  $logGroupNames = @(Get-OptionalTerraformJsonOutput "runtime_log_group_names") |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+  $iamRoleNames = @(
+    Get-OptionalTerraformJsonOutput "runtime_iam_role_arns" |
+      ForEach-Object { ([string]$_ -split "/")[-1] }
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
   $snapshot = [ordered]@{
-    Buckets = @(
-      Get-TerraformOutput "documents_bucket_name"
-      Get-TerraformOutput "frontend_bucket_name"
-    )
-    EcrRepositories = @(
-      ((Get-TerraformOutput "api_ecr_repository_url") -split "/", 2)[1]
-      ((Get-TerraformOutput "worker_ecr_repository_url") -split "/", 2)[1]
-    )
-    TaskDefinitionFamilies = @(
-      Get-TerraformOutput "api_task_definition_family"
-      Get-TerraformOutput "worker_task_definition_family"
-      Get-TerraformOutput "migration_task_definition_family"
-    )
-    CloudFrontDistributionId = Get-TerraformOutput "cloudfront_distribution_id"
-    CloudFrontVpcOriginId = Get-TerraformOutput "cloudfront_vpc_origin_id"
-    EcsClusterName = Get-TerraformOutput "ecs_cluster_name"
-    AlbArn = Get-TerraformOutput "alb_arn"
-    RdsIdentifier = Get-TerraformOutput "rds_identifier"
-    LogGroupNames = @(Get-TerraformJsonOutput "runtime_log_group_names")
-    IamRoleNames = @(
-      Get-TerraformJsonOutput "runtime_iam_role_arns" |
-        ForEach-Object { ([string]$_ -split "/")[-1] }
-    )
+    Buckets = @($buckets)
+    EcrRepositories = @($ecrRepositories)
+    TaskDefinitionFamilies = @($taskDefinitionFamilies)
+    CloudFrontDistributionId = Get-OptionalTerraformOutput "cloudfront_distribution_id"
+    CloudFrontVpcOriginId = Get-OptionalTerraformOutput "cloudfront_vpc_origin_id"
+    EcsClusterName = Get-OptionalTerraformOutput "ecs_cluster_name"
+    AlbArn = Get-OptionalTerraformOutput "alb_arn"
+    RdsIdentifier = Get-OptionalTerraformOutput "rds_identifier"
+    LogGroupNames = @($logGroupNames)
+    IamRoleNames = @($iamRoleNames)
     Project = if ([string]::IsNullOrWhiteSpace($env:TF_VAR_project)) { "ragproject" } else { $env:TF_VAR_project }
     Environment = if ([string]::IsNullOrWhiteSpace($env:TF_VAR_environment)) { "demo" } else { $env:TF_VAR_environment }
   }
@@ -836,7 +887,9 @@ function Invoke-Down {
   Write-Step "apply exact destroy plan; bootstrap state and lock resources are outside this stack"
   Apply-SavedPlan $script:DestroyPlanPath
   Write-Step "deregister CI-created task definition revisions"
-  Remove-ActiveTaskDefinitions $snapshot.TaskDefinitionFamilies
+  if (@($snapshot.TaskDefinitionFamilies).Count -gt 0) {
+    Remove-ActiveTaskDefinitions $snapshot.TaskDefinitionFamilies
+  }
   Clear-DatabaseUrlSecret
   Write-Step "verify that no runtime resources remain"
   Assert-NoRuntimeRemnants $snapshot

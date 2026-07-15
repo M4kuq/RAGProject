@@ -46,6 +46,8 @@ Assert-True ($content -match 'deploy/AWS_ECS') "the long-lived branch guard is r
 Assert-True ($content -match 'ap-northeast-1') "the region guard is required"
 Assert-True ($content -match 'Remove-AllBucketVersions') "versioned S3 cleanup is required"
 Assert-True ($content -match 'Assert-NoRuntimeRemnants') "post-destroy verification is required"
+Assert-True ($content -match 'Get-OptionalTerraformOutput') "down must tolerate outputs missing after a partial apply"
+Assert-True ($content -match 'No outputs found') "optional outputs must only ignore Terraform missing-output errors"
 
 $terraformRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $albContent = Get-Content -LiteralPath (Join-Path $terraformRoot "modules/alb/main.tf") -Raw
