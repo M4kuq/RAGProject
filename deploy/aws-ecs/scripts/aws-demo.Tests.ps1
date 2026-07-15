@@ -73,6 +73,8 @@ Assert-True ($cloudFrontContent -match 'domain_name\s+=\s+var\.alb_dns_name') "C
 Assert-True ($cloudFrontContent -match 'header_behavior\s+=\s+"allExcept"') "API origin policy must exclude selected viewer headers"
 Assert-True ($cloudFrontContent -match 'items\s+=\s+\["Host"\]') "API origin policy must not forward the viewer Host"
 Assert-True ($cloudFrontContent -notmatch 'headers\s+=\s+\["\*"\]') "API behavior must not forward every viewer header"
+Assert-True ($cloudFrontContent -match 'Managed-CachingDisabled') "API behavior must use the managed disabled-cache policy"
+Assert-True ($cloudFrontContent -match 'cache_policy_id\s+=\s+data\.aws_cloudfront_cache_policy\.api_disabled\.id') "API origin request policy requires an explicit cache policy"
 Assert-True ($rootContent -notmatch 'resource\s+"aws_route53_record"') "default-domain deployment must not require Route 53"
 Assert-True ($content -notmatch 'TF_VAR_alb_certificate_arn') "lifecycle must not require an ALB certificate"
 Assert-True ($content -match 'get-vpc-origin') "destroy verification must check the CloudFront VPC origin"

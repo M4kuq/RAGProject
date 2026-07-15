@@ -96,6 +96,10 @@ locals {
   EOT
 }
 
+data "aws_cloudfront_cache_policy" "api_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
 resource "aws_cloudfront_origin_access_control" "frontend" {
   name                              = "${var.name_prefix}-frontend-oac"
   description                       = "OAC for private frontend assets"
@@ -228,10 +232,8 @@ resource "aws_cloudfront_distribution" "this" {
       allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
       cached_methods         = ["GET", "HEAD"]
       compress               = true
-      default_ttl            = 0
-      min_ttl                = 0
-      max_ttl                = 0
 
+      cache_policy_id          = data.aws_cloudfront_cache_policy.api_disabled.id
       origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
 
       function_association {
