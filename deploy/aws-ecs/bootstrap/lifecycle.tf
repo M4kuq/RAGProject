@@ -513,6 +513,20 @@ data "aws_iam_policy_document" "terraform_lifecycle_global" {
     resources = ["*"]
   }
 
+  # Cloud Map creates and removes the private Route 53 hosted zone behind the
+  # runtime namespace. These global Route 53 APIs cannot be region-scoped.
+  statement {
+    sid    = "ManageRuntimeCloudMapHostedZone"
+    effect = "Allow"
+    actions = [
+      "route53:CreateHostedZone",
+      "route53:DeleteHostedZone",
+      "route53:GetHostedZone",
+      "route53:ListHostedZonesByName",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid    = "ManageRuntimeBudget"
     effect = "Allow"
