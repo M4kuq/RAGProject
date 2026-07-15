@@ -559,7 +559,16 @@ function Invoke-Smoke {
   $resultDir = Join-Path $script:ArtifactDirectory "results"
   New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
   $resultCount = if ($null -ne $search.data.results) { @($search.data.results).Count } else { 0 }
-  if ($resultCount -le 0) {
+  $requireSearchResults = if ([string]::IsNullOrWhiteSpace($env:RAG_DEMO_REQUIRE_SEARCH_RESULTS)) {
+    $true
+  } else {
+    switch ($env:RAG_DEMO_REQUIRE_SEARCH_RESULTS.Trim().ToLowerInvariant()) {
+      "true" { $true }
+      "false" { $false }
+      default { throw "RAG_DEMO_REQUIRE_SEARCH_RESULTS must be true or false." }
+    }
+  }
+  if ($requireSearchResults -and $resultCount -le 0) {
     throw "Smoke search returned no results."
   }
   [ordered]@{
@@ -569,6 +578,7 @@ function Invoke-Smoke {
     ready = ($null -ne $ready)
     authenticated = $true
     rag_search_succeeded = $true
+    search_results_required = $requireSearchResults
     result_count = $resultCount
   } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $resultDir "smoke.json") -Encoding UTF8
   Write-Host "Smoke passed. A redacted result was written under deploy/aws-ecs/.aws-demo/results."

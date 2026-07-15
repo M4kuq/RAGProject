@@ -21,6 +21,11 @@ on:
         description: "For down only, enter DESTROY-RUNTIME exactly."
         required: false
         type: string
+      require_search_results:
+        description: "For smoke, require at least one indexed search result. Disable only for a no-load-data smoke."
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -56,6 +61,7 @@ env:
   RAG_DEMO_ADMIN_EMAIL: ${{ secrets.RAG_DEMO_ADMIN_EMAIL }}
   RAG_DEMO_ADMIN_PASSWORD: ${{ secrets.RAG_DEMO_ADMIN_PASSWORD }}
   RAG_DEMO_BASIC_AUTH_HEADER: ${{ secrets.BASIC_AUTH_HEADER }}
+  RAG_DEMO_REQUIRE_SEARCH_RESULTS: ${{ inputs.require_search_results }}
   GH_TOKEN: ${{ github.token }}
 
 jobs:
