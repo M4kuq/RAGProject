@@ -72,7 +72,7 @@ tradeoff は次のとおりです。
 
 remote state は複数人・CI での差分確認や将来の apply に必要です。S3 は versioning と暗号化を有効化し、DynamoDB は state lock 用に `LockID` hash key を持ちます。
 
-state backend 自体は Terraform state の保存先なので、root module から同時に作れません。そのため `bootstrap/` を local backend の永続構成として分離しています。bootstrap は state/lock に加え、read-only Terraform plan role と値を持たない入力用Secrets Manager containerを管理します。lifecycle roleとruntime resourceは管理しません。
+state backend 自体は Terraform state の保存先なので、root module から同時に作れません。そのため `bootstrap/` を local backend の永続構成として分離しています。bootstrap は state/lock、read-only Terraform plan role、対象サービス・runtime IAM名・Secret操作を限定したTerraform lifecycle role、値を持たない入力用Secrets Manager containerを管理します。runtime resourceは管理しません。
 
 手順:
 

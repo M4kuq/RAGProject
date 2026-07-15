@@ -144,7 +144,7 @@ runtime 用の広い権限を作る前に、GitHub OIDC の成立だけを確認
 
 remote state backend は root stack 自身からは作れないため、先に `bootstrap/` を local backend で apply します。
 
-同じbootstrapは、`deploy/AWS_ECS`だけを信頼するread-only Terraform plan roleと、`DATABASE_URL`、`SESSION_SECRET`、`RAG_DEMO_ADMIN_PASSWORD`の値を持たないSecret containerも管理します。plan roleの書き込み権限はDynamoDB state lock操作だけで、runtime lifecycle権限やSecret値読取権限は持ちません。
+同じbootstrapは、`deploy/AWS_ECS`だけを信頼するread-only Terraform plan roleとTerraform lifecycle role、`DATABASE_URL`、`SESSION_SECRET`、`RAG_DEMO_ADMIN_PASSWORD`の値を持たないSecret containerも管理します。plan roleの書き込み権限はDynamoDB state lock操作だけで、runtime lifecycle権限やSecret値読取権限は持ちません。lifecycle roleはroot stackが使用するサービスの書き込み操作、固定したruntime IAM role/policy、remote state更新、DATABASE_URLとruntime deployment-configへの値書き込み、RDS管理master secretの値読取だけに限定します。
 
 ```bash
 cd deploy/aws-ecs/bootstrap
