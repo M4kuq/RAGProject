@@ -675,6 +675,89 @@ function Test-AwsResourceAbsent {
   throw "AWS absence verification failed unexpectedly."
 }
 
+function Get-TaggedRuntimeResourceType {
+  param([Parameter(Mandatory = $true)]$Mapping)
+  $arnParts = @(([string]$Mapping.ResourceARN) -split ":", 6)
+  if ($arnParts.Count -lt 6) { return "unknown/unknown" }
+  $resourceSegments = @($arnParts[5] -split "[:/]")
+  if ($resourceSegments.Count -eq 0 -or [string]::IsNullOrWhiteSpace($resourceSegments[0])) {
+    return "$($arnParts[2])/unknown"
+  }
+  return "$($arnParts[2])/$($resourceSegments[0])"
+}
+
+function Test-TaggedRuntimeResourceInactive {
+  param([Parameter(Mandatory = $true)]$Mapping)
+  $arn = [string]$Mapping.ResourceARN
+  $arnParts = @($arn -split ":", 6)
+  if ($arnParts.Count -lt 6) { return $false }
+  $resourceSegments = @($arnParts[5] -split "[:/]")
+  $resourceType = Get-TaggedRuntimeResourceType $Mapping
+
+  switch ($resourceType) {
+    "ec2/security-group-rule" {
+      if ($resourceSegments.Count -lt 2) { return $false }
+      return (Test-AwsResourceAbsent @(
+        "ec2", "describe-security-group-rules",
+        "--security-group-rule-ids", $resourceSegments[1],
+        "--region", $script:ExpectedRegion, "--no-cli-pager"
+      ) "InvalidSecurityGroupRuleId.NotFound")
+    }
+    "ec2/subnet" {
+      if ($resourceSegments.Count -lt 2) { return $false }
+      return (Test-AwsResourceAbsent @(
+        "ec2", "describe-subnets", "--subnet-ids", $resourceSegments[1],
+        "--region", $script:ExpectedRegion, "--no-cli-pager"
+      ) "InvalidSubnetID.NotFound")
+    }
+    "ecs/cluster" {
+      $clusterJson = Invoke-Native "aws" @(
+        "ecs", "describe-clusters", "--clusters", $arn,
+        "--region", $script:ExpectedRegion, "--output", "json", "--no-cli-pager"
+      ) -Capture
+      $activeClusters = @(
+        ($clusterJson | ConvertFrom-Json).clusters |
+          Where-Object { $_.status -eq "ACTIVE" }
+      )
+      return ($activeClusters.Count -eq 0)
+    }
+    "ecs/service" {
+      if ($resourceSegments.Count -lt 3) { return $false }
+      $serviceOutput = & aws ecs describe-services `
+        --cluster $resourceSegments[1] `
+        --services $arn `
+        --region $script:ExpectedRegion `
+        --output json `
+        --no-cli-pager 2>&1
+      $serviceExitCode = $LASTEXITCODE
+      if ($serviceExitCode -ne 0) {
+        if (($serviceOutput | Out-String) -match "ClusterNotFoundException") { return $true }
+        throw "ECS service remnant verification failed unexpectedly."
+      }
+      $liveServices = @(
+        (($serviceOutput | Out-String) | ConvertFrom-Json).services |
+          Where-Object { $_.status -ne "INACTIVE" }
+      )
+      return ($liveServices.Count -eq 0)
+    }
+    "ecs/task-definition" {
+      $taskOutput = & aws ecs describe-task-definition `
+        --task-definition $arn `
+        --region $script:ExpectedRegion `
+        --output json `
+        --no-cli-pager 2>&1
+      $taskExitCode = $LASTEXITCODE
+      if ($taskExitCode -ne 0) {
+        if (($taskOutput | Out-String) -match "Unable to describe task definition") { return $true }
+        throw "ECS task definition remnant verification failed unexpectedly."
+      }
+      $taskDefinition = (($taskOutput | Out-String) | ConvertFrom-Json).taskDefinition
+      return ([string]$taskDefinition.status -ne "ACTIVE")
+    }
+    default { return $false }
+  }
+}
+
 function Remove-ActiveTaskDefinitions {
   param([Parameter(Mandatory = $true)][string[]]$Families)
 
@@ -840,31 +923,26 @@ function Assert-NoRuntimeRemnants {
     ) -Capture
     $tagged = @((($taggedJson | ConvertFrom-Json).ResourceTagMappingList))
     if ($tagged.Count -eq 0) { return }
+    $liveTagged = @(
+      $tagged |
+        Where-Object { -not (Test-TaggedRuntimeResourceInactive $_) }
+    )
+    if ($liveTagged.Count -eq 0) { return }
     if ($attempt -lt 30) {
       Start-Sleep -Seconds 10
       continue
     }
 
     $typeCounts = @(
-      $tagged |
-        ForEach-Object {
-          $arnParts = @(([string]$_.ResourceARN) -split ":", 6)
-          if ($arnParts.Count -lt 6) {
-            "unknown/unknown"
-          } else {
-            $resourceSegments = @($arnParts[5] -split "[:/]")
-            $resourceType = $resourceSegments[0]
-            if ([string]::IsNullOrWhiteSpace($resourceType)) { $resourceType = "unknown" }
-            "$($arnParts[2])/$resourceType"
-          }
-        } |
+      $liveTagged |
+        ForEach-Object { Get-TaggedRuntimeResourceType $_ } |
         Group-Object |
         Sort-Object Name |
         ForEach-Object { "$($_.Name)=$($_.Count)" }
     )
-    Write-Host "Tagged runtime resource types still visible: $($typeCounts -join ', ')"
+    Write-Host "Active or unverified runtime resource types still visible: $($typeCounts -join ', ')"
   }
-  throw "Tagged AWS runtime resources remain after destroy."
+  throw "Active or unverified tagged AWS runtime resources remain after destroy."
 }
 
 function Invoke-Down {
