@@ -735,6 +735,13 @@ function Test-TaggedRuntimeResourceInactive {
         "--region", $script:ExpectedRegion, "--no-cli-pager"
       ) "InvalidSecurityGroupRuleId.NotFound")
     }
+    "ec2/volume" {
+      if ($resourceSegments.Count -lt 2) { return $false }
+      return (Test-AwsResourceAbsent @(
+        "ec2", "describe-volumes", "--volume-ids", $resourceSegments[1],
+        "--region", $script:ExpectedRegion, "--no-cli-pager"
+      ) "InvalidVolume.NotFound")
+    }
     "ec2/subnet" {
       if ($resourceSegments.Count -lt 2) { return $false }
       return (Test-AwsResourceAbsent @(
