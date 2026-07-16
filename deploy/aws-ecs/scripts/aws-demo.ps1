@@ -519,6 +519,31 @@ function Invoke-LoadData {
   }
 }
 
+function Invoke-SmokeReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$BaseUrl,
+    [Parameter(Mandatory = $true)][hashtable]$Headers,
+    [Parameter(Mandatory = $true)][Microsoft.PowerShell.Commands.WebRequestSession]$WebSession,
+    [int]$MaxAttempts = 12,
+    [int]$DelaySeconds = 10
+  )
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      return Invoke-RestMethod -Method Get -Uri "$BaseUrl/ready" -Headers $Headers -WebSession $WebSession
+    } catch {
+      $response = $_.Exception.Response
+      $statusCode = if ($null -eq $response) { $null } else { [int]$response.StatusCode }
+      $isTransient = ($null -eq $statusCode) -or ($statusCode -in @(502, 503, 504))
+      if (-not $isTransient -or $attempt -eq $MaxAttempts) {
+        throw "Smoke readiness endpoint did not become available."
+      }
+      Write-Step "Readiness is not available yet; retrying ($attempt/$MaxAttempts)."
+      Start-Sleep -Seconds $DelaySeconds
+    }
+  }
+  throw "Smoke readiness endpoint did not become available."
+}
+
 function Invoke-Smoke {
   Assert-DemoContext | Out-Null
   Assert-BackendEnvironment
@@ -531,7 +556,7 @@ function Invoke-Smoke {
   $baseUrl = Get-DemoBaseUrl
   $baseHeaders = @{ Authorization = $env:RAG_DEMO_BASIC_AUTH_HEADER; Origin = $baseUrl }
   $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-  $ready = Invoke-RestMethod -Method Get -Uri "$baseUrl/ready" -Headers $baseHeaders -WebSession $session
+  $ready = Invoke-SmokeReady -BaseUrl $baseUrl -Headers $baseHeaders -WebSession $session
   $csrf = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/v1/auth/csrf" -Headers $baseHeaders -WebSession $session
   $loginHeaders = @{
     Authorization = $env:RAG_DEMO_BASIC_AUTH_HEADER
