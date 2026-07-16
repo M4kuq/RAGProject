@@ -568,26 +568,6 @@ function Invoke-Smoke {
     password = $env:RAG_DEMO_ADMIN_PASSWORD
   } | ConvertTo-Json -Compress
   $login = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/v1/auth/login" -Headers $loginHeaders -WebSession $session -ContentType "application/json" -Body $loginBody
-  $query = if ([string]::IsNullOrWhiteSpace($env:RAG_DEMO_SMOKE_QUERY)) {
-    "What vector database does this project use?"
-  } else {
-    $env:RAG_DEMO_SMOKE_QUERY
-  }
-  $searchHeaders = @{
-    Authorization = $env:RAG_DEMO_BASIC_AUTH_HEADER
-    Origin = $baseUrl
-    "X-CSRF-Token" = [string]$login.data.csrf_token
-  }
-  $searchBody = @{
-    query = $query
-    top_k = 5
-    rerank_top_n = 3
-    cache_bypass = $true
-  } | ConvertTo-Json -Compress
-  $search = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/v1/rag/search" -Headers $searchHeaders -WebSession $session -ContentType "application/json" -Body $searchBody
-  $resultDir = Join-Path $script:ArtifactDirectory "results"
-  New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
-  $resultCount = if ($null -ne $search.data.results) { @($search.data.results).Count } else { 0 }
   $requireSearchResults = if ([string]::IsNullOrWhiteSpace($env:RAG_DEMO_REQUIRE_SEARCH_RESULTS)) {
     $true
   } else {
@@ -597,16 +577,43 @@ function Invoke-Smoke {
       default { throw "RAG_DEMO_REQUIRE_SEARCH_RESULTS must be true or false." }
     }
   }
-  if ($requireSearchResults -and $resultCount -le 0) {
-    throw "Smoke search returned no results."
+  $resultCount = 0
+  $ragSearchSucceeded = $false
+  $searchSkipped = -not $requireSearchResults
+  if ($requireSearchResults) {
+    $query = if ([string]::IsNullOrWhiteSpace($env:RAG_DEMO_SMOKE_QUERY)) {
+      "What vector database does this project use?"
+    } else {
+      $env:RAG_DEMO_SMOKE_QUERY
+    }
+    $searchHeaders = @{
+      Authorization = $env:RAG_DEMO_BASIC_AUTH_HEADER
+      Origin = $baseUrl
+      "X-CSRF-Token" = [string]$login.data.csrf_token
+    }
+    $searchBody = @{
+      query = $query
+      top_k = 5
+      rerank_top_n = 3
+      cache_bypass = $true
+    } | ConvertTo-Json -Compress
+    $search = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/v1/rag/search" -Headers $searchHeaders -WebSession $session -ContentType "application/json" -Body $searchBody
+    $resultCount = if ($null -ne $search.data.results) { @($search.data.results).Count } else { 0 }
+    if ($resultCount -le 0) {
+      throw "Smoke search returned no results."
+    }
+    $ragSearchSucceeded = $true
   }
+  $resultDir = Join-Path $script:ArtifactDirectory "results"
+  New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
   [ordered]@{
     schema_version = 1
     checked_at_utc = [DateTimeOffset]::UtcNow.ToString("O")
     base_url = $baseUrl
     ready = ($null -ne $ready)
     authenticated = $true
-    rag_search_succeeded = $true
+    rag_search_succeeded = $ragSearchSucceeded
+    rag_search_skipped = $searchSkipped
     search_results_required = $requireSearchResults
     result_count = $resultCount
   } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $resultDir "smoke.json") -Encoding UTF8

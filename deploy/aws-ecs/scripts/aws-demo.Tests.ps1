@@ -104,7 +104,10 @@ Assert-True ($content -match 'function Invoke-SmokeReady') "smoke must wait for 
 Assert-True ($content -match '\$statusCode -in @\(502, 503, 504\)') "smoke readiness retries must be limited to transient gateway failures"
 Assert-True ($content -match '\[int\]\$MaxAttempts = 12') "smoke readiness retries must remain bounded"
 Assert-True ($content -match 'Smoke readiness endpoint did not become available') "smoke readiness failures must not expose the endpoint"
-Assert-True ($content -match '\$requireSearchResults\s+-and\s+\$resultCount\s+-le\s+0') "smoke must only require retrieval results when requested"
+$searchPolicyIndex = $content.IndexOf('if ($requireSearchResults) {')
+$searchRequestIndex = $content.IndexOf('$search = Invoke-RestMethod')
+Assert-True ($searchPolicyIndex -ge 0 -and $searchPolicyIndex -lt $searchRequestIndex) "no-data smoke must skip the RAG search request"
+Assert-True ($content -match 'rag_search_skipped\s*=\s*\$searchSkipped') "smoke output must explicitly record a skipped RAG search"
 Assert-True ($content -match 'Smoke search returned no results') "strict smoke must fail on an empty retrieval result"
 Assert-True ($content -match 'Get-TerraformOutput "database_name"') "database URL must use the configured database name"
 Assert-True (($content -split 'source_sha = \$context\.GitSha').Count -eq 3) "both deploy workflows must receive the exact planned commit"
