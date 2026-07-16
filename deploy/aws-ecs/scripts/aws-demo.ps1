@@ -173,8 +173,12 @@ function Assert-PlanPreservesBootstrapIdentity {
   } finally {
     Pop-Location
   }
+  $resourceChanges = @()
+  if ($null -ne $plan.PSObject.Properties["resource_changes"]) {
+    $resourceChanges = @($plan.resource_changes)
+  }
   $providerChanges = @(
-    $plan.resource_changes |
+    $resourceChanges |
       Where-Object {
         $_.address -match "aws_iam_openid_connect_provider" -and
         (@($_.change.actions) -join ",") -ne "no-op"
@@ -823,7 +827,7 @@ function Assert-NoRuntimeRemnants {
     }
   }
 
-  for ($attempt = 1; $attempt -le 12; $attempt++) {
+  for ($attempt = 1; $attempt -le 30; $attempt++) {
     $taggedJson = Invoke-Native "aws" @(
       "resourcegroupstaggingapi", "get-resources",
       "--tag-filters",
@@ -836,7 +840,7 @@ function Assert-NoRuntimeRemnants {
     ) -Capture
     $tagged = @((($taggedJson | ConvertFrom-Json).ResourceTagMappingList))
     if ($tagged.Count -eq 0) { return }
-    if ($attempt -lt 12) { Start-Sleep -Seconds 10 }
+    if ($attempt -lt 30) { Start-Sleep -Seconds 10 }
   }
   throw "Tagged AWS runtime resources remain after destroy."
 }
