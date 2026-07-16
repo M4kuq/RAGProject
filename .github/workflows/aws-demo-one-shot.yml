@@ -1,0 +1,151 @@
+name: AWS Demo One Shot No Data
+run-name: AWS Demo one-shot no-data
+
+on:
+  push:
+    branches:
+      - deploy/AWS_ECS
+    paths:
+      - ".github/workflows/aws-demo-one-shot.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: aws-demo-one-shot-no-data
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    name: up-smoke-down
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Dispatch guarded lifecycle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          workflow="aws-demo.yml"
+          branch="deploy/AWS_ECS"
+          cleanup_needed=false
+
+          dispatch_run() {
+            local command="$1"
+            shift
+            local title="AWS Demo $command"
+            local previous=""
+            local current=""
+
+            previous="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "$workflow" \
+                --branch "$branch" \
+                --event workflow_dispatch \
+                --limit 20 \
+                --json databaseId,displayTitle \
+                --jq '.[] | select(.displayTitle == "'"$title"'") | .databaseId' |
+                head -n 1
+            )"
+
+            gh workflow run "$workflow" \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$branch" \
+              -f command="$command" \
+              "$@" >/dev/null
+
+            for attempt in $(seq 1 60); do
+              sleep 2
+              current="$(
+                gh run list \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --workflow "$workflow" \
+                  --branch "$branch" \
+                  --event workflow_dispatch \
+                  --limit 20 \
+                  --json databaseId,displayTitle \
+                  --jq '.[] | select(.displayTitle == "'"$title"'") | .databaseId' |
+                  head -n 1
+              )"
+              if [ -n "$current" ] && [ "$current" != "$previous" ]; then
+                printf '%s\n' "$current"
+                return 0
+              fi
+            done
+
+            echo "Timed out waiting for the $command run to appear." >&2
+            return 1
+          }
+
+          cleanup() {
+            local exit_code="$?"
+            trap - EXIT
+            if [ "$cleanup_needed" = "true" ]; then
+              echo "Lifecycle did not finish cleanly; dispatching down." >&2
+              if down_id="$(dispatch_run down -f destroy_confirmation=DESTROY-RUNTIME)"; then
+                cleanup_needed=false
+                gh run watch "$down_id" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --exit-status || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+
+          trap cleanup EXIT
+          trap 'exit 130' INT TERM
+
+          conflict_count="$(
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" \
+              --branch "$branch" \
+              --limit 100 \
+              --json displayTitle,status \
+              --jq '[.[] |
+                select(.status != "completed") |
+                select(.displayTitle == "AWS Demo up" or .displayTitle == "AWS Demo down")
+              ] | length'
+          )"
+          if [ "$conflict_count" != "0" ]; then
+            echo "An AWS Demo up/down run is already active." >&2
+            exit 1
+          fi
+
+          doctor_id="$(dispatch_run doctor)"
+          gh run watch "$doctor_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          cleanup_needed=true
+          up_id="$(dispatch_run up)"
+          gh run watch "$up_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          smoke_id="$(dispatch_run smoke -f require_search_results=false)"
+          gh run watch "$smoke_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          down_id="$(dispatch_run down -f destroy_confirmation=DESTROY-RUNTIME)"
+          cleanup_needed=false
+          gh run watch "$down_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          {
+            echo "### AWS demo one-shot lifecycle"
+            echo
+            echo "- doctor: https://github.com/$GITHUB_REPOSITORY/actions/runs/$doctor_id"
+            echo "- up: https://github.com/$GITHUB_REPOSITORY/actions/runs/$up_id"
+            echo "- smoke (no load-data): https://github.com/$GITHUB_REPOSITORY/actions/runs/$smoke_id"
+            echo "- down: https://github.com/$GITHUB_REPOSITORY/actions/runs/$down_id"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          trap - EXIT
