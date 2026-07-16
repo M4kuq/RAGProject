@@ -50,6 +50,7 @@ Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 30; \$attempt\+
 Assert-True ($content -match 'Active or unverified runtime resource types still visible') "tag remnant failures must report only resource types"
 Assert-True ($content -match 'Test-TaggedRuntimeResourceInactive') "tag remnants must use authoritative service checks"
 Assert-True ($content -match 'InvalidSubnetID\.NotFound') "subnet tombstones must be verified with EC2"
+Assert-True ($content -match 'InvalidVolume\.NotFound') "ECS-managed volume tombstones must be verified with EC2"
 Assert-True ($content -match 'InvalidSecurityGroupRuleId\.NotFound') "security-group-rule tombstones must be verified with EC2"
 Assert-True ($content -match 'Group-Object\s+\|\s+Sort-Object Name') "tag remnant type diagnostics must aggregate identifiers"
 Assert-True ($content -match 'AWS_DEMO_ALLOWED_ACCOUNT_IDS') "sandbox allowlist is required"
