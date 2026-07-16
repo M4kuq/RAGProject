@@ -40,6 +40,7 @@ from app.mcp.tools import build_tool_registry
 from app.rag.generation import FakeAnswerGenerator, GenerationRequest, GenerationResult
 from app.rag.rerank import FakeRerankerClient
 from app.services.rag_service import RagSearchPipelineError, RagService
+from app.storage.file_storage import LocalFileStorage
 
 
 def _test_settings(
@@ -145,8 +146,19 @@ def test_mcp_settings_phase1_guardrails() -> None:
         Settings(_env_file=None, app_env="test", mcp_allow_write_tools=True)
     with pytest.raises(ValueError, match="MCP_LOCAL_ONLY"):
         Settings(_env_file=None, app_env="test", mcp_local_only=False)
-    with pytest.raises(ValueError, match="MCP_TRANSPORT"):
+    http_settings = get_mcp_settings(
+        Settings(
+            _env_file=None,
+            app_env="test",
+            mcp_transport="http",
+            mcp_http_api_key="test-mcp-key",
+        ),
+    )
+    assert http_settings.transport == "http"
+    with pytest.raises(ValueError, match="MCP_HTTP_API_KEY"):
         Settings(_env_file=None, app_env="test", mcp_transport="http")
+    with pytest.raises(ValueError, match="MCP_TRANSPORT"):
+        Settings(_env_file=None, app_env="test", mcp_transport="sse")
     with pytest.raises(ValueError, match="MCP_ACTOR_MODE"):
         Settings(_env_file=None, app_env="test", mcp_actor_mode="admin")
     with pytest.raises(ValueError):
@@ -183,7 +195,9 @@ def test_mcp_adapter_injects_storage_without_global_settings(
     finally:
         engine.dispose()
 
-    assert adapter.document_service.storage.base_dir == settings.storage_root
+    storage = adapter.document_service.storage
+    assert isinstance(storage, LocalFileStorage)
+    assert storage.base_dir == settings.storage_root
 
 
 def test_tool_registry_exposes_read_mostly_phase2_tools(

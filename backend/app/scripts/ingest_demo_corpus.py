@@ -70,6 +70,7 @@ class DemoCorpusApiClient:
         admin_password: str,
         origin: str,
         timeout_seconds: float,
+        basic_auth_header: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.admin_email = admin_email
@@ -77,10 +78,16 @@ class DemoCorpusApiClient:
         self.origin = origin
         self.timeout_seconds = timeout_seconds
         self.csrf_token: str | None = None
+        if basic_auth_header is not None and not basic_auth_header.startswith("Basic "):
+            raise DemoCorpusError("basic_auth_header_must_use_basic_scheme")
+        default_headers = (
+            {"Authorization": basic_auth_header} if basic_auth_header is not None else None
+        )
         self.client = httpx.Client(
             base_url=self.base_url,
             timeout=timeout_seconds,
             follow_redirects=False,
+            headers=default_headers,
         )
 
     def close(self) -> None:
@@ -609,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
             admin_password=args.admin_password,
             origin=args.origin,
             timeout_seconds=args.timeout_seconds,
+            basic_auth_header=os.environ.get("RAG_DEMO_BASIC_AUTH_HEADER"),
         )
         try:
             summary = ingest_demo_corpus(

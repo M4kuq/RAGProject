@@ -1,0 +1,43 @@
+region      = "ap-northeast-1"
+project     = "ragproject"
+environment = "demo"
+
+github_oidc_repo     = "OWNER/REPO"
+github_deploy_branch = "deploy/AWS_ECS"
+# The lifecycle role and provider are bootstrap prerequisites outside the runtime root stack.
+create_github_oidc_provider = false
+github_oidc_provider_arn = "REPLACE_WITH_EXISTING_GITHUB_OIDC_PROVIDER_ARN"
+
+api_image_tag    = "placeholder"
+worker_image_tag = "placeholder"
+
+# ECS uses the Postgres graph provider. Switch Neo4j only in the EKS stack.
+graph_store_provider = "postgres"
+
+# Store the actual values in Secrets Manager, not in Terraform files.
+database_url_secret_arn        = "REPLACE_WITH_DATABASE_URL_SECRET_ARN"
+session_secret_arn             = "REPLACE_WITH_SESSION_SECRET_ARN"
+demo_admin_password_secret_arn = "REPLACE_WITH_DEMO_ADMIN_PASSWORD_SECRET_ARN"
+
+additional_secret_arns  = []
+ssm_parameter_arns      = []
+
+basic_auth_username      = "demo-user"
+basic_auth_header_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+basic_auth_realm         = "RAGProject Demo"
+
+origin_verify_header_name  = "X-RAGProject-Origin-Verify"
+origin_verify_header_value = "replace-with-random-32-plus-character-value"
+# app_public_origin = "https://d111111abcdef8.cloudfront.net"
+
+bedrock_generation_model_id = "amazon.nova-lite-v1:0"
+bedrock_embedding_model_id  = "amazon.titan-embed-text-v2:0"
+bedrock_rerank_model_id     = "amazon.rerank-v1:0"
+
+api_desired_count    = 0
+worker_desired_count = 0
+qdrant_desired_count = 0
+qdrant_ebs_volume_size_gib = 20
+
+budget_alert_email      = "you@example.com"
+monthly_budget_limit_usd = "30"

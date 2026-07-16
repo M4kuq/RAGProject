@@ -1,0 +1,142 @@
+name: AWS Deploy Frontend
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact planned commit SHA to build and deploy."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-demo-runtime-deploy-AWS_ECS
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  DEPLOYMENT_CONFIG_SECRET_NAME: ragproject-demo-deployment-config
+
+jobs:
+  deploy:
+    name: build / sync S3 / invalidate CloudFront
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check deploy branch
+        working-directory: .
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
+            echo "This workflow is limited to refs/heads/deploy/AWS_ECS."
+            exit 1
+          fi
+
+      - name: Validate planned commit
+        working-directory: .
+        shell: bash
+        run: |
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase commit SHA."
+            exit 1
+          fi
+
+      - name: Validate and mask AWS account
+        working-directory: .
+        shell: bash
+        env:
+          AWS_DEMO_ACCOUNT_ID: ${{ secrets.AWS_DEMO_ACCOUNT_ID }}
+        run: |
+          if [[ ! "$AWS_DEMO_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "AWS_DEMO_ACCOUNT_ID must be a 12-digit repository secret."
+            exit 1
+          fi
+          echo "::add-mask::$AWS_DEMO_ACCOUNT_ID"
+
+      - name: Checkout trusted deploy branch
+        uses: actions/checkout@v6
+        with:
+          ref: deploy/AWS_ECS
+          fetch-depth: 0
+
+      - name: Verify planned commit belongs to deploy branch
+        working-directory: .
+        shell: bash
+        run: |
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "origin/deploy/AWS_ECS"; then
+            echo "source_sha must be the deploy branch head or one of its ancestors."
+            exit 1
+          fi
+
+      - name: Checkout planned commit
+        working-directory: .
+        shell: bash
+        run: git checkout --detach "$SOURCE_SHA"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEMO_ACCOUNT_ID }}:role/ragproject-demo-github-deploy
+          mask-aws-account-id: true
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+
+      - name: Load runtime deployment config
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          config_file="${RUNNER_TEMP}/deployment-config.json"
+          trap 'rm -f "$config_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$DEPLOYMENT_CONFIG_SECRET_NAME" \
+            --query SecretString \
+            --output text > "$config_file"
+          jq -e '
+            (.frontend_bucket_name | test("^[a-z0-9.-]+$")) and
+            (.cloudfront_distribution_id | test("^[A-Z0-9]+$"))
+          ' "$config_file" > /dev/null
+          jq -r '[.frontend_bucket_name, .cloudfront_distribution_id][]' "$config_file" |
+            while IFS= read -r value; do
+              echo "::add-mask::$value"
+            done
+          {
+            echo "FRONTEND_BUCKET_NAME=$(jq -r '.frontend_bucket_name' "$config_file")"
+            echo "CLOUDFRONT_DISTRIBUTION_ID=$(jq -r '.cloudfront_distribution_id' "$config_file")"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Sync frontend assets
+        run: aws s3 sync dist "s3://${FRONTEND_BUCKET_NAME}" --delete
+
+      - name: Invalidate CloudFront
+        working-directory: .
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text > /dev/null
+          {
+            echo "### Frontend deployment"
+            echo "- Asset sync and CloudFront invalidation completed successfully."
+          } >> "$GITHUB_STEP_SUMMARY"

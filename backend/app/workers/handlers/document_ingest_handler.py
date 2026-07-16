@@ -34,7 +34,11 @@ from app.ingest.qdrant import (
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.job_repository import JobRepository
 from app.services.graph_index_service import GraphIndexService
-from app.storage.file_storage import LocalFileStorage
+from app.storage.file_storage import (
+    DocumentStorage,
+    DocumentStorageError,
+    create_document_storage,
+)
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
 
 logger = logging.getLogger(__name__)
@@ -112,7 +116,7 @@ class DocumentIngestHandler:
         session_factory: sessionmaker[Session] = SessionLocal,
         repository: DocumentRepository | None = None,
         job_repository: JobRepository | None = None,
-        storage: LocalFileStorage | None = None,
+        storage: DocumentStorage | None = None,
         dispatcher: ExtractorDispatcher | None = None,
         settings: Settings | None = None,
         indexing_service: DocumentIndexingService | None = None,
@@ -121,9 +125,9 @@ class DocumentIngestHandler:
         self.session_factory = session_factory
         self.repository = repository or DocumentRepository()
         self.job_repository = job_repository or JobRepository()
-        self.storage = storage or LocalFileStorage()
-        self.dispatcher = dispatcher or ExtractorDispatcher()
         self.settings = settings or get_settings()
+        self.storage = storage or create_document_storage(self.settings)
+        self.dispatcher = dispatcher or ExtractorDispatcher()
         self.indexing_service = indexing_service or create_document_indexing_service(self.settings)
         self.graph_index_service = graph_index_service or GraphIndexService()
 
@@ -166,8 +170,8 @@ class DocumentIngestHandler:
                 return self._fail_version(
                     context, snapshot.document_version_id, "storage_file_missing"
                 )
-            file_path = self.storage.resolve_path(storage_key=snapshot.storage_key)
-            extracted = self._extract(file_path, snapshot)
+            with self.storage.materialize(storage_key=snapshot.storage_key) as file_path:
+                extracted = self._extract(file_path, snapshot)
             metadata = metadata_from_extracted_document(extracted)
             if metadata.text_char_count > self.settings.ingest_max_extracted_text_chars:
                 return self._fail_version(
@@ -182,6 +186,13 @@ class DocumentIngestHandler:
             return self._fail_version(context, snapshot.document_version_id, exc.error_code)
         except ChunkingError as exc:
             return self._fail_version(context, snapshot.document_version_id, exc.error_code)
+        except DocumentStorageError as exc:
+            error_code = (
+                "storage_file_missing"
+                if exc.error_code == "storage_file_missing"
+                else "internal_error"
+            )
+            return self._fail_version(context, snapshot.document_version_id, error_code)
         except LeaseLostError:
             raise
         except Exception:
