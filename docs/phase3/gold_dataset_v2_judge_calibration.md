@@ -60,5 +60,5 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 ## Merge order
 
 1. PR #91を先にmergeする。
-2. このstacked PRを最新mainへretarget/rebaseする。
+2. このstacked PRへ最新mainを通常mergeし、baseをmainへ変更する。
 3. 後続PRでrunner adapterと人間review UIを小さく接続する。
