@@ -22,6 +22,9 @@ locals {
   migration_task_arns = [
     "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.name_prefix}-cluster/*",
   ]
+  migration_log_stream_arns = [
+    "arn:${data.aws_partition.current.partition}:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.name_prefix}/api:log-stream:migration/migration/*",
+  ]
   bedrock_invoke_model_arns = [
     local.bedrock_generation_model_arn,
     local.bedrock_embedding_model_arn,
@@ -352,6 +355,13 @@ data "aws_iam_policy_document" "github_deploy" {
       variable = "ecs:cluster"
       values   = [local.ecs_cluster_arn]
     }
+  }
+
+  statement {
+    sid       = "ReadMigrationTaskLogs"
+    effect    = "Allow"
+    actions   = ["logs:GetLogEvents"]
+    resources = local.migration_log_stream_arns
   }
 
   statement {
