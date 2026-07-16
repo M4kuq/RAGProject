@@ -41,6 +41,8 @@ $content = Get-Content -LiteralPath $scriptPath -Raw
 Assert-True ($content -notmatch 'terraform\s+destroy') "direct terraform destroy is forbidden"
 Assert-True ($content -match '"plan", "-destroy"') "destroy must create a saved plan"
 Assert-True ($content -match 'Apply-SavedPlan') "apply must use the saved-plan helper"
+Assert-True ($content -match 'PSObject\.Properties\["resource_changes"\]') "empty Terraform plans must omit resource_changes safely"
+Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 30; \$attempt\+\+\)') "tag remnant verification must tolerate AWS tag-index convergence"
 Assert-True ($content -match 'AWS_DEMO_ALLOWED_ACCOUNT_IDS') "sandbox allowlist is required"
 Assert-True ($content -match 'deploy/AWS_ECS') "the long-lived branch guard is required"
 Assert-True ($content -match 'ap-northeast-1') "the region guard is required"
