@@ -273,6 +273,46 @@ jobs:
           migration_exit_code="$(jq -r '.tasks[0].containers[] | select(.name == "migration") | .exitCode // empty' "${RUNNER_TEMP}/migration-task.json")"
           if [ "${migration_exit_code}" != "0" ]; then
             echo "Migration failed with exit code ${migration_exit_code:-missing}."
+
+            migration_stopped_reason="$(jq -r '.tasks[0].stoppedReason // "not reported"' "${RUNNER_TEMP}/migration-task.json")"
+            migration_container_reason="$(jq -r '.tasks[0].containers[] | select(.name == "migration") | .reason // "not reported"' "${RUNNER_TEMP}/migration-task.json")"
+            printf 'Stopped reason: %s\nContainer reason: %s\n' "${migration_stopped_reason}" "${migration_container_reason}" | sed -E \
+              -e 's#(postgresql(\+psycopg)?://)[^@[:space:]]+@#\1***@#g' \
+              -e 's#(DATABASE_URL|RAG_DEMO_ADMIN_PASSWORD|password)=([^[:space:]]+)#\1=***#gI'
+
+            migration_task_id="${migration_task_arn##*/}"
+            migration_task_definition_json="$(aws ecs describe-task-definition \
+              --task-definition "${migration_task_definition_arn}" \
+              --output json)"
+            migration_log_group="$(jq -r '.taskDefinition.containerDefinitions[] | select(.name == "migration") | .logConfiguration.options["awslogs-group"] // empty' <<< "${migration_task_definition_json}")"
+            migration_log_prefix="$(jq -r '.taskDefinition.containerDefinitions[] | select(.name == "migration") | .logConfiguration.options["awslogs-stream-prefix"] // empty' <<< "${migration_task_definition_json}")"
+            migration_log_stream="${migration_log_prefix}/migration/${migration_task_id}"
+            migration_logs=""
+
+            if [ -n "${migration_log_group}" ] && [ -n "${migration_log_prefix}" ]; then
+              for attempt in 1 2 3 4 5; do
+                if migration_logs="$(aws logs get-log-events \
+                  --log-group-name "${migration_log_group}" \
+                  --log-stream-name "${migration_log_stream}" \
+                  --start-from-head \
+                  --limit 200 \
+                  --query 'events[].message' \
+                  --output text 2>/dev/null)"; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
+
+            echo "::group::Migration container logs"
+            if [ -n "${migration_logs}" ]; then
+              printf '%s\n' "${migration_logs}" | sed -E \
+                -e 's#(postgresql(\+psycopg)?://)[^@[:space:]]+@#\1***@#g' \
+                -e 's#(DATABASE_URL|RAG_DEMO_ADMIN_PASSWORD|password)=([^[:space:]]+)#\1=***#gI'
+            else
+              echo "Migration log stream was unavailable or empty."
+            fi
+            echo "::endgroup::"
             exit 1
           fi
 

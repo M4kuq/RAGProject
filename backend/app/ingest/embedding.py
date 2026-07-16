@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import math
 import re
 from collections.abc import Sequence
@@ -9,7 +11,10 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from app.aws.client import aws_error_category, create_aws_client
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 STOPWORDS = {
@@ -83,9 +88,12 @@ class EmbeddingAdapterError(RuntimeError):
         self,
         error_code: str = "embedding_failed",
         message: str = "Embedding generation failed.",
+        *,
+        error_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        self.error_category = error_category
 
 
 class EmbeddingAdapter(Protocol):
@@ -220,6 +228,72 @@ class LMStudioEmbeddingAdapter:
         return vectors
 
 
+class BedrockTitanEmbeddingAdapter:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        model_name: str,
+        dimension: int,
+        client: Any | None = None,
+    ) -> None:
+        if dimension not in {256, 512, 1024}:
+            raise ValueError("Bedrock Titan V2 dimension must be 256, 512, or 1024")
+        self.model_name = model_name
+        self._dimension = dimension
+        self.client = client or create_aws_client("bedrock-runtime", settings)
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
+        _validate_texts(texts)
+        vectors = [self._embed_text(text) for text in texts]
+        _validate_vectors(vectors, expected_count=len(texts), dimension=self._dimension)
+        return vectors
+
+    def _embed_text(self, text: str) -> list[float]:
+        if len(text) > 50_000:
+            raise EmbeddingAdapterError(error_category="invalid_request")
+        try:
+            response = self.client.invoke_model(
+                modelId=self.model_name,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(
+                    {
+                        "inputText": text,
+                        "dimensions": self._dimension,
+                        "normalize": True,
+                    }
+                ),
+            )
+            body = response.get("body") if isinstance(response, dict) else None
+            if body is None or not hasattr(body, "read"):
+                raise ValueError("Bedrock response body is missing")
+            raw_payload: object = body.read()
+            if not isinstance(raw_payload, (str, bytes, bytearray)):
+                raise ValueError("Bedrock response body is invalid")
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingAdapterError(error_category="invalid_response") from exc
+        except Exception as exc:
+            category = aws_error_category(exc)
+            logger.warning(
+                "bedrock embedding failed",
+                extra={"error_category": category},
+            )
+            raise EmbeddingAdapterError(error_category=category) from exc
+        vector = payload.get("embedding") if isinstance(payload, dict) else None
+        if not isinstance(vector, Sequence) or isinstance(vector, (bytes, bytearray, str)):
+            raise EmbeddingAdapterError(error_category="invalid_response")
+        try:
+            return [float(cast(Any, value)) for value in vector]
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingAdapterError(error_category="invalid_response") from exc
+
+
 class DocumentEmbeddingService:
     def __init__(self, *, adapter: EmbeddingAdapter, config: EmbeddingBatchConfig) -> None:
         self.adapter = adapter
@@ -277,6 +351,12 @@ def create_embedding_adapter(settings: Settings) -> EmbeddingAdapter:
             model_name=settings.embedding_model,
             dimension=dimension,
             timeout_seconds=settings.lmstudio_timeout_seconds,
+        )
+    if provider == "bedrock":
+        return BedrockTitanEmbeddingAdapter(
+            settings=settings,
+            model_name=settings.bedrock_embedding_model_id,
+            dimension=dimension,
         )
     raise EmbeddingAdapterError("embedding_failed")
 

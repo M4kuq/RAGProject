@@ -1,0 +1,124 @@
+name: AWS Infra Plan
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/aws-infra-plan.yml"
+      - ".github/workflows/aws-oidc-smoke.yml"
+      - "deploy/aws-ecs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-infra-plan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  validate:
+    name: terraform fmt / validate
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: deploy/aws-ecs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: PowerShell parser and credential-free tests
+        working-directory: .
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-demo.Tests.ps1
+
+      - name: OIDC parser and credential-free tests
+        working-directory: .
+        shell: pwsh
+        run: ./deploy/aws-ecs/scripts/aws-oidc.Tests.ps1
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+  plan:
+    name: terraform plan (manual)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/deploy/AWS_ECS' }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: deploy/aws-ecs
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_github_oidc_repo: ${{ vars.OIDC_REPO }}
+      TF_VAR_github_deploy_branch: ${{ vars.DEPLOY_BRANCH }}
+      TF_VAR_create_github_oidc_provider: "false"
+      TF_VAR_github_oidc_provider_arn: ${{ secrets.AWS_GITHUB_OIDC_PROVIDER_ARN }}
+      TF_VAR_database_url_secret_arn: ${{ secrets.DATABASE_URL_SECRET_ARN }}
+      TF_VAR_session_secret_arn: ${{ secrets.SESSION_SECRET_ARN }}
+      TF_VAR_demo_admin_password_secret_arn: ${{ secrets.DEMO_ADMIN_PASSWORD_SECRET_ARN }}
+      TF_VAR_basic_auth_username: ${{ vars.BASIC_AUTH_USERNAME }}
+      TF_VAR_basic_auth_header_sha256: ${{ secrets.BASIC_AUTH_HEADER_SHA256 }}
+      TF_VAR_origin_verify_header_value: ${{ secrets.ORIGIN_VERIFY_HEADER_VALUE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          mask-aws-account-id: true
+          allowed-account-ids: ${{ secrets.AWS_DEMO_ALLOWED_ACCOUNT_IDS }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Summarize Terraform plan
+        if: ${{ success() }}
+        run: |
+          terraform show -no-color tfplan > tfplan.txt
+          {
+            echo "### Terraform plan"
+            grep -E "^(Plan:|No changes\\.)" tfplan.txt || true
+          } >> "$GITHUB_STEP_SUMMARY"

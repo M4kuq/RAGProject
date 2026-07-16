@@ -12,7 +12,7 @@ GRAPH_INDEXING_ENABLED_SETTING = "rag.graph.indexing.enabled"
 GRAPH_EXTRACTOR_DEFAULT_SETTING = "rag.graph.extractor.default"
 _GRAPH_EXTRACTOR_TYPES = frozenset({"llm", "rule_based"})
 _GRAPH_EXTRACTION_PROVIDERS = frozenset(
-    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini"}
+    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini", "bedrock"}
 )
 _MISSING: Final = object()
 
