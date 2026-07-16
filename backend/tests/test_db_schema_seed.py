@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
+from app.core.security import hash_password, verify_password
 from app.db.base import Base
 from app.db.evaluation_models import EvaluationResult
 from app.db.models import (
@@ -610,6 +611,65 @@ def test_phase2_evaluation_dataset_strategy_orm_fields() -> None:
     assert all(value in result_constraint_sql for value in RETRIEVAL_STRATEGY_VALUES)
 
 
+def test_deployed_seed_users_omit_known_local_accounts() -> None:
+    from app.services.seed import _seed_users
+
+    class FakeSession:
+        def __init__(self, scalar_results: list[User | None]) -> None:
+            self.users: list[User] = []
+            self.scalar_results = scalar_results
+
+        def scalar(self, statement: object) -> User | None:
+            del statement
+            return self.scalar_results.pop(0)
+
+        def add(self, item: object) -> None:
+            if isinstance(item, User):
+                self.users.append(item)
+
+        def flush(self) -> None:
+            return None
+
+        def get(self, model: object, key: object) -> object:
+            del model, key
+            return object()
+
+    old_admin = User(
+        role_id=1,
+        email="admin@example.com",
+        display_name="Local Admin",
+        password_hash=hash_password("password"),
+        status="active",
+    )
+    old_viewer = User(
+        role_id=2,
+        email="viewer@example.com",
+        display_name="Local Viewer",
+        password_hash=hash_password("password"),
+        status="active",
+    )
+    fake_db = FakeSession([old_admin, old_viewer, None])
+    roles = {
+        "admin": Role(role_id=1, role_name="admin", description="Admin"),
+        "viewer": Role(role_id=2, role_name="viewer", description="Viewer"),
+    }
+
+    _seed_users(
+        cast(Any, fake_db),
+        roles,
+        deployed_admin_email="aws-admin@example.com",
+        deployed_admin_password="strong-deployed-password",
+    )
+
+    assert [user.email for user in fake_db.users] == ["aws-admin@example.com"]
+    assert old_admin.status == "disabled"
+    assert old_viewer.status == "disabled"
+    assert not verify_password("password", old_admin.password_hash)
+    assert not verify_password("password", old_viewer.password_hash)
+    assert verify_password("strong-deployed-password", fake_db.users[0].password_hash)
+    assert not verify_password("password", fake_db.users[0].password_hash)
+
+
 def test_seed_can_run_twice_without_duplicates(
     pg_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -1087,3 +1147,42 @@ class _CapturingIndexingService:
 class _CleanupCall:
     document_version_id: int
     chunk_ids: list[int]
+
+
+def test_deployed_seed_omits_unindexed_demo_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.seed as seed_module
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.committed = False
+
+        def commit(self) -> None:
+            self.committed = True
+
+    fake_db = FakeSession()
+    seeded_documents: list[object] = []
+    monkeypatch.setattr(
+        seed_module,
+        "get_settings",
+        lambda: type("FakeSettings", (), {"app_env": "local"})(),
+    )
+    monkeypatch.setattr(seed_module, "_seed_roles", lambda db: {})
+    monkeypatch.setattr(seed_module, "_seed_users", lambda db, roles, **kwargs: None)
+    monkeypatch.setattr(seed_module, "_seed_system_settings", lambda db: None)
+    monkeypatch.setattr(
+        seed_module,
+        "_seed_demo_document",
+        lambda db, **kwargs: seeded_documents.append(kwargs),
+    )
+
+    seed_module.seed(
+        cast(Any, fake_db),
+        index_documents=False,
+        deployed_admin_email="aws-admin@example.com",
+        deployed_admin_password="strong-deployed-password",
+    )
+
+    assert fake_db.committed is True
+    assert seeded_documents == []
