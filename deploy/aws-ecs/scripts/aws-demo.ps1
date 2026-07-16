@@ -840,7 +840,29 @@ function Assert-NoRuntimeRemnants {
     ) -Capture
     $tagged = @((($taggedJson | ConvertFrom-Json).ResourceTagMappingList))
     if ($tagged.Count -eq 0) { return }
-    if ($attempt -lt 30) { Start-Sleep -Seconds 10 }
+    if ($attempt -lt 30) {
+      Start-Sleep -Seconds 10
+      continue
+    }
+
+    $typeCounts = @(
+      $tagged |
+        ForEach-Object {
+          $arnParts = @(([string]$_.ResourceARN) -split ":", 6)
+          if ($arnParts.Count -lt 6) {
+            "unknown/unknown"
+          } else {
+            $resourceSegments = @($arnParts[5] -split "[:/]")
+            $resourceType = $resourceSegments[0]
+            if ([string]::IsNullOrWhiteSpace($resourceType)) { $resourceType = "unknown" }
+            "$($arnParts[2])/$resourceType"
+          }
+        } |
+        Group-Object |
+        Sort-Object Name |
+        ForEach-Object { "$($_.Name)=$($_.Count)" }
+    )
+    Write-Host "Tagged runtime resource types still visible: $($typeCounts -join ', ')"
   }
   throw "Tagged AWS runtime resources remain after destroy."
 }
