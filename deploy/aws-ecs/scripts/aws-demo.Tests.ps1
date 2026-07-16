@@ -43,6 +43,8 @@ Assert-True ($content -match '"plan", "-destroy"') "destroy must create a saved 
 Assert-True ($content -match 'Apply-SavedPlan') "apply must use the saved-plan helper"
 Assert-True ($content -match 'PSObject\.Properties\["resource_changes"\]') "empty Terraform plans must omit resource_changes safely"
 Assert-True ($content -match 'for \(\$attempt = 1; \$attempt -le 30; \$attempt\+\+\)') "tag remnant verification must tolerate AWS tag-index convergence"
+Assert-True ($content -match 'Tagged runtime resource types still visible') "tag remnant failures must report only resource types"
+Assert-True ($content -match 'Group-Object\s+\|\s+Sort-Object Name') "tag remnant type diagnostics must aggregate identifiers"
 Assert-True ($content -match 'AWS_DEMO_ALLOWED_ACCOUNT_IDS') "sandbox allowlist is required"
 Assert-True ($content -match 'deploy/AWS_ECS') "the long-lived branch guard is required"
 Assert-True ($content -match 'ap-northeast-1') "the region guard is required"
