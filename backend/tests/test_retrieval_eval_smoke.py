@@ -53,6 +53,9 @@ def test_parse_metrics_defaults_and_rejects_unknown() -> None:
     defaults = parse_metrics(None)
     assert "recall_at_k" in defaults
     assert "retrieval_call_count_avg" in defaults
+    assert "answer_completeness" in defaults
+    assert "citation_presence" in defaults
+    assert "citation_correctness" in defaults
 
     assert parse_metrics("recall_at_k,mrr,recall_at_k") == ["recall_at_k", "mrr"]
     with pytest.raises(SmokeError, match="invalid_metric:raw_prompt"):
@@ -64,6 +67,23 @@ def test_config_defaults_to_real_local_retrieval_strategies() -> None:
 
     assert config.mode == "local"
     assert config.strategies == ["dense", "hybrid", "agentic_router"]
+
+
+def test_config_parses_graph_quality_thresholds() -> None:
+    config = config_from_args(
+        [
+            "--graph-path-relevance-min",
+            "0.7",
+            "--graph-citation-coverage-min",
+            "0.8",
+            "--multi-hop-answerability-min",
+            "0.9",
+        ]
+    )
+
+    assert config.thresholds.graph_path_relevance_min == 0.7
+    assert config.thresholds.graph_citation_coverage_min == 0.8
+    assert config.thresholds.multi_hop_answerability_min == 0.9
 
 
 @pytest.mark.parametrize(
@@ -676,6 +696,37 @@ def test_threshold_uses_p95_latency_value() -> None:
             "threshold": 8000.0,
             "actual": 9000.0,
         }
+    ]
+
+
+def test_threshold_checks_graph_quality_metrics() -> None:
+    artifact: dict[str, object] = {
+        "summary": {"failed_count": 0},
+        "metrics_by_strategy": [
+            {
+                "strategy": "graph_postgres",
+                "metrics": {
+                    "graph_path_relevance": {"average": 0.2},
+                    "graph_citation_coverage": {"average": 1.0},
+                    "multi_hop_answerability": {"average": 0.0},
+                },
+            }
+        ],
+    }
+    result = evaluate_thresholds(
+        artifact,
+        SmokeThresholds(
+            graph_path_relevance_min=0.7,
+            graph_citation_coverage_min=0.9,
+            multi_hop_answerability_min=1.0,
+        ),
+        "fail",
+    )
+
+    assert result.passed is False
+    assert [item["metric"] for item in result.violations] == [
+        "graph_path_relevance",
+        "multi_hop_answerability",
     ]
 
 

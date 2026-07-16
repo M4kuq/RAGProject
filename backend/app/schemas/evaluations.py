@@ -99,8 +99,11 @@ class EvaluationMetricName(StrEnum):
     RECALL_AT_K = "recall_at_k"
     MRR = "mrr"
     CITATION_COVERAGE = "citation_coverage"
+    CITATION_PRESENCE = "citation_presence"
+    CITATION_CORRECTNESS = "citation_correctness"
     GROUNDEDNESS = "groundedness"
     FAITHFULNESS = "faithfulness"
+    ANSWER_COMPLETENESS = "answer_completeness"
     NO_CONTEXT_RATE = "no_context_rate"
     P95_LATENCY = "p95_latency"
     STRATEGY_SELECTION_ACCURACY = "strategy_selection_accuracy"
@@ -124,8 +127,11 @@ DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.RECALL_AT_K,
     EvaluationMetricName.MRR,
     EvaluationMetricName.CITATION_COVERAGE,
+    EvaluationMetricName.CITATION_PRESENCE,
+    EvaluationMetricName.CITATION_CORRECTNESS,
     EvaluationMetricName.GROUNDEDNESS,
     EvaluationMetricName.FAITHFULNESS,
+    EvaluationMetricName.ANSWER_COMPLETENESS,
     EvaluationMetricName.NO_CONTEXT_RATE,
     EvaluationMetricName.P95_LATENCY,
     EvaluationMetricName.STRATEGY_SELECTION_ACCURACY,
@@ -408,7 +414,7 @@ class EvaluationRunCreateRequest(BaseModel):
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
-        max_length=20,
+        max_length=32,
     )
     cache_modes: list[EvaluationCacheMode] | None = Field(
         default=None,

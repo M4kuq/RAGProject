@@ -71,6 +71,8 @@ def test_phase3_corpus_multi_hop_fixture_loads_with_required_metadata() -> None:
         assert _string_list(raw_relation_types)
         assert isinstance(raw_relation_types, list)
         assert set(raw_relation_types).issubset(EMITTED_RELATION_TYPES)
+        raw_answer_slots = case.metadata_json.get("expected_answer_slots")
+        assert _non_empty_string_list(raw_answer_slots)
         if "paper" in case.tags:
             assert raw_relation_types
             assert set(raw_relation_types).issubset(LLM_OBSERVED_RELATION_TYPES)
@@ -97,6 +99,7 @@ def test_phase3_corpus_multi_hop_manifest_is_safe_and_corpus_grounded() -> None:
     manifest = EvaluationDatasetManifest.model_validate(payload)
 
     assert manifest.dataset.dataset_name == DATASET_NAME
+    assert manifest.dataset.version == "v2"
     assert manifest.schema_version == "phase2.evaluation_dataset.v1"
     assert all(case.status == "active" for case in manifest.cases)
     assert all(case.required_citation for case in manifest.cases)

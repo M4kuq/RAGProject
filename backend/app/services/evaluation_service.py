@@ -140,13 +140,20 @@ PROVIDER_SKIP_BASE_METRICS = frozenset(
         "recall_at_k",
         "mrr",
         "faithfulness",
+        "answer_completeness",
         "groundedness",
         "citation_coverage",
+        "citation_presence",
+        "citation_correctness",
         "context_precision",
         "no_context_rate",
     }
 )
-GRAPH_PROMOTION_STRING_HINT_KEYS = ("expected_entity_labels", "expected_relation_types")
+GRAPH_PROMOTION_STRING_HINT_KEYS = (
+    "expected_entity_labels",
+    "expected_relation_types",
+    "expected_answer_slots",
+)
 GRAPH_PROMOTION_INT_HINT_KEYS = ("required_hop_count",)
 GRAPH_PROMOTION_HINT_FORBIDDEN_PARTS = (
     "api_key",
@@ -184,7 +191,28 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
         metric_name="citation_coverage",
         display_name="Citation coverage",
+        description="Backward-compatible alias of citation presence.",
+        higher_is_better=True,
+        value_unit="ratio",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    MetricSpec(
+        metric_name="citation_presence",
+        display_name="Citation presence",
         description="Fraction of required answers with at least one safe citation.",
+        higher_is_better=True,
+        value_unit="ratio",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    MetricSpec(
+        metric_name="citation_correctness",
+        display_name="Citation correctness",
+        description=(
+            "Fraction of citations matching configured gold chunk, document, "
+            "keyword, or answer signals."
+        ),
         higher_is_better=True,
         value_unit="ratio",
         min_value=0.0,
@@ -202,7 +230,19 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec(
         metric_name="faithfulness",
         display_name="Faithfulness",
-        description="Keyword-based faithfulness signal for deterministic smoke tests.",
+        description=(
+            "Deterministic expected keyword or answer signal measured from "
+            "generated answer text only."
+        ),
+        higher_is_better=True,
+        value_unit="ratio",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    MetricSpec(
+        metric_name="answer_completeness",
+        display_name="Answer completeness",
+        description="Fraction of safe expected answer slots present in generated answer text.",
         higher_is_better=True,
         value_unit="ratio",
         min_value=0.0,

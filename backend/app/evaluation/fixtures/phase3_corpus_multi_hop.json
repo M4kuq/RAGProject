@@ -3,7 +3,7 @@
   "dataset": {
     "dataset_name": "phase3_corpus_multi_hop",
     "description": "Corpus-grounded multi-hop GraphRAG gold fixture for LLM paper and RAGProject self-doc comparisons.",
-    "version": "v1",
+    "version": "v2",
     "source_type": "fixture",
     "status": "active",
     "metadata_json": {
@@ -32,6 +32,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["RAG", "Retrieval"],
         "expected_relation_types": ["uses", "organizes"],
+        "expected_answer_slots": ["Retrieval-Augmented Generation", "Self-RAG", "Corrective Retrieval Augmented Generation", "RAPTOR", "GraphRAG"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -55,6 +56,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["LoRA", "LLM"],
         "expected_relation_types": ["uses"],
+        "expected_answer_slots": ["Low-Rank Adaptation", "QLoRA"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -78,6 +80,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["DeepSeek", "LLM"],
         "expected_relation_types": ["describes"],
+        "expected_answer_slots": ["DeepSeek LLM", "DeepSeek-V3", "DeepSeek-R1", "DeepSeek-Coder"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -101,6 +104,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["API", "ToolBench"],
         "expected_relation_types": ["evaluates", "uses"],
+        "expected_answer_slots": ["Gorilla", "ToolBench"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -125,6 +129,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRAG", "RAG", "Retrieval"],
         "expected_relation_types": ["organizes", "supports"],
+        "expected_answer_slots": ["GraphRAG", "global summarization", "community summaries"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -149,6 +154,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["ReAct", "LLM"],
         "expected_relation_types": ["uses"],
+        "expected_answer_slots": ["ReAct", "reasoning traces", "actions"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -171,6 +177,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["Graph", "graph path relevance", "graph citation coverage"],
         "expected_relation_types": ["uses"],
+        "expected_answer_slots": ["graph_path_relevance", "graph_citation_coverage"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -194,6 +201,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["Graph", "Citation", "retrieval run items", "source chunk ids"],
         "expected_relation_types": ["connects"],
+        "expected_answer_slots": ["Graph Citation", "retrieval_run_items", "source_chunk_ids"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -216,6 +224,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRAG", "PostgreSQL"],
         "expected_relation_types": ["connects"],
+        "expected_answer_slots": ["GraphRAG", "PostgreSQL"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -239,6 +248,7 @@
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphIndexService", "graph index build", "GraphRepository", "document version id"],
         "expected_relation_types": ["connects"],
+        "expected_answer_slots": ["GraphIndexService", "graph_index_build", "GraphRepository"],
         "required_hop_count": 1
       },
       "status": "active"
@@ -261,7 +271,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphStore", "PostgresGraphStore", "Neo4jGraphStore", "GraphPath", "PostgreSQL"],
-        "expected_relation_types": []
+        "expected_relation_types": [],
+        "expected_answer_slots": ["PostgresGraphStore", "Neo4jGraphStore", "GraphPath"]
       },
       "status": "active"
     },
@@ -284,7 +295,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["MCP", "LangChain", "LangGraph", "Qdrant"],
-        "expected_relation_types": []
+        "expected_relation_types": [],
+        "expected_answer_slots": ["MCP", "LangChain", "LangGraph", "Qdrant"]
       },
       "status": "active"
     },
@@ -306,7 +318,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRAG", "graph path relevance", "graph citation coverage", "Evaluation"],
-        "expected_relation_types": []
+        "expected_relation_types": [],
+        "expected_answer_slots": ["GraphRAG", "graph_path_relevance", "graph_citation_coverage", "strategy comparison"]
       },
       "status": "active"
     },
@@ -329,7 +342,8 @@
         "expected_strategy": "graph",
         "acceptable_strategies": ["graph", "graph_postgres", "graph_neo4j", "hybrid"],
         "expected_entity_labels": ["GraphRetrievalStrategy", "retrieval run items", "source chunk ids", "document chunk id", "document version id"],
-        "expected_relation_types": []
+        "expected_relation_types": [],
+        "expected_answer_slots": ["GraphRetrievalStrategy", "retrieval_run_items", "source_chunk_ids", "document_chunk_id", "document_version_id"]
       },
       "status": "active"
     }

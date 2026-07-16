@@ -11,6 +11,7 @@ from app.evaluation.fixtures import (
 from app.schemas.rag import RagAskCitation, RagAskConfidence, RetrievalScoreSummary
 
 EVALUATION_DETAIL_SCHEMA_VERSION: Final = "phase2.eval.v1"
+EVALUATION_METRIC_SEMANTICS_VERSION: Final = "rag.eval.metric.v2"
 
 
 @dataclass(frozen=True)
@@ -44,21 +45,30 @@ class EvaluationMetricInputs:
 
 def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     retrieved_items = sorted(inputs.retrieved_items or [], key=lambda item: item.rank_order)
-    evidence_text = " ".join(
-        [
-            inputs.answer_text,
-            *[citation.snippet for citation in inputs.citations],
-            *[item.snippet for item in retrieved_items],
-        ]
+    retrieval_evidence_text = " ".join(item.snippet for item in retrieved_items)
+    if not retrieval_evidence_text:
+        retrieval_evidence_text = " ".join(citation.snippet for citation in inputs.citations)
+
+    answer_keyword_hits = _keyword_hits(inputs.answer_text, inputs.case.expected_keywords)
+    answer_hit = _expected_answer_hit(inputs.answer_text, inputs.case)
+    expected_answer_slots = _metadata_string_values(
+        inputs.case.metadata_json,
+        "expected_answer_slots",
     )
-    keyword_hits = _keyword_hits(evidence_text, inputs.case.expected_keywords)
-    answer_hit = _expected_answer_hit(evidence_text, inputs.case)
+    answer_slot_hits = _keyword_hits(inputs.answer_text, expected_answer_slots)
     expected_signal_count = len(inputs.case.expected_keywords) + (
         1 if inputs.case.expected_answer and not inputs.case.expected_keywords else 0
     )
-    matched_signal_count = keyword_hits + answer_hit
-    faithfulness = _ratio(matched_signal_count, expected_signal_count)
-    citation_coverage = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
+    faithfulness = _ratio(answer_keyword_hits + answer_hit, expected_signal_count)
+    answer_completeness = (
+        None if not expected_answer_slots else _ratio(answer_slot_hits, len(expected_answer_slots))
+    )
+    citation_presence = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
+    citation_correctness, citation_correctness_details = _citation_correctness(
+        inputs.case,
+        inputs.citations,
+        retrieved_items,
+    )
     selected_count = (
         inputs.retrieval_summary.selected_count if inputs.retrieval_summary is not None else 0
     )
@@ -67,10 +77,11 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         if inputs.confidence
         else (1.0 if selected_count > 0 else 0.0)
     )
+    retrieval_signal_hits = _expected_signal_hits(retrieval_evidence_text, inputs.case)
     context_precision = _context_precision(
-        evidence_text=evidence_text,
+        evidence_text=retrieval_evidence_text,
         selected_count=(selected_count),
-        keyword_hits=matched_signal_count,
+        keyword_hits=retrieval_signal_hits,
     )
     metadata_details: dict[str, object] = {
         "case_id": inputs.case.case_id,
@@ -85,13 +96,14 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metadata_json=inputs.case.metadata_json,
         ),
         "expected_keyword_count": len(inputs.case.expected_keywords),
+        "expected_answer_slot_count": len(expected_answer_slots),
         "required_citation": inputs.case.required_citation,
     }
     if inputs.error_code:
         metadata_details["error_code"] = inputs.error_code
 
-    recall = _recall_at_k(inputs.case, retrieved_items, evidence_text)
-    first_rank = _first_relevant_rank(inputs.case, retrieved_items, evidence_text)
+    recall = _recall_at_k(inputs.case, retrieved_items, retrieval_evidence_text)
+    first_rank = _first_relevant_rank(inputs.case, retrieved_items, retrieval_evidence_text)
     mrr = (
         None
         if _target_count(inputs.case) <= 0
@@ -116,7 +128,11 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 matched_count=(
                     None
                     if recall is None
-                    else _matched_target_count(inputs.case, retrieved_items, evidence_text)
+                    else _matched_target_count(
+                        inputs.case,
+                        retrieved_items,
+                        retrieval_evidence_text,
+                    )
                 ),
                 rank=None,
                 not_applicable=recall is None,
@@ -139,10 +155,26 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
             metric_score=faithfulness,
             metric_label=_label(faithfulness),
             details={
-                "matched_expected_keywords": keyword_hits,
+                "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+                "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+                "evidence_scope": "answer_text_only",
+                "matched_expected_keywords": answer_keyword_hits,
                 "matched_expected_answer": bool(answer_hit),
                 "expected_keyword_count": len(inputs.case.expected_keywords),
                 "expected_signal_count": expected_signal_count,
+            },
+        ),
+        MetricValue(
+            metric_name="answer_completeness",
+            metric_score=answer_completeness,
+            metric_label=_optional_label(answer_completeness),
+            details={
+                "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+                "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+                "evidence_scope": "answer_text_only",
+                "expected_answer_slot_count": len(expected_answer_slots),
+                "matched_answer_slot_count": answer_slot_hits,
+                "not_applicable": answer_completeness is None,
             },
         ),
         MetricValue(
@@ -157,21 +189,43 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         ),
         MetricValue(
             metric_name="citation_coverage",
-            metric_score=citation_coverage,
-            metric_label=_label(citation_coverage),
+            metric_score=citation_presence,
+            metric_label=_label(citation_presence),
             details={
+                "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+                "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+                "legacy_alias_for": "citation_presence",
                 "required_citation": inputs.case.required_citation,
                 "citation_count": len(inputs.citations),
             },
+        ),
+        MetricValue(
+            metric_name="citation_presence",
+            metric_score=citation_presence,
+            metric_label=_label(citation_presence),
+            details={
+                "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+                "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+                "required_citation": inputs.case.required_citation,
+                "citation_count": len(inputs.citations),
+            },
+        ),
+        MetricValue(
+            metric_name="citation_correctness",
+            metric_score=citation_correctness,
+            metric_label=_optional_label(citation_correctness),
+            details=citation_correctness_details,
         ),
         MetricValue(
             metric_name="context_precision",
             metric_score=context_precision,
             metric_label=_label(context_precision),
             details={
+                "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+                "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+                "evidence_scope": "retrieval_evidence_only",
                 "selected_count": (selected_count),
-                "matched_expected_keywords": keyword_hits,
-                "matched_expected_answer": bool(answer_hit),
+                "matched_expected_signals": retrieval_signal_hits,
             },
         ),
         MetricValue(
@@ -231,6 +285,126 @@ def _expected_answer_hit(text: str, case: EvaluationCase) -> int:
     if case.expected_keywords or not case.expected_answer:
         return 0
     return 1 if case.expected_answer.casefold() in text.casefold() else 0
+
+
+def _expected_signal_hits(text: str, case: EvaluationCase) -> int:
+    return _keyword_hits(text, case.expected_keywords) + _expected_answer_hit(text, case)
+
+
+def _citation_correctness(
+    case: EvaluationCase,
+    citations: list[RagAskCitation],
+    retrieved_items: list[RetrievedEvaluationItem],
+) -> tuple[float | None, dict[str, object]]:
+    details: dict[str, object] = {
+        "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+        "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+        "citation_count": len(citations),
+    }
+    if not citations:
+        if not case.required_citation:
+            details.update(
+                {
+                    "not_applicable": True,
+                    "reason_code": "citation_not_required",
+                    "gold_source": "none",
+                    "matched_citation_count": 0,
+                }
+            )
+            return None, details
+        details.update(
+            {
+                "not_applicable": False,
+                "reason_code": "required_citation_missing",
+                "gold_source": "citation_presence",
+                "matched_citation_count": 0,
+            }
+        )
+        return 0.0, details
+
+    matching_citation_count = 0
+    gold_source: str
+    if case.expected_chunk_ids:
+        expected_chunk_ids = set(case.expected_chunk_ids)
+        gold_source = "expected_chunk_ids"
+        matching_citation_count = sum(
+            1 for citation in citations if citation.document_chunk_id in expected_chunk_ids
+        )
+    elif case.expected_document_ids:
+        document_id_by_chunk_id = {
+            item.document_chunk_id: item.logical_document_id
+            for item in retrieved_items
+            if item.logical_document_id is not None
+        }
+        if not document_id_by_chunk_id:
+            details.update(
+                {
+                    "not_applicable": True,
+                    "reason_code": "citation_document_mapping_unavailable",
+                    "gold_source": "expected_document_ids",
+                    "matched_citation_count": 0,
+                }
+            )
+            return None, details
+        expected_document_ids = set(case.expected_document_ids)
+        gold_source = "expected_document_ids"
+        matching_citation_count = sum(
+            1
+            for citation in citations
+            if document_id_by_chunk_id.get(citation.document_chunk_id) in expected_document_ids
+        )
+    elif case.expected_keywords:
+        gold_source = "expected_keywords"
+        matching_citation_count = sum(
+            1
+            for citation in citations
+            if _keyword_hits(citation.snippet, case.expected_keywords) > 0
+        )
+    elif case.expected_answer:
+        gold_source = "expected_answer"
+        matching_citation_count = sum(
+            1
+            for citation in citations
+            if case.expected_answer.casefold() in citation.snippet.casefold()
+        )
+    else:
+        details.update(
+            {
+                "not_applicable": True,
+                "reason_code": "citation_gold_signal_missing",
+                "gold_source": "none",
+                "matched_citation_count": 0,
+            }
+        )
+        return None, details
+
+    details.update(
+        {
+            "not_applicable": False,
+            "gold_source": gold_source,
+            "matched_citation_count": matching_citation_count,
+        }
+    )
+    return _ratio(matching_citation_count, len(citations)), details
+
+
+def _metadata_string_values(
+    metadata_json: dict[str, object] | None,
+    key: str,
+) -> tuple[str, ...]:
+    if not isinstance(metadata_json, dict):
+        return ()
+    raw_values = metadata_json.get(key)
+    if not isinstance(raw_values, list):
+        return ()
+    values: list[str] = []
+    for raw_value in raw_values:
+        if not isinstance(raw_value, str):
+            continue
+        value = " ".join(raw_value.replace("\x00", " ").split())
+        if value and value not in values:
+            values.append(value)
+    return tuple(values)
 
 
 def _recall_at_k(

@@ -39,8 +39,16 @@ const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     direction: "意味は各 metric_name に依存します。"
   },
   citation_coverage: {
-    description: "回答が必要な引用を満たしているかを示します。",
+    description: "citation_presence と同じ値を返す後方互換用の指標です。",
+    direction: "新しい比較では citation_presence を使用します。"
+  },
+  citation_presence: {
+    description: "引用必須の回答に安全な引用が1件以上あるかを示します。",
     direction: "高いほど良好です。"
+  },
+  citation_correctness: {
+    description: "引用が設定済みの正解 chunk、document、keyword、answer signal に合う割合です。",
+    direction: "高いほど正解根拠を引用できています。"
   },
   context_precision: {
     description: "取得した context が期待回答にどれだけ関係しているかを示します。",
@@ -51,8 +59,12 @@ const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     direction: "graph quality 系指標と合わせて確認します。"
   },
   faithfulness: {
-    description: "回答が期待回答や keyword signal に沿っているかを示します。",
+    description: "生成回答だけを対象に、期待回答や keyword signal に沿っているかを示します。",
     direction: "高いほど良好です。"
+  },
+  answer_completeness: {
+    description: "生成回答に必須の expected_answer_slots が含まれた割合です。",
+    direction: "高いほど回答の必須要素を満たしています。"
   },
   fallback_rate: {
     description: "fallback retrieval path を使ったケースの割合です。",
@@ -109,8 +121,11 @@ const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
 };
 
 const METRIC_PRIORITY = [
+  "answer_completeness",
   "faithfulness",
   "groundedness",
+  "citation_presence",
+  "citation_correctness",
   "citation_coverage",
   "recall_at_k",
   "mrr",

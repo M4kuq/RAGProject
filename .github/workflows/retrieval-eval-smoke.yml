@@ -78,6 +78,18 @@ on:
         description: "Maximum retrieval_call_count_avg"
         required: false
         default: "3"
+      graph_path_relevance_min:
+        description: "Minimum graph_path_relevance"
+        required: false
+        default: "0"
+      graph_citation_coverage_min:
+        description: "Minimum graph_citation_coverage"
+        required: false
+        default: "0"
+      multi_hop_answerability_min:
+        description: "Minimum multi_hop_answerability"
+        required: false
+        default: "0"
   schedule:
     - cron: "0 18 * * 1"
 
@@ -284,6 +296,9 @@ jobs:
           SMOKE_BUDGET_EXHAUSTED_RATE_MAX: ${{ github.event.inputs.budget_exhausted_rate_max || '1' }}
           SMOKE_SUFFICIENCY_SCORE_AVG_MIN: ${{ github.event.inputs.sufficiency_score_avg_min || '0' }}
           SMOKE_RETRIEVAL_CALL_COUNT_AVG_MAX: ${{ github.event.inputs.retrieval_call_count_avg_max || '3' }}
+          SMOKE_GRAPH_PATH_RELEVANCE_MIN: ${{ github.event.inputs.graph_path_relevance_min || '0' }}
+          SMOKE_GRAPH_CITATION_COVERAGE_MIN: ${{ github.event.inputs.graph_citation_coverage_min || '0' }}
+          SMOKE_MULTI_HOP_ANSWERABILITY_MIN: ${{ github.event.inputs.multi_hop_answerability_min || '0' }}
           SMOKE_TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
         run: |
           mkdir -p ../artifacts
@@ -306,6 +321,9 @@ jobs:
             --budget-exhausted-rate-max "${SMOKE_BUDGET_EXHAUSTED_RATE_MAX}" \
             --sufficiency-score-avg-min "${SMOKE_SUFFICIENCY_SCORE_AVG_MIN}" \
             --retrieval-call-count-avg-max "${SMOKE_RETRIEVAL_CALL_COUNT_AVG_MAX}" \
+            --graph-path-relevance-min "${SMOKE_GRAPH_PATH_RELEVANCE_MIN}" \
+            --graph-citation-coverage-min "${SMOKE_GRAPH_CITATION_COVERAGE_MIN}" \
+            --multi-hop-answerability-min "${SMOKE_MULTI_HOP_ANSWERABILITY_MIN}" \
             --trigger-type "${SMOKE_TRIGGER_TYPE}" \
             --output-json ../artifacts/retrieval_eval_smoke.json \
             --output-md ../artifacts/retrieval_eval_smoke.md

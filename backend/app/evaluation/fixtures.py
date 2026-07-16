@@ -95,7 +95,11 @@ def evaluation_case_strategy_snapshot(
                 acceptable.append(strategy)
         if acceptable:
             snapshot["acceptable_strategies"] = acceptable
-    for key in ("expected_entity_labels", "expected_relation_types"):
+    for key in (
+        "expected_entity_labels",
+        "expected_relation_types",
+        "expected_answer_slots",
+    ):
         raw_values = metadata_json.get(key)
         if isinstance(raw_values, list):
             values: list[str] = []
@@ -225,7 +229,11 @@ def _optional_metadata_json(value: dict[str, Any]) -> dict[str, object] | None:
             if strategy not in acceptable:
                 acceptable.append(strategy)
         metadata["acceptable_strategies"] = acceptable
-    for key in ("expected_entity_labels", "expected_relation_types"):
+    for key in (
+        "expected_entity_labels",
+        "expected_relation_types",
+        "expected_answer_slots",
+    ):
         raw_values = raw.get(key)
         if raw_values is None:
             continue

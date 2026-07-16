@@ -29,6 +29,9 @@ The fixture has 14 active cases:
 | LLM paper corpus | 6 | LLM-observed relations plus extracted canonical entity hubs |
 | RAGProject self docs | 8 | extracted relations plus canonical entity hubs |
 
+The fixture dataset version is `v2`; the manifest schema remains
+`phase2.evaluation_dataset.v1`.
+
 Every case includes:
 
 - `required_citation=true`
@@ -36,6 +39,12 @@ Every case includes:
 - `metadata_json.acceptable_strategies`
 - `metadata_json.expected_entity_labels`
 - `metadata_json.expected_relation_types`
+- `metadata_json.expected_answer_slots`
+
+`expected_answer_slots` are short safe terms that must appear in the generated
+answer text, not merely in retrieved snippets or citations. They catch cases
+where Graph retrieval finds the right path but generation omits the relation
+target or another essential answer element.
 
 Paper cases now use non-empty `expected_relation_types` based on the #82 LLM
 graph extraction validation. The old deterministic rule-based extractor still
@@ -85,10 +94,13 @@ conservative because LLM extraction is non-deterministic.
 
 `graph_path_relevance` uses intersection scoring: expected entity labels and
 expected relation types receive credit when the observed graph path contains a
-matching safe label or type. The corpus eval runbook remains a manual/demo
-workflow with warn thresholds so LLM non-determinism does not make CI flaky. CI
-continues to use Fake paths and fixture/schema/metric-logic tests; it does not
-require a live LLM graph index or the full corpus index.
+matching safe label or type. `answer_completeness` matches `expected_answer_slots` against answer text only.
+`faithfulness` now checks expected keyword or answer signals against generated
+answer text only, so retrieved snippets cannot inflate generation quality.
+The corpus eval runbook remains a manual/demo workflow with warn thresholds so
+LLM non-determinism does not make CI flaky. CI continues to use Fake paths and
+fixture/schema/metric-logic tests; it does not require a live LLM graph index or
+the full corpus index.
 
 Paper multi-source hubs used by the fixture:
 

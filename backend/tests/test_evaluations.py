@@ -40,7 +40,12 @@ from app.db.models import (
     EvaluationCase as EvaluationCaseModel,
 )
 from app.db.session import get_db
-from app.evaluation.fixtures import EvaluationCase, EvaluationFixtureError, load_evaluation_cases
+from app.evaluation.fixtures import (
+    EvaluationCase,
+    EvaluationFixtureError,
+    evaluation_case_snapshot_hash,
+    load_evaluation_cases,
+)
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     RetrievedEvaluationItem,
@@ -67,6 +72,7 @@ from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSea
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import (
+    DEFAULT_EVALUATION_METRICS,
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
     EvaluationDatasetManifest,
@@ -149,6 +155,9 @@ def evaluation_client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
 
 
 def test_fixture_loader_and_metric_clamp() -> None:
+    default_request = EvaluationRunCreateRequest()
+    assert default_request.metrics == list(DEFAULT_EVALUATION_METRICS)
+
     cases = load_evaluation_cases("phase1_smoke", case_limit=1)
     assert [case.case_id for case in cases] == ["phase1_seed_stack"]
 
@@ -211,8 +220,78 @@ def test_fixture_loader_and_metric_clamp() -> None:
     )
     answer_only_by_name = {metric.metric_name: metric for metric in answer_only_metrics}
     assert answer_only_by_name["faithfulness"].metric_score == 1.0
-    assert answer_only_by_name["context_precision"].metric_score == 1.0
+    assert answer_only_by_name["context_precision"].metric_score == 0.0
     assert "canonical answer" not in str(answer_only_by_name["faithfulness"].details)
+
+    separated_metrics = calculate_metrics(
+        EvaluationMetricInputs(
+            case=EvaluationCase(
+                case_id="separated_signals",
+                question="Which components are required?",
+                expected_keywords=("Qdrant",),
+                required_citation=True,
+                expected_chunk_ids=(11,),
+                metadata_json={"expected_answer_slots": ["PostgreSQL", "Qdrant"]},
+            ),
+            answer_text="PostgreSQL stores relational state.",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=11,
+                    source_label="architecture.md",
+                    snippet="Qdrant stores retrieval vectors.",
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=11,
+                    logical_document_id=7,
+                    rank_order=1,
+                    snippet="Qdrant stores retrieval vectors.",
+                )
+            ],
+        )
+    )
+    separated_by_name = {metric.metric_name: metric for metric in separated_metrics}
+    assert separated_by_name["recall_at_k"].metric_score == 1.0
+    assert separated_by_name["context_precision"].metric_score == 1.0
+    assert separated_by_name["faithfulness"].metric_score == 0.0
+    assert separated_by_name["answer_completeness"].metric_score == 0.5
+    assert separated_by_name["citation_presence"].metric_score == 1.0
+    assert separated_by_name["citation_correctness"].metric_score == 1.0
+    assert separated_by_name["citation_coverage"].metric_score == 1.0
+    assert "PostgreSQL" not in str(separated_by_name["answer_completeness"].details)
+    assert "Qdrant" not in str(separated_by_name["answer_completeness"].details)
+
+    snapshot_base = evaluation_case_snapshot_hash(
+        question="Which components are required?",
+        expected_answer=None,
+        expected_keywords=("Qdrant",),
+        expected_document_ids=(),
+        expected_chunk_ids=(11,),
+        required_citation=True,
+        metadata_json={"expected_answer_slots": ["Qdrant"]},
+    )
+    snapshot_changed = evaluation_case_snapshot_hash(
+        question="Which components are required?",
+        expected_answer=None,
+        expected_keywords=("Qdrant",),
+        expected_document_ids=(),
+        expected_chunk_ids=(11,),
+        required_citation=True,
+        metadata_json={"expected_answer_slots": ["PostgreSQL", "Qdrant"]},
+    )
+    assert snapshot_base != snapshot_changed
 
     with pytest.raises(ValueError):
         EvaluationRunCreateRequest(dataset_name="phase1.smoke", case_limit=1)
@@ -240,6 +319,7 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "acceptable_strategies": ["graph", "hybrid"],
         "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
         "expected_relation_types": ["uses", "stores"],
+        "expected_answer_slots": ["PostgreSQL", "Qdrant"],
         "required_hop_count": 2,
     }
 
@@ -258,8 +338,11 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         "recall_at_k",
         "mrr",
         "citation_coverage",
+        "citation_presence",
+        "citation_correctness",
         "groundedness",
         "faithfulness",
+        "answer_completeness",
         "no_context_rate",
         "p95_latency",
         "strategy_selection_accuracy",
@@ -281,6 +364,7 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         graph_fixture_path.read_text(encoding="utf-8")
     )
     assert graph_manifest.dataset.dataset_name == "phase3_graph_multi_hop"
+    assert graph_manifest.dataset.version == "v2"
     dumped = manifest.model_dump_json()
     dumped += graph_manifest.model_dump_json()
     assert "raw prompt" not in dumped.lower()
@@ -855,8 +939,11 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "recall_at_k",
                 "mrr",
                 "citation_coverage",
+                "citation_presence",
+                "citation_correctness",
                 "groundedness",
                 "faithfulness",
+                "answer_completeness",
                 "no_context_rate",
                 "p95_latency",
                 "strategy_selection_accuracy",
@@ -2469,12 +2556,14 @@ def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
             "acceptable_strategies": ["graph", "hybrid"],
             "expected_entity_labels": ["FastAPI", "PostgreSQL", "FastAPI"],
             "expected_relation_types": ["uses", "stores"],
+            "expected_answer_slots": ["PostgreSQL", "Qdrant", "PostgreSQL"],
             "required_hop_count": 2,
         },
     )
 
     assert metadata["expected_entity_labels"] == ["FastAPI", "PostgreSQL"]
     assert metadata["expected_relation_types"] == ["uses", "stores"]
+    assert metadata["expected_answer_slots"] == ["PostgreSQL", "Qdrant"]
     assert metadata["required_hop_count"] == 2
 
 
