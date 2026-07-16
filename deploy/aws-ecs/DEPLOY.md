@@ -261,7 +261,7 @@ terraform apply \
 - Budget alert は `monthly_budget_limit_usd` と `budget_alert_email` で設定します。
 - 完全削除は保存済みdestroy planを使う `aws-demo.ps1 down -ConfirmDestroy -DestroyConfirmation DESTROY-RUNTIME` で実行します。RDS/S3のデータ喪失を伴うため、実行前に必ず手動確認してください。
 
-## 12. 残る検証と制約
+## 12. Live検証記録と残る制約
 
 実装済み:
 
@@ -271,11 +271,17 @@ terraform apply \
 4. S3 document storageをAPI/workerで共有
 5. PostgreSQL job tableのlease/retry/status維持
 
-このPRで未実施:
+2026-07-16 no-data live検証:
 
-- 実AWS credentialを使う `terraform plan` / `apply`
-- sandbox accountでのBedrock model accessとlive invocation
-- S3 upload→worker ingest→Qdrant→回答のend-to-end smoke
+- [`doctor` run 29467605159](https://github.com/M4kuq/RAGProject/actions/runs/29467605159) と [`up` run 29467621275](https://github.com/M4kuq/RAGProject/actions/runs/29467621275) が成功し、runtime stack、migration、API/worker、frontendを構築しました。
+- [`AWS Deploy App` run 29468223868](https://github.com/M4kuq/RAGProject/actions/runs/29468223868) と [`AWS Deploy Frontend` run 29468355880](https://github.com/M4kuq/RAGProject/actions/runs/29468355880) が成功しました。
+- `load-data` は意図的に実行せず、[`smoke` run 29468404858](https://github.com/M4kuq/RAGProject/actions/runs/29468404858) でCloudFront経由のreadiness、CSRF取得、管理者loginを確認しました。no-data条件のためRAG searchは明示的にskipしています。
+- [`down` run 29468437001](https://github.com/M4kuq/RAGProject/actions/runs/29468437001) が成功し、[final verification job 87554672036](https://github.com/M4kuq/RAGProject/actions/runs/29468437001/job/87554672036) でruntime stackに追加のdestroy差分とruntime-tagged残存resourceがないことを確認しました。bootstrapのstate、lock、OIDC関連resourceは意図どおり残しています。
+
+未実施:
+
+- `load-data` を含むS3 upload→PostgreSQL job lease→worker ingest→Qdrant→Bedrock検索・回答のend-to-end smoke
+- sandbox accountでのBedrock embedding、rerank、generationの実データを使った結果品質確認
 - task replacement後のS3/RDS保持とQdrant再index手順のlive確認
 
 既知の運用制約:

@@ -142,6 +142,13 @@ pwsh deploy/aws-ecs/scripts/aws-demo.ps1 down -ConfirmDestroy -DestroyConfirmati
 
 destroy後はECS、RDS、ALB、CloudFront distribution/VPC Origin、ECR、runtime S3、runtime deployment-config secret、Logsが残っていないことを確認する。state、lock、OIDCと事前作成したアプリ入力用secret containerだけをbootstrapとして残す。Billingは反映遅延があるため翌日も確認する。
 
+### 2026-07-16 no-data実施記録
+
+- AWS無料クレジットを利用し、`load-data`なしで `doctor` → `up` → app/frontend deploy → `smoke` → `down` を実行した。
+- no-data smokeではCloudFront経由のreadiness、CSRF取得、管理者loginを確認し、indexed dataがないためRAG searchは明示的にskipした。
+- `down`後のfinal verificationでruntime stackに追加のdestroy差分とruntime-tagged残存resourceがないことを確認した。bootstrapのstate、lock、OIDC関連resourceは意図どおり残した。
+- 厳密なS3 upload→worker ingest→Qdrant→Bedrock回答経路は未検証であり、別の明示的なlive検証として扱う。
+
 ## 9. 中止条件
 
 - Account IDやRegionが不一致。
