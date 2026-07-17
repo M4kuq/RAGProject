@@ -7,6 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.evaluation.gold_v2 import (
+    AuxiliaryJudgeDecision,
+    HumanCalibrationRecord,
+    HumanDisagreementCategory,
+    JudgeReasonCode,
+)
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.schemas.common import PaginationMeta
 
@@ -682,6 +688,55 @@ class EvaluationFailurePromotionResponse(BaseModel):
     created_count: int
     skipped_count: int
     items: list[EvaluationFailurePromotionItem] = Field(default_factory=list)
+
+
+class EvaluationHumanCalibrationUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auxiliary_decision: AuxiliaryJudgeDecision
+    human_pass: bool
+    disagreement_category: HumanDisagreementCategory | None = None
+    human_reason_codes: list[JudgeReasonCode] = Field(default_factory=list, max_length=10)
+
+    @field_validator("human_reason_codes")
+    @classmethod
+    def validate_human_reason_codes(
+        cls,
+        value: list[JudgeReasonCode],
+    ) -> list[JudgeReasonCode]:
+        if len(value) != len(set(value)):
+            raise ValueError("human_reason_codes must be unique")
+        return value
+
+
+class EvaluationHumanCalibrationTarget(BaseModel):
+    evaluation_run_item_id: int
+    case_id: str = Field(min_length=1, max_length=120)
+    strategy_type: RetrievalStrategy
+    status: EvaluationStatus
+    answerable: bool
+    required_citation: bool
+    prompt_injection: bool
+
+
+class EvaluationHumanCalibrationResponse(BaseModel):
+    evaluation_human_calibration_id: int
+    evaluation_run_item_id: int
+    auxiliary_decision: AuxiliaryJudgeDecision
+    human_calibration: HumanCalibrationRecord
+    reviewed_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvaluationHumanCalibrationSummary(BaseModel):
+    schema_version: Literal["phase3.human_calibration.v1"] = "phase3.human_calibration.v1"
+    evaluation_run_id: int
+    eligible_count: int = Field(ge=0)
+    reviewed_count: int = Field(ge=0)
+    agreement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    targets: list[EvaluationHumanCalibrationTarget] = Field(default_factory=list)
+    records: list[EvaluationHumanCalibrationResponse] = Field(default_factory=list)
 
 
 class EvaluationRunDetail(EvaluationRunSummary):

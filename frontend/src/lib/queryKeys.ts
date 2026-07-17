@@ -32,6 +32,8 @@ export const queryKeys = {
     metricCatalog: ["evaluations", "metric-catalog"] as const,
     list: (params: { page: number; page_size: number }) => ["evaluations", "list", params] as const,
     detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const,
+    humanCalibrations: (evaluationRunId: number) =>
+      ["evaluations", "detail", evaluationRunId, "human-calibrations"] as const,
     compare: (baseRunId: number | null, candidateRunId: number | null) =>
       ["evaluations", "compare", baseRunId, candidateRunId] as const,
     datasets: (params: { page: number; page_size: number }) =>

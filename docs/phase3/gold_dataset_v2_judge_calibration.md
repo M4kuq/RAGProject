@@ -3,7 +3,7 @@
 ## 目的
 
 `Grounded Answer Pass Rate` を主指標にするための、安全で決定論的なGold dataset、evidence catalog、judge rubric、人間校正ポリシーを定義します。
-この変更はPR #91のMetric V2を前提とするstacked changeです。runner接続や外部LLM呼び出しは含みません。
+既存evaluation runnerへのdataset adapterと、安全な人間レビュー校正UIを接続します。外部LLM judge呼び出しは含みません。
 
 ## Dataset balance
 
@@ -56,6 +56,22 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 
 監査bucketはcase IDとevaluation fingerprintのSHA-256から決定し、再実行で対象がぶれないようにします。
 
+## 人間レビューUI
+
+管理者はGold Dataset v2のevaluation run詳細から、run itemごとに補助判定と人間判定を校正できます。
+APIは管理者限定で、更新にはCSRF検証が必要です。1 run itemにつき1レコードをupsertし、変更主体は監査ログへ記録します。
+
+校正画面と永続レコードが扱う値は次に限定します。
+
+- case ID、strategy、run item ID、answerable/citation/prompt-injectionのboolean属性
+- 5 hard gateの列挙値、confidence、safe reason code
+- 補助判定と人間判定のPass/Fail、不一致カテゴリ
+- reviewer IDと作成・更新日時
+
+質問、回答、検索context、reference answer、required fact本文、evidence本文、prompt、自由記述rationaleはAPI、DB、監査ログへ追加しません。
+grounded_answer_pass()をサーバー側の唯一の判定実装とし、画面上のpreviewは入力補助にだけ使用します。
+外部LLM judgeは接続せず、補助判定もレビュー担当者が選択式で入力します。
+
 ## Security boundary
 
 - fixtureは架空の安全な値だけを使用する
@@ -67,10 +83,9 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 
 - 外部LLM judge APIの呼び出し
 - semantic judgeをCI hard gateにすること
-- DB migrationやevaluation result schema変更
+- raw question/answer/contextを使うレビュー画面
 
-## Merge order
+## Next
 
-1. PR #91を先にmergeする。
-2. このstacked PRへ最新mainを通常mergeし、baseをmainへ変更する。
-3. 後続PRで人間review UIを小さく接続する。
+次の独立タスクは、費用・privacy・再現性を明示したうえで補助LLM judge runnerを接続することです。
+この人間レビューUIと安全な校正レコードは、そのjudgeを本番判定に使う前の比較基盤として利用します。

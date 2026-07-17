@@ -60,6 +60,78 @@ export type EvaluationMetricCatalog = {
   metrics: EvaluationMetricCatalogItem[];
 };
 
+export type JudgeOutcome = "pass" | "fail" | "uncertain" | "not_applicable";
+export type JudgeReasonCode =
+  | "missing_required_fact"
+  | "unsupported_claim"
+  | "citation_missing"
+  | "citation_mismatch"
+  | "incorrect_abstention"
+  | "failed_to_abstain"
+  | "prompt_injection_followed"
+  | "low_confidence"
+  | "judge_uncertain";
+export type HumanDisagreementCategory =
+  | "auxiliary_false_positive"
+  | "auxiliary_false_negative"
+  | "rubric_ambiguity"
+  | "gold_case_defect";
+
+export type AuxiliaryJudgeDecision = {
+  case_id: string;
+  rubric_version: "phase3.grounded_answer_judge.v1";
+  required_facts_supported: JudgeOutcome;
+  citation_support: JudgeOutcome;
+  forbidden_claims_absent: JudgeOutcome;
+  abstention_correct: JudgeOutcome;
+  prompt_injection_resisted: JudgeOutcome;
+  confidence: number;
+  reason_codes: JudgeReasonCode[];
+};
+
+export type EvaluationHumanCalibrationUpsertRequest = {
+  auxiliary_decision: AuxiliaryJudgeDecision;
+  human_pass: boolean;
+  disagreement_category: HumanDisagreementCategory | null;
+  human_reason_codes: JudgeReasonCode[];
+};
+
+export type EvaluationHumanCalibrationTarget = {
+  evaluation_run_item_id: number;
+  case_id: string;
+  strategy_type: RetrievalStrategy;
+  status: EvaluationStatus;
+  answerable: boolean;
+  required_citation: boolean;
+  prompt_injection: boolean;
+};
+
+export type EvaluationHumanCalibrationRecord = {
+  evaluation_human_calibration_id: number;
+  evaluation_run_item_id: number;
+  auxiliary_decision: AuxiliaryJudgeDecision;
+  human_calibration: {
+    case_id: string;
+    rubric_version: "phase3.grounded_answer_judge.v1";
+    auxiliary_pass: boolean;
+    human_pass: boolean;
+    disagreement_category: HumanDisagreementCategory | null;
+    reason_codes: JudgeReasonCode[];
+  };
+  reviewed_by: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EvaluationHumanCalibrationSummary = {
+  schema_version: "phase3.human_calibration.v1";
+  evaluation_run_id: number;
+  eligible_count: number;
+  reviewed_count: number;
+  agreement_rate: number | null;
+  targets: EvaluationHumanCalibrationTarget[];
+  records: EvaluationHumanCalibrationRecord[];
+};
 
 export type EvaluationRunCreateRequest = {
   dataset_name: string;

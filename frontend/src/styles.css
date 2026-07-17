@@ -1029,6 +1029,109 @@ textarea {
   max-width: 860px;
 }
 
+.human-calibration-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+}
+
+.human-calibration-summary div {
+  background: var(--admin-surface-soft);
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  min-width: 120px;
+  padding: 10px 12px;
+}
+
+.human-calibration-summary dt {
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.human-calibration-summary dd {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 4px 0 0;
+}
+
+.human-calibration-target {
+  display: grid;
+  font-weight: 700;
+  gap: 6px;
+  margin: 16px 0;
+  max-width: 560px;
+}
+
+.human-calibration-form {
+  display: grid;
+  gap: 16px;
+}
+
+.human-calibration-form fieldset {
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  margin: 0;
+  padding: 16px;
+}
+
+.human-calibration-form legend {
+  font-weight: 800;
+  padding: 0 6px;
+}
+
+.human-calibration-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.human-calibration-form-grid label {
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.human-calibration-form-grid select[multiple] {
+  min-height: 118px;
+}
+
+.human-calibration-safe-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.human-calibration-safe-facts span {
+  background: var(--admin-primary-soft);
+  border-radius: 999px;
+  color: var(--admin-primary-emphasis);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+.human-calibration-preview {
+  margin: 14px 0 0;
+}
+
+.human-calibration-form .field-error {
+  color: var(--admin-danger);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.human-calibration-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.human-calibration-records {
+  margin-top: 18px;
+}
+
 .comparison-toolbar {
   align-items: center;
   display: flex;

@@ -21,9 +21,10 @@ from app.core.config import Settings
 from app.core.errors import ConflictError, ResourceNotFound
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.evaluation_models import EvaluationResult
+from app.db.evaluation_models import EvaluationHumanCalibration, EvaluationResult
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import (
+    AuditLog,
     DocumentChunk,
     DocumentVersion,
     EvaluationDataset,
@@ -46,6 +47,7 @@ from app.evaluation.fixtures import (
     evaluation_case_snapshot_hash,
     load_evaluation_cases,
 )
+from app.evaluation.gold_v2 import load_gold_v2_bundle
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     RetrievedEvaluationItem,
@@ -5059,6 +5061,200 @@ def _comparison_item(
         "case_id": case_id,
         "status": status,
         "include_case_metadata": include_case_metadata,
+    }
+
+
+def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert admin is not None
+        run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="gold_answer_quality_v2",
+            items=[_comparison_item("gold_v2_001", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        db.commit()
+        item = db.scalar(
+            select(EvaluationRunItem).where(
+                EvaluationRunItem.evaluation_run_id == run.evaluation_run_id
+            )
+        )
+        assert item is not None
+        run_id = run.evaluation_run_id
+        item_id = item.evaluation_run_item_id
+
+    _login_as(client, "admin@example.com")
+    listing = client.get(f"/api/v1/evaluations/runs/{run_id}/human-calibrations")
+    assert listing.status_code == 200
+    assert listing.json()["data"]["eligible_count"] == 1
+    assert listing.json()["data"]["reviewed_count"] == 0
+    assert listing.json()["data"]["targets"] == [
+        {
+            "evaluation_run_item_id": item_id,
+            "case_id": "gold_v2_001",
+            "strategy_type": "dense",
+            "status": "succeeded",
+            "answerable": True,
+            "required_citation": True,
+            "prompt_injection": False,
+        }
+    ]
+
+    payload = _human_calibration_payload("gold_v2_001")
+    missing_csrf = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=payload,
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_missing"
+
+    csrf = _session_csrf(client)
+    created = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=payload,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert created.status_code == 200
+    created_data = created.json()["data"]
+    assert created_data["human_calibration"]["auxiliary_pass"] is True
+    assert created_data["human_calibration"]["human_pass"] is True
+    calibration_id = created_data["evaluation_human_calibration_id"]
+
+    failed_payload = _human_calibration_payload(
+        "gold_v2_001",
+        required_facts_supported="fail",
+        human_pass=True,
+        disagreement_category="auxiliary_false_negative",
+        reason_codes=["missing_required_fact"],
+    )
+    updated = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=failed_payload,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert updated.status_code == 200
+    updated_data = updated.json()["data"]
+    assert updated_data["evaluation_human_calibration_id"] == calibration_id
+    assert updated_data["human_calibration"]["auxiliary_pass"] is False
+    assert updated_data["human_calibration"]["human_pass"] is True
+    assert updated_data["human_calibration"]["disagreement_category"] == "auxiliary_false_negative"
+
+    refreshed = client.get(f"/api/v1/evaluations/runs/{run_id}/human-calibrations")
+    assert refreshed.status_code == 200
+    refreshed_data = refreshed.json()["data"]
+    assert refreshed_data["reviewed_count"] == 1
+    assert refreshed_data["agreement_rate"] == 0.0
+    assert len(refreshed_data["records"]) == 1
+
+    gold_case = load_gold_v2_bundle()[0].cases[0]
+    assert gold_case.question not in refreshed.text
+    assert gold_case.reference_answer not in refreshed.text
+    with session_factory() as db:
+        calibrations = db.scalars(select(EvaluationHumanCalibration)).all()
+        assert len(calibrations) == 1
+        audit_row = db.scalar(
+            select(AuditLog)
+            .where(AuditLog.action_type == "evaluation.human_calibration_saved")
+            .order_by(AuditLog.audit_log_id.desc())
+        )
+        assert audit_row is not None
+        assert audit_row.metadata_json["case_id"] == "gold_v2_001"
+        assert "question" not in audit_row.metadata_json
+        assert "answer" not in audit_row.metadata_json
+        assert "context" not in audit_row.metadata_json
+
+
+def test_human_calibration_api_enforces_admin_gold_run_and_contract(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert admin is not None
+        gold_run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="gold_answer_quality_v2",
+            items=[_comparison_item("gold_v2_001", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        other_run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="phase1_smoke",
+            items=[_comparison_item("phase1_seed_stack", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        db.commit()
+        gold_item = db.scalar(
+            select(EvaluationRunItem).where(
+                EvaluationRunItem.evaluation_run_id == gold_run.evaluation_run_id
+            )
+        )
+        assert gold_item is not None
+        gold_run_id = gold_run.evaluation_run_id
+        other_run_id = other_run.evaluation_run_id
+        gold_item_id = gold_item.evaluation_run_item_id
+
+    _login_as(client, "viewer@example.com")
+    forbidden = client.get(f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations")
+    assert forbidden.status_code == 403
+    _logout(client)
+    _login_as(client, "admin@example.com")
+
+    wrong_dataset = client.get(f"/api/v1/evaluations/runs/{other_run_id}/human-calibrations")
+    assert wrong_dataset.status_code == 422
+
+    csrf = _session_csrf(client)
+    invalid_shape = _human_calibration_payload("gold_v2_002")
+    invalid = client.put(
+        f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations/{gold_item_id}",
+        json=invalid_shape,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert invalid.status_code == 422
+
+    missing_disagreement = _human_calibration_payload(
+        "gold_v2_001",
+        human_pass=False,
+    )
+    inconsistent = client.put(
+        f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations/{gold_item_id}",
+        json=missing_disagreement,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert inconsistent.status_code == 422
+
+
+def _human_calibration_payload(
+    case_id: str,
+    *,
+    required_facts_supported: str = "pass",
+    human_pass: bool = True,
+    disagreement_category: str | None = None,
+    reason_codes: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "auxiliary_decision": {
+            "case_id": case_id,
+            "rubric_version": "phase3.grounded_answer_judge.v1",
+            "required_facts_supported": required_facts_supported,
+            "citation_support": "pass",
+            "forbidden_claims_absent": "pass",
+            "abstention_correct": "not_applicable",
+            "prompt_injection_resisted": "not_applicable",
+            "confidence": 0.95,
+            "reason_codes": reason_codes or [],
+        },
+        "human_pass": human_pass,
+        "disagreement_category": disagreement_category,
+        "human_reason_codes": reason_codes or [],
     }
 
 

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Protocol, cast
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ from app.api.responses import pagination_meta
 from app.core.config import Settings, get_settings
 from app.core.errors import ConflictError, ResourceNotFound, ValidationFailed
 from app.core.job_utils import redact_error_message
-from app.db.evaluation_models import EvaluationResult
+from app.db.evaluation_models import EvaluationHumanCalibration, EvaluationResult
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import EvaluationCase as EvaluationCaseModel
 from app.db.models import (
@@ -35,6 +36,13 @@ from app.evaluation.fixtures import (
     EvaluationFixtureError,
     evaluation_case_snapshot_hash,
     load_evaluation_cases,
+)
+from app.evaluation.gold_v2 import (
+    AuxiliaryJudgeDecision,
+    HumanCalibrationRecord,
+    calibration_agreement,
+    grounded_answer_pass,
+    load_gold_v2_bundle,
 )
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
@@ -79,6 +87,10 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
     EvaluationGenerationComparison,
+    EvaluationHumanCalibrationResponse,
+    EvaluationHumanCalibrationSummary,
+    EvaluationHumanCalibrationTarget,
+    EvaluationHumanCalibrationUpsertRequest,
     EvaluationMetricCatalog,
     EvaluationMetricCatalogItem,
     EvaluationMetricCategory,
@@ -98,6 +110,7 @@ from app.schemas.evaluations import (
     MetricSpec,
     StrategyComparisonMetric,
 )
+from app.services.audit_service import audit
 from app.services.rag_service import _safe_generation_label
 
 SCORE_QUANT = Decimal("0.000001")
@@ -1027,6 +1040,191 @@ class EvaluationService:
                 for item in loaded.items
             ],
             failure_candidates=self._failure_candidates(db, run=loaded.run),
+        )
+
+    def get_human_calibrations(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationHumanCalibrationSummary:
+        run = self._require_human_calibration_run(
+            db,
+            evaluation_run_id=evaluation_run_id,
+        )
+        dataset, _, _ = load_gold_v2_bundle()
+        cases_by_id = {case.case_id: case for case in dataset.cases}
+        targets = [
+            EvaluationHumanCalibrationTarget(
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                case_id=case.case_id,
+                strategy_type=cast(RetrievalStrategy, item.strategy_type),
+                status=cast(EvaluationStatus, item.status),
+                answerable=case.answerable,
+                required_citation=case.required_citation,
+                prompt_injection="prompt_injection" in case.tags,
+            )
+            for item in self.repository.list_items(
+                db,
+                evaluation_run_id=run.evaluation_run_id,
+            )
+            if item.case_key is not None and (case := cases_by_id.get(item.case_key)) is not None
+        ]
+        records = [
+            self._human_calibration_response(row)
+            for row in self.repository.list_human_calibrations(
+                db,
+                evaluation_run_id=run.evaluation_run_id,
+            )
+        ]
+        agreement = calibration_agreement([record.human_calibration for record in records])
+        return EvaluationHumanCalibrationSummary(
+            evaluation_run_id=run.evaluation_run_id,
+            eligible_count=len(targets),
+            reviewed_count=len(records),
+            agreement_rate=agreement,
+            targets=targets,
+            records=records,
+        )
+
+    def upsert_human_calibration(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+        evaluation_run_item_id: int,
+        payload: EvaluationHumanCalibrationUpsertRequest,
+        user: User,
+        request_id: str | None,
+    ) -> EvaluationHumanCalibrationResponse:
+        self._require_human_calibration_run(
+            db,
+            evaluation_run_id=evaluation_run_id,
+        )
+        item = self.repository.get_item(
+            db,
+            evaluation_run_id=evaluation_run_id,
+            evaluation_run_item_id=evaluation_run_item_id,
+            for_update=True,
+        )
+        if item is None:
+            raise ResourceNotFound()
+        dataset, _, _ = load_gold_v2_bundle()
+        gold_case = next(
+            (case for case in dataset.cases if case.case_id == item.case_key),
+            None,
+        )
+        if gold_case is None:
+            raise ValidationFailed(
+                {"evaluation_run_item_id": "item is not an eligible Gold Dataset v2 case"}
+            )
+
+        decision = payload.auxiliary_decision
+        try:
+            auxiliary_pass = grounded_answer_pass(gold_case, decision)
+            human_record = HumanCalibrationRecord(
+                case_id=gold_case.case_id,
+                rubric_version=decision.rubric_version,
+                auxiliary_pass=auxiliary_pass,
+                human_pass=payload.human_pass,
+                disagreement_category=payload.disagreement_category,
+                reason_codes=payload.human_reason_codes,
+            )
+        except (ValueError, PydanticValidationError) as exc:
+            raise ValidationFailed(
+                {"human_calibration": "verdicts do not match the Gold Dataset v2 contract"}
+            ) from exc
+
+        now = datetime.now(UTC)
+        row = self.repository.upsert_human_calibration(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            case_id=gold_case.case_id,
+            rubric_version=decision.rubric_version,
+            required_facts_supported=decision.required_facts_supported.value,
+            citation_support=decision.citation_support.value,
+            forbidden_claims_absent=decision.forbidden_claims_absent.value,
+            abstention_correct=decision.abstention_correct.value,
+            prompt_injection_resisted=decision.prompt_injection_resisted.value,
+            auxiliary_confidence=Decimal(str(decision.confidence)).quantize(Decimal("0.0001")),
+            auxiliary_reason_codes=[code.value for code in decision.reason_codes],
+            auxiliary_pass=human_record.auxiliary_pass,
+            human_pass=human_record.human_pass,
+            disagreement_category=(
+                human_record.disagreement_category.value
+                if human_record.disagreement_category is not None
+                else None
+            ),
+            human_reason_codes=[code.value for code in human_record.reason_codes],
+            reviewed_by=user.user_id,
+            updated_at=now,
+        )
+        audit(
+            db,
+            action="evaluation.human_calibration_saved",
+            actor_user_id=user.user_id,
+            request_id=request_id,
+            target_type="evaluation_human_calibration",
+            target_id=row.evaluation_human_calibration_id,
+            metadata={
+                "evaluation_run_id": evaluation_run_id,
+                "evaluation_run_item_id": evaluation_run_item_id,
+                "case_id": gold_case.case_id,
+                "auxiliary_pass": human_record.auxiliary_pass,
+                "human_pass": human_record.human_pass,
+                "disagreement_category": row.disagreement_category,
+            },
+        )
+        db.commit()
+        db.refresh(row)
+        return self._human_calibration_response(row)
+
+    def _require_human_calibration_run(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationRun:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
+        if run is None:
+            raise ResourceNotFound()
+        if _config(run)["dataset_name"] != "gold_answer_quality_v2":
+            raise ValidationFailed(
+                {"evaluation_run_id": "human calibration requires Gold Dataset v2"}
+            )
+        return run
+
+    @staticmethod
+    def _human_calibration_response(
+        row: EvaluationHumanCalibration,
+    ) -> EvaluationHumanCalibrationResponse:
+        decision = AuxiliaryJudgeDecision(
+            case_id=row.case_id,
+            rubric_version=cast(Literal["phase3.grounded_answer_judge.v1"], row.rubric_version),
+            required_facts_supported=row.required_facts_supported,
+            citation_support=row.citation_support,
+            forbidden_claims_absent=row.forbidden_claims_absent,
+            abstention_correct=row.abstention_correct,
+            prompt_injection_resisted=row.prompt_injection_resisted,
+            confidence=float(row.auxiliary_confidence),
+            reason_codes=row.auxiliary_reason_codes_json,
+        )
+        human_record = HumanCalibrationRecord(
+            case_id=row.case_id,
+            rubric_version=cast(Literal["phase3.grounded_answer_judge.v1"], row.rubric_version),
+            auxiliary_pass=row.auxiliary_pass,
+            human_pass=row.human_pass,
+            disagreement_category=row.disagreement_category,
+            reason_codes=row.human_reason_codes_json,
+        )
+        return EvaluationHumanCalibrationResponse(
+            evaluation_human_calibration_id=row.evaluation_human_calibration_id,
+            evaluation_run_item_id=row.evaluation_run_item_id,
+            auxiliary_decision=decision,
+            human_calibration=human_record,
+            reviewed_by=row.reviewed_by,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
         )
 
     def compare_runs(
