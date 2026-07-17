@@ -23,6 +23,15 @@ from app.services.evaluation_service import EvaluationService
 router = APIRouter()
 
 
+@router.get("/evaluations/metric-catalog")
+def evaluation_metric_catalog(
+    request: Request,
+    _: User = Depends(require_admin),
+) -> dict[str, object]:
+    result = EvaluationService.get_metric_catalog()
+    return success_response(result.model_dump(mode="json"), request)
+
+
 @router.get("/evaluations/datasets")
 def evaluation_datasets(
     request: Request,

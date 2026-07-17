@@ -37,6 +37,30 @@ export type EvaluationGenerationProvider =
   | "anthropic"
   | "gemini";
 
+export type EvaluationMetricCategory =
+  | "retrieval"
+  | "answer"
+  | "citation"
+  | "routing"
+  | "graph"
+  | "performance";
+
+export type EvaluationMetricCatalogItem = {
+  metric_name: string;
+  category: EvaluationMetricCategory;
+  display_name: string;
+  description: string;
+  higher_is_better: boolean;
+  value_unit: "ratio" | "ms" | "count";
+  alias_of: string | null;
+};
+
+export type EvaluationMetricCatalog = {
+  schema_version: "phase3.evaluation_metric_taxonomy.v1";
+  metrics: EvaluationMetricCatalogItem[];
+};
+
+
 export type EvaluationRunCreateRequest = {
   dataset_name: string;
   evaluation_dataset_id?: number | null;

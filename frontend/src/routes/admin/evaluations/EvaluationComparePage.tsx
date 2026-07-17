@@ -1,19 +1,21 @@
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  compareMetricNames,
   HelpTooltip,
   MetricHelp,
   orderedMetricEntries
 } from "../../../components/admin/MetricHelp";
+import { groupMetricsByCategory } from "../../../components/admin/MetricTaxonomy";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
-import { useEvaluationRunComparison } from "../../../features/evaluations/evaluationHooks";
+import {
+  useEvaluationMetricCatalog,
+  useEvaluationRunComparison
+} from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationCaseComparison,
   EvaluationCaseTransition,
   EvaluationComparisonDirection,
   EvaluationGenerationComparison,
-  EvaluationMetricComparison,
   EvaluationRunSummary
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
@@ -23,6 +25,7 @@ export function EvaluationComparePage() {
   const baseRunId = parseRunId(searchParams.get("base"));
   const candidateRunId = parseRunId(searchParams.get("candidate"));
   const comparison = useEvaluationRunComparison(baseRunId, candidateRunId);
+  const metricCatalog = useEvaluationMetricCatalog();
   const hasValidParams = baseRunId !== null && candidateRunId !== null;
 
   return (
@@ -89,12 +92,19 @@ export function EvaluationComparePage() {
                 </tr>
               </thead>
               <tbody>
-                {[...comparison.data.metrics].sort(compareMetricComparisons).map((metric) => (
+                {groupMetricsByCategory(
+                  comparison.data.metrics,
+                  metricCatalog.data,
+                  (metric) => metric.metric_name
+                )
+                  .flatMap((group) => group.items.map((metric) => ({ group, metric })))
+                  .map(({ group, metric }) => (
                   <tr
                     className={`comparison-direction-${metric.direction}`}
                     key={metric.metric_name}
                   >
                     <td>
+                      <span className="metric-category-badge">{group.label}</span>
                       <span className="metric-name-cell">
                         {metric.metric_name}
                         <MetricHelp metricName={metric.metric_name} />
@@ -340,13 +350,6 @@ function parseRunId(value: string | null): number | null {
   }
   const runId = Number(value);
   return Number.isSafeInteger(runId) && runId > 0 ? runId : null;
-}
-
-function compareMetricComparisons(
-  left: EvaluationMetricComparison,
-  right: EvaluationMetricComparison
-) {
-  return compareMetricNames(left.metric_name, right.metric_name);
 }
 
 function compareCases(left: EvaluationCaseComparison, right: EvaluationCaseComparison) {

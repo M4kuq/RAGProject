@@ -120,6 +120,15 @@ class EvaluationMetricName(StrEnum):
     ENTITY_RELATION_QUALITY_SUMMARY = "entity_relation_quality_summary"
 
 
+class EvaluationMetricCategory(StrEnum):
+    RETRIEVAL = "retrieval"
+    ANSWER = "answer"
+    CITATION = "citation"
+    ROUTING = "routing"
+    GRAPH = "graph"
+    PERFORMANCE = "performance"
+
+
 DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY = EvaluationRunRequestStrategy.DENSE
 PR25_ALLOWED_STRATEGIES = set(EvaluationRunRequestStrategy)
 
@@ -157,6 +166,23 @@ class MetricSpec(BaseModel):
     value_unit: Literal["ratio", "ms", "count"] = "ratio"
     min_value: float | None = None
     max_value: float | None = None
+
+
+class EvaluationMetricCatalogItem(BaseModel):
+    metric_name: EvaluationMetricName
+    category: EvaluationMetricCategory
+    display_name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=500)
+    higher_is_better: bool
+    value_unit: Literal["ratio", "ms", "count"]
+    alias_of: EvaluationMetricName | None = None
+
+
+class EvaluationMetricCatalog(BaseModel):
+    schema_version: Literal["phase3.evaluation_metric_taxonomy.v1"] = (
+        "phase3.evaluation_metric_taxonomy.v1"
+    )
+    metrics: list[EvaluationMetricCatalogItem] = Field(min_length=1, max_length=32)
 
 
 class MetricValue(BaseModel):

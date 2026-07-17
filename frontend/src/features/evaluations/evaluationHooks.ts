@@ -6,6 +6,7 @@ import {
   createEvaluationRun,
   exportEvaluationDataset,
   getEvaluationDataset,
+  getEvaluationMetricCatalog,
   getEvaluationRunDetail,
   importEvaluationDataset,
   listEvaluationCases,
@@ -27,6 +28,14 @@ export function useEvaluationRuns(params: { page: number; page_size: number }) {
   return useQuery({
     queryKey: queryKeys.evaluations.list(params),
     queryFn: () => listEvaluationRuns(params)
+  });
+}
+
+export function useEvaluationMetricCatalog() {
+  return useQuery({
+    queryKey: queryKeys.evaluations.metricCatalog,
+    queryFn: getEvaluationMetricCatalog,
+    staleTime: Number.POSITIVE_INFINITY
   });
 }
 

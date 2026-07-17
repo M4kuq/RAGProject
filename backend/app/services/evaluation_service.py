@@ -79,7 +79,11 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
     EvaluationGenerationComparison,
+    EvaluationMetricCatalog,
+    EvaluationMetricCatalogItem,
+    EvaluationMetricCategory,
     EvaluationMetricComparison,
+    EvaluationMetricName,
     EvaluationMetricResult,
     EvaluationRunComparison,
     EvaluationRunComparisonSummary,
@@ -183,6 +187,17 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
         metric_name="mrr",
         display_name="MRR",
         description="Mean reciprocal rank for expected references.",
+        higher_is_better=True,
+        value_unit="ratio",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    MetricSpec(
+        metric_name="context_precision",
+        display_name="Context precision",
+        description=(
+            "Fraction of selected retrieval contexts matching configured expected signals."
+        ),
         higher_is_better=True,
         value_unit="ratio",
         min_value=0.0,
@@ -368,6 +383,62 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
 )
 
 
+EVALUATION_METRIC_CATEGORY_BY_NAME: dict[EvaluationMetricName, EvaluationMetricCategory] = {
+    EvaluationMetricName.RECALL_AT_K: EvaluationMetricCategory.RETRIEVAL,
+    EvaluationMetricName.MRR: EvaluationMetricCategory.RETRIEVAL,
+    EvaluationMetricName.CONTEXT_PRECISION: EvaluationMetricCategory.RETRIEVAL,
+    EvaluationMetricName.NO_CONTEXT_RATE: EvaluationMetricCategory.RETRIEVAL,
+    EvaluationMetricName.GROUNDEDNESS: EvaluationMetricCategory.ANSWER,
+    EvaluationMetricName.FAITHFULNESS: EvaluationMetricCategory.ANSWER,
+    EvaluationMetricName.ANSWER_COMPLETENESS: EvaluationMetricCategory.ANSWER,
+    EvaluationMetricName.CITATION_PRESENCE: EvaluationMetricCategory.CITATION,
+    EvaluationMetricName.CITATION_CORRECTNESS: EvaluationMetricCategory.CITATION,
+    EvaluationMetricName.CITATION_COVERAGE: EvaluationMetricCategory.CITATION,
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: EvaluationMetricCategory.ROUTING,
+    EvaluationMetricName.FALLBACK_RATE: EvaluationMetricCategory.ROUTING,
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: EvaluationMetricCategory.ROUTING,
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: EvaluationMetricCategory.ROUTING,
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: EvaluationMetricCategory.ROUTING,
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: EvaluationMetricCategory.GRAPH,
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: EvaluationMetricCategory.GRAPH,
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: EvaluationMetricCategory.GRAPH,
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: EvaluationMetricCategory.GRAPH,
+    EvaluationMetricName.P95_LATENCY: EvaluationMetricCategory.PERFORMANCE,
+    EvaluationMetricName.CACHE_HIT_RATE: EvaluationMetricCategory.PERFORMANCE,
+    EvaluationMetricName.CACHE_SAVED_LATENCY: EvaluationMetricCategory.PERFORMANCE,
+}
+EVALUATION_METRIC_ALIAS_BY_NAME: dict[EvaluationMetricName, EvaluationMetricName] = {
+    EvaluationMetricName.CITATION_COVERAGE: EvaluationMetricName.CITATION_PRESENCE,
+}
+
+
+def _build_evaluation_metric_catalog() -> EvaluationMetricCatalog:
+    spec_by_name = {spec.metric_name: spec for spec in STRATEGY_METRIC_SPECS}
+    expected_names = set(EvaluationMetricName)
+    if set(spec_by_name) != expected_names:
+        raise RuntimeError("evaluation metric specs must cover every metric")
+    if set(EVALUATION_METRIC_CATEGORY_BY_NAME) != expected_names:
+        raise RuntimeError("evaluation metric categories must cover every metric")
+
+    return EvaluationMetricCatalog(
+        metrics=[
+            EvaluationMetricCatalogItem(
+                metric_name=spec.metric_name,
+                category=EVALUATION_METRIC_CATEGORY_BY_NAME[spec.metric_name],
+                display_name=spec.display_name,
+                description=spec.description,
+                higher_is_better=spec.higher_is_better,
+                value_unit=spec.value_unit,
+                alias_of=EVALUATION_METRIC_ALIAS_BY_NAME.get(spec.metric_name),
+            )
+            for spec in STRATEGY_METRIC_SPECS
+        ]
+    )
+
+
+EVALUATION_METRIC_CATALOG = _build_evaluation_metric_catalog()
+
+
 @dataclass(frozen=True)
 class LoadedEvaluationCase:
     case: EvaluationCase
@@ -474,6 +545,10 @@ class EvaluationService:
         self.rag_service_factory = rag_service_factory
         self.settings = settings or get_settings()
         self.trace_export_service = trace_export_service or TraceExportService(self.settings)
+
+    @staticmethod
+    def get_metric_catalog() -> EvaluationMetricCatalog:
+        return EVALUATION_METRIC_CATALOG.model_copy(deep=True)
 
     def create_run(
         self,

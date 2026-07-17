@@ -79,6 +79,8 @@ from app.schemas.evaluations import (
     EvaluationFailureCandidate,
     EvaluationFailurePromotionRequest,
     EvaluationFailureSeverity,
+    EvaluationMetricCategory,
+    EvaluationMetricName,
     EvaluationRunCreateRequest,
     EvaluationRunRequestStrategy,
     StrategyComparisonMetric,
@@ -90,6 +92,8 @@ from app.schemas.rag import (
     RetrievalScoreSummary,
 )
 from app.services.evaluation_service import (
+    EVALUATION_METRIC_ALIAS_BY_NAME,
+    EVALUATION_METRIC_CATEGORY_BY_NAME,
     STRATEGY_METRIC_SPECS,
     EvaluationService,
     _failure_reasons,
@@ -295,6 +299,71 @@ def test_fixture_loader_and_metric_clamp() -> None:
 
     with pytest.raises(ValueError):
         EvaluationRunCreateRequest(dataset_name="phase1.smoke", case_limit=1)
+
+
+def test_evaluation_metric_catalog_classifies_every_metric_once() -> None:
+    catalog = EvaluationService.get_metric_catalog()
+    metric_names = [item.metric_name for item in catalog.metrics]
+
+    assert catalog.schema_version == "phase3.evaluation_metric_taxonomy.v1"
+    assert len(metric_names) == 22
+    assert len(metric_names) == len(set(metric_names))
+    assert set(metric_names) == set(EvaluationMetricName)
+    assert set(EVALUATION_METRIC_CATEGORY_BY_NAME) == set(EvaluationMetricName)
+    counts = {
+        category: sum(item.category == category for item in catalog.metrics)
+        for category in EvaluationMetricCategory
+    }
+    assert counts == {
+        EvaluationMetricCategory.RETRIEVAL: 4,
+        EvaluationMetricCategory.ANSWER: 3,
+        EvaluationMetricCategory.CITATION: 3,
+        EvaluationMetricCategory.ROUTING: 5,
+        EvaluationMetricCategory.GRAPH: 4,
+        EvaluationMetricCategory.PERFORMANCE: 3,
+    }
+    assert EVALUATION_METRIC_ALIAS_BY_NAME == {
+        EvaluationMetricName.CITATION_COVERAGE: EvaluationMetricName.CITATION_PRESENCE
+    }
+    citation_coverage = next(
+        item
+        for item in catalog.metrics
+        if item.metric_name == EvaluationMetricName.CITATION_COVERAGE
+    )
+    assert citation_coverage.category == EvaluationMetricCategory.CITATION
+    assert citation_coverage.alias_of == EvaluationMetricName.CITATION_PRESENCE
+    assert all(
+        item.display_name and item.description and item.value_unit for item in catalog.metrics
+    )
+
+
+def test_evaluation_metric_catalog_api_is_admin_only(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = evaluation_client
+    path = "/api/v1/evaluations/metric-catalog"
+
+    assert client.get(path).status_code == 401
+
+    _login_as(client, "viewer@example.com")
+    viewer_response = client.get(path)
+    assert viewer_response.status_code == 403
+    assert viewer_response.json()["error"]["code"] == "permission_denied"
+
+    _logout(client)
+    _login_as(client, "admin@example.com")
+    response = client.get(path)
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["schema_version"] == "phase3.evaluation_metric_taxonomy.v1"
+    assert len(payload["metrics"]) == 22
+    by_name = {item["metric_name"]: item for item in payload["metrics"]}
+    assert by_name["citation_coverage"]["category"] == "citation"
+    assert by_name["citation_coverage"]["alias_of"] == "citation_presence"
+    assert by_name["p95_latency"]["higher_is_better"] is False
+    assert by_name["p95_latency"]["value_unit"] == "ms"
+    assert TEST_PASSWORD.lower() not in response.text.lower()
 
 
 def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:

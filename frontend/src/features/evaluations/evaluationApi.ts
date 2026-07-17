@@ -7,6 +7,7 @@ import type {
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
+  EvaluationMetricCatalog,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
   EvaluationRunComparison,
@@ -26,6 +27,13 @@ function toQuery(params: Record<string, string | number | undefined>): string {
   });
   const text = query.toString();
   return text ? `?${text}` : "";
+}
+
+export async function getEvaluationMetricCatalog(): Promise<EvaluationMetricCatalog> {
+  const response = await apiFetch<ApiResponse<EvaluationMetricCatalog>>(
+    "/api/v1/evaluations/metric-catalog"
+  );
+  return response.data;
 }
 
 export async function createEvaluationRun(

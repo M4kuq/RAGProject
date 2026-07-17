@@ -1147,11 +1147,39 @@ textarea {
   gap: 5px;
 }
 
+.metric-category-badge,
+.metric-category-label {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  color: var(--color-subtle);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.metric-category-badge {
+  margin-right: 8px;
+}
+
 .metric-detail-list {
   align-items: start;
   display: grid;
   gap: 6px;
   justify-items: start;
+}
+
+.metric-detail-group {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.metric-category-label {
+  margin-bottom: 2px;
 }
 
 .metric-help {
