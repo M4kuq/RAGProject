@@ -5164,10 +5164,12 @@ def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
             .order_by(AuditLog.audit_log_id.desc())
         )
         assert audit_row is not None
-        assert audit_row.metadata_json["case_id"] == "gold_v2_001"
-        assert "question" not in audit_row.metadata_json
-        assert "answer" not in audit_row.metadata_json
-        assert "context" not in audit_row.metadata_json
+        audit_metadata = audit_row.metadata_json
+        assert audit_metadata is not None
+        assert audit_metadata["case_id"] == "gold_v2_001"
+        assert "question" not in audit_metadata
+        assert "answer" not in audit_metadata
+        assert "context" not in audit_metadata
 
 
 def test_human_calibration_api_enforces_admin_gold_run_and_contract(
