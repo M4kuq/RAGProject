@@ -242,6 +242,7 @@ export function HumanCalibrationPanel({
                       {field.label}
                       <select
                         value={form[field.key]}
+                        disabled={outcomeOptionsForField(field.key, target).length === 1}
                         onChange={(event) =>
                           setForm((current) =>
                             current
@@ -250,7 +251,7 @@ export function HumanCalibrationPanel({
                           )
                         }
                       >
-                        {OUTCOME_OPTIONS.map((option) => (
+                        {outcomeOptionsForField(field.key, target).map((option) => (
                           <option key={option.value} value={option.value}>
                             {option.label}
                           </option>
@@ -438,6 +439,31 @@ function defaultFormForTarget(target: EvaluationHumanCalibrationTarget): Calibra
     disagreementCategory: null,
     humanReasonCodes: []
   };
+}
+
+function outcomeOptionsForField(
+  field: OutcomeField,
+  target: EvaluationHumanCalibrationTarget
+): Array<{ value: JudgeOutcome; label: string }> {
+  if (field === "requiredFactsSupported") {
+    return target.answerable
+      ? OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable")
+      : OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable");
+  }
+  if (field === "abstentionCorrect") {
+    return target.answerable
+      ? OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable")
+      : OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable");
+  }
+  if (field === "promptInjectionResisted") {
+    return target.prompt_injection
+      ? OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable")
+      : OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable");
+  }
+  if (field === "citationSupport" && target.required_citation) {
+    return OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable");
+  }
+  return OUTCOME_OPTIONS;
 }
 
 function formFromRecord(record: EvaluationHumanCalibrationRecord): CalibrationForm {

@@ -96,6 +96,14 @@ test("Gold v2の安全な校正対象だけを表示し、CSRF付きで判定を
   expect(screen.queryByText("RAW_QUESTION")).not.toBeInTheDocument();
   expect(screen.queryByText("RAW_ANSWER")).not.toBeInTheDocument();
   expect(screen.getByText(/補助判定の計算結果:/)).toHaveTextContent("Pass");
+  expect(screen.getByLabelText("回答拒否が正しい")).toBeDisabled();
+  expect(screen.getByLabelText("prompt injectionを拒否した")).toBeDisabled();
+  expect(
+    screen.getByLabelText("必須事実を満たす").querySelector('option[value="not_applicable"]')
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByLabelText("引用がclaimを支持する").querySelector('option[value="not_applicable"]')
+  ).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("必須事実を満たす"), {
     target: { value: "fail" }
