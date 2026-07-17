@@ -143,6 +143,59 @@ function evaluationComparisonPayload() {
   };
 }
 
+function evaluationMetricCatalogPayload() {
+  return {
+    schema_version: "phase3.evaluation_metric_taxonomy.v1",
+    metrics: [
+      {
+        metric_name: "recall_at_k",
+        category: "retrieval",
+        display_name: "Recall at K",
+        description: "Retrieval recall.",
+        higher_is_better: true,
+        value_unit: "ratio",
+        alias_of: null
+      },
+      {
+        metric_name: "mrr",
+        category: "retrieval",
+        display_name: "MRR",
+        description: "Mean reciprocal rank.",
+        higher_is_better: true,
+        value_unit: "ratio",
+        alias_of: null
+      },
+      {
+        metric_name: "faithfulness",
+        category: "answer",
+        display_name: "Faithfulness",
+        description: "Answer-only faithfulness.",
+        higher_is_better: true,
+        value_unit: "ratio",
+        alias_of: null
+      },
+      {
+        metric_name: "citation_presence",
+        category: "citation",
+        display_name: "Citation presence",
+        description: "Citation presence.",
+        higher_is_better: true,
+        value_unit: "ratio",
+        alias_of: null
+      },
+      {
+        metric_name: "p95_latency",
+        category: "performance",
+        display_name: "P95 latency",
+        description: "P95 latency.",
+        higher_is_better: false,
+        value_unit: "ms",
+        alias_of: null
+      }
+    ]
+  };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   queryClient.clear();
@@ -521,6 +574,9 @@ test("evaluation comparison page shows direction colors and lower-is-better hint
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
+      if (url.endsWith("/api/v1/evaluations/metric-catalog")) {
+        return jsonResponse({ data: evaluationMetricCatalogPayload() });
+      }
       if (url.includes("/api/v1/evaluations/runs/compare")) {
         return jsonResponse({ data: evaluationComparisonPayload() });
       }
@@ -550,11 +606,13 @@ test("evaluation comparison page shows direction colors and lower-is-better hint
   const p95Row = within(metricTable).getByText("p95_latency").closest("tr");
   expect(p95Row).toHaveClass("comparison-direction-improved");
   expect(within(p95Row as HTMLElement).getByText("改善")).toBeInTheDocument();
+  expect(within(p95Row as HTMLElement).getByText("性能")).toBeInTheDocument();
   expect(within(p95Row as HTMLElement).getByText("低いほど良い")).toBeInTheDocument();
 
   const recallRow = within(metricTable).getByText("recall_at_k").closest("tr");
   expect(recallRow).toHaveClass("comparison-direction-regressed");
   expect(within(recallRow as HTMLElement).getByText("悪化")).toBeInTheDocument();
+  expect(within(recallRow as HTMLElement).getByText("検索品質")).toBeInTheDocument();
 
   const caseTable = screen.getByRole("table", { name: "case 差分" });
   const regressedCaseRow = within(caseTable).getByText("shared_pass").closest("tr");
@@ -664,6 +722,9 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
       }
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/metric-catalog")) {
+        return jsonResponse({ data: evaluationMetricCatalogPayload() });
       }
       if (url.includes("/api/v1/evaluations/datasets")) {
         if (!url.includes("page=2")) {
@@ -904,6 +965,8 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   const metricDetailList = document.querySelector(".metric-detail-list");
   expect(metricDetailList).toBeInTheDocument();
   expect(metricDetailList?.querySelectorAll(".metric-detail-item")).toHaveLength(2);
+  expect(metricDetailList?.querySelectorAll(".metric-detail-group")).toHaveLength(1);
+  expect(screen.getAllByText("検索品質").length).toBeGreaterThan(1);
   expect(screen.getByText(/失敗した評価 item/)).toBeInTheDocument();
   expect(screen.getByText(/strategy 期待値だけ/)).toBeInTheDocument();
   expect(await screen.findByRole("option", { name: "promoted_failures" })).toBeInTheDocument();

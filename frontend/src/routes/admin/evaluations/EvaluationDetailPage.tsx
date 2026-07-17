@@ -6,17 +6,20 @@ import {
   MetricHelp,
   orderedMetricEntries
 } from "../../../components/admin/MetricHelp";
+import { groupMetricsByCategory } from "../../../components/admin/MetricTaxonomy";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import {
   useActiveEvaluationDatasets,
   useCreateEvaluationDataset,
+  useEvaluationMetricCatalog,
   useEvaluationRunDetail,
   usePromoteEvaluationFailures
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationFailureCandidate,
   EvaluationFailureSeverity,
+  EvaluationMetricCatalog,
   EvaluationMetricResult,
   EvaluationDataset,
   StrategyComparisonMetric
@@ -26,6 +29,7 @@ import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
 export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
+  const metricCatalog = useEvaluationMetricCatalog();
   const datasets = useActiveEvaluationDatasets();
   const createDataset = useCreateEvaluationDataset();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
@@ -184,9 +188,16 @@ export function EvaluationDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {orderedMetricEntries(Object.entries(run.data.metric_summary)).map(([name, value]) => (
+            {groupMetricsByCategory(
+              Object.entries(run.data.metric_summary),
+              metricCatalog.data,
+              ([name]) => name
+            )
+              .flatMap((group) => group.items.map((item) => ({ group, item })))
+              .map(({ group, item: [name, value] }) => (
               <tr key={name}>
                 <td>
+                  <span className="metric-category-badge">{group.label}</span>
                   <span className="metric-name-cell">
                     {name}
                     <MetricHelp metricName={name} />
@@ -552,7 +563,7 @@ export function EvaluationDetailPage() {
                 <td>{formatScore(item.citation_coverage)}</td>
                 <td>{formatScore(item.context_precision)}</td>
                 <td>{item.error_code ?? formatSafeText(item.error_message, 80)}</td>
-                <td>{formatMetricDetails(item.metrics)}</td>
+                <td>{formatMetricDetails(item.metrics, metricCatalog.data)}</td>
               </tr>
             ))}
             {run.data.items.length === 0 ? (
@@ -661,25 +672,37 @@ function failureTypePriority(failureType: string): number {
   return priority[failureType] ?? 100;
 }
 
-function formatMetricDetails(metrics: EvaluationMetricResult[]) {
+function formatMetricDetails(
+  metrics: EvaluationMetricResult[],
+  catalog: EvaluationMetricCatalog | undefined
+) {
   const safeMetrics = metrics.filter((metric) => metric.metric_name !== "case_metadata");
   if (!safeMetrics.length) {
     return "-";
   }
+  const groups = groupMetricsByCategory(safeMetrics, catalog, (metric) => metric.metric_name);
   return (
     <span className="metric-detail-list">
-      {[...safeMetrics].sort(compareEvaluationMetrics).map((metric) => {
-        const label = metric.metric_label ? ` ${metric.metric_label}` : "";
-        return (
-          <span className="metric-detail-item" key={`${metric.strategy_type}-${metric.metric_name}`}>
-            <span>
-              {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
-              {label}
-            </span>
-            <MetricHelp metricName={metric.metric_name} />
-          </span>
-        );
-      })}
+      {groups.map((group) => (
+        <span className="metric-detail-group" key={group.category}>
+          <span className="metric-category-label">{group.label}</span>
+          {group.items.map((metric) => {
+            const label = metric.metric_label ? ` ${metric.metric_label}` : "";
+            return (
+              <span
+                className="metric-detail-item"
+                key={`${metric.strategy_type}-${metric.metric_name}`}
+              >
+                <span>
+                  {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
+                  {label}
+                </span>
+                <MetricHelp metricName={metric.metric_name} />
+              </span>
+            );
+          })}
+        </span>
+      ))}
     </span>
   );
 }
@@ -692,13 +715,6 @@ function compareStrategyMetrics(left: StrategyComparisonMetric, right: StrategyC
   return (
     comparisonMetricLabel(left).localeCompare(comparisonMetricLabel(right)) ||
     compareMetricNames(left.metric_name, right.metric_name)
-  );
-}
-
-function compareEvaluationMetrics(left: EvaluationMetricResult, right: EvaluationMetricResult) {
-  return (
-    compareMetricNames(left.metric_name, right.metric_name) ||
-    left.strategy_type.localeCompare(right.strategy_type)
   );
 }
 
