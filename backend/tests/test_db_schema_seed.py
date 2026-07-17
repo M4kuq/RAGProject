@@ -69,7 +69,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0020_graph_llm_extractor"
+    assert version == "0021_eval_human_calibration"
 
     expected_tables = {
         "roles",
@@ -93,6 +93,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "evaluation_runs",
         "evaluation_run_items",
         "evaluation_results",
+        "evaluation_human_calibrations",
         "audit_logs",
         "system_settings",
     }
@@ -134,6 +135,13 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_evaluation_run_items_strategy_type",
         "ck_evaluation_run_items_generation_non_negative",
         "ck_evaluation_results_strategy_type",
+        "uq_eval_human_calibrations_run_item",
+        "ck_eval_human_calibrations_case_id",
+        "ck_eval_human_calibrations_rubric",
+        "ck_eval_human_calibrations_outcomes",
+        "ck_eval_human_calibrations_confidence",
+        "ck_eval_human_calibrations_disagreement",
+        "ck_eval_human_calibrations_verdict_consistency",
     }
     actual_constraints = scalar_set(
         pg_engine,
@@ -161,6 +169,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ix_evaluation_cases_dataset_status",
         "ix_evaluation_runs_dataset_strategy",
         "ix_evaluation_run_items_case",
+        "ix_eval_human_calibrations_reviewer",
         "ix_document_chunks_content_fts",
         "ix_document_chunks_content_fts_english",
     }
