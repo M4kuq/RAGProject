@@ -4,11 +4,17 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.evaluation.gold_v2 import GoldCaseV2
 
 
 class EvaluationFixtureError(RuntimeError):
     pass
+
+
+GOLD_V2_DATASET_NAME = "gold_answer_quality_v2"
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,8 @@ def load_evaluation_cases(
     case_limit: int | None = None,
 ) -> list[EvaluationCase]:
     safe_name = _safe_dataset_name(dataset_name)
+    if safe_name == GOLD_V2_DATASET_NAME:
+        return _load_gold_v2_evaluation_cases(case_limit=case_limit)
     path = Path(__file__).with_name("fixtures") / f"{safe_name}.json"
     if not path.exists():
         raise EvaluationFixtureError("evaluation_dataset_not_found")
@@ -48,6 +56,42 @@ def load_evaluation_cases(
     if not loaded:
         raise EvaluationFixtureError("evaluation_dataset_empty")
     return loaded
+
+
+def _load_gold_v2_evaluation_cases(*, case_limit: int | None) -> list[EvaluationCase]:
+    from app.evaluation.gold_v2 import GoldV2ValidationError, load_gold_v2_bundle
+
+    try:
+        dataset, _, _ = load_gold_v2_bundle()
+    except GoldV2ValidationError as exc:
+        raise EvaluationFixtureError("evaluation_dataset_invalid") from exc
+
+    loaded = [_gold_v2_evaluation_case(case) for case in dataset.cases]
+    if case_limit is not None:
+        loaded = loaded[:case_limit]
+    if not loaded:
+        raise EvaluationFixtureError("evaluation_dataset_empty")
+    return loaded
+
+
+def _gold_v2_evaluation_case(case: GoldCaseV2) -> EvaluationCase:
+    expected_signals = tuple(fact.statement for fact in case.required_facts)
+    if not expected_signals:
+        expected_signals = (case.reference_answer,)
+    return EvaluationCase(
+        case_id=case.case_id,
+        question=case.question,
+        expected_keywords=expected_signals,
+        required_citation=case.required_citation,
+        expected_answer=case.reference_answer,
+        tags=tuple(case.tags),
+        metadata_json={
+            "expected_strategy": case.expected_strategy,
+            "acceptable_strategies": [case.expected_strategy],
+            "expected_answer_slots": list(expected_signals),
+            "required_hop_count": 2 if "multi_hop" in case.tags else 1,
+        },
+    )
 
 
 def evaluation_case_question_hash(question: str | None) -> str:

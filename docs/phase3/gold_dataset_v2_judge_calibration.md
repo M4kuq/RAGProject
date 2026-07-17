@@ -31,6 +31,19 @@ answerable caseは全required factをsupport evidenceで被覆し、unanswerable
 
 平均スコアでhard failureを相殺しません。LLM judgeのconfidenceも主指標そのものには混ぜません。
 
+## Existing evaluation runner adapter
+
+`load_evaluation_cases("gold_answer_quality_v2", case_limit=50)` はGold Dataset v2を既存の `EvaluationCase` 契約へ変換します。
+`EvaluationService.run_job()`、worker handler、DBテーブル、公開APIは変更せず、既存runnerが50件をロードして既存の決定論的metricを集計できます。
+
+- required fact statementをexpected keywordとanswer-completeness slotへ変換する
+- expected strategy、hop count、tagを既存のsafe metadata境界へ写像する
+- reference answerは実行時の比較だけに使用し、DB、API detail、trace artifact、ログへ保存しない
+- forbidden claim、expected evidence、promptをrunner artifactへ複製しない
+
+統合テストは外部LLM、外部judge、AWS、`load-data` を使わない参照RAG stubで50件の完走と集計を検証します。
+この接続は既存metric runner向けであり、補助LLM judgeの呼び出しや `Grounded Answer Pass Rate` のjudge判定を追加しません。
+
 ## Auxiliary judge と人間校正
 
 LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに含めません。decision schemaは列挙値、confidence、safe reason codeだけを許可し、raw answer、raw context、自由記述rationaleを保存しません。
@@ -52,7 +65,6 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 
 ## Non-goals
 
-- evaluation runner本体への接続
 - 外部LLM judge APIの呼び出し
 - semantic judgeをCI hard gateにすること
 - DB migrationやevaluation result schema変更
@@ -61,4 +73,4 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 
 1. PR #91を先にmergeする。
 2. このstacked PRへ最新mainを通常mergeし、baseをmainへ変更する。
-3. 後続PRでrunner adapterと人間review UIを小さく接続する。
+3. 後続PRで人間review UIを小さく接続する。
