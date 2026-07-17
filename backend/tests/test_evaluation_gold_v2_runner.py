@@ -279,4 +279,3 @@ def _seed_admin(db: Session) -> User:
     db.commit()
     db.refresh(user)
     return user
-
