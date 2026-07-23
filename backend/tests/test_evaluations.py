@@ -514,12 +514,12 @@ def test_evaluation_metric_catalog_api_is_admin_only(
     by_name = {item["metric_name"]: item for item in payload["metrics"]}
     assert by_name["citation_coverage"]["category"] == "citation"
     assert by_name["citation_coverage"]["alias_of"] == "citation_presence"
-    assert by_name["faithfulness"]["display_name"] == "譛溷ｾ・屓遲斐す繧ｰ繝翫Ν荳閾ｴ邇・ｼ域立Faithfulness・・
+    assert by_name["faithfulness"]["display_name"] == "期待回答シグナル一致率（旧Faithfulness）"
     assert by_name["faithfulness"]["importance"] == "diagnostic"
     assert by_name["faithfulness"]["primary_scopes"] == []
-    assert "繧ｭ繝ｼ繝ｯ繝ｼ繝画悴險ｭ螳壽凾縺ｯN/A" in by_name["faithfulness"]["plain_language_summary"]
+    assert "キーワード未設定時はN/A" in by_name["faithfulness"]["plain_language_summary"]
     assert by_name["claim_faithfulness"]["method"] == "local_judge"
-    assert "繝ｭ繝ｼ繧ｫ繝ｫLLM縺ｫ繧医ｋ閾ｪ蜍募愛螳・ in by_name["claim_faithfulness"]["plain_language_summary"]
+    assert "ローカルLLMによる自動判定" in by_name["claim_faithfulness"]["plain_language_summary"]
     assert by_name["recall_at_k"]["plain_language_summary"]
     assert by_name["p95_latency"]["higher_is_better"] is False
     assert by_name["p95_latency"]["value_unit"] == "ms"

@@ -485,12 +485,12 @@ EVALUATION_METRIC_ALIAS_BY_NAME: dict[EvaluationMetricName, EvaluationMetricName
 }
 
 EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
-    EvaluationMetricName.RECALL_AT_K: "讀懃ｴ｢蜀咲樟邇・,
-    EvaluationMetricName.MRR: "蟷ｳ蝮・・・ｽ・,
-    EvaluationMetricName.CONTEXT_PRECISION: "譁・ц驕ｩ蜷育紫",
-    EvaluationMetricName.CITATION_COVERAGE: "蠑慕畑縺ｮ譛臥┌・井ｺ呈鋤・・,
-    EvaluationMetricName.CITATION_PRESENCE: "蠑慕畑縺ｮ譛臥┌",
-    EvaluationMetricName.CITATION_CORRECTNESS: "蠑慕畑豁｣遒ｺ諤ｧ",
+    EvaluationMetricName.RECALL_AT_K: "検索再現率",
+    EvaluationMetricName.MRR: "平均逆順位",
+    EvaluationMetricName.CONTEXT_PRECISION: "文脈適合率",
+    EvaluationMetricName.CITATION_COVERAGE: "引用の有無（互換）",
+    EvaluationMetricName.CITATION_PRESENCE: "引用の有無",
+    EvaluationMetricName.CITATION_CORRECTNESS: "引用正確性",
     EvaluationMetricName.GROUNDEDNESS: "Groundedness\uff08\u691c\u7d22\u4fe1\u983c\u5ea6\uff09",
     EvaluationMetricName.FAITHFULNESS: (
         "\u671f\u5f85\u56de\u7b54\u30b7\u30b0\u30ca\u30eb\u4e00\u81f4\u7387"
@@ -499,31 +499,31 @@ EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
     EvaluationMetricName.CLAIM_FAITHFULNESS: (
         "Claim Faithfulness\uff08\u30ed\u30fc\u30ab\u30ebjudge\uff09"
     ),
-    EvaluationMetricName.ANSWER_COMPLETENESS: "蝗樒ｭ泌ｮ悟・諤ｧ",
-    EvaluationMetricName.NO_CONTEXT_RATE: "譬ｹ諡縺ｪ縺礼紫",
-    EvaluationMetricName.P95_LATENCY: "驕・＞繧ｱ繝ｼ繧ｹ縺ｮ蠢懃ｭ疲凾髢・,
-    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "邨瑚ｷｯ驕ｸ謚樒ｲｾ蠎ｦ",
-    EvaluationMetricName.FALLBACK_RATE: "繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ邇・,
-    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "讀懃ｴ｢莠育ｮ苓ｶ・℃邇・,
-    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "譬ｹ諡蜈・ｶｳ蠎ｦ",
-    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "蟷ｳ蝮・､懃ｴ｢蝗樊焚",
-    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "繧ｰ繝ｩ繝慕ｵ瑚ｷｯ驕ｩ蜷育紫",
-    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "繧ｰ繝ｩ繝募ｼ慕畑蟇ｾ蠢懃紫",
-    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: "隍・焚谿ｵ髫主屓遲泌庄閭ｽ諤ｧ",
-    EvaluationMetricName.CACHE_HIT_RATE: "繧ｭ繝｣繝・す繝･蛻ｩ逕ｨ邇・,
-    EvaluationMetricName.CACHE_SAVED_LATENCY: "繧ｭ繝｣繝・す繝･遏ｭ邵ｮ譎る俣",
-    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: "繧ｨ繝ｳ繝・ぅ繝・ぅ繝ｻ髢｢菫ょ刀雉ｪ髮・ｨ・,
+    EvaluationMetricName.ANSWER_COMPLETENESS: "回答完全性",
+    EvaluationMetricName.NO_CONTEXT_RATE: "根拠なし率",
+    EvaluationMetricName.P95_LATENCY: "遅いケースの応答時間",
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "経路選択精度",
+    EvaluationMetricName.FALLBACK_RATE: "フォールバック率",
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索予算超過率",
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "根拠充足度",
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "平均検索回数",
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "グラフ経路適合率",
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ引用対応率",
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: "複数段階回答可能性",
+    EvaluationMetricName.CACHE_HIT_RATE: "キャッシュ利用率",
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュ短縮時間",
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: "エンティティ・関係品質集計",
 }
 EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str] = {
-    EvaluationMetricName.RECALL_AT_K: "蠢・ｦ√↑諠・ｱ繧呈､懃ｴ｢邨先棡縺ｮ荳贋ｽ阪〒隕九▽縺代ｉ繧後◆蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.MRR: "蠢・ｦ√↑諠・ｱ縺梧､懃ｴ｢邨先棡縺ｮ縺ｩ縺ｮ縺上ｉ縺・ｸ贋ｽ阪↓蜃ｺ縺溘°繧堤､ｺ縺励∪縺吶・,
+    EvaluationMetricName.RECALL_AT_K: "必要な情報を検索結果の上位で見つけられた割合です。",
+    EvaluationMetricName.MRR: "必要な情報が検索結果のどのくらい上位に出たかを示します。",
     EvaluationMetricName.CONTEXT_PRECISION: (
-        "蜿門ｾ励＠縺滓ュ蝣ｱ縺ｫ蝗樒ｭ斐∈髢｢菫ゅ☆繧句・螳ｹ縺後←繧後□縺大性縺ｾ繧後ｋ縺九ｒ遉ｺ縺励∪縺吶・
+        "取得した情報に回答へ関係する内容がどれだけ含まれるかを示します。"
     ),
-    EvaluationMetricName.CITATION_COVERAGE: "莉･蜑阪・邨先棡縺ｨ豈碑ｼ・☆繧九◆繧√・莠呈鋤謖・ｨ吶〒縺吶・,
-    EvaluationMetricName.CITATION_PRESENCE: "蠑慕畑縺悟ｿ・ｦ√↑蝗樒ｭ斐↓蠑慕畑縺御ｻ倥＞縺ｦ縺・ｋ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.CITATION_CORRECTNESS: "蠑慕畑蜈医′譛溷ｾ・☆繧区ｹ諡縺ｨ荳閾ｴ縺励※縺・ｋ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.GROUNDEDNESS: "蝗樒ｭ斐′蜿門ｾ励＠縺滓ｹ諡縺ｫ謾ｯ縺医ｉ繧後※縺・ｋ蠎ｦ蜷医＞縺ｧ縺吶・,
+    EvaluationMetricName.CITATION_COVERAGE: "以前の結果と比較するための互換指標です。",
+    EvaluationMetricName.CITATION_PRESENCE: "引用が必要な回答に引用が付いている割合です。",
+    EvaluationMetricName.CITATION_CORRECTNESS: "引用先が期待する根拠と一致している割合です。",
+    EvaluationMetricName.GROUNDEDNESS: "回答が取得した根拠に支えられている度合いです。",
     EvaluationMetricName.FAITHFULNESS: (
         "\u65e7\u30c7\u30fc\u30bf\u30bb\u30c3\u30c8\u5411\u3051\u306b\u3001\u56de\u7b54\u3078\u660e\u793a\u7684\u306a"
         "\u671f\u5f85\u30ad\u30fc\u30ef\u30fc\u30c9\u304c\u542b\u307e\u308c\u305f\u5272\u5408\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002"
@@ -534,23 +534,23 @@ EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str
         "\u691c\u7d22\u3067\u5f97\u305f\u6839\u62e0\u306b\u88cf\u4ed8\u3051\u3089\u308c\u305f\u4e3b\u5f35\u306e\u5272\u5408\u3067\u3059\u3002"
         "\u30ed\u30fc\u30ab\u30ebLLM\u306b\u3088\u308b\u81ea\u52d5\u5224\u5b9a\u306e\u305f\u3081\u66ab\u5b9a\u5024\u3067\u3059\u3002"
     ),
-    EvaluationMetricName.ANSWER_COMPLETENESS: "蝗樒ｭ斐↓蠢・ｦ√↑蜀・ｮｹ縺後◎繧阪▲縺ｦ縺・ｋ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.NO_CONTEXT_RATE: "蝗樒ｭ斐↓菴ｿ縺医ｋ諠・ｱ繧貞叙蠕励〒縺阪↑縺九▲縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.P95_LATENCY: "縺ｻ縺ｨ繧薙←縺ｮ隧穂ｾ｡縺後％縺ｮ譎る俣莉･蜀・↓螳御ｺ・☆繧狗岼螳峨〒縺吶・,
-    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "雉ｪ蝠上↓蜷医▲縺滓､懃ｴ｢譁ｹ豕輔ｒ驕ｸ縺ｹ縺溷牡蜷医〒縺吶・,
-    EvaluationMetricName.FALLBACK_RATE: "騾壼ｸｸ邨瑚ｷｯ縺ｧ荳崎ｶｳ縺励∽ｻ｣譖ｿ讀懃ｴ｢繧剃ｽｿ縺｣縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "讀懃ｴ｢蝗樊焚縺ｮ荳企剞縺ｾ縺ｧ菴ｿ縺・・縺｣縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "蜿門ｾ励＠縺滓ュ蝣ｱ縺悟屓遲斐↓蜊∝・縺縺｣縺溘°縺ｮ蟷ｳ蝮・〒縺吶・,
-    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "1繧ｱ繝ｼ繧ｹ縺ｧ讀懃ｴ｢繧貞他縺ｳ蜃ｺ縺励◆蟷ｳ蝮・屓謨ｰ縺ｧ縺吶・,
-    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "蜿門ｾ励＠縺溘げ繝ｩ繝慕ｵ瑚ｷｯ縺梧悄蠕・☆繧矩未菫ゅ↓蜷医≧蠎ｦ蜷医＞縺ｧ縺吶・,
-    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "繧ｰ繝ｩ繝慕ｵ瑚ｷｯ繧貞ｼ慕畑蜿ｯ閭ｽ縺ｪ譬ｹ諡縺ｸ謌ｻ縺帙◆蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.ANSWER_COMPLETENESS: "回答に必要な内容がそろっている割合です。",
+    EvaluationMetricName.NO_CONTEXT_RATE: "回答に使える情報を取得できなかったケースの割合です。",
+    EvaluationMetricName.P95_LATENCY: "ほとんどの評価がこの時間以内に完了する目安です。",
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "質問に合った検索方法を選べた割合です。",
+    EvaluationMetricName.FALLBACK_RATE: "通常経路で不足し、代替検索を使ったケースの割合です。",
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索回数の上限まで使い切ったケースの割合です。",
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "取得した情報が回答に十分だったかの平均です。",
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "1ケースで検索を呼び出した平均回数です。",
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "取得したグラフ経路が期待する関係に合う度合いです。",
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ経路を引用可能な根拠へ戻せた割合です。",
     EvaluationMetricName.MULTI_HOP_ANSWERABILITY: (
-        "隍・焚縺ｮ髢｢菫ゅｒ縺溘←繧玖ｳｪ蝠上↓蠢・ｦ√↑邨瑚ｷｯ繧貞叙蠕励〒縺阪◆蜑ｲ蜷医〒縺吶・
+        "複数の関係をたどる質問に必要な経路を取得できた割合です。"
     ),
-    EvaluationMetricName.CACHE_HIT_RATE: "驕主悉縺ｮ讀懃ｴ｢邨先棡繧貞・蛻ｩ逕ｨ縺ｧ縺阪◆蜑ｲ蜷医〒縺吶・,
-    EvaluationMetricName.CACHE_SAVED_LATENCY: "繧ｭ繝｣繝・す繝･縺ｧ遏ｭ邵ｮ縺ｧ縺阪◆謗ｨ螳壽凾髢薙〒縺吶・,
+    EvaluationMetricName.CACHE_HIT_RATE: "過去の検索結果を再利用できた割合です。",
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュで短縮できた推定時間です。",
     EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: (
-        "繧ｰ繝ｩ繝輔・繧ｨ繝ｳ繝・ぅ繝・ぅ繝ｻ髢｢菫ゅ・邨瑚ｷｯ繧貞ｮ牙・縺ｪ髮・ｨ亥､縺ｧ遒ｺ隱阪＠縺ｾ縺吶・
+        "グラフのエンティティ・関係・経路を安全な集計値で確認します。"
     ),
 }
 EVALUATION_METRIC_PRIMARY_SCOPES_BY_NAME: dict[
