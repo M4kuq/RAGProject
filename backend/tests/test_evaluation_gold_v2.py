@@ -82,14 +82,13 @@ def test_isolated_evaluation_manifest_matches_gold_v2_bundle() -> None:
 
     assert manifest.dataset.dataset_name == dataset.dataset.dataset_name
     assert manifest.dataset.version == "v2-corpus-1"
-    assert [case.case_key for case in manifest.cases] == [
-        case.case_id for case in dataset.cases
-    ]
+    assert [case.case_key for case in manifest.cases] == [case.case_id for case in dataset.cases]
     assert len(manifest.cases) == 50
     assert sum(case.answerable for case in manifest.cases) == 30
     assert len(manifest.corpus_documents) == len(catalog.sources) == 15
     assert sum(len(document.facts) for document in manifest.corpus_documents) == 45
     assert len(manifest.corpus_fingerprint()) == 64
+
 
 def test_gold_v2_fixture_contains_no_secret_shaped_values() -> None:
     dataset, catalog, rubric = load_gold_v2_bundle()

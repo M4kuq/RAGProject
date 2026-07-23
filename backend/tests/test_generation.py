@@ -29,7 +29,6 @@ def test_fake_generation_provider_is_test_only() -> None:
         Settings(app_env="local", generation_provider="fake")
 
 
-
 def test_openai_input_lists_actual_noncontiguous_marker_ids() -> None:
     # Evidence-pack compression can drop earlier candidates while preserving the
     # original local_citation_id, so context_items may carry non-contiguous ids.

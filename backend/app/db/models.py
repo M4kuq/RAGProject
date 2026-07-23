@@ -773,8 +773,7 @@ class EvaluationDataset(Base, TimestampMixin):
             name="ck_evaluation_datasets_corpus_mode",
         ),
         CheckConstraint(
-            "corpus_status IN "
-            "('shared_legacy', 'not_prepared', 'preparing', 'ready', 'failed')",
+            "corpus_status IN ('shared_legacy', 'not_prepared', 'preparing', 'ready', 'failed')",
             name="ck_evaluation_datasets_corpus_status",
         ),
         pg_check(

@@ -475,9 +475,7 @@ EVALUATION_METRIC_CATEGORY_BY_NAME: dict[EvaluationMetricName, EvaluationMetricC
     EvaluationMetricName.CACHE_HIT_RATE: EvaluationMetricCategory.PERFORMANCE,
     EvaluationMetricName.CACHE_SAVED_LATENCY: EvaluationMetricCategory.PERFORMANCE,
 }
-EVALUATION_METRIC_METHOD_BY_NAME: dict[
-    EvaluationMetricName, EvaluationMetricMethod
-] = {
+EVALUATION_METRIC_METHOD_BY_NAME: dict[EvaluationMetricName, EvaluationMetricMethod] = {
     EvaluationMetricName.GROUNDEDNESS: EvaluationMetricMethod.PROXY,
     EvaluationMetricName.FAITHFULNESS: EvaluationMetricMethod.PROXY,
     EvaluationMetricName.CLAIM_FAITHFULNESS: EvaluationMetricMethod.LOCAL_JUDGE,
@@ -493,11 +491,10 @@ EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
     EvaluationMetricName.CITATION_COVERAGE: "引用の有無（互換）",
     EvaluationMetricName.CITATION_PRESENCE: "引用の有無",
     EvaluationMetricName.CITATION_CORRECTNESS: "引用正確性",
-    EvaluationMetricName.GROUNDEDNESS: "Groundedness\uFF08\u691C\u7D22\u4FE1\u983C\u5EA6\uFF09",
-    EvaluationMetricName.FAITHFULNESS: "Faithfulness\uFF08\u7C21\u6613\uFF09",
+    EvaluationMetricName.GROUNDEDNESS: "Groundedness\uff08\u691c\u7d22\u4fe1\u983c\u5ea6\uff09",
+    EvaluationMetricName.FAITHFULNESS: "Faithfulness\uff08\u7c21\u6613\uff09",
     EvaluationMetricName.CLAIM_FAITHFULNESS: (
-        "Claim Faithfulness\uFF08\u30ED\u30FC\u30AB\u30EB"
-        "judge\uFF09"
+        "Claim Faithfulness\uff08\u30ed\u30fc\u30ab\u30ebjudge\uff09"
     ),
     EvaluationMetricName.ANSWER_COMPLETENESS: "回答完全性",
     EvaluationMetricName.NO_CONTEXT_RATE: "根拠なし率",
@@ -525,12 +522,12 @@ EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str
     EvaluationMetricName.CITATION_CORRECTNESS: "引用先が期待する根拠と一致している割合です。",
     EvaluationMetricName.GROUNDEDNESS: "回答が取得した根拠に支えられている度合いです。",
     EvaluationMetricName.FAITHFULNESS: (
-        "\u56DE\u7B54\u304C\u671F\u5F85\u3059\u308B\u5185\u5BB9\u3084\u30AD\u30FC\u30EF\u30FC\u30C9\u306B"
-        "\u6CBF\u3063\u3066\u3044\u308B\u304B\u3092\u793A\u3059\u7C21\u6613\u6307\u6A19\u3067\u3059\u3002"
+        "\u56de\u7b54\u304c\u671f\u5f85\u3059\u308b\u5185\u5bb9\u3084\u30ad\u30fc\u30ef\u30fc\u30c9\u306b"
+        "\u6cbf\u3063\u3066\u3044\u308b\u304b\u3092\u793a\u3059\u7c21\u6613\u6307\u6a19\u3067\u3059\u3002"
     ),
     EvaluationMetricName.CLAIM_FAITHFULNESS: (
-        "\u56DE\u7B54\u5185\u306E\u4E8B\u5B9Fclaim\u304C\u691C\u7D22context\u306B\u652F\u6301\u3055\u308C\u308B"
-        "\u5272\u5408\u3092\u30ED\u30FC\u30AB\u30EBjudge\u3067\u5224\u5B9A\u3057\u307E\u3059\u3002"
+        "\u56de\u7b54\u5185\u306e\u4e8b\u5b9fclaim\u304c\u691c\u7d22context\u306b\u652f\u6301\u3055\u308c\u308b"
+        "\u5272\u5408\u3092\u30ed\u30fc\u30ab\u30ebjudge\u3067\u5224\u5b9a\u3057\u307e\u3059\u3002"
     ),
     EvaluationMetricName.ANSWER_COMPLETENESS: "回答に必要な内容がそろっている割合です。",
     EvaluationMetricName.NO_CONTEXT_RATE: "回答に使える情報を取得できなかったケースの割合です。",
