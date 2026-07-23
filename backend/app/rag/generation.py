@@ -276,12 +276,14 @@ class OpenAICompatibleChatAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int = 8192,
+        disable_thinking: bool = True,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.disable_thinking = disable_thinking
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
@@ -295,8 +297,14 @@ class OpenAICompatibleChatAnswerGenerator:
                 },
                 json={
                     "model": self.model_name,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "enable_thinking": False,
+                    **(
+                        {
+                            "chat_template_kwargs": {"enable_thinking": False},
+                            "enable_thinking": False,
+                        }
+                        if self.disable_thinking
+                        else {}
+                    ),
                     "messages": [
                         {"role": "system", "content": _system_instructions(request)},
                         {"role": "user", "content": _openai_input(request)},
@@ -549,6 +557,21 @@ def create_answer_generator(
             model_name=_lmstudio_model_name(generation_model_name),
             timeout_seconds=timeout_seconds or settings.lmstudio_timeout_seconds,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+        )
+    if generation_provider == "nvidia":
+        if (
+            settings.app_env.lower() not in {"local", "test"}
+            or not settings.nvidia_api_key
+            or not settings.nvidia_base_url
+        ):
+            raise AnswerGenerationError()
+        return OpenAICompatibleChatAnswerGenerator(
+            api_key=settings.nvidia_api_key,
+            base_url=settings.nvidia_base_url,
+            model_name=generation_model_name,
+            timeout_seconds=timeout_seconds or settings.nvidia_timeout_seconds,
+            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+            disable_thinking=False,
         )
     if generation_provider == "openai" and settings.openai_api_key:
         return OpenAIResponsesAnswerGenerator(

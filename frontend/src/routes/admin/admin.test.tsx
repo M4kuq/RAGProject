@@ -206,6 +206,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 test("AdminSidebar renders document review and job links", () => {
@@ -2423,4 +2424,80 @@ test("job list pagination requests the selected page", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "次へ" }));
   await waitFor(() => expect(jobRequests.some((url) => url.includes("page=2"))).toBe(true));
   expect(screen.queryByText("stale_error")).not.toBeInTheDocument();
+});
+
+test("local evaluation form submits NVIDIA catalog and custom model IDs", async () => {
+  vi.stubEnv("VITE_ENABLE_NVIDIA_API", "true");
+  const createPayloads: Array<Record<string, unknown>> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: {
+            user_id: 1,
+            email: "admin@example.com",
+            display_name: "Admin",
+            role: "admin"
+          }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
+        createPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse(
+          { data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } },
+          202
+        );
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("heading", { name: "\u8a55\u4fa1" })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "\u751f\u6210 provider" }), {
+    target: { value: "nvidia" }
+  });
+  expect(screen.getByRole("combobox", { name: "\u751f\u6210 model" })).toHaveValue(
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+  );
+  expect(screen.getByRole("status")).toHaveTextContent("NVIDIA");
+  expect(
+    document.querySelector(
+      'datalist#nvidia-generation-models option[value="nvidia/llama-3.3-nemotron-super-49b-v1.5"]'
+    )
+  ).not.toBeNull();
+  const customModel = "mistralai/mixtral-8x22b-instruct-v0.1";
+  fireEvent.change(screen.getByRole("combobox", { name: "\u751f\u6210 model" }), {
+    target: { value: customModel }
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "llm_tool_orchestrator" }));
+  fireEvent.click(screen.getByRole("button", { name: "\u8a55\u4fa1\u3092\u5b9f\u884c" }));
+
+  await waitFor(() => expect(createPayloads).toHaveLength(1));
+  expect(createPayloads[0]).toMatchObject({
+    generation_provider: "nvidia",
+    generation_model: customModel
+  });
 });

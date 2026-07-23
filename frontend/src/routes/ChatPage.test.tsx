@@ -270,6 +270,7 @@ afterEach(() => {
   document.cookie = "rag_csrf=; Max-Age=0; path=/";
   window.localStorage.clear();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 test("shows temporary chat action only on the blank new chat screen", async () => {
@@ -1075,4 +1076,51 @@ test("reload after failed ask renders only the persisted user message", async ()
   expect(await screen.findByText("Failed question")).toBeInTheDocument();
   expect(screen.queryByText("Assistant")).not.toBeInTheDocument();
   expect(screen.queryByText("Generating answer...")).not.toBeInTheDocument();
+});
+
+test("sends an enabled NVIDIA model key and shows the external data warning", async () => {
+  vi.stubEnv("VITE_ENABLE_NVIDIA_API", "true");
+  document.cookie = "rag_csrf=csrf-token";
+  vi.stubGlobal("crypto", { randomUUID: () => "nvidia-fixed" });
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
+    if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+    if (path.includes("/api/v1/chat/sessions/10/messages")) return jsonResponse(emptyMessages());
+    if (path.endsWith("/api/v1/rag/ask") && init?.method === "POST") {
+      return jsonResponse(askSuccess());
+    }
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/10");
+
+  await screen.findByRole("heading", { name: "Demo chat" });
+  const nvidiaModelKey = "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5";
+  expect(
+    screen.getByRole("option", {
+      name: "NVIDIA Nemotron Super 49B (fast, recommended, external)"
+    })
+  ).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("model"), {
+    target: { value: nvidiaModelKey }
+  });
+  expect(screen.getByRole("status")).toHaveTextContent("NVIDIA");
+  fireEvent.change(screen.getByLabelText("message"), {
+    target: { value: "What is RAG?" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  const askCall = await waitFor(() => {
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/api/v1/rag/ask") && init?.method === "POST"
+    );
+    expect(call).toBeTruthy();
+    return call as [string, RequestInit];
+  });
+  expect(JSON.parse(String(askCall[1].body))).toMatchObject({
+    model_key: nvidiaModelKey
+  });
 });

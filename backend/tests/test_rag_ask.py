@@ -2940,6 +2940,107 @@ def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
         assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
 
 
+def test_rag_ask_uses_nvidia_model_key_and_persists_safe_generation_metadata(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(nvidia_api_key="test-nvidia-key")
+
+    def fake_create_answer_generator(*args: Any, **kwargs: Any) -> _ObservedCitationAnswerGenerator:
+        assert args[0] is settings
+        assert kwargs["provider"] == "nvidia"
+        assert kwargs["model_name"] == "meta/llama-3.3-70b-instruct"
+        return _ObservedCitationAnswerGenerator()
+
+    monkeypatch.setattr(
+        "app.services.rag_service.create_answer_generator",
+        fake_create_answer_generator,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="nvidia model")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "nvidia-model-msg",
+            "message": "alpha policy summary",
+            "model_key": "nvidia:meta/llama-3.3-70b-instruct",
+            "strategy": "dense",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["generation"] == {
+        "provider": "nvidia",
+        "model": "meta/llama-3.3-70b-instruct",
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20,
+        "estimated_cost_usd": 0.0,
+        "latency_ms": data["generation"]["latency_ms"],
+    }
+    assert data["generation"]["latency_ms"] >= 0
+    assert "test-nvidia-key" not in str(response.json())
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.retrieval_settings_json is not None
+        assert run.retrieval_settings_json["generation_provider"] == "nvidia"
+        assert run.retrieval_settings_json["generation_model"] == "meta/llama-3.3-70b-instruct"
+        assert "test-nvidia-key" not in str(run.retrieval_settings_json)
+
+
+def test_rag_ask_rejects_nvidia_outside_local_without_persisting_message(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _settings(
+        app_env="production",
+        nvidia_api_key="test-nvidia-key",
+        session_cookie_secure=True,
+        session_secret="x" * 32,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="nvidia production block")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "nvidia-production-msg",
+            "message": "alpha policy summary",
+            "model_key": "nvidia:meta/llama-3.3-70b-instruct",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "unsupported_model"
+    assert "test-nvidia-key" not in str(response.json())
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+        assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
+
+
 def test_rag_ask_persists_and_replays_multiple_citations(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

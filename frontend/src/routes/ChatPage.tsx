@@ -19,18 +19,17 @@ import {
   useUpdateChatSessionTitle
 } from "../features/chat/chatHooks";
 import { ApiError } from "../lib/apiClient";
+import {
+  buildChatModelOptions,
+  DEFAULT_MODEL,
+  isNvidiaModelKey,
+  NVIDIA_EXTERNAL_DATA_WARNING,
+  resolveSavedChatModel
+} from "../lib/modelCatalog";
 import { queryKeys } from "../lib/queryKeys";
 
 const DEFAULT_TOP_K = 20;
 const DEFAULT_RERANK_TOP_N = 5;
-const DEFAULT_MODEL = "lmstudio:qwen3.5-9b";
-const MODEL_OPTIONS = [
-  { value: DEFAULT_MODEL, label: "Local Qwen3.5" },
-  { value: "openai:gpt-5.5", label: "GPT 5.5" },
-  { value: "openai:gpt-5.4", label: "GPT 5.4" },
-  { value: "anthropic:claude-sonnet-4-20250514", label: "Claude" },
-  { value: "gemini:gemini-2.5-flash", label: "Gemini" }
-];
 const RAG_STRATEGY_OPTIONS = [
   {
     value: "llm_tool_orchestrator" as const,
@@ -200,8 +199,7 @@ function readInitialModel(): string {
   if (typeof window === "undefined") {
     return DEFAULT_MODEL;
   }
-  const saved = window.localStorage.getItem(MODEL_STORAGE_KEY);
-  return MODEL_OPTIONS.some((option) => option.value === saved) ? saved ?? DEFAULT_MODEL : DEFAULT_MODEL;
+  return resolveSavedChatModel(window.localStorage.getItem(MODEL_STORAGE_KEY));
 }
 
 function ChatSidebar({
@@ -469,6 +467,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const modelOptions = buildChatModelOptions();
   const routeSessionParam = mode === "temporary" ? params.temporaryChatId : params.chatSessionId;
   const hasRouteSessionParam = routeSessionParam !== undefined;
   const routeSessionId = parseId(routeSessionParam);
@@ -794,10 +793,13 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         {chatHistory.isError ? <p className="notice">Chat history could not be loaded.</p> : null}
         <div className="composer-shell">
           <MessageInput
+            externalDataWarning={
+              isNvidiaModelKey(selectedModel) ? NVIDIA_EXTERNAL_DATA_WARNING : null
+            }
             disabled={Boolean(inputDisabledReason) || currentUser.isLoading || currentUser.isError}
             disabledReason={inputDisabledReason}
             isSending={isSending}
-            modelOptions={MODEL_OPTIONS}
+            modelOptions={modelOptions}
             onChange={setQuestion}
             onModelChange={changeModel}
             onStrategyChange={setSelectedStrategy}
