@@ -9,7 +9,9 @@ MAX_MARKER_DIGITS = 6
 
 
 class CitationBuildError(RuntimeError):
-    pass
+    def __init__(self, detail_code: str = "citation_parse_invalid") -> None:
+        super().__init__("citation_build_failed")
+        self.detail_code = detail_code
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,7 @@ def parse_generation_output(content: str) -> ParsedGenerationOutput:
     for match in MARKER_RE.finditer(answer_text):
         raw_marker = match.group(1)
         if len(raw_marker) > MAX_MARKER_DIGITS:
-            raise CitationBuildError("citation_build_failed")
+            raise CitationBuildError("citation_parse_invalid")
         markers.append(
             CitationMarker(
                 local_citation_id=int(raw_marker),
@@ -68,35 +70,35 @@ def validate_generation_citations(
     source_map: list[CitationSource],
 ) -> list[CitationSource]:
     if not parsed.markers:
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_marker_missing")
     if not MARKER_RE.sub("", parsed.answer_text).strip():
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_parse_invalid")
 
     if any(local_id < 1 for local_id in parsed.unique_marker_ids):
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_index_out_of_range")
 
     source_by_local_id = {}
     for source in source_map:
         if source.local_citation_id < 1:
-            raise CitationBuildError("citation_build_failed")
+            raise CitationBuildError("citation_source_unmapped")
         if source.local_citation_id in source_by_local_id:
-            raise CitationBuildError("citation_build_failed")
+            raise CitationBuildError("citation_source_unmapped")
         source_by_local_id[source.local_citation_id] = source
     if not source_by_local_id:
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_source_missing")
 
     # Reject markers whose id exceeds the number of provided context items. Valid
     # markers must fall within [1, N] where N == len(source_map). A marker id greater
     # than max_local_id can only be a hallucinated/out-of-bounds citation.
     max_local_id = max(source_by_local_id)
     if any(local_id > max_local_id for local_id in parsed.unique_marker_ids):
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_index_out_of_range")
 
     unknown = [
         local_id for local_id in parsed.unique_marker_ids if local_id not in source_by_local_id
     ]
     if unknown:
-        raise CitationBuildError("citation_build_failed")
+        raise CitationBuildError("citation_source_unmapped")
 
     return [source_by_local_id[local_id] for local_id in parsed.unique_marker_ids]
 

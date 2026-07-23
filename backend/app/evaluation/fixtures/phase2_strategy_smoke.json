@@ -2,12 +2,13 @@
   "schema_version": "phase2.evaluation_dataset.v1",
   "dataset": {
     "dataset_name": "phase2_strategy_smoke",
-    "description": "Small deterministic dataset for Phase2 strategy metric schema smoke tests.",
+    "description": "Small deterministic retrieval-only dataset for Phase2 strategy metric schema smoke tests; it does not measure generated-answer quality.",
     "version": "v1",
     "source_type": "fixture",
     "status": "active",
     "metadata_json": {
       "owner": "phase2",
+      "evaluation_scope": "retrieval",
       "context_included": false
     }
   },

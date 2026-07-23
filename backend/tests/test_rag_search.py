@@ -96,6 +96,7 @@ def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], _StaticVec
         rerank_provider="fake",
         rerank_top_n_default=1,
         rerank_top_n_max=5,
+        generation_provider="fake",
         qdrant_collection_name="document_chunks",
         search_snippet_max_chars=32,
     )
@@ -104,6 +105,7 @@ def rag_client() -> Iterator[tuple[TestClient, sessionmaker[Session], _StaticVec
         embedding_adapter=FakeEmbeddingAdapter(dimension=4),
         vector_client=vector_client,
         reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
     )
 
     def override_db() -> Iterator[Session]:
@@ -207,6 +209,7 @@ def test_sparse_query_normalization_and_score_order_are_deterministic() -> None:
 
     assert normalized.terms == ("alpha", "secondary", "sql_123", "beta")
     assert normalized.search_text == "alpha secondary sql_123 beta"
+    assert normalized.tsquery_text == "alpha | secondary | sql_123 | beta"
 
     ranked = normalize_sparse_scores([(2, 2.0), (1, 2.0), (3, 1.0), (4, 0.0)])
     assert [(candidate.document_chunk_id, candidate.rank_order) for candidate in ranked] == [

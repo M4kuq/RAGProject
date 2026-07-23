@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { HumanCalibrationPanel } from "../../../components/admin/HumanCalibrationPanel";
 import {
+  EvaluationMetricOverview,
+  metricDefinitionMap
+} from "../../../components/admin/EvaluationMetricOverview";
+import {
   compareMetricNames,
   HelpTooltip,
   MetricHelp,
@@ -23,6 +27,7 @@ import type {
   EvaluationMetricCatalog,
   EvaluationMetricResult,
   EvaluationDataset,
+  EvaluationScope,
   StrategyComparisonMetric
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, formatSafeText, truncateText } from "../../../lib/format";
@@ -31,6 +36,7 @@ export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
   const metricCatalog = useEvaluationMetricCatalog();
+  const metricDefinitions = metricDefinitionMap(metricCatalog.data);
   const datasets = useActiveEvaluationDatasets();
   const createDataset = useCreateEvaluationDataset();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
@@ -86,14 +92,73 @@ export function EvaluationDetailPage() {
         </button>
       </header>
 
+      <section className="admin-section evaluation-trust-overview" aria-labelledby="evaluation-trust-title">
+        <div className="section-title-row">
+          <div>
+            <h2 id="evaluation-trust-title">評価の信頼性</h2>
+            <p className="section-help">処理の完了と回答品質を分けて確認してください。</p>
+          </div>
+          <span className="evaluation-scope-pill">品質: {formatQualityStatus(run.data.quality_status)}</span>
+        </div>
+        <div className="key-metric-grid">
+          <article className="key-metric-card">
+            <h3>処理完了</h3>
+            <strong>{run.data.status === "succeeded" ? "完了" : "処理中または失敗"}</strong>
+            <p>runnerの状態です。品質合格とは別です。</p>
+          </article>
+          <article className="key-metric-card">
+            <h3>回答または正しい拒否</h3>
+            <strong>{run.data.answered_count + run.data.abstained_count}/{run.data.case_count}</strong>
+            <span className="key-metric-badge">暫定</span>
+            <p>拒否の正しさはjudgeと手動校正で確定します。</p>
+          </article>
+          <article className="key-metric-card">
+            <h3>judge済み</h3>
+            <strong>{run.data.judged_count}/{run.data.answered_count + run.data.abstained_count}</strong>
+            <p>coverage {formatPercent(run.data.judge_coverage)}</p>
+          </article>
+          <article className="key-metric-card">
+            <h3>手動校正済み</h3>
+            <strong>{run.data.reviewed_count}/{run.data.answered_count + run.data.abstained_count}</strong>
+            <p>coverage {formatPercent(run.data.review_coverage)}</p>
+          </article>
+          <article className="key-metric-card">
+            <div className="key-metric-card-header">
+              <h3>主要指標</h3>
+              <span className="key-metric-badge">重要</span>
+              {run.data.grounded_answer_pass_rate_calibrated === null ? (
+                <span className="key-metric-badge">暫定</span>
+              ) : null}
+            </div>
+            <strong>
+              {formatPercent(
+                run.data.grounded_answer_pass_rate_calibrated ??
+                  run.data.grounded_answer_pass_rate_provisional
+              )}
+            </strong>
+            <p>全件の手動校正前は正式値をN/Aとして扱います。</p>
+          </article>
+        </div>
+        {sameModelJudgeBias(run.data.generation_models, run.data.requested_generation_model) ? (
+          <InlineAlert tone="info">
+            回答生成とjudgeに同じqwen3.5-9bを使っています。自己評価バイアスがあるため、
+            正式な判断には手動校正済み指標を使用してください。
+          </InlineAlert>
+        ) : null}
+      </section>
+
       <section className="admin-section">
-        <h2>状態</h2>
+        <h2>実行結果</h2>
         <dl className="detail-grid">
           <div>
-            <dt>状態</dt>
+            <dt>処理状態</dt>
             <dd>
-              <StatusBadge status={run.data.status} />
+              {run.data.status === "succeeded" ? "処理完了" : <StatusBadge status={run.data.status} />}
             </dd>
+          </div>
+          <div>
+            <dt>評価スコープ</dt>
+            <dd>{formatEvaluationScope(run.data.evaluation_scope)}</dd>
           </div>
           <div>
             <dt>ケース</dt>
@@ -177,49 +242,19 @@ export function EvaluationDetailPage() {
             <dd>{run.data.error_code ?? formatSafeText(run.data.error_message, 120)}</dd>
           </div>
         </dl>
+        <p className="section-help">
+          実行状態の「成功」はジョブが完了したことを示し、回答品質の合格を意味しません。
+        </p>
       </section>
 
-      <HumanCalibrationPanel
-        datasetName={run.data.dataset_name}
-        evaluationRunId={run.data.evaluation_run_id}
+      <EvaluationMetricOverview
+        catalog={metricCatalog.data}
+        evaluationScope={run.data.evaluation_scope}
+        metrics={run.data.metric_summary}
+        provisional={run.data.review_coverage !== 1}
       />
 
-      <section className="admin-section">
-        <h2>指標サマリー</h2>
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>metric</th>
-              <th>平均</th>
-            </tr>
-          </thead>
-          <tbody>
-            {groupMetricsByCategory(
-              Object.entries(run.data.metric_summary),
-              metricCatalog.data,
-              ([name]) => name
-            )
-              .flatMap((group) => group.items.map((item) => ({ group, item })))
-              .map(({ group, item: [name, value] }) => (
-              <tr key={name}>
-                <td>
-                  <span className="metric-category-badge">{group.label}</span>
-                  <span className="metric-name-cell">
-                    {name}
-                    <MetricHelp metricName={name} />
-                  </span>
-                </td>
-                <td>{value.toFixed(3)}</td>
-              </tr>
-            ))}
-            {Object.keys(run.data.metric_summary).length === 0 ? (
-              <tr>
-                <td colSpan={2}>まだ metric はありません。</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
+      <HumanCalibrationPanel evaluationRunId={run.data.evaluation_run_id} />
 
       <section className="admin-section">
         <h2>strategy 比較</h2>
@@ -251,7 +286,10 @@ export function EvaluationDetailPage() {
                 <td>
                   <span className="metric-name-cell">
                     {metric.metric_name}
-                    <MetricHelp metricName={metric.metric_name} />
+                    <MetricHelp
+                      definition={metricDefinitions.get(metric.metric_name)}
+                      metricName={metric.metric_name}
+                    />
                   </span>
                 </td>
                 <td>{formatScore(metric.average)}</td>
@@ -320,7 +358,7 @@ export function EvaluationDetailPage() {
               <dt>
                 <span className="metric-name-cell">
                   {name}
-                  <MetricHelp metricName={name} />
+                  <MetricHelp definition={metricDefinitions.get(name)} metricName={name} />
                 </span>
               </dt>
               <dd>{value}</dd>
@@ -514,7 +552,7 @@ export function EvaluationDetailPage() {
             <tr>
               <th>case</th>
               <th>strategy</th>
-              <th>状態</th>
+              <th>実行状態</th>
               <th>provider</th>
               <th>model</th>
               <th>
@@ -678,6 +716,42 @@ function failureTypePriority(failureType: string): number {
   return priority[failureType] ?? 100;
 }
 
+function formatPercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "N/A" : (value * 100).toFixed(1) + "%";
+}
+
+function formatQualityStatus(status: string): string {
+  const labels: Record<string, string> = {
+    not_applicable: "対象外",
+    pending: "判定待ち",
+    partial: "一部判定",
+    calibration_required: "手動校正待ち",
+    passed: "合格",
+    failed: "不合格"
+  };
+  return labels[status] ?? status;
+}
+
+function sameModelJudgeBias(
+  models: string[] | undefined,
+  requestedModel: string | null | undefined
+): boolean {
+  return [...(models ?? []), requestedModel ?? ""].some((model) =>
+    model.toLowerCase().includes("qwen3.5-9b")
+  );
+}
+
+function formatEvaluationScope(scope: EvaluationScope) {
+  if (scope === "end_to_end") {
+    return "検索＋回答";
+  }
+  if (scope === "answer") {
+    return "回答のみ";
+  }
+  return "検索のみ";
+}
+
+
 function formatMetricDetails(
   metrics: EvaluationMetricResult[],
   catalog: EvaluationMetricCatalog | undefined
@@ -686,6 +760,7 @@ function formatMetricDetails(
   if (!safeMetrics.length) {
     return "-";
   }
+  const definitions = metricDefinitionMap(catalog);
   const groups = groupMetricsByCategory(safeMetrics, catalog, (metric) => metric.metric_name);
   return (
     <span className="metric-detail-list">
@@ -703,7 +778,10 @@ function formatMetricDetails(
                   {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
                   {label}
                 </span>
-                <MetricHelp metricName={metric.metric_name} />
+                <MetricHelp
+                  definition={definitions.get(metric.metric_name)}
+                  metricName={metric.metric_name}
+                />
               </span>
             );
           })}

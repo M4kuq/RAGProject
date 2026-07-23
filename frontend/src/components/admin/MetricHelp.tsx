@@ -1,5 +1,6 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { EvaluationMetricCatalogItem } from "../../features/evaluations/evaluationTypes";
 
 type MetricDefinition = {
   description: string;
@@ -17,6 +18,11 @@ type TooltipPosition = {
   left: number;
   placement: "bottom" | "top";
   top: number;
+};
+
+type MetricHelpProps = {
+  definition?: EvaluationMetricCatalogItem;
+  metricName: string;
 };
 
 const TOOLTIP_OFFSET = 8;
@@ -122,8 +128,9 @@ const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
 
 const METRIC_PRIORITY = [
   "answer_completeness",
-  "faithfulness",
+  "claim_faithfulness",
   "groundedness",
+  "faithfulness",
   "citation_presence",
   "citation_correctness",
   "citation_coverage",
@@ -158,11 +165,16 @@ export function orderedMetricEntries<T>(entries: Array<[string, T]>): Array<[str
   return [...entries].sort(([left], [right]) => compareMetricNames(left, right));
 }
 
-export function MetricHelp({ metricName }: { metricName: string }) {
-  const definition = METRIC_DEFINITIONS[metricName] ?? {
-    description: "この評価 run に記録された metric です。",
-    direction: "解釈は metric の定義に依存します。"
-  };
+export function MetricHelp({ definition: catalogDefinition, metricName }: MetricHelpProps) {
+  const definition = catalogDefinition
+    ? {
+        description: catalogDefinition.plain_language_summary,
+        direction: catalogMetricDirection(catalogDefinition)
+      }
+    : (METRIC_DEFINITIONS[metricName] ?? {
+        description: "この評価 run に記録された metric です。",
+        direction: "解釈は metric の定義に依存します。"
+      });
 
   return (
     <HelpTooltip
@@ -172,6 +184,15 @@ export function MetricHelp({ metricName }: { metricName: string }) {
       title={metricName}
     />
   );
+}
+
+function catalogMetricDirection(definition: EvaluationMetricCatalogItem) {
+  const direction = definition.higher_is_better
+    ? "高いほど良好です。"
+    : "低いほど良好です。";
+  return definition.importance === "diagnostic"
+    ? `${direction} 診断用の参考値です。`
+    : direction;
 }
 
 export function HelpTooltip({ ariaLabel, description, direction, title }: HelpTooltipProps) {

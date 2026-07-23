@@ -181,6 +181,16 @@ class McpServiceAdapter:
             ),
             "error_code": result.error_code,
         }
+        if getattr(result, "answer_outcome", None) == "abstained":
+            data.update(
+                {
+                    "status": "failed",
+                    "answer": "",
+                    "citations": [],
+                    "confidence": None,
+                    "error_code": "no_context_found",
+                }
+            )
         if payload.strategy == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value:
             data["auto_strategy_summary"] = _safe_auto_strategy_summary(
                 data.get("retrieval_score_summary"),

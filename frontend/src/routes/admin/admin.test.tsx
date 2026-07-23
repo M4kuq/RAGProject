@@ -22,6 +22,7 @@ function evaluationRunSummary(evaluationRunId: number, datasetName: string) {
     dataset_name: datasetName,
     strategy_type: "dense",
     strategies: ["dense"],
+    evaluation_scope: "retrieval",
     metric_names: ["recall_at_k", "p95_latency"],
     trigger_type: "manual",
     status: "succeeded",
@@ -147,52 +148,72 @@ function evaluationMetricCatalogPayload() {
   return {
     schema_version: "phase3.evaluation_metric_taxonomy.v1",
     metrics: [
+      metricCatalogItem("recall_at_k", "retrieval", "検索再現率", 0, ["retrieval"]),
+      metricCatalogItem("mrr", "retrieval", "平均逆順位", 1, ["retrieval"]),
+      metricCatalogItem("context_precision", "retrieval", "文脈適合率", 2, ["retrieval"]),
+      metricCatalogItem(
+        "claim_faithfulness",
+        "answer",
+        "Claim Faithfulness",
+        4,
+        ["answer", "end_to_end"]
+      ),
+      metricCatalogItem(
+        "answer_completeness",
+        "answer",
+        "回答完全性",
+        5,
+        ["answer", "end_to_end"]
+      ),
       {
-        metric_name: "recall_at_k",
-        category: "retrieval",
-        display_name: "Recall at K",
-        description: "Retrieval recall.",
-        higher_is_better: true,
-        value_unit: "ratio",
-        alias_of: null
+        ...metricCatalogItem(
+          "faithfulness",
+          "answer",
+          "期待回答シグナル一致率（旧Faithfulness）",
+          6
+        ),
+        importance: "diagnostic"
       },
+      metricCatalogItem("citation_presence", "citation", "引用の有無", 8),
+      metricCatalogItem(
+        "citation_correctness",
+        "citation",
+        "引用正確性",
+        7,
+        ["answer", "end_to_end"]
+      ),
       {
-        metric_name: "mrr",
-        category: "retrieval",
-        display_name: "MRR",
-        description: "Mean reciprocal rank.",
-        higher_is_better: true,
-        value_unit: "ratio",
-        alias_of: null
-      },
-      {
-        metric_name: "faithfulness",
-        category: "answer",
-        display_name: "Faithfulness",
-        description: "Answer-only faithfulness.",
-        higher_is_better: true,
-        value_unit: "ratio",
-        alias_of: null
-      },
-      {
-        metric_name: "citation_presence",
-        category: "citation",
-        display_name: "Citation presence",
-        description: "Citation presence.",
-        higher_is_better: true,
-        value_unit: "ratio",
-        alias_of: null
-      },
-      {
-        metric_name: "p95_latency",
-        category: "performance",
-        display_name: "P95 latency",
-        description: "P95 latency.",
+        ...metricCatalogItem("p95_latency", "performance", "遅いケースの応答時間", 19),
         higher_is_better: false,
-        value_unit: "ms",
-        alias_of: null
+        value_unit: "ms"
       }
     ]
+  };
+}
+
+function metricCatalogItem(
+  metricName: string,
+  category: string,
+  displayName: string,
+  displayPriority: number,
+  primaryScopes: string[] = []
+) {
+  const answerMetric = category === "answer" || category === "citation";
+  return {
+    metric_name: metricName,
+    category,
+    display_name: displayName,
+    description: `${displayName}の説明です。`,
+    plain_language_summary: `${displayName}を平易に説明します。`,
+    higher_is_better: true,
+    value_unit: "ratio",
+    alias_of: null,
+    importance: primaryScopes.length ? "primary" : "secondary",
+    applicable_scopes: answerMetric
+      ? ["answer", "end_to_end"]
+      : ["retrieval", "end_to_end"],
+    primary_scopes: primaryScopes,
+    display_priority: displayPriority
   };
 }
 
@@ -395,6 +416,17 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
+      if (url.includes("/api/v1/evaluations/generation/readiness")) {
+        return jsonResponse({
+          data: {
+            generation_provider: "lmstudio",
+            requested_model: "qwen3.5-9b",
+            resolved_model: "qwen/qwen3.5-9b",
+            ready: true,
+            reason_code: "ready"
+          }
+        });
+      }
       if (url.includes("/api/v1/evaluations/runs")) {
         return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
       }
@@ -414,6 +446,66 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
 
   expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "評価を実行" })).toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: "回答生成まで（推奨）" })).toBeChecked();
+  expect(screen.getByRole("combobox", { name: "生成 provider" })).toHaveValue("lmstudio");
+  expect(screen.getByRole("textbox", { name: "生成 model" })).toHaveValue("qwen3.5-9b");
+  expect(screen.queryByRole("option", { name: "fake" })).not.toBeInTheDocument();
+  expect(await screen.findByText("LM Studio接続確認済み: qwen/qwen3.5-9b")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeEnabled();
+});
+
+test("evaluation create form blocks an unloaded LM Studio model", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/generation/readiness")) {
+        return jsonResponse({
+          data: {
+            generation_provider: "lmstudio",
+            requested_model: "qwen3.5-9b",
+            resolved_model: "qwen/qwen3.5-9b",
+            ready: false,
+            reason_code: "model_not_loaded"
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(
+    await screen.findByText(
+      "指定したモデルがロードされていません。LM Studioでロードしてから再実行してください。"
+    )
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeDisabled();
 });
 
 test("evaluation create form submits requested generation provider and model", async () => {
@@ -431,7 +523,7 @@ test("evaluation create form submits requested generation provider and model", a
       }
       if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
         createPayloads.push(JSON.parse(String(init.body)));
-        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } }, 202);
+        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"], evaluation_scope: "end_to_end" } }, 202);
       }
       if (url.includes("/api/v1/evaluations/runs")) {
         return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
@@ -457,18 +549,19 @@ test("evaluation create form submits requested generation provider and model", a
   fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
     target: { value: "gpt-4.1-mini" }
   });
-  fireEvent.click(screen.getByRole("checkbox", { name: "llm_tool_orchestrator" }));
   fireEvent.click(screen.getByRole("button", { name: "評価を実行" }));
 
   await waitFor(() => expect(createPayloads).toHaveLength(1));
   expect(createPayloads[0]).toMatchObject({
+    top_k: 5,
+    evaluation_scope: "end_to_end",
     generation_provider: "openai",
     generation_model: "gpt-4.1-mini"
   });
   expect(JSON.stringify(createPayloads[0]).toLowerCase()).not.toContain("api_key");
 });
 
-test("evaluation create form blocks generation selection without answer strategy", async () => {
+test("evaluation create form can switch to retrieval-only mode", async () => {
   const createPayloads: Array<Record<string, unknown>> = [];
   vi.stubGlobal(
     "fetch",
@@ -483,7 +576,7 @@ test("evaluation create form blocks generation selection without answer strategy
       }
       if (url.endsWith("/api/v1/evaluations/runs") && init?.method === "POST") {
         createPayloads.push(JSON.parse(String(init.body)));
-        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"] } }, 202);
+        return jsonResponse({ data: { evaluation_run_id: 42, job_id: 142, status: "queued", strategies: ["dense"], evaluation_scope: "retrieval" } }, 202);
       }
       if (url.includes("/api/v1/evaluations/runs")) {
         return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
@@ -503,15 +596,20 @@ test("evaluation create form blocks generation selection without answer strategy
   );
 
   expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
-  fireEvent.change(screen.getByRole("textbox", { name: "生成 model" }), {
-    target: { value: "gpt-4.1-mini" }
-  });
+  fireEvent.click(screen.getByRole("radio", { name: "検索のみ（原因分析用）" }));
 
-  expect(
-    screen.getByText(/provider\/model 比較には llm_tool_orchestrator/)
-  ).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "評価を実行" })).toBeDisabled();
-  expect(createPayloads).toHaveLength(0);
+  expect(screen.getByRole("combobox", { name: "生成 provider" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "生成 model" })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "llm_tool_orchestrator" })).toBeDisabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "評価を実行" }));
+  await waitFor(() => expect(createPayloads).toHaveLength(1));
+  expect(createPayloads[0]).toMatchObject({
+    evaluation_scope: "retrieval",
+    strategies: ["dense"]
+  });
+  expect(createPayloads[0]).not.toHaveProperty("generation_provider");
+  expect(createPayloads[0]).not.toHaveProperty("generation_model");
 });
 
 test("evaluation list opens comparison for two selected runs", async () => {
@@ -552,6 +650,7 @@ test("evaluation list opens comparison for two selected runs", async () => {
   );
 
   expect(await screen.findByRole("heading", { name: "評価" })).toBeInTheDocument();
+  expect((await screen.findAllByText("検索のみ")).length).toBeGreaterThan(0);
   fireEvent.click(await screen.findByLabelText("比較対象 run #10 を選択"));
   fireEvent.click(await screen.findByLabelText("比較対象 run #11 を選択"));
   fireEvent.click(screen.getByRole("button", { name: "比較" }));
@@ -605,14 +704,14 @@ test("evaluation comparison page shows direction colors and lower-is-better hint
   const metricTable = await screen.findByRole("table", { name: "metric 差分" });
   const p95Row = within(metricTable).getByText("p95_latency").closest("tr");
   expect(p95Row).toHaveClass("comparison-direction-improved");
-  expect(within(p95Row as HTMLElement).getByText("改善")).toBeInTheDocument();
-  expect(within(p95Row as HTMLElement).getByText("性能")).toBeInTheDocument();
+  expect(within(p95Row as HTMLElement).getByText(/改善/)).toBeInTheDocument();
+  expect(within(metricTable).getByText("性能")).toBeInTheDocument();
   expect(within(p95Row as HTMLElement).getByText("低いほど良い")).toBeInTheDocument();
 
   const recallRow = within(metricTable).getByText("recall_at_k").closest("tr");
   expect(recallRow).toHaveClass("comparison-direction-regressed");
-  expect(within(recallRow as HTMLElement).getByText("悪化")).toBeInTheDocument();
-  expect(within(recallRow as HTMLElement).getByText("検索品質")).toBeInTheDocument();
+  expect(within(recallRow as HTMLElement).getByText(/悪化/)).toBeInTheDocument();
+  expect(within(metricTable).getByText("検索品質")).toBeInTheDocument();
 
   const caseTable = screen.getByRole("table", { name: "case 差分" });
   const regressedCaseRow = within(caseTable).getByText("shared_pass").closest("tr");
@@ -799,6 +898,7 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
             strategy_type: "agentic_router",
             strategies: ["agentic_router"],
             metric_names: ["no_context_rate"],
+            evaluation_scope: "retrieval",
             trigger_type: "manual",
             status: "succeeded",
             case_count: 1,
@@ -958,6 +1058,10 @@ test("evaluation detail promotes fixture failures to selected dataset with backe
   );
 
   expect(await screen.findByRole("heading", { name: "評価 #77" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /まず見る3項目/ })).toBeInTheDocument();
+  expect(screen.getAllByText("重要")).toHaveLength(4);
+  expect(screen.getAllByText("75.0%").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("未評価（結果なし）")).toHaveLength(2);
   expect(screen.getAllByRole("button", { name: "recall_at_k の説明" }).length).toBeGreaterThan(1);
   expect(screen.getAllByText("$0.123456").length).toBeGreaterThan(0);
   expect(screen.getAllByText("fake-rag-answer").length).toBeGreaterThan(0);
@@ -1056,6 +1160,7 @@ test("evaluation detail can create a target dataset and promote selected failure
             strategy_type: "hybrid",
             strategies: ["hybrid"],
             metric_names: ["no_context_rate"],
+            evaluation_scope: "retrieval",
             trigger_type: "manual",
             status: "succeeded",
             case_count: 1,

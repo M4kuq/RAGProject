@@ -755,7 +755,11 @@ class EvaluationDataset(Base, TimestampMixin):
     __tablename__ = "evaluation_datasets"
     __table_args__ = (
         ForeignKeyConstraint(["created_by"], ["users.user_id"], ondelete="RESTRICT"),
-        UniqueConstraint("dataset_name", name="uq_evaluation_datasets_name"),
+        UniqueConstraint(
+            "dataset_name",
+            "version",
+            name="uq_evaluation_datasets_name_version",
+        ),
         CheckConstraint(
             "source_type IN ('manual', 'fixture', 'feedback_promoted', 'imported')",
             name="ck_evaluation_datasets_source_type",
@@ -763,6 +767,18 @@ class EvaluationDataset(Base, TimestampMixin):
         CheckConstraint(
             "status IN ('active', 'archived')",
             name="ck_evaluation_datasets_status",
+        ),
+        CheckConstraint(
+            "corpus_mode IN ('shared_legacy', 'isolated')",
+            name="ck_evaluation_datasets_corpus_mode",
+        ),
+        CheckConstraint(
+            "corpus_status IN ('shared_legacy', 'not_prepared', 'preparing', 'ready', 'failed')",
+            name="ck_evaluation_datasets_corpus_status",
+        ),
+        pg_check(
+            "content_fingerprint IS NULL OR content_fingerprint ~ '^[0-9a-f]{64}$'",
+            "ck_evaluation_datasets_content_fingerprint",
         ),
         pg_check("btrim(dataset_name) <> ''", "ck_evaluation_datasets_name_not_empty"),
         pg_check("btrim(version) <> ''", "ck_evaluation_datasets_version_not_empty"),
@@ -781,6 +797,29 @@ class EvaluationDataset(Base, TimestampMixin):
         String(30), server_default=text("'active'"), default="active", nullable=False
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    manifest_schema_version: Mapped[str] = mapped_column(
+        String(64),
+        server_default=text("'phase2.evaluation_dataset.v1'"),
+        default="phase2.evaluation_dataset.v1",
+        nullable=False,
+    )
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    corpus_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    corpus_mode: Mapped[str] = mapped_column(
+        String(30),
+        server_default=text("'shared_legacy'"),
+        default="shared_legacy",
+        nullable=False,
+    )
+    corpus_status: Mapped[str] = mapped_column(
+        String(30),
+        server_default=text("'shared_legacy'"),
+        default="shared_legacy",
+        nullable=False,
+    )
+    corpus_failure_code: Mapped[str | None] = mapped_column(String(100))
+    corpus_prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    readiness_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[int | None] = mapped_column(big_int())
 
 
@@ -882,6 +921,7 @@ class EvaluationRun(Base, TimestampMixin):
     )
     retrieval_settings_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     strategy_metrics_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    corpus_fingerprint: Mapped[str | None] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -905,6 +945,12 @@ class EvaluationRunItem(Base, TimestampMixin):
         CheckConstraint(
             "status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')",
             name="ck_evaluation_run_items_status",
+        ),
+        CheckConstraint(
+            "answer_outcome IS NULL OR answer_outcome IN "
+            "('answered', 'abstained', 'no_context', 'citation_error', "
+            "'generation_error', 'retrieval_error')",
+            name="ck_evaluation_run_items_answer_outcome",
         ),
         CheckConstraint(
             "(faithfulness_score IS NULL OR "
@@ -950,6 +996,7 @@ class EvaluationRunItem(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(30), server_default=text("'queued'"), default="queued", nullable=False
     )
+    answer_outcome: Mapped[str | None] = mapped_column(String(30))
     faithfulness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     groundedness_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     citation_coverage: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
@@ -964,6 +1011,7 @@ class EvaluationRunItem(Base, TimestampMixin):
     latency_breakdown_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     metric_summary_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
     error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
 
 

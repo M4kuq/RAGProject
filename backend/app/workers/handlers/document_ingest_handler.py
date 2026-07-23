@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -251,7 +251,7 @@ class DocumentIngestHandler:
                 mime_type=version.mime_type,
                 file_size_bytes=version.file_size_bytes,
                 content_hash=version.content_hash,
-                is_active=version.is_active,
+                is_active=(version.is_active or _evaluation_activation_requested(context.payload)),
                 storage_key=version.storage_key,
                 metadata_json=version.metadata_json,
                 status=version.status,
@@ -558,6 +558,13 @@ class DocumentIngestHandler:
             if stored_count != expected_chunk_count:
                 raise RuntimeError("chunk count mismatch during ready update")
             self.repository.mark_version_ready(db, version=version, updated_at=_now())
+            if _evaluation_activation_requested(context.payload):
+                self.repository.set_active_version(
+                    db,
+                    logical_document_id=version.logical_document_id,
+                    version=version,
+                    updated_at=_now(),
+                )
             if graph_indexing_enabled(db):
                 self.job_repository.create_job(
                     db,
@@ -736,6 +743,12 @@ def _failed(error_code: str) -> JobHandlerResult:
 
 def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _evaluation_activation_requested(payload: Mapping[str, object]) -> bool:
+    return payload.get("evaluation_corpus_activate") is True and _is_positive_int(
+        payload.get("evaluation_dataset_id")
+    )
 
 
 def _now() -> datetime:

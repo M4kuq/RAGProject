@@ -309,6 +309,7 @@ def test_openai_generator_categorizes_transport_errors(
 def test_factory_supports_cloud_provider_overrides() -> None:
     settings = Settings(
         _env_file=None,
+        app_env="test",
         generation_provider="fake",
         openai_api_key="test-openai-key",
         anthropic_api_key="test-anthropic-key",

@@ -26,6 +26,10 @@ class NormalizedSparseQuery:
     def search_text(self) -> str:
         return " ".join(self.terms)
 
+    @property
+    def tsquery_text(self) -> str:
+        return " | ".join(self.terms)
+
 
 class SparseRetrievalStrategy:
     def __init__(self, repository: SparseRetrievalRepository | None = None) -> None:

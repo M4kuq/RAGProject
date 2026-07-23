@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.core.config import Settings
 from app.rag.generation import (
     FakeAnswerGenerator,
@@ -11,8 +13,21 @@ from app.rag.generation import (
     OpenAICompatibleChatAnswerGenerator,
     TokenUsage,
     _openai_input,
+    check_lmstudio_model_readiness,
     create_answer_generator,
 )
+
+
+def test_generation_defaults_to_lmstudio_qwen_9b() -> None:
+    settings = Settings(app_env="test")
+
+    assert settings.generation_provider == "lmstudio"
+    assert settings.generation_model_name == "qwen3.5-9b"
+
+
+def test_fake_generation_provider_is_test_only() -> None:
+    with pytest.raises(ValueError, match="GENERATION_PROVIDER must be"):
+        Settings(app_env="local", generation_provider="fake")
 
 
 def test_openai_input_lists_actual_noncontiguous_marker_ids() -> None:
@@ -113,7 +128,7 @@ class LegitimateWillResponse:
         }
 
 
-def test_lmstudio_generator_uses_openai_compatible_chat_api(monkeypatch) -> None:
+def test_lmstudio_generator_uses_native_chat_api(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_post(url: str, **kwargs: object) -> DummyResponse:
@@ -143,22 +158,25 @@ def test_lmstudio_generator_uses_openai_compatible_chat_api(monkeypatch) -> None
         )
     )
 
-    assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
+    assert captured["url"] == "http://host.docker.internal:1234/api/v1/chat"
     payload = captured["json"]
     assert isinstance(payload, dict)
     assert payload["model"] == "qwen3.5-9b"
-    assert payload["enable_thinking"] is False
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["max_tokens"] == 8192
-    messages = payload["messages"]
-    assert isinstance(messages, list)
-    assert "/no_think" in messages[0]["content"]
-    assert messages[1]["content"].startswith("/no_think\n")
-    assert "Citation [1]" in messages[1]["content"]
-    assert "Return the final answer only." in messages[1]["content"]
-    assert "If one or more shown citations directly support the answer" in messages[1]["content"]
-    assert "Use the insufficient-evidence sentence only when none" in messages[1]["content"]
-    assert "十分な根拠がありません" in messages[1]["content"]
+    assert payload["max_output_tokens"] == 8192
+    assert "reasoning" not in payload
+    assert payload["stream"] is False
+    assert payload["store"] is False
+    system_prompt = payload["system_prompt"]
+    input_text = payload["input"]
+    assert isinstance(system_prompt, str)
+    assert isinstance(input_text, str)
+    assert "/no_think" in system_prompt
+    assert input_text.startswith("/no_think\n")
+    assert "Citation [1]" in input_text
+    assert "Return the final answer only." in input_text
+    assert "If one or more shown citations directly support the answer" in input_text
+    assert "Use the insufficient-evidence sentence only when none" in input_text
+    assert "十分な根拠がありません" in input_text
     assert result.content == "Phase1 は Qdrant をベクトル検索に使用しています [1]。"
     assert result.usage == TokenUsage(input_tokens=41, output_tokens=17, total_tokens=58)
 
@@ -173,6 +191,74 @@ def test_create_answer_generator_supports_lmstudio() -> None:
     generator = create_answer_generator(settings)
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
+    assert generator.model_name == "qwen/qwen3.5-9b"
+
+
+def test_lmstudio_model_readiness_resolves_default_native_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {
+                        "key": "qwen/qwen3.5-9b",
+                        "loaded_instances": [{"id": "qwen/qwen3.5-9b"}],
+                    }
+                ]
+            }
+
+    def fake_get(url: str, **kwargs: object) -> Response:
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.get", fake_get)
+    result = check_lmstudio_model_readiness(
+        Settings(
+            _env_file=None,
+            lmstudio_base_url="http://host.docker.internal:1234/v1",
+        ),
+        "qwen3.5-9b",
+    )
+
+    assert result.ready is True
+    assert result.requested_model == "qwen3.5-9b"
+    assert result.resolved_model == "qwen/qwen3.5-9b"
+    assert result.reason_code == "ready"
+    assert captured["url"] == "http://host.docker.internal:1234/api/v1/models"
+    assert "lm-studio" in str(captured["headers"])
+
+
+def test_lmstudio_model_readiness_reports_unloaded_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {
+                        "key": "qwen/qwen3.5-9b",
+                        "loaded_instances": [],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("app.rag.generation.httpx.get", lambda *args, **kwargs: Response())
+    result = check_lmstudio_model_readiness(
+        Settings(_env_file=None),
+        "qwen3.5:9b",
+    )
+
+    assert result.ready is False
+    assert result.resolved_model == "qwen/qwen3.5-9b"
+    assert result.reason_code == "model_not_loaded"
 
 
 def test_create_answer_generator_uses_ollama_generation_timeout() -> None:

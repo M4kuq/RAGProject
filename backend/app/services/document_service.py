@@ -148,6 +148,8 @@ class DocumentService:
         content_type: str | None,
         content: bytes,
         request_id: str | None,
+        activate_after_ingest: bool = False,
+        evaluation_dataset_id: int | None = None,
     ) -> DocumentUploadResponse:
         settings = get_settings()
         upload = validate_upload(
@@ -187,7 +189,14 @@ class DocumentService:
                 content=content,
             )
             storage_saved = True
-            job = self._create_ingest_job(db, user=user, document=document, version=version)
+            job = self._create_ingest_job(
+                db,
+                user=user,
+                document=document,
+                version=version,
+                activate_after_ingest=activate_after_ingest,
+                evaluation_dataset_id=evaluation_dataset_id,
+            )
             audit(
                 db,
                 action="document.uploaded",
@@ -786,17 +795,31 @@ class DocumentService:
         user: User,
         document: LogicalDocument,
         version: DocumentVersion,
+        activate_after_ingest: bool = False,
+        evaluation_dataset_id: int | None = None,
     ) -> Job:
+        payload: dict[str, object] = {
+            "logical_document_id": document.logical_document_id,
+            "document_version_id": version.document_version_id,
+            "requested_by_user_id": user.user_id,
+        }
+        if activate_after_ingest:
+            if evaluation_dataset_id is None or evaluation_dataset_id < 1:
+                raise ValueError(
+                    "evaluation_dataset_id is required for evaluation corpus activation"
+                )
+            payload.update(
+                {
+                    "evaluation_corpus_activate": True,
+                    "evaluation_dataset_id": evaluation_dataset_id,
+                }
+            )
         return self.job_repository.create_job(
             db,
             job_type="document_ingest",
             target_type="document_version",
             target_id=version.document_version_id,
-            payload_json={
-                "logical_document_id": document.logical_document_id,
-                "document_version_id": version.document_version_id,
-                "requested_by_user_id": user.user_id,
-            },
+            payload_json=payload,
             created_by=user.user_id,
         )
 
