@@ -163,7 +163,7 @@ def test_lmstudio_generator_uses_native_chat_api(monkeypatch) -> None:
     assert isinstance(payload, dict)
     assert payload["model"] == "qwen3.5-9b"
     assert payload["max_output_tokens"] == 8192
-    assert payload["reasoning"] == "off"
+    assert "reasoning" not in payload
     assert payload["stream"] is False
     assert payload["store"] is False
     system_prompt = payload["system_prompt"]

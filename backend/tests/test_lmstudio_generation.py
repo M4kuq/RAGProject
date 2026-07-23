@@ -66,7 +66,7 @@ def test_lmstudio_generator_calls_native_chat_api(
     assert captured["json"]["input"].startswith("/no_think\n")
     assert "/no_think" in captured["json"]["system_prompt"]
     assert captured["json"]["max_output_tokens"] == 8192
-    assert captured["json"]["reasoning"] == "off"
+    assert "reasoning" not in captured["json"]
     assert captured["json"]["stream"] is False
     assert captured["json"]["store"] is False
 

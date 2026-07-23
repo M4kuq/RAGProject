@@ -308,7 +308,6 @@ class OpenAICompatibleChatAnswerGenerator:
                 "system_prompt": _system_instructions(request),
                 "max_output_tokens": _max_output_tokens(self.max_output_tokens),
                 "temperature": request.temperature if request.temperature is not None else 0.2,
-                "reasoning": "off",
                 "stream": False,
                 "store": False,
             }
