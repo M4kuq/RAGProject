@@ -1,5 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { metricDefinitionMap } from "../../../components/admin/EvaluationMetricOverview";
 import {
   HelpTooltip,
   MetricHelp,
@@ -13,11 +14,13 @@ import {
   useCreateEvaluationRun,
   useEvaluationCorpusReadiness,
   useEvaluationDatasets,
+  useEvaluationMetricCatalog,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
 import type {
   EvaluationCacheMode,
   EvaluationGenerationProvider,
+  EvaluationMetricCatalogItem,
   EvaluationScope,
   EvaluationRunnableStrategy
 } from "../../../features/evaluations/evaluationTypes";
@@ -64,6 +67,8 @@ export function EvaluationListPage() {
   );
   const runs = useEvaluationRuns(params);
   const datasets = useEvaluationDatasets({ page: 1, page_size: 50 });
+  const metricCatalog = useEvaluationMetricCatalog();
+  const metricDefinitions = metricDefinitionMap(metricCatalog.data);
   const selectedDataset = useMemo(
     () =>
       datasets.data?.items.find(
@@ -422,7 +427,7 @@ export function EvaluationListPage() {
                     成功 {run.succeeded_count}/{run.case_count}
                     {run.failed_count ? ` / 失敗 ${run.failed_count}` : ""}
                   </td>
-                  <td>{formatMetricSummary(run.metric_summary)}</td>
+                  <td>{formatMetricSummary(run.metric_summary, metricDefinitions)}</td>
                   <td>{formatCost(run.total_estimated_cost_usd)}</td>
                   <td>{run.job_id ? <Link to={`/admin/jobs/${run.job_id}`}>#{run.job_id}</Link> : "-"}</td>
                   <td>{formatDate(run.started_at)}</td>
@@ -487,7 +492,10 @@ function formatEvaluationScope(scope: EvaluationScope) {
 }
 
 
-function formatMetricSummary(summary: Record<string, number>) {
+function formatMetricSummary(
+  summary: Record<string, number>,
+  definitions: Map<string, EvaluationMetricCatalogItem>
+) {
   const entries = orderedMetricEntries(Object.entries(summary));
   if (!entries.length) {
     return "-";
@@ -497,7 +505,7 @@ function formatMetricSummary(summary: Record<string, number>) {
       {entries.map(([name, value]) => (
         <span className="metric-detail-item" key={name}>
           <span>{name}: {value.toFixed(2)}</span>
-          <MetricHelp metricName={name} />
+          <MetricHelp definition={definitions.get(name)} metricName={name} />
         </span>
       ))}
     </span>

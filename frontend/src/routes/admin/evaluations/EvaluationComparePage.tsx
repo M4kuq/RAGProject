@@ -127,7 +127,10 @@ export function EvaluationComparePage() {
                                 ★
                               </span>
                             ) : null}
-                            <MetricHelp metricName={metric.metric_name} />
+                            <MetricHelp
+                              definition={definition}
+                              metricName={metric.metric_name}
+                            />
                           </span>
                           <code className="metric-raw-name">{metric.metric_name}</code>
                         </td>

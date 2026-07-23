@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { HumanCalibrationPanel } from "../../../components/admin/HumanCalibrationPanel";
-import { EvaluationMetricOverview } from "../../../components/admin/EvaluationMetricOverview";
+import {
+  EvaluationMetricOverview,
+  metricDefinitionMap
+} from "../../../components/admin/EvaluationMetricOverview";
 import {
   compareMetricNames,
   HelpTooltip,
@@ -33,6 +36,7 @@ export function EvaluationDetailPage() {
   const evaluationRunId = Number(useParams().evaluationRunId);
   const run = useEvaluationRunDetail(evaluationRunId);
   const metricCatalog = useEvaluationMetricCatalog();
+  const metricDefinitions = metricDefinitionMap(metricCatalog.data);
   const datasets = useActiveEvaluationDatasets();
   const createDataset = useCreateEvaluationDataset();
   const promoteFailures = usePromoteEvaluationFailures(evaluationRunId);
@@ -282,7 +286,10 @@ export function EvaluationDetailPage() {
                 <td>
                   <span className="metric-name-cell">
                     {metric.metric_name}
-                    <MetricHelp metricName={metric.metric_name} />
+                    <MetricHelp
+                      definition={metricDefinitions.get(metric.metric_name)}
+                      metricName={metric.metric_name}
+                    />
                   </span>
                 </td>
                 <td>{formatScore(metric.average)}</td>
@@ -351,7 +358,7 @@ export function EvaluationDetailPage() {
               <dt>
                 <span className="metric-name-cell">
                   {name}
-                  <MetricHelp metricName={name} />
+                  <MetricHelp definition={metricDefinitions.get(name)} metricName={name} />
                 </span>
               </dt>
               <dd>{value}</dd>
@@ -753,6 +760,7 @@ function formatMetricDetails(
   if (!safeMetrics.length) {
     return "-";
   }
+  const definitions = metricDefinitionMap(catalog);
   const groups = groupMetricsByCategory(safeMetrics, catalog, (metric) => metric.metric_name);
   return (
     <span className="metric-detail-list">
@@ -770,7 +778,10 @@ function formatMetricDetails(
                   {metric.metric_name}={formatScore(metric.metric_score ?? metric.metric_value)}
                   {label}
                 </span>
-                <MetricHelp metricName={metric.metric_name} />
+                <MetricHelp
+                  definition={definitions.get(metric.metric_name)}
+                  metricName={metric.metric_name}
+                />
               </span>
             );
           })}

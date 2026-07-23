@@ -51,17 +51,16 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
 
     has_answer = bool(inputs.answer_text.strip())
     answer_keyword_hits = _keyword_hits(inputs.answer_text, inputs.case.expected_keywords)
-    answer_hit = _expected_answer_hit(inputs.answer_text, inputs.case)
     expected_answer_slots = _metadata_string_values(
         inputs.case.metadata_json,
         "expected_answer_slots",
     )
     answer_slot_hits = _keyword_hits(inputs.answer_text, expected_answer_slots)
-    expected_signal_count = len(inputs.case.expected_keywords) + (
-        1 if inputs.case.expected_answer and not inputs.case.expected_keywords else 0
-    )
+    expected_signal_count = len(inputs.case.expected_keywords)
     faithfulness = (
-        _ratio(answer_keyword_hits + answer_hit, expected_signal_count) if has_answer else None
+        _ratio(answer_keyword_hits, expected_signal_count)
+        if has_answer and expected_signal_count
+        else None
     )
     answer_completeness = (
         _ratio(answer_slot_hits, len(expected_answer_slots))
@@ -183,11 +182,15 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
                 "evidence_scope": "answer_text_only",
                 "matched_expected_keywords": answer_keyword_hits,
-                "matched_expected_answer": bool(answer_hit),
+                "matched_expected_answer": False,
                 "expected_keyword_count": len(inputs.case.expected_keywords),
                 "expected_signal_count": expected_signal_count,
-                "not_applicable": not has_answer,
-                "reason_code": None if has_answer else "answer_not_generated",
+                "not_applicable": faithfulness is None,
+                "reason_code": (
+                    "answer_not_generated"
+                    if not has_answer
+                    else ("expected_keywords_not_configured" if not expected_signal_count else None)
+                ),
             },
         ),
         MetricValue(

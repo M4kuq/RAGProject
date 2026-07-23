@@ -152,9 +152,9 @@ function evaluationMetricCatalogPayload() {
       metricCatalogItem("mrr", "retrieval", "平均逆順位", 1, ["retrieval"]),
       metricCatalogItem("context_precision", "retrieval", "文脈適合率", 2, ["retrieval"]),
       metricCatalogItem(
-        "faithfulness",
+        "claim_faithfulness",
         "answer",
-        "忠実性",
+        "Claim Faithfulness",
         4,
         ["answer", "end_to_end"]
       ),
@@ -165,6 +165,15 @@ function evaluationMetricCatalogPayload() {
         5,
         ["answer", "end_to_end"]
       ),
+      {
+        ...metricCatalogItem(
+          "faithfulness",
+          "answer",
+          "期待回答シグナル一致率（旧Faithfulness）",
+          6
+        ),
+        importance: "diagnostic"
+      },
       metricCatalogItem("citation_presence", "citation", "引用の有無", 8),
       metricCatalogItem(
         "citation_correctness",

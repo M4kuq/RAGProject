@@ -67,7 +67,7 @@ export function EvaluationMetricOverview({
                     {provisional ? (
                       <span className="key-metric-badge">暫定</span>
                     ) : null}
-                    <MetricHelp metricName={definition.metric_name} />
+                    <MetricHelp definition={definition} metricName={definition.metric_name} />
                   </div>
                   <div className="key-metric-value-row">
                     <div>
@@ -190,7 +190,7 @@ function MetricCategorySection({
                         {isPrimary && provisional ? (
                           <span className="metric-primary-star">暫定</span>
                         ) : null}
-                        <MetricHelp metricName={metricName} />
+                        <MetricHelp definition={definition} metricName={metricName} />
                       </span>
                       {definition ? <code className="metric-raw-name">{metricName}</code> : null}
                     </td>

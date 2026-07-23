@@ -47,7 +47,13 @@ const catalog: EvaluationMetricCatalog = {
     metric("recall_at_k", "retrieval", "検索再現率", 0, ["retrieval"]),
     metric("mrr", "retrieval", "平均逆順位", 1, ["retrieval"]),
     metric("context_precision", "retrieval", "文脈適合率", 2, ["retrieval"]),
-    metric("faithfulness", "answer", "忠実性", 4, ["answer", "end_to_end"]),
+    metric(
+      "claim_faithfulness",
+      "answer",
+      "Claim Faithfulness",
+      4,
+      ["answer", "end_to_end"]
+    ),
     metric(
       "answer_completeness",
       "answer",
@@ -55,6 +61,10 @@ const catalog: EvaluationMetricCatalog = {
       5,
       ["answer", "end_to_end"]
     ),
+    {
+      ...metric("faithfulness", "answer", "期待回答シグナル一致率（旧Faithfulness）", 6),
+      importance: "diagnostic"
+    },
     metric(
       "citation_correctness",
       "citation",
@@ -75,7 +85,7 @@ describe("EvaluationMetricOverview", () => {
       "context_precision"
     ]);
     expect(selectPrimaryMetrics(catalog, "end_to_end").map((item) => item.metric_name)).toEqual([
-      "faithfulness",
+      "claim_faithfulness",
       "answer_completeness",
       "citation_correctness"
     ]);
@@ -87,7 +97,8 @@ describe("EvaluationMetricOverview", () => {
         catalog={catalog}
         evaluationScope="end_to_end"
         metrics={{
-          faithfulness: 0.71,
+          claim_faithfulness: 0.71,
+          faithfulness: 0,
           answer_completeness: 0.64,
           citation_correctness: 0.72,
           citation_presence: 0.8,
@@ -99,7 +110,7 @@ describe("EvaluationMetricOverview", () => {
     expect(screen.getByRole("heading", { name: /まず見る3項目/ })).toBeInTheDocument();
     expect(screen.getByText("評価スコープ: 検索＋回答")).toBeInTheDocument();
     expect(screen.getAllByText("重要")).toHaveLength(3);
-    expect(screen.getAllByText("忠実性").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Claim Faithfulness").length).toBeGreaterThan(1);
     expect(screen.getAllByText("71.0%")).toHaveLength(2);
     expect(screen.getByText(/合否判定ではありません/)).toBeInTheDocument();
 
@@ -116,7 +127,7 @@ describe("EvaluationMetricOverview", () => {
       <EvaluationMetricOverview
         catalog={catalog}
         evaluationScope="end_to_end"
-        metrics={{ faithfulness: 0.71 }}
+        metrics={{ claim_faithfulness: 0.71 }}
       />
     );
 
