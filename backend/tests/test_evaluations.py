@@ -2492,6 +2492,7 @@ def test_evaluation_service_runs_persistent_dataset_cases() -> None:
                 if metric.metric_name == "faithfulness"
             )
             assert faithfulness.metric_score is None
+            assert faithfulness.details is not None
             assert faithfulness.details["reason_code"] == "expected_keywords_not_configured"
     finally:
         engine.dispose()
