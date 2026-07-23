@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 56630)
-Total output lines: 5859
-
 from __future__ import annotations
 
 import hashlib
@@ -517,12 +514,12 @@ def test_evaluation_metric_catalog_api_is_admin_only(
     by_name = {item["metric_name"]: item for item in payload["metrics"]}
     assert by_name["citation_coverage"]["category"] == "citation"
     assert by_name["citation_coverage"]["alias_of"] == "citation_presence"
-    assert by_name["faithfulness"]["display_name"] == "期待回答シグナル一致率（旧Faithfulness）"
+    assert by_name["faithfulness"]["display_name"] == "譛溷ｾ・屓遲斐す繧ｰ繝翫Ν荳閾ｴ邇・ｼ域立Faithfulness・・
     assert by_name["faithfulness"]["importance"] == "diagnostic"
     assert by_name["faithfulness"]["primary_scopes"] == []
-    assert "キーワード未設定時はN/A" in by_name["faithfulness"]["plain_language_summary"]
+    assert "繧ｭ繝ｼ繝ｯ繝ｼ繝画悴險ｭ螳壽凾縺ｯN/A" in by_name["faithfulness"]["plain_language_summary"]
     assert by_name["claim_faithfulness"]["method"] == "local_judge"
-    assert "ローカルLLMによる自動判定" in by_name["claim_faithfulness"]["plain_language_summary"]
+    assert "繝ｭ繝ｼ繧ｫ繝ｫLLM縺ｫ繧医ｋ閾ｪ蜍募愛螳・ in by_name["claim_faithfulness"]["plain_language_summary"]
     assert by_name["recall_at_k"]["plain_language_summary"]
     assert by_name["p95_latency"]["higher_is_better"] is False
     assert by_name["p95_latency"]["value_unit"] == "ms"
@@ -1550,7 +1547,2662 @@ def test_evaluation_run_job_uses_default_generation_selection_when_unspecified()
         generation_model: str | None = None,
     ) -> _FakeEvaluationRagService:
         del settings, db
-  …26630 tokens truncated…ll marker qdrant citation evidence",
+        recorded.append((generation_provider, generation_model))
+        return _FakeEvaluationRagService()
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=1),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=factory, settings=Settings(app_env="test")
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-default-generation",
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+
+        assert result["status"] == "succeeded"
+        assert recorded == [(None, None)]
+        assert detail.requested_generation_provider is None
+        assert detail.requested_generation_model is None
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_rag_service_defers_unavailable_requested_provider_to_generation_failure() -> (
+    None
+):
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="openai",
+                generation_model="gpt-4.1-mini",
+            )
+            with pytest.raises(AnswerGenerationError):
+                service.service.answer_generator.generate(
+                    # The request body is intentionally generic and contains no raw fixture text.
+                    request=cast(Any, object()),
+                )
+            provider_only_service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="openai",
+            )
+            with pytest.raises(AnswerGenerationError):
+                provider_only_service.service.answer_generator.generate(
+                    request=cast(Any, object()),
+                )
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_rag_service_applies_requested_fake_model_to_generation_metadata() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            service = create_evaluation_rag_service(
+                Settings(app_env="test", generation_provider="fake"),
+                db,
+                generation_provider="fake",
+                generation_model="eval-model-a",
+            )
+            metadata = service._generation_metadata(
+                GenerationResult(
+                    content="answer [1]",
+                    usage=TokenUsage(input_tokens=3, output_tokens=2, total_tokens=5),
+                ),
+                latency_ms=9,
+            )
+
+        assert service.service.settings.generation_provider == "fake"
+        assert service.service.settings.generation_model_name == "eval-model-a"
+        assert metadata.provider == "fake"
+        assert metadata.model == "eval-model-a"
+        assert metadata.total_tokens == 5
+        assert metadata.latency_ms == 9
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runner_persists_items_results_and_safe_details() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            assert run.strategy_type == "dense"
+            assert run.strategy_metrics_summary_json is not None
+            items = db.scalars(select(EvaluationRunItem)).all()
+            results = db.scalars(select(EvaluationResult)).all()
+            assert len(items) == 2
+            assert all(item.status == "succeeded" for item in items)
+            assert all(item.strategy_type == "dense" for item in items)
+            assert all(item.metric_summary_json for item in items)
+            assert {result.metric_name for result in results} >= {
+                "faithfulness",
+                "groundedness",
+                "citation_coverage",
+                "strategy_selection_accuracy",
+            }
+            assert all(result.strategy_type == "dense" for result in results)
+            assert all(
+                result.metric_detail_json == result.details_json
+                for result in results
+                if result.metric_name != "case_metadata"
+            )
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert response.case_count == 2
+            assert response.items[0].case_id == "phase1_seed_stack"
+            assert response.items[0].strategy_type == "dense"
+            assert "raw prompt" not in response.model_dump_json().lower()
+            assert "full context" not in response.model_dump_json().lower()
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_persists_generation_usage_cost_latency_and_summary() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _UsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _UsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval-generation-usage",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert len(items) == 2
+            assert items[0].generation_provider == "lmstudio"
+            assert items[0].generation_model == "qwen3.5-9b"
+            assert items[0].input_tokens == 100
+            assert items[0].output_tokens == 50
+            assert items[0].total_tokens == 150
+            assert items[0].estimated_cost_usd == Decimal("0.123456")
+            assert items[0].generation_latency_ms == 40
+            assert items[1].generation_provider == "openai"
+            assert items[1].generation_model == "redacted"
+            assert items[1].input_tokens == 200
+            assert items[1].output_tokens == 25
+            assert items[1].total_tokens == 225
+            assert items[1].estimated_cost_usd == Decimal("0.654321")
+            assert items[1].generation_latency_ms == 80
+
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.total_estimated_cost_usd == 0.777777
+            assert detail.total_input_tokens == 300
+            assert detail.total_output_tokens == 75
+            assert detail.total_tokens == 375
+            assert detail.avg_generation_latency_ms == 60.0
+            assert detail.generation_providers == ["lmstudio", "openai"]
+            assert detail.generation_models == ["qwen3.5-9b", "redacted"]
+            assert detail.items[1].generation_model == "redacted"
+            dumped = detail.model_dump_json()
+            assert "sk-test-secret-token" not in dumped
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_generation_usage_missing_keeps_case_successful_with_nulls() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _MissingUsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=1),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _MissingUsageEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-eval-generation-usage-missing",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            item = db.scalar(select(EvaluationRunItem))
+            assert item is not None
+            assert item.status == "succeeded"
+            assert item.generation_provider == "fake"
+            assert item.generation_model == "unknown-model"
+            assert item.input_tokens is None
+            assert item.output_tokens is None
+            assert item.total_tokens is None
+            assert item.estimated_cost_usd is None
+            assert item.generation_latency_ms is None
+
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.total_estimated_cost_usd is None
+            assert detail.total_input_tokens is None
+            assert detail.total_output_tokens is None
+            assert detail.total_tokens is None
+            assert detail.avg_generation_latency_ms is None
+            assert detail.generation_providers == ["fake"]
+            assert detail.generation_models == ["unknown-model"]
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_generation_metadata_unknown_model_cost_is_null() -> None:
+    service = RagService(
+        settings=Settings(
+            app_env="test",
+            generation_provider="fake",
+            generation_model_name="unknown-model",
+        ),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=_FakeVectorClient(),
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    evaluator = EvaluationRagQuestionService(service)
+
+    metadata = evaluator._generation_metadata(
+        GenerationResult(content="answer", usage=TokenUsage(10, 5, 15)),
+        latency_ms=7,
+    )
+
+    assert metadata.provider == "fake"
+    assert metadata.model == "unknown-model"
+    assert metadata.input_tokens == 10
+    assert metadata.output_tokens == 5
+    assert metadata.total_tokens == 15
+    assert metadata.estimated_cost_usd is None
+    assert metadata.latency_ms == 7
+
+
+def test_evaluation_generation_retries_missing_citation_with_real_generator_contract() -> None:
+    requests: list[GenerationRequest] = []
+    results = iter(
+        [
+            GenerationResult(
+                content="Answer without a marker",
+                usage=TokenUsage(3, 1, 4),
+            ),
+            GenerationResult(
+                content="Answer with evidence [1]",
+                usage=TokenUsage(4, 2, 6),
+            ),
+        ]
+    )
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        return next(results)
+
+    settings = Settings(
+        app_env="test",
+        generation_provider="lmstudio",
+        generation_model_name="qwen3.5-9b",
+    )
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=settings,
+        ),
+    )
+    evaluator = EvaluationRagQuestionService(rag_service)
+
+    generation, metadata = evaluator._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert generation.content == "Answer with evidence [1]"
+    assert generation.usage == TokenUsage(7, 3, 10)
+    assert metadata.input_tokens == 7
+    assert metadata.output_tokens == 3
+    assert metadata.total_tokens == 10
+    assert len(requests) == 2
+    assert requests[1].temperature == 0.0
+    assert requests[1].system_instructions is not None
+    assert "Retry instruction" in requests[1].system_instructions
+
+
+def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_base",
+                items=[
+                    _comparison_item("shared_pass", "succeeded"),
+                    _comparison_item("shared_fail", "failed"),
+                    _comparison_item("base_only", "succeeded"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.8"),
+                    "mrr": Decimal("0.5"),
+                    "no_context_rate": Decimal("0.0"),
+                    "p95_latency": Decimal("200.0"),
+                },
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_candidate",
+                items=[
+                    _comparison_item("shared_pass", "failed"),
+                    _comparison_item("shared_fail", "succeeded"),
+                    _comparison_item("candidate_only", "succeeded"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.7"),
+                    "mrr": Decimal("0.5"),
+                    "no_context_rate": Decimal("0.2"),
+                    "p95_latency": Decimal("100.0"),
+                },
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        metrics = {metric.metric_name: metric for metric in comparison.metrics}
+        assert metrics["recall_at_k"].direction == "regressed"
+        assert metrics["recall_at_k"].delta == pytest.approx(-0.1)
+        assert metrics["p95_latency"].lower_is_better is True
+        assert metrics["p95_latency"].direction == "improved"
+        assert metrics["p95_latency"].delta == pytest.approx(-100.0)
+        assert metrics["no_context_rate"].direction == "regressed"
+        assert metrics["mrr"].direction == "unchanged"
+        assert comparison.summary.improved_metric_count == 1
+        assert comparison.summary.regressed_metric_count == 2
+        assert comparison.summary.unchanged_metric_count == 1
+
+        cases = {case.case_id: case for case in comparison.cases}
+        assert cases["shared_pass"].transition == "regressed"
+        assert cases["shared_fail"].transition == "improved"
+        assert cases["base_only"].transition == "removed"
+        assert cases["candidate_only"].transition == "added"
+        assert cases["shared_pass"].metric_deltas["recall_at_k"] == pytest.approx(-0.1)
+        assert cases["shared_pass"].metric_deltas["p95_latency"] == pytest.approx(-100.0)
+        assert comparison.summary.common_case_count == 2
+        assert comparison.summary.base_only_case_count == 1
+        assert comparison.summary.candidate_only_case_count == 1
+        assert comparison.summary.regressed_case_count == 1
+        assert comparison.summary.improved_case_count == 1
+        serialized = comparison.model_dump_json().lower()
+        assert "raw question" not in serialized
+        assert "raw answer" not in serialized
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_includes_generation_cost_token_latency_deltas() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_generation_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_generation_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+            for item in candidate_generation_items:
+                item.estimated_cost_usd = Decimal("0.200000")
+            db.commit()
+            unchanged_cost_comparison = EvaluationService(
+                settings=Settings(app_env="test")
+            ).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        generation = comparison.generation
+        assert generation.base_estimated_cost_usd == 0.2
+        assert generation.candidate_estimated_cost_usd == 0.1
+        assert generation.cost_delta == pytest.approx(-0.1)
+        assert generation.cost_direction == "improved"
+        assert generation.cost_lower_is_better is True
+        assert generation.tokens_delta == -300
+        assert generation.tokens_direction == "improved"
+        assert generation.tokens_lower_is_better is True
+        assert generation.latency_delta == pytest.approx(-75.0)
+        assert generation.latency_direction == "improved"
+        assert generation.latency_lower_is_better is True
+        assert generation.base_providers == ["openai"]
+        assert generation.base_models == ["gpt-4.1-mini"]
+        assert generation.candidate_providers == ["anthropic"]
+        assert generation.candidate_models == ["claude-3-5-sonnet"]
+        assert unchanged_cost_comparison.generation.cost_delta == 0.0
+        assert unchanged_cost_comparison.generation.cost_direction == "unchanged"
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_generation_deltas_require_matching_snapshot_hashes() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_snapshot_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_snapshot_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+            db.commit()
+
+            matching = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+            _replace_case_hashes_for_item(
+                db,
+                candidate_items[0],
+                question_hash="c" * 64,
+                case_snapshot_hash="d" * 64,
+            )
+            db.commit()
+
+            mismatched = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert matching.generation.cost_delta == pytest.approx(-0.1)
+        assert matching.generation.tokens_delta == -300
+        assert matching.generation.latency_delta == pytest.approx(-75.0)
+        assert mismatched.generation.cost_delta is None
+        assert mismatched.generation.cost_direction == "not_applicable"
+        assert mismatched.generation.tokens_delta is None
+        assert mismatched.generation.tokens_direction == "not_applicable"
+        assert mismatched.generation.latency_delta is None
+        assert mismatched.generation.latency_direction == "not_applicable"
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_generation_deltas_are_not_applicable_when_successful_items_differ() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_coverage_base",
+                items=[
+                    _comparison_item("shared_generation_a", "succeeded"),
+                    _comparison_item("shared_generation_b", "succeeded"),
+                ],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_coverage_candidate",
+                items=[
+                    _comparison_item("shared_generation_a", "succeeded"),
+                    _comparison_item("shared_generation_b", "succeeded"),
+                ],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="openai",
+                model="gpt-4.1-mini",
+                cost=Decimal("0.200000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                cost=Decimal("0.100000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+            base_items[1].status = "failed"
+            base_items[1].error_code = "generation_failed"
+            candidate_items[0].status = "failed"
+            candidate_items[0].error_code = "generation_failed"
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert comparison.generation.base_estimated_cost_usd == 0.2
+        assert comparison.generation.candidate_estimated_cost_usd == 0.1
+        assert comparison.generation.cost_delta is None
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_delta is None
+        assert comparison.generation.tokens_direction == "not_applicable"
+        assert comparison.generation.latency_delta is None
+        assert comparison.generation.latency_direction == "not_applicable"
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_generation_token_latency_deltas_do_not_require_cost() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_unpriced_base",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="generation_unpriced_candidate",
+                items=[_comparison_item("shared_generation_case", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.8")},
+            )
+            base_items = _set_generation_for_run(
+                db,
+                base,
+                provider="fake",
+                model="custom-fake-model",
+                cost=Decimal("0.000000"),
+                total_tokens=1000,
+                latency_ms=250,
+            )
+            candidate_items = _set_generation_for_run(
+                db,
+                candidate,
+                provider="fake",
+                model="custom-fake-model-v2",
+                cost=Decimal("0.000000"),
+                total_tokens=700,
+                latency_ms=175,
+            )
+            for item in [*base_items, *candidate_items]:
+                item.strategy_type = RetrievalStrategy.LLM_TOOL_ORCHESTRATOR.value
+                item.estimated_cost_usd = None
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert comparison.generation.base_estimated_cost_usd is None
+        assert comparison.generation.candidate_estimated_cost_usd is None
+        assert comparison.generation.cost_delta is None
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_delta == -300
+        assert comparison.generation.tokens_direction == "improved"
+        assert comparison.generation.latency_delta == pytest.approx(-75.0)
+        assert comparison.generation.latency_direction == "improved"
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_identical_run_is_unchanged() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            run = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_same",
+                items=[
+                    _comparison_item("same_a", "succeeded"),
+                    _comparison_item("same_b", "failed"),
+                ],
+                metrics={
+                    "recall_at_k": Decimal("0.5"),
+                    "p95_latency": Decimal("120.0"),
+                },
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=run.evaluation_run_id,
+                candidate_run_id=run.evaluation_run_id,
+            )
+
+        assert {metric.direction for metric in comparison.metrics} == {"unchanged"}
+        assert {case.transition for case in comparison.cases} == {"unchanged"}
+        assert comparison.generation.cost_direction == "not_applicable"
+        assert comparison.generation.tokens_direction == "not_applicable"
+        assert comparison.generation.latency_direction == "not_applicable"
+        assert comparison.summary.common_case_count == 2
+        assert comparison.summary.base_only_case_count == 0
+        assert comparison.summary.candidate_only_case_count == 0
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_prefers_safe_case_key_when_metadata_is_missing() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_base_no_metadata",
+                items=[
+                    _comparison_item(
+                        "readable_case_key",
+                        "succeeded",
+                        include_case_metadata=False,
+                    )
+                ],
+                metrics={"recall_at_k": Decimal("1.0")},
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_candidate_no_metadata",
+                items=[
+                    _comparison_item(
+                        "readable_case_key",
+                        "failed",
+                        include_case_metadata=False,
+                    )
+                ],
+                metrics={"recall_at_k": Decimal("0.5")},
+            )
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+
+        assert len(comparison.cases) == 1
+        case = comparison.cases[0]
+        assert case.case_id == "readable_case_key"
+        assert case.question_hash is not None
+        assert case.case_snapshot_hash is not None
+        assert case.transition == "regressed"
+        assert comparison.summary.common_case_count == 1
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_missing_run_raises_not_found() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            run = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="comparison_missing",
+                items=[_comparison_item("existing", "succeeded")],
+                metrics={"recall_at_k": Decimal("0.5")},
+            )
+            db.commit()
+
+            with pytest.raises(ResourceNotFound):
+                EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                    db,
+                    base_run_id=run.evaluation_run_id,
+                    candidate_run_id=999999,
+                )
+    finally:
+        engine.dispose()
+
+
+def test_compare_runs_endpoint_returns_safe_payload(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert user is not None
+        base = _seed_comparison_run(
+            db,
+            created_by=user.user_id,
+            dataset_name="comparison_api_base",
+            items=[_comparison_item("api_case", "succeeded")],
+            metrics={"recall_at_k": Decimal("0.8"), "p95_latency": Decimal("200.0")},
+        )
+        candidate = _seed_comparison_run(
+            db,
+            created_by=user.user_id,
+            dataset_name="comparison_api_candidate",
+            items=[_comparison_item("api_case", "failed")],
+            metrics={"recall_at_k": Decimal("0.7"), "p95_latency": Decimal("100.0")},
+        )
+        db.commit()
+        base_id = base.evaluation_run_id
+        candidate_id = candidate.evaluation_run_id
+
+    _login_as(client, "admin@example.com")
+    response = client.get(
+        f"/api/v1/evaluations/runs/compare?base={base_id}&candidate={candidate_id}",
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["base_run"]["evaluation_run_id"] == base_id
+    assert payload["candidate_run"]["evaluation_run_id"] == candidate_id
+    assert payload["metrics"][0]["metric_name"] in {"p95_latency", "recall_at_k"}
+    serialized = json.dumps(payload).lower()
+    assert "raw question" not in serialized
+    assert "raw answer" not in serialized
+    assert "secret" not in serialized
+
+    missing = client.get(
+        f"/api/v1/evaluations/runs/compare?base={base_id}&candidate=999999",
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing.status_code == 404
+
+
+def test_evaluation_service_runs_persistent_dataset_cases() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="persistent_strategy",
+                    description="Persistent strategy dataset.",
+                    version="v1",
+                    source_type="manual",
+                    metadata_json={"owner": "phase2"},
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="persistent_dense",
+                    question="What vector database is used by the Phase1 RAG stack?",
+                    expected_answer=(
+                        "Qdrant and deterministic fake adapters support "
+                        "citation-aware retrieval traces."
+                    ),
+                    required_citation=True,
+                    tags=["dense"],
+                    metadata_json={"expected_strategy": "dense"},
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    dataset_name="persistent_strategy",
+                    case_limit=1,
+                    strategy_type="dense",
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _FakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-persistent-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            item = db.scalar(select(EvaluationRunItem))
+            assert item is not None
+            assert item.evaluation_case_id is not None
+            assert item.case_key == "persistent_dense"
+            assert item.strategy_type == "dense"
+            assert item.latency_breakdown_json is not None
+            response = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            faithfulness = next(
+                metric
+                for metric in response.items[0].metrics
+                if metric.metric_name == "faithfulness"
+            )
+            assert faithfulness.metric_score is None
+            assert faithfulness.details["reason_code"] == "expected_keywords_not_configured"
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runs_dense_sparse_hybrid_strategy_comparison() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="compare_strategy",
+                    description="Compare dense sparse hybrid.",
+                    version="v1",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="compare_case",
+                    question="Which retrieval strategy finds the target chunk?",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid"],
+                    metrics=[
+                        "recall_at_k",
+                        "mrr",
+                        "citation_coverage",
+                        "groundedness",
+                        "faithfulness",
+                        "no_context_rate",
+                        "p95_latency",
+                    ],
+                    top_k=5,
+                    rerank_top_n=3,
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            assert created.strategies == [
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-strategy-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            assert run.strategy_metrics_summary_json is not None
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == ["dense", "sparse", "hybrid"]
+            assert all(item.retrieval_run_id is not None for item in items)
+            assert run.strategy_metrics_summary_json["case_count"] == 3
+            assert run.strategy_metrics_summary_json["succeeded_count"] == 3
+            retrieval_runs = db.scalars(
+                select(RetrievalRun).order_by(RetrievalRun.retrieval_run_id)
+            ).all()
+            assert [retrieval.strategy_type for retrieval in retrieval_runs] == [
+                "dense",
+                "sparse",
+                "hybrid",
+            ]
+            results = db.scalars(select(EvaluationResult)).all()
+            assert {result.metric_name for result in results} >= {
+                "recall_at_k",
+                "mrr",
+                "citation_coverage",
+                "groundedness",
+                "faithfulness",
+                "no_context_rate",
+                "p95_latency",
+            }
+            assert all(
+                "target chunk" not in json.dumps(result.metric_detail_json).lower()
+                for result in results
+            )
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.strategies == [
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            ]
+            assert detail.case_count == 3
+            assert detail.succeeded_count == 3
+            assert detail.failed_count == 0
+            comparison = service.get_strategy_comparison(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+            )
+            assert {metric.strategy_type for metric in comparison.metrics} >= {
+                RetrievalStrategy.DENSE,
+                RetrievalStrategy.SPARSE,
+                RetrievalStrategy.HYBRID,
+            }
+            dense_recall = next(
+                metric
+                for metric in comparison.metrics
+                if metric.strategy_type == RetrievalStrategy.DENSE
+                and metric.metric_name == "recall_at_k"
+            )
+            assert dense_recall.average == 1.0
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_runs_graph_provider_and_cache_comparison_safely() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="graph_cache_compare",
+                    description="Compare graph providers and cache modes.",
+                    version="v1",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="graph_cache_case",
+                    question="Which graph provider should be compared without raw output?",
+                    expected_keywords=["graph"],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "graph",
+                        "acceptable_strategies": ["graph", "hybrid"],
+                        "expected_entity_labels": ["FastAPI", "PostgreSQL", "Qdrant"],
+                        "expected_relation_types": ["uses", "stores"],
+                        "required_hop_count": 2,
+                    },
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=[
+                        "dense",
+                        "hybrid",
+                        "agentic_router",
+                        "graph",
+                        "graph_postgres",
+                        "graph_neo4j",
+                    ],
+                    cache_modes=["warm", "disabled"],
+                    metrics=[
+                        "recall_at_k",
+                        "citation_coverage",
+                        "faithfulness",
+                        "no_context_rate",
+                        "p95_latency",
+                        "fallback_rate",
+                        "graph_path_relevance",
+                        "graph_citation_coverage",
+                        "multi_hop_answerability",
+                        "cache_hit_rate",
+                        "cache_saved_latency",
+                        "entity_relation_quality_summary",
+                    ],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+            assert "graph_postgres__cache_cold" in created.strategies
+            assert "graph_neo4j__cache_warm" in created.strategies
+            assert "agentic_router" in created.strategies
+            assert not any(
+                strategy.startswith("agentic_router__cache_") for strategy in created.strategies
+            )
+            assert created.strategies.count("graph_postgres__cache_cold") == 1
+            assert created.strategies[:3] == [
+                "dense__cache_disabled",
+                "dense__cache_cold",
+                "dense__cache_warm",
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-graph-cache-eval",
+            )
+            assert result["status"] == "succeeded"
+            assert result["case_count"] == 13
+            assert result["succeeded_count"] == 13
+            assert result["failed_count"] == 0
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _GraphCacheAwareEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            assert run.strategy_metrics_summary_json is not None
+            strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
+            assert "graph_postgres__cache_cold" in strategy_metrics
+            assert "graph_neo4j__cache_warm" in strategy_metrics
+            assert "agentic_summary" in run.strategy_metrics_summary_json
+            assert run.strategy_metrics_summary_json["provider_comparison"]["postgres"]
+            assert run.strategy_metrics_summary_json["provider_comparison"]["neo4j"]
+            assert (
+                "graph_postgres__cache_cold"
+                in run.strategy_metrics_summary_json["provider_comparison"]["postgres"][
+                    "metric_summary_by_label"
+                ]
+            )
+            assert set(run.strategy_metrics_summary_json["cache_comparison"]) == {
+                "disabled",
+                "cold",
+                "warm",
+            }
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.failed_count == 0
+            assert not any(
+                str(candidate.metric_snapshot.get("evaluation_strategy_label", "")).startswith(
+                    "graph_neo4j"
+                )
+                for candidate in detail.failure_candidates
+            )
+            assert {metric.comparison_label for metric in detail.strategy_comparison} >= {
+                "graph_postgres__cache_cold",
+                "graph_neo4j__cache_warm",
+            }
+            graph_relevance = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_cold"
+                and metric.metric_name == "graph_path_relevance"
+            )
+            assert graph_relevance.average == 1.0
+            neo4j_graph_metric = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "graph_path_relevance"
+            )
+            assert neo4j_graph_metric.not_applicable_count == 1
+            neo4j_no_context = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "no_context_rate"
+            )
+            assert neo4j_no_context.average is None
+            assert neo4j_no_context.not_applicable_count == 1
+            neo4j_fallback = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_neo4j__cache_warm"
+                and metric.metric_name == "fallback_rate"
+            )
+            assert neo4j_fallback.average is None
+            assert neo4j_fallback.not_applicable_count == 1
+            cache_hit = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_warm"
+                and metric.metric_name == "cache_hit_rate"
+            )
+            assert cache_hit.average == 1.0
+            cache_saved_latency = next(
+                metric
+                for metric in detail.strategy_comparison
+                if metric.comparison_label == "graph_postgres__cache_warm"
+                and metric.metric_name == "cache_saved_latency"
+            )
+            assert cache_saved_latency.average is not None
+            persisted_details = json.dumps(
+                [result.metric_detail_json for result in db.scalars(select(EvaluationResult)).all()]
+            ).lower()
+            assert "which graph provider" not in persisted_details
+            assert "safe target citation preview" not in persisted_details
+            assert "raw output" not in persisted_details
+            assert "graph_store_provider" in persisted_details
+    finally:
+        engine.dispose()
+
+
+def test_graph_path_relevance_is_not_applicable_without_expected_graph_hints() -> None:
+    metric = _graph_path_relevance_metric(
+        graph_paths=[
+            GraphRetrievalPath(
+                path_json={
+                    "safe_entity_labels": ["FastAPI"],
+                    "relation_types": ["uses"],
+                    "depth": 1,
+                },
+                source_chunk_ids_json=[100],
+            )
+        ],
+        metadata_json={},
+        provider="postgres",
+        reason_codes=[],
+    )
+
+    assert metric.metric_score is None
+    assert metric.metric_label == "not_applicable"
+    assert metric.details["reason_code"] == "graph_relevance_hints_missing"
+
+
+def test_evaluation_cache_modes_skip_non_cacheable_strategy_variants() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="non_cacheable_strategy_modes",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="non_cacheable_modes",
+                    question="Which strategy variants should be cacheable?",
+                    expected_keywords=["strategy"],
+                ),
+            )
+
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "agentic_router", "llm_tool_orchestrator"],
+                    cache_modes=["warm"],
+                    metrics=["cache_hit_rate"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        assert created.strategies == [
+            "dense__cache_cold",
+            "dense__cache_warm",
+            "agentic_router",
+            "llm_tool_orchestrator",
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_graph_path_metrics_only_use_selected_source_chunks() -> None:
+    selected_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["FastAPI"]},
+        source_chunk_ids_json=[100, 101],
+    )
+    unselected_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["Neo4j"]},
+        source_chunk_ids_json=[200],
+    )
+    empty_source_path = GraphRetrievalPath(
+        path_json={"safe_entity_labels": ["Qdrant"]},
+        source_chunk_ids_json=[],
+    )
+
+    filtered = _filter_graph_paths_for_source_chunk_ids(
+        [selected_path, unselected_path, empty_source_path],
+        {101},
+    )
+
+    assert filtered == [selected_path]
+
+
+def test_evaluation_cache_namespace_preserves_eval_suffix_when_long() -> None:
+    suffix = "123456789.case_target_cache_warm"
+    namespace = "retrieval-cache-namespace-" + ("long-segment-" * 8)
+    result = _evaluation_cache_namespace(namespace, suffix)
+
+    assert len(result) <= 80
+    assert result.endswith(f".eval.{suffix}")
+    assert result != f"{namespace}.eval.{suffix}"
+
+
+def test_default_evaluation_cache_namespace_includes_corpus_fingerprint() -> None:
+    original = Settings(
+        app_env="test",
+        retrieval_cache_namespace="rag.retrieval",
+    )
+    service = cast(Any, SimpleNamespace(settings=original))
+
+    with _evaluation_target_settings(
+        service,
+        strategy_type=RetrievalStrategy.HYBRID,
+        graph_store_provider=None,
+        cache_mode="default",
+        evaluation_run_id=41,
+        cache_attempt_id="case-a",
+        corpus_fingerprint="f" * 64,
+    ):
+        assert (
+            service.settings.retrieval_cache_namespace == "rag.retrieval.eval.corpus.ffffffffffff"
+        )
+
+    assert service.settings is original
+
+
+def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
+    candidate = EvaluationFailureCandidate(
+        evaluation_run_id=1,
+        evaluation_run_item_id=2,
+        evaluation_case_id=3,
+        case_key="graph_case",
+        question_hash="a" * 64,
+        strategy_type=RetrievalStrategy.GRAPH,
+        failure_type="graph_path_relevance_low",
+        severity=EvaluationFailureSeverity.MEDIUM,
+        failure_reason_codes=["graph_path_relevance_low"],
+        metric_snapshot={"metric_name": "graph_path_relevance"},
+        recommended_tags=["strategy:graph"],
+        promotion_key="graph-case-key",
+    )
+
+    metadata = _promotion_metadata(
+        candidate,
+        {
+            "expected_strategy": "graph",
+            "acceptable_strategies": ["graph", "hybrid"],
+            "expected_entity_labels": ["FastAPI", "PostgreSQL", "FastAPI"],
+            "expected_relation_types": ["uses", "stores"],
+            "expected_answer_slots": ["PostgreSQL", "Qdrant", "PostgreSQL"],
+            "required_hop_count": 2,
+        },
+    )
+
+    assert metadata["expected_entity_labels"] == ["FastAPI", "PostgreSQL"]
+    assert metadata["expected_relation_types"] == ["uses", "stores"]
+    assert metadata["expected_answer_slots"] == ["PostgreSQL", "Qdrant"]
+    assert metadata["required_hop_count"] == 2
+
+
+def test_failure_reasons_include_low_graph_quality_metrics() -> None:
+    item = EvaluationRunItem(status="succeeded", strategy_type=RetrievalStrategy.GRAPH.value)
+    metric_by_name = {
+        "graph_path_relevance": EvaluationResult(
+            metric_name="graph_path_relevance",
+            metric_score=Decimal("0.5"),
+        ),
+        "graph_citation_coverage": EvaluationResult(
+            metric_name="graph_citation_coverage",
+            metric_score=Decimal("0.0"),
+        ),
+        "multi_hop_answerability": EvaluationResult(
+            metric_name="multi_hop_answerability",
+            metric_score=Decimal("0.0"),
+        ),
+    }
+
+    reasons = _failure_reasons(item, metric_by_name, Settings(app_env="test"))
+
+    assert {
+        (failure_type, tuple(reason_codes)) for failure_type, _severity, reason_codes in reasons
+    } >= {
+        ("low_graph_path_relevance", ("graph_path_relevance_below_threshold",)),
+        ("low_graph_citation_coverage", ("graph_citation_coverage_below_threshold",)),
+        ("low_multi_hop_answerability", ("multi_hop_answerability_below_threshold",)),
+    }
+
+
+def test_evaluation_cache_namespace_isolated_per_case_target() -> None:
+    engine, session_factory = _session_factory()
+    attempts: list[tuple[str, str | None]] = []
+
+    class _RecordingCacheAttemptRagService(_GraphCacheAwareEvaluationRagService):
+        def evaluate_strategy_target(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            target: object,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+            evaluation_run_id: int | None = None,
+            cache_attempt_id: str | None = None,
+        ) -> RagEvaluationResult:
+            attempts.append((_target_cache_mode_value(target), cache_attempt_id))
+            return super().evaluate_strategy_target(
+                db,
+                question=question,
+                request_id=request_id,
+                target=target,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                evaluation_run_id=evaluation_run_id,
+                cache_attempt_id=cache_attempt_id,
+            )
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingCacheAttemptRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="graph_cache_namespace",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            for case_key in ("same_question_a", "same_question_b"):
+                service.create_case(
+                    db,
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    payload=EvaluationCaseCreateRequest(
+                        case_key=case_key,
+                        question="shared graph cache question",
+                        expected_keywords=["graph"],
+                        expected_chunk_ids=[100],
+                        required_citation=True,
+                        metadata_json={
+                            "expected_entity_labels": ["FastAPI"],
+                            "expected_relation_types": ["uses"],
+                        },
+                    ),
+                )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["graph_postgres"],
+                    cache_modes=["warm"],
+                    metrics=["cache_hit_rate", "cache_saved_latency", "p95_latency"],
+                    case_limit=2,
+                ),
+                user=user,
+            )
+            assert created.strategies == [
+                "graph_postgres__cache_cold",
+                "graph_postgres__cache_warm",
+            ]
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingCacheAttemptRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-cache-namespace",
+            )
+            assert result["status"] == "succeeded"
+
+        assert [mode for mode, _ in attempts] == ["cold", "warm", "cold", "warm"]
+        assert attempts[0][1] == attempts[1][1]
+        assert attempts[2][1] == attempts[3][1]
+        assert attempts[0][1] != attempts[2][1]
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_preserves_retrieval_only_runner_for_default_search_targets() -> None:
+    engine, session_factory = _session_factory()
+    calls: list[str] = []
+
+    class _RecordingSearchEvaluationRagService(_StrategyAwareFakeEvaluationRagService):
+        def evaluate_strategy_target(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            target: object,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+            evaluation_run_id: int | None = None,
+            cache_attempt_id: str | None = None,
+        ) -> RagEvaluationResult:
+            del evaluation_run_id, cache_attempt_id
+            calls.append("target")
+            strategy = getattr(target, "retrieval_strategy", RetrievalStrategy.DENSE)
+            if not isinstance(strategy, RetrievalStrategy):
+                strategy = RetrievalStrategy(str(strategy))
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
+        def evaluate_strategy(
+            self,
+            db: Session,
+            *,
+            question: str,
+            request_id: str | None,
+            strategy_type: RetrievalStrategy,
+            top_k: int | None = None,
+            rerank_top_n: int | None = None,
+        ) -> RagEvaluationResult:
+            calls.append("strategy")
+            return self.evaluate_question(
+                db,
+                question=question,
+                request_id=request_id,
+                strategy_type=strategy_type,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingSearchEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="retrieval_only_runner",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="dense_runner",
+                    question="Which runner should dense evaluation use?",
+                    expected_keywords=["dense"],
+                    expected_chunk_ids=[100],
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense"],
+                    metrics=["recall_at_k"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _RecordingSearchEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-retrieval-only-runner",
+            )
+
+        assert result["status"] == "succeeded"
+        assert calls == ["strategy"]
+    finally:
+        engine.dispose()
+
+
+def test_graph_evaluation_targets_use_retrieval_only_runner() -> None:
+    assert RetrievalStrategy.GRAPH in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES
+
+
+def test_evaluation_runner_honors_metric_selection_and_bounds_request_ids() -> None:
+    engine, session_factory = _session_factory()
+    long_case_key = "case_" + ("x" * 115)
+    long_request_id = "request-" + ("r" * 90)
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="custom_metric_strategy",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key=long_case_key,
+                    question="Which retrieval strategy finds the target?",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse"],
+                    metrics=["recall_at_k"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id=long_request_id,
+            )
+            assert result["case_count"] == 2
+            assert result["succeeded_count"] == 2
+
+        with session_factory() as db:
+            detail = EvaluationService(
+                rag_service_factory=lambda settings, db: _StrategyAwareFakeEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            ).get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.case_count == 2
+            assert detail.metric_names == ["recall_at_k"]
+            results = db.scalars(select(EvaluationResult)).all()
+            assert {result.metric_name for result in results} == {"recall_at_k"}
+            retrieval_runs = db.scalars(select(RetrievalRun)).all()
+            assert len(retrieval_runs) == 2
+            assert all(run.request_id is not None for run in retrieval_runs)
+            assert all(len(str(run.request_id)) <= 100 for run in retrieval_runs)
+            assert len({run.request_id for run in retrieval_runs}) == 2
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_service_executes_real_dense_sparse_hybrid_retrieval_paths() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=user.user_id,
+                title="Strategy runner source",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="b" * 64,
+                status="ready",
+                is_active=True,
+                file_name="strategy-runner.md",
+                mime_type="text/markdown",
+                file_size_bytes=100,
+                created_by=user.user_id,
+            )
+            db.add(version)
+            db.flush()
+            chunk = DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=0,
+                chunk_hash=hashlib.sha256(b"alpha target retrieval").hexdigest(),
+                content_text="alpha target retrieval qdrant deterministic citation",
+                modality="text",
+            )
+            db.add(chunk)
+            db.flush()
+
+            service = EvaluationService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    rerank_provider="fake",
+                    sparse_enabled=True,
+                    hybrid_enabled=True,
+                )
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="real_strategy_paths",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="real_paths_case",
+                    question="alpha target retrieval",
+                    expected_keywords=["alpha", "target"],
+                    expected_document_ids=[logical.logical_document_id],
+                    expected_chunk_ids=[chunk.document_chunk_id],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid"],
+                    case_limit=1,
+                    top_k=5,
+                    rerank_top_n=3,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    rerank_provider="fake",
+                    sparse_enabled=True,
+                    hybrid_enabled=True,
+                )
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-real-strategy-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == ["dense", "sparse", "hybrid"]
+            retrieval_runs = db.scalars(
+                select(RetrievalRun).order_by(RetrievalRun.retrieval_run_id)
+            ).all()
+            assert [run.strategy_type for run in retrieval_runs] == [
+                "dense",
+                "sparse",
+                "hybrid",
+            ]
+            assert all(run.query_plan_json for run in retrieval_runs)
+            assert "alpha target retrieval" not in json.dumps(
+                [run.query_plan_json for run in retrieval_runs]
+            )
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_strategy_runner_treats_no_context_as_metric_outcome() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _NoContextStrategyRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="no_context_strategy_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="no_context_case",
+                    question="zzzznevermatchlexical",
+                    expected_keywords=["zzzznevermatchlexical"],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["sparse"],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _NoContextStrategyRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-no-context-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            items = db.scalars(select(EvaluationRunItem)).all()
+            assert len(items) == 1
+            assert items[0].status == "succeeded"
+            assert items[0].error_code is None
+            no_context = db.scalar(
+                select(EvaluationResult).where(
+                    EvaluationResult.evaluation_run_item_id == items[0].evaluation_run_item_id,
+                    EvaluationResult.metric_name == "no_context_rate",
+                )
+            )
+            assert no_context is not None
+            assert no_context.metric_score is not None
+            assert float(no_context.metric_score) == 1.0
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["failed_count"] == 0
+    finally:
+        engine.dispose()
+
+
+def test_agentic_evaluation_metrics_and_failure_promotion_are_idempotent() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_eval_dataset",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_expected_hybrid",
+                    question="hybrid target retrieval",
+                    expected_keywords=["hybrid", "target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "hybrid",
+                        "acceptable_strategies": ["hybrid", "dense"],
+                    },
+                ),
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_missing_context",
+                    question="missing target retrieval",
+                    expected_keywords=["missing"],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "sparse",
+                        "acceptable_strategies": ["sparse", "hybrid"],
+                    },
+                ),
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="agentic_strategy_mismatch",
+                    question="dense target retrieval",
+                    expected_keywords=["target"],
+                    required_citation=True,
+                    metadata_json={
+                        "expected_strategy": "sparse",
+                        "acceptable_strategies": ["sparse", "hybrid"],
+                    },
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=["dense", "sparse", "hybrid", "agentic_router"],
+                    case_limit=3,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _AgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-agentic-eval",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["agentic_summary"]["fallback_rate"] == 1.0
+            assert (
+                run.strategy_metrics_summary_json["agentic_summary"]["budget_exhausted_rate"]
+                == 0.333333
+            )
+            assert (
+                run.strategy_metrics_summary_json["agentic_summary"]["strategy_selection_accuracy"]
+                == 0.5
+            )
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert len(items) == 12
+            assert {item.strategy_type for item in items} == {
+                "dense",
+                "sparse",
+                "hybrid",
+                "agentic_router",
+            }
+            agentic_results = db.scalars(
+                select(EvaluationResult).where(EvaluationResult.strategy_type == "agentic_router")
+            ).all()
+            assert {result.metric_name for result in agentic_results} >= {
+                "strategy_selection_accuracy",
+                "fallback_rate",
+                "budget_exhausted_rate",
+                "sufficiency_score_avg",
+                "retrieval_call_count_avg",
+            }
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert any(
+                metric.strategy_type == "agentic_router" and metric.metric_name == "fallback_rate"
+                for metric in detail.strategy_comparison
+            )
+            assert any(
+                candidate.failure_type == "strategy_selection_incorrect"
+                for candidate in detail.failure_candidates
+            )
+            eligible_candidates = [
+                candidate
+                for candidate in detail.failure_candidates
+                if candidate.severity.value in {"medium", "high"}
+            ]
+            unique_candidate_item_ids = {
+                candidate.evaluation_run_item_id for candidate in eligible_candidates
+            }
+            assert len(eligible_candidates) > len(unique_candidate_item_ids)
+            admin_user = db.scalar(select(User).where(User.email == "admin@example.com"))
+            assert admin_user is not None
+            bulk_target = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_bulk_failure_target",
+                    source_type="manual",
+                ),
+                user=admin_user,
+            )
+            bulk_promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=bulk_target.evaluation_dataset_id,
+                    min_severity="medium",
+                    limit=50,
+                ),
+            )
+            assert bulk_promoted.created_count == len(unique_candidate_item_ids)
+            selected_candidate = next(
+                candidate
+                for candidate in eligible_candidates
+                if candidate.failure_type == "strategy_selection_incorrect"
+            )
+            keyed_target = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="agentic_keyed_failure_target",
+                    source_type="manual",
+                ),
+                user=admin_user,
+            )
+            keyed_promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=keyed_target.evaluation_dataset_id,
+                    promotion_keys=[selected_candidate.promotion_key],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert keyed_promoted.created_count == 1
+            assert keyed_promoted.items[0].promotion_key == selected_candidate.promotion_key
+            assert keyed_promoted.items[0].failure_type == "strategy_selection_incorrect"
+            promoted = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=dataset.evaluation_dataset_id,
+                    failure_types=["strategy_selection_incorrect"],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted.created_count == 1
+            promoted_again = service.promote_failures(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                payload=EvaluationFailurePromotionRequest(
+                    target_dataset_id=dataset.evaluation_dataset_id,
+                    failure_types=["strategy_selection_incorrect"],
+                    min_severity="medium",
+                    limit=10,
+                ),
+            )
+            assert promoted_again.created_count == 0
+            assert promoted_again.skipped_count == 1
+            promoted_case = db.get(EvaluationCaseModel, promoted.items[0].promoted_case_id)
+            assert promoted_case is not None
+            assert promoted_case.metadata_json is not None
+            assert promoted_case.metadata_json["source"] == "failure_promoted"
+            assert promoted_case.metadata_json["expected_strategy"] == "sparse"
+            assert promoted_case.metadata_json["acceptable_strategies"] == [
+                "sparse",
+                "hybrid",
+            ]
+            assert "raw chunk" not in json.dumps(promoted_case.metadata_json).lower()
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_handler_processes_job_and_case_failure() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _PartiallyFailingRagService(),
+                settings=Settings(app_env="test"),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(dataset_name="phase1_smoke", case_limit=2),
+                user=user,
+            )
+
+        handler_service = EvaluationService(
+            rag_service_factory=lambda settings, db: _PartiallyFailingRagService(),
+            settings=Settings(app_env="test"),
+        )
+        handler = EvaluationRunHandler(
+            session_factory=session_factory,
+            service_factory=lambda: handler_service,
+        )
+        result = handler.handle(
+            JobExecutionContext(
+                job_id=10,
+                job_type="evaluation_run",
+                target_type="evaluation_run",
+                target_id=created.evaluation_run_id,
+                payload={"evaluation_run_id": created.evaluation_run_id},
+                worker_instance_id="worker-1",
+            )
+        )
+
+        assert result.status == "succeeded"
+        with session_factory() as db:
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.status == "succeeded"
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.status for item in items] == ["succeeded", "failed"]
+            assert items[1].error_code == "no_context_found"
+            assert items[1].case_key == "phase1_seed_ci"
+            assert items[1].generation_provider is None
+            assert items[1].generation_model is None
+            assert items[1].input_tokens is None
+            assert items[1].output_tokens is None
+            assert items[1].total_tokens is None
+            assert items[1].estimated_cost_usd is None
+            assert items[1].generation_latency_ms is None
+            assert run.strategy_metrics_summary_json is not None
+            dense_summary = run.strategy_metrics_summary_json["strategy_metrics"]["dense"]
+            assert dense_summary["case_count"] == 2
+            assert dense_summary["succeeded_count"] == 1
+            assert dense_summary["failed_count"] == 1
+    finally:
+        engine.dispose()
+
+
+def test_evaluation_runner_compares_tool_langchain_and_langgraph_agentic_strategies() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            service = EvaluationService(settings=Settings(app_env="test"))
+            dataset = service.create_dataset(
+                db,
+                payload=EvaluationDatasetCreateRequest(
+                    dataset_name="tool_agentic_strategy_compare",
+                    source_type="manual",
+                ),
+                user=user,
+            )
+            service.create_case(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+                payload=EvaluationCaseCreateRequest(
+                    case_key="tool_agentic_case",
+                    question="Compare tool agentic retrieval",
+                    expected_keywords=["target"],
+                    expected_document_ids=[10],
+                    expected_chunk_ids=[100],
+                    required_citation=True,
+                ),
+            )
+            created = service.create_run(
+                db,
+                payload=EvaluationRunCreateRequest(
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                    strategies=[
+                        "llm_tool_orchestrator",
+                        "langchain_agentic",
+                        "langgraph_agentic",
+                    ],
+                    case_limit=1,
+                ),
+                user=user,
+            )
+
+        with session_factory() as db:
+            service = EvaluationService(
+                rag_service_factory=lambda settings, db: _ToolAgenticEvaluationRagService(),
+                settings=Settings(app_env="test"),
+            )
+            result = service.run_job(
+                db,
+                evaluation_run_id=created.evaluation_run_id,
+                request_id="test-tool-agentic-compare",
+            )
+            assert result["status"] == "succeeded"
+
+        with session_factory() as db:
+            service = EvaluationService(settings=Settings(app_env="test"))
+            run = db.get(EvaluationRun, created.evaluation_run_id)
+            assert run is not None
+            assert run.strategy_metrics_summary_json is not None
+            assert run.strategy_metrics_summary_json["case_count"] == 3
+            strategy_metrics = run.strategy_metrics_summary_json["strategy_metrics"]
+            assert set(strategy_metrics) >= {
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+                "langgraph_agentic",
+            }
+            assert (
+                strategy_metrics["llm_tool_orchestrator"]["metric_summary"]["fallback_rate"] == 0.0
+            )
+            assert strategy_metrics["langchain_agentic"]["metric_summary"]["fallback_rate"] == 0.0
+            assert strategy_metrics["langgraph_agentic"]["metric_summary"]["fallback_rate"] == 0.0
+            items = db.scalars(
+                select(EvaluationRunItem).order_by(EvaluationRunItem.evaluation_run_item_id)
+            ).all()
+            assert [item.strategy_type for item in items] == [
+                "llm_tool_orchestrator",
+                "langchain_agentic",
+                "langgraph_agentic",
+            ]
+            detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
+            assert detail.strategies == [
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+                RetrievalStrategy.LANGGRAPH_AGENTIC,
+            ]
+            assert {metric.strategy_type for metric in detail.strategy_comparison} >= {
+                RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+                RetrievalStrategy.LANGCHAIN_AGENTIC,
+                RetrievalStrategy.LANGGRAPH_AGENTIC,
+            }
+    finally:
+        engine.dispose()
+
+
+def test_langchain_agentic_evaluation_marks_retrieval_run_failed_on_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session_factory = _session_factory()
+    try:
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+
+        def fail_langchain_retrieval(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            raise RuntimeError("synthetic_langchain_failure")
+
+        monkeypatch.setattr(service, "_retrieve_langchain_agentic", fail_langchain_retrieval)
+        evaluator = EvaluationRagQuestionService(service)
+
+        with session_factory() as db:
+            with pytest.raises(RuntimeError, match="synthetic_langchain_failure"):
+                evaluator.evaluate_question(
+                    db,
+                    question="Compare LangChain failure handling",
+                    request_id="test-langchain-internal-error",
+                    strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+                )
+
+            run = db.scalar(
+                select(RetrievalRun).where(
+                    RetrievalRun.request_id == "test-langchain-internal-error"
+                )
+            )
+            assert run is not None
+            assert run.status == "failed"
+            assert run.error_code == "internal_error"
+            assert run.finished_at is not None
+    finally:
+        engine.dispose()
+
+
+def test_agentic_router_evaluation_uses_graph_service_search() -> None:
+    engine, session_factory = _session_factory()
+
+    class _RecordingGraphSearchService:
+        def __init__(self) -> None:
+            self.strategies: list[str] = []
+
+        def search(
+            self,
+            db: Session,
+            *,
+            payload: Any,
+            request_id: str | None,
+        ) -> RagSearchResponse:
+            query = str(payload.query)
+            strategy_value = str(payload.strategy.value)
+            self.strategies.append(strategy_value)
+            run = _create_fake_retrieval_run(
+                db,
+                question=query,
+                status="succeeded",
+                request_id=request_id,
+                strategy_type=strategy_value,
+                retrieval_score_summary={
+                    "requested_top_k": 5,
+                    "qdrant_candidate_count": 0,
+                    "post_filter_candidate_count": 0,
+                    "selected_count": 0,
+                    "excluded_by_rdb_check_count": 0,
+                },
+            )
+            db.commit()
+            db.refresh(run)
+            return RagSearchResponse(
+                retrieval_run_id=run.retrieval_run_id,
+                status="succeeded",
+                retrieval_score_summary=RetrievalScoreSummary(
+                    requested_top_k=5,
+                    qdrant_candidate_count=0,
+                    post_filter_candidate_count=0,
+                    selected_count=0,
+                    excluded_by_rdb_check_count=0,
+                ),
+                items=[],
+            )
+
+    try:
+        graph_service = _RecordingGraphSearchService()
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+        evaluator = EvaluationRagQuestionService(service, graph_service=cast(Any, graph_service))
+        with session_factory() as db:
+            result = evaluator.answer_question_with_strategy(
+                db,
+                question="agentic graph routing",
+                request_id="test-agentic-graph-routing",
+                strategy_type=RetrievalStrategy.AGENTIC_ROUTER,
+            )
+            run = db.scalar(
+                select(RetrievalRun).where(RetrievalRun.request_id == "test-agentic-graph-routing")
+            )
+
+        assert graph_service.strategies == [RetrievalStrategy.AGENTIC_ROUTER.value]
+        assert result.status == "failed"
+        assert result.error_code == "no_context_found"
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+    finally:
+        engine.dispose()
+
+
+def test_graph_evaluation_uses_graph_service_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine, session_factory = _session_factory()
+
+    class _RecordingGraphSearchService:
+        def __init__(self) -> None:
+            self.strategies: list[str] = []
+
+        def search(
+            self,
+            db: Session,
+            *,
+            payload: Any,
+            request_id: str | None,
+        ) -> RagSearchResponse:
+            query = str(payload.query)
+            strategy_value = str(payload.strategy.value)
+            self.strategies.append(strategy_value)
+            run = _create_fake_retrieval_run(
+                db,
+                question=query,
+                status="succeeded",
+                request_id=request_id,
+                strategy_type=strategy_value,
+            )
+            db.commit()
+            db.refresh(run)
+            return RagSearchResponse(
+                retrieval_run_id=run.retrieval_run_id,
+                status="succeeded",
+                retrieval_score_summary=RetrievalScoreSummary(
+                    requested_top_k=5,
+                    qdrant_candidate_count=0,
+                    post_filter_candidate_count=0,
+                    selected_count=0,
+                    excluded_by_rdb_check_count=0,
+                ),
+                items=[],
+            )
+
+    try:
+        graph_service = _RecordingGraphSearchService()
+        service = RagService(
+            settings=Settings(app_env="test"),
+            embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+            vector_client=_FakeVectorClient(),
+            reranker=FakeRerankerClient(),
+            answer_generator=FakeAnswerGenerator(),
+        )
+
+        def fail_default_search(*args: Any, **kwargs: Any) -> RagSearchResponse:
+            del args, kwargs
+            raise AssertionError("graph evaluation must use GraphRagService search")
+
+        monkeypatch.setattr(service, "search", fail_default_search)
+        evaluator = EvaluationRagQuestionService(service, graph_service=cast(Any, graph_service))
+        with session_factory() as db:
+            result = evaluator.evaluate_strategy(
+                db,
+                question="graph routing",
+                request_id="test-graph-eval-routing",
+                strategy_type=RetrievalStrategy.GRAPH,
+            )
+
+        assert graph_service.strategies == [RetrievalStrategy.GRAPH.value]
+        assert result.status == "succeeded"
+        assert result.answer_text == ""
+        assert result.error_code == "no_context_found"
+    finally:
+        engine.dispose()
+
+
+def test_cached_search_target_uses_retrieval_only_evaluation_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session_factory = _session_factory()
+    search_calls: list[tuple[str, bool, str]] = []
+    service = RagService(
+        settings=Settings(app_env="test"),
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=_FakeVectorClient(),
+        reranker=FakeRerankerClient(),
+        answer_generator=FakeAnswerGenerator(),
+    )
+    evaluator = EvaluationRagQuestionService(service)
+
+    def fail_answer_path(*args: Any, **kwargs: Any) -> RagEvaluationResult:
+        del args, kwargs
+        raise AssertionError("cached search targets must stay on evaluate_strategy")
+
+    def fake_search(
+        db: Session,
+        *,
+        payload: Any,
+        request_id: str | None,
+    ) -> RagSearchResponse:
+        search_calls.append(
+            (
+                str(payload.strategy.value),
+                service.settings.retrieval_cache_enabled,
+                service.settings.retrieval_cache_namespace,
+            )
+        )
+        run = _create_fake_retrieval_run(
+            db,
+            question=str(payload.query),
+            status="succeeded",
+            request_id=request_id,
+            strategy_type=str(payload.strategy.value),
+            cache_summary_json={
+                "schema_version": "phase3.retrieval_cache.v1",
+                "enabled": True,
+                "status": "miss",
+                "reason": "evaluation_cache_mode",
+            },
+        )
+        db.commit()
+        db.refresh(run)
+        return RagSearchResponse(
+            retrieval_run_id=run.retrieval_run_id,
+            status="succeeded",
+            retrieval_score_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=0,
+                post_filter_candidate_count=0,
+                selected_count=0,
+                excluded_by_rdb_check_count=0,
+            ),
+            items=[],
+        )
+
+    monkeypatch.setattr(evaluator, "answer_question_with_strategy", fail_answer_path)
+    monkeypatch.setattr(service, "search", fake_search)
+
+    try:
+        target = SimpleNamespace(
+            retrieval_strategy=RetrievalStrategy.DENSE,
+            graph_store_provider=None,
+            cache_mode="warm",
+        )
+        with session_factory() as db:
+            result = evaluator.evaluate_strategy_target(
+                db,
+                question="cached dense search target",
+                request_id="test-cached-search-target",
+                target=target,
+                evaluation_run_id=42,
+                cache_attempt_id="case-cache",
+            )
+
+        assert result.status == "succeeded"
+        assert result.answer_text == ""
+        assert result.error_code == "no_context_found"
+        assert search_calls == [
+            (
+                RetrievalStrategy.DENSE.value,
+                True,
+                "rag.retrieval.eval.42.case-cache",
+            )
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_langchain_agentic_evaluation_populates_retrieved_items_for_metrics() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            logical = LogicalDocument(
+                owner_user_id=user.user_id,
+                title="LangChain evaluation source",
+                status="active",
+            )
+            db.add(logical)
+            db.flush()
+            version = DocumentVersion(
+                logical_document_id=logical.logical_document_id,
+                version_no=1,
+                content_hash="c" * 64,
+                status="ready",
+                is_active=True,
+                file_name="langchain-eval.md",
+                mime_type="text/markdown",
+                file_size_bytes=100,
+                created_by=user.user_id,
+            )
+            db.add(version)
+            db.flush()
+            chunk = DocumentChunk(
+                document_version_id=version.document_version_id,
+                chunk_index=0,
+                chunk_hash=hashlib.sha256(b"langchain eval recall marker").hexdigest(),
+                content_text="langchain eval recall marker qdrant citation evidence",
+                modality="text",
+            )
+            db.add(chunk)
+            db.flush()
+            logical_document_id = logical.logical_document_id
+            document_chunk_id = chunk.document_chunk_id
+            db.commit()
+
+            service = RagService(
+                settings=Settings(
+                    app_env="test",
+                    embedding_provider="fake",
+                    embedding_fake_dimension=4,
+                    retrieval_top_k_default=1,
+                    retrieval_top_k_max=5,
+                    rerank_provider="fake",
+                    rerank_top_n_default=1,
+                    rerank_top_n_max=5,
+                    qdrant_collection_name="document_chunks",
+                    generation_provider="fake",
+                    langchain_agentic_enabled=True,
+                    sparse_enabled=False,
+                    hybrid_enabled=False,
+                ),
+                embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+                vector_client=_FakeVectorClient(
+                    [
+                        VectorSearchCandidate(
+                            document_chunk_id=document_chunk_id,
+                            retrieval_score=0.91,
+                            qdrant_order=1,
+                            payload={},
+                        )
+                    ]
+                ),
+                reranker=FakeRerankerClient(),
+                answer_generator=FakeAnswerGenerator(),
+            )
+            evaluator = EvaluationRagQuestionService(service)
+
+            result = evaluator.evaluate_question(
+                db,
+                question="langchain eval recall marker",
+                request_id="test-langchain-retrieved-items",
+                strategy_type=RetrievalStrategy.LANGCHAIN_AGENTIC,
+            )
+
+        assert result.status == "succeeded"
+        assert result.retrieved_items == [
+            RetrievedEvaluationItem(
+                document_chunk_id=document_chunk_id,
+                logical_document_id=logical_document_id,
+                rank_order=1,
+                snippet="langchain eval recall marker qdrant citation evidence",
             )
         ]
         metrics = calculate_metrics(

@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 57831)
-Total output lines: 5912
-
 from __future__ import annotations
 
 import hashlib
@@ -488,12 +485,12 @@ EVALUATION_METRIC_ALIAS_BY_NAME: dict[EvaluationMetricName, EvaluationMetricName
 }
 
 EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
-    EvaluationMetricName.RECALL_AT_K: "検索再現率",
-    EvaluationMetricName.MRR: "平均逆順位",
-    EvaluationMetricName.CONTEXT_PRECISION: "文脈適合率",
-    EvaluationMetricName.CITATION_COVERAGE: "引用の有無（互換）",
-    EvaluationMetricName.CITATION_PRESENCE: "引用の有無",
-    EvaluationMetricName.CITATION_CORRECTNESS: "引用正確性",
+    EvaluationMetricName.RECALL_AT_K: "讀懃ｴ｢蜀咲樟邇・,
+    EvaluationMetricName.MRR: "蟷ｳ蝮・・・ｽ・,
+    EvaluationMetricName.CONTEXT_PRECISION: "譁・ц驕ｩ蜷育紫",
+    EvaluationMetricName.CITATION_COVERAGE: "蠑慕畑縺ｮ譛臥┌・井ｺ呈鋤・・,
+    EvaluationMetricName.CITATION_PRESENCE: "蠑慕畑縺ｮ譛臥┌",
+    EvaluationMetricName.CITATION_CORRECTNESS: "蠑慕畑豁｣遒ｺ諤ｧ",
     EvaluationMetricName.GROUNDEDNESS: "Groundedness\uff08\u691c\u7d22\u4fe1\u983c\u5ea6\uff09",
     EvaluationMetricName.FAITHFULNESS: (
         "\u671f\u5f85\u56de\u7b54\u30b7\u30b0\u30ca\u30eb\u4e00\u81f4\u7387"
@@ -502,31 +499,31 @@ EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
     EvaluationMetricName.CLAIM_FAITHFULNESS: (
         "Claim Faithfulness\uff08\u30ed\u30fc\u30ab\u30ebjudge\uff09"
     ),
-    EvaluationMetricName.ANSWER_COMPLETENESS: "回答完全性",
-    EvaluationMetricName.NO_CONTEXT_RATE: "根拠なし率",
-    EvaluationMetricName.P95_LATENCY: "遅いケースの応答時間",
-    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "経路選択精度",
-    EvaluationMetricName.FALLBACK_RATE: "フォールバック率",
-    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索予算超過率",
-    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "根拠充足度",
-    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "平均検索回数",
-    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "グラフ経路適合率",
-    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ引用対応率",
-    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: "複数段階回答可能性",
-    EvaluationMetricName.CACHE_HIT_RATE: "キャッシュ利用率",
-    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュ短縮時間",
-    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: "エンティティ・関係品質集計",
+    EvaluationMetricName.ANSWER_COMPLETENESS: "蝗樒ｭ泌ｮ悟・諤ｧ",
+    EvaluationMetricName.NO_CONTEXT_RATE: "譬ｹ諡縺ｪ縺礼紫",
+    EvaluationMetricName.P95_LATENCY: "驕・＞繧ｱ繝ｼ繧ｹ縺ｮ蠢懃ｭ疲凾髢・,
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "邨瑚ｷｯ驕ｸ謚樒ｲｾ蠎ｦ",
+    EvaluationMetricName.FALLBACK_RATE: "繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ邇・,
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "讀懃ｴ｢莠育ｮ苓ｶ・℃邇・,
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "譬ｹ諡蜈・ｶｳ蠎ｦ",
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "蟷ｳ蝮・､懃ｴ｢蝗樊焚",
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "繧ｰ繝ｩ繝慕ｵ瑚ｷｯ驕ｩ蜷育紫",
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "繧ｰ繝ｩ繝募ｼ慕畑蟇ｾ蠢懃紫",
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: "隍・焚谿ｵ髫主屓遲泌庄閭ｽ諤ｧ",
+    EvaluationMetricName.CACHE_HIT_RATE: "繧ｭ繝｣繝・す繝･蛻ｩ逕ｨ邇・,
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "繧ｭ繝｣繝・す繝･遏ｭ邵ｮ譎る俣",
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: "繧ｨ繝ｳ繝・ぅ繝・ぅ繝ｻ髢｢菫ょ刀雉ｪ髮・ｨ・,
 }
 EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str] = {
-    EvaluationMetricName.RECALL_AT_K: "必要な情報を検索結果の上位で見つけられた割合です。",
-    EvaluationMetricName.MRR: "必要な情報が検索結果のどのくらい上位に出たかを示します。",
+    EvaluationMetricName.RECALL_AT_K: "蠢・ｦ√↑諠・ｱ繧呈､懃ｴ｢邨先棡縺ｮ荳贋ｽ阪〒隕九▽縺代ｉ繧後◆蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.MRR: "蠢・ｦ√↑諠・ｱ縺梧､懃ｴ｢邨先棡縺ｮ縺ｩ縺ｮ縺上ｉ縺・ｸ贋ｽ阪↓蜃ｺ縺溘°繧堤､ｺ縺励∪縺吶・,
     EvaluationMetricName.CONTEXT_PRECISION: (
-        "取得した情報に回答へ関係する内容がどれだけ含まれるかを示します。"
+        "蜿門ｾ励＠縺滓ュ蝣ｱ縺ｫ蝗樒ｭ斐∈髢｢菫ゅ☆繧句・螳ｹ縺後←繧後□縺大性縺ｾ繧後ｋ縺九ｒ遉ｺ縺励∪縺吶・
     ),
-    EvaluationMetricName.CITATION_COVERAGE: "以前の結果と比較するための互換指標です。",
-    EvaluationMetricName.CITATION_PRESENCE: "引用が必要な回答に引用が付いている割合です。",
-    EvaluationMetricName.CITATION_CORRECTNESS: "引用先が期待する根拠と一致している割合です。",
-    EvaluationMetricName.GROUNDEDNESS: "回答が取得した根拠に支えられている度合いです。",
+    EvaluationMetricName.CITATION_COVERAGE: "莉･蜑阪・邨先棡縺ｨ豈碑ｼ・☆繧九◆繧√・莠呈鋤謖・ｨ吶〒縺吶・,
+    EvaluationMetricName.CITATION_PRESENCE: "蠑慕畑縺悟ｿ・ｦ√↑蝗樒ｭ斐↓蠑慕畑縺御ｻ倥＞縺ｦ縺・ｋ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.CITATION_CORRECTNESS: "蠑慕畑蜈医′譛溷ｾ・☆繧区ｹ諡縺ｨ荳閾ｴ縺励※縺・ｋ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.GROUNDEDNESS: "蝗樒ｭ斐′蜿門ｾ励＠縺滓ｹ諡縺ｫ謾ｯ縺医ｉ繧後※縺・ｋ蠎ｦ蜷医＞縺ｧ縺吶・,
     EvaluationMetricName.FAITHFULNESS: (
         "\u65e7\u30c7\u30fc\u30bf\u30bb\u30c3\u30c8\u5411\u3051\u306b\u3001\u56de\u7b54\u3078\u660e\u793a\u7684\u306a"
         "\u671f\u5f85\u30ad\u30fc\u30ef\u30fc\u30c9\u304c\u542b\u307e\u308c\u305f\u5272\u5408\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002"
@@ -537,23 +534,23 @@ EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str
         "\u691c\u7d22\u3067\u5f97\u305f\u6839\u62e0\u306b\u88cf\u4ed8\u3051\u3089\u308c\u305f\u4e3b\u5f35\u306e\u5272\u5408\u3067\u3059\u3002"
         "\u30ed\u30fc\u30ab\u30ebLLM\u306b\u3088\u308b\u81ea\u52d5\u5224\u5b9a\u306e\u305f\u3081\u66ab\u5b9a\u5024\u3067\u3059\u3002"
     ),
-    EvaluationMetricName.ANSWER_COMPLETENESS: "回答に必要な内容がそろっている割合です。",
-    EvaluationMetricName.NO_CONTEXT_RATE: "回答に使える情報を取得できなかったケースの割合です。",
-    EvaluationMetricName.P95_LATENCY: "ほとんどの評価がこの時間以内に完了する目安です。",
-    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "質問に合った検索方法を選べた割合です。",
-    EvaluationMetricName.FALLBACK_RATE: "通常経路で不足し、代替検索を使ったケースの割合です。",
-    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索回数の上限まで使い切ったケースの割合です。",
-    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "取得した情報が回答に十分だったかの平均です。",
-    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "1ケースで検索を呼び出した平均回数です。",
-    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "取得したグラフ経路が期待する関係に合う度合いです。",
-    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ経路を引用可能な根拠へ戻せた割合です。",
+    EvaluationMetricName.ANSWER_COMPLETENESS: "蝗樒ｭ斐↓蠢・ｦ√↑蜀・ｮｹ縺後◎繧阪▲縺ｦ縺・ｋ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.NO_CONTEXT_RATE: "蝗樒ｭ斐↓菴ｿ縺医ｋ諠・ｱ繧貞叙蠕励〒縺阪↑縺九▲縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.P95_LATENCY: "縺ｻ縺ｨ繧薙←縺ｮ隧穂ｾ｡縺後％縺ｮ譎る俣莉･蜀・↓螳御ｺ・☆繧狗岼螳峨〒縺吶・,
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "雉ｪ蝠上↓蜷医▲縺滓､懃ｴ｢譁ｹ豕輔ｒ驕ｸ縺ｹ縺溷牡蜷医〒縺吶・,
+    EvaluationMetricName.FALLBACK_RATE: "騾壼ｸｸ邨瑚ｷｯ縺ｧ荳崎ｶｳ縺励∽ｻ｣譖ｿ讀懃ｴ｢繧剃ｽｿ縺｣縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "讀懃ｴ｢蝗樊焚縺ｮ荳企剞縺ｾ縺ｧ菴ｿ縺・・縺｣縺溘こ繝ｼ繧ｹ縺ｮ蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "蜿門ｾ励＠縺滓ュ蝣ｱ縺悟屓遲斐↓蜊∝・縺縺｣縺溘°縺ｮ蟷ｳ蝮・〒縺吶・,
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "1繧ｱ繝ｼ繧ｹ縺ｧ讀懃ｴ｢繧貞他縺ｳ蜃ｺ縺励◆蟷ｳ蝮・屓謨ｰ縺ｧ縺吶・,
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "蜿門ｾ励＠縺溘げ繝ｩ繝慕ｵ瑚ｷｯ縺梧悄蠕・☆繧矩未菫ゅ↓蜷医≧蠎ｦ蜷医＞縺ｧ縺吶・,
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "繧ｰ繝ｩ繝慕ｵ瑚ｷｯ繧貞ｼ慕畑蜿ｯ閭ｽ縺ｪ譬ｹ諡縺ｸ謌ｻ縺帙◆蜑ｲ蜷医〒縺吶・,
     EvaluationMetricName.MULTI_HOP_ANSWERABILITY: (
-        "複数の関係をたどる質問に必要な経路を取得できた割合です。"
+        "隍・焚縺ｮ髢｢菫ゅｒ縺溘←繧玖ｳｪ蝠上↓蠢・ｦ√↑邨瑚ｷｯ繧貞叙蠕励〒縺阪◆蜑ｲ蜷医〒縺吶・
     ),
-    EvaluationMetricName.CACHE_HIT_RATE: "過去の検索結果を再利用できた割合です。",
-    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュで短縮できた推定時間です。",
+    EvaluationMetricName.CACHE_HIT_RATE: "驕主悉縺ｮ讀懃ｴ｢邨先棡繧貞・蛻ｩ逕ｨ縺ｧ縺阪◆蜑ｲ蜷医〒縺吶・,
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "繧ｭ繝｣繝・す繝･縺ｧ遏ｭ邵ｮ縺ｧ縺阪◆謗ｨ螳壽凾髢薙〒縺吶・,
     EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: (
-        "グラフのエンティティ・関係・経路を安全な集計値で確認します。"
+        "繧ｰ繝ｩ繝輔・繧ｨ繝ｳ繝・ぅ繝・ぅ繝ｻ髢｢菫ゅ・邨瑚ｷｯ繧貞ｮ牙・縺ｪ髮・ｨ亥､縺ｧ遒ｺ隱阪＠縺ｾ縺吶・
     ),
 }
 EVALUATION_METRIC_PRIMARY_SCOPES_BY_NAME: dict[
@@ -1543,7 +1540,2807 @@ class EvaluationService:
                     confidence=1.0,
                     reason_codes=payload.human_reason_codes,
                 )
-                calculated_human_pass = grounded_answer_pass(contract, human_decision…27831 tokens truncated…if _is_cacheable_target(target):
+                calculated_human_pass = grounded_answer_pass(contract, human_decision)
+                if calculated_human_pass != human_pass:
+                    raise ValueError("manual dimensions do not match human_pass")
+            human_record = HumanCalibrationRecord(
+                case_id=contract.case_id,
+                rubric_version=decision.rubric_version,
+                auxiliary_pass=auxiliary_pass,
+                human_pass=human_pass,
+                disagreement_category=payload.disagreement_category,
+                reason_codes=payload.human_reason_codes,
+            )
+        except (ValueError, PydanticValidationError) as exc:
+            raise ValidationFailed(
+                {"manual_calibration": "verdicts do not match the calibration contract"}
+            ) from exc
+
+        now = datetime.now(UTC)
+        self.repository.purge_expired_review_payloads(db, now=now)
+        row = self.repository.upsert_human_calibration(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            case_id=contract.case_id,
+            rubric_version=decision.rubric_version,
+            required_facts_supported=decision.required_facts_supported.value,
+            citation_support=decision.citation_support.value,
+            forbidden_claims_absent=decision.forbidden_claims_absent.value,
+            abstention_correct=decision.abstention_correct.value,
+            prompt_injection_resisted=decision.prompt_injection_resisted.value,
+            human_required_facts_supported=(
+                payload.human_dimensions.required_facts_supported.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_citation_support=(
+                payload.human_dimensions.citation_support.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_forbidden_claims_absent=(
+                payload.human_dimensions.forbidden_claims_absent.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_abstention_correct=(
+                payload.human_dimensions.abstention_correct.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_prompt_injection_resisted=(
+                payload.human_dimensions.prompt_injection_resisted.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            auxiliary_confidence=Decimal(str(decision.confidence)).quantize(Decimal("0.0001")),
+            auxiliary_reason_codes=[code.value for code in decision.reason_codes],
+            auxiliary_pass=human_record.auxiliary_pass,
+            human_pass=human_record.human_pass,
+            disagreement_category=(
+                human_record.disagreement_category.value
+                if human_record.disagreement_category is not None
+                else None
+            ),
+            human_reason_codes=[code.value for code in human_record.reason_codes],
+            reviewed_by=user.user_id,
+            updated_at=now,
+        )
+        audit(
+            db,
+            action="evaluation.human_calibration_saved",
+            actor_user_id=user.user_id,
+            request_id=request_id,
+            target_type="evaluation_human_calibration",
+            target_id=row.evaluation_human_calibration_id,
+            metadata={
+                "evaluation_run_id": evaluation_run_id,
+                "evaluation_run_item_id": evaluation_run_item_id,
+                "case_id": contract.case_id,
+                "auxiliary_pass": human_record.auxiliary_pass,
+                "human_pass": human_record.human_pass,
+                "disagreement_category": row.disagreement_category,
+            },
+        )
+        db.commit()
+        db.refresh(row)
+        return self._human_calibration_response(row)
+
+    def _require_manual_calibration_run(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationRun:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
+        if run is None:
+            raise ResourceNotFound()
+        return run
+
+    @staticmethod
+    def _human_calibration_response(
+        row: EvaluationHumanCalibration,
+    ) -> EvaluationHumanCalibrationResponse:
+        decision = AuxiliaryJudgeDecision(
+            case_id=row.case_id,
+            rubric_version=cast(Literal["phase3.grounded_answer_judge.v1"], row.rubric_version),
+            required_facts_supported=row.required_facts_supported,
+            citation_support=row.citation_support,
+            forbidden_claims_absent=row.forbidden_claims_absent,
+            abstention_correct=row.abstention_correct,
+            prompt_injection_resisted=row.prompt_injection_resisted,
+            confidence=float(row.auxiliary_confidence),
+            reason_codes=row.auxiliary_reason_codes_json,
+        )
+        human_record = HumanCalibrationRecord(
+            case_id=row.case_id,
+            rubric_version=cast(Literal["phase3.grounded_answer_judge.v1"], row.rubric_version),
+            auxiliary_pass=row.auxiliary_pass,
+            human_pass=row.human_pass,
+            disagreement_category=row.disagreement_category,
+            reason_codes=row.human_reason_codes_json,
+        )
+        return EvaluationHumanCalibrationResponse(
+            evaluation_human_calibration_id=row.evaluation_human_calibration_id,
+            evaluation_run_item_id=row.evaluation_run_item_id,
+            auxiliary_decision=decision,
+            human_dimensions=_manual_dimensions_from_row(row),
+            human_calibration=human_record,
+            reviewed_by=row.reviewed_by,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    def compare_runs(
+        self,
+        db: Session,
+        *,
+        base_run_id: int,
+        candidate_run_id: int,
+    ) -> EvaluationRunComparison:
+        base = self._load_run_comparison(db, evaluation_run_id=base_run_id)
+        candidate = (
+            base
+            if base_run_id == candidate_run_id
+            else self._load_run_comparison(db, evaluation_run_id=candidate_run_id)
+        )
+        metrics = _compare_metric_summaries(base.summary, candidate.summary)
+        generation = _compare_generation_summaries(
+            base.summary,
+            candidate.summary,
+            base.items,
+            base.results_by_item,
+            candidate.items,
+            candidate.results_by_item,
+        )
+        cases = _compare_run_cases(
+            base.items,
+            base.results_by_item,
+            candidate.items,
+            candidate.results_by_item,
+        )
+        return EvaluationRunComparison(
+            base_run=base.summary,
+            candidate_run=candidate.summary,
+            generation=generation,
+            metrics=metrics,
+            cases=cases,
+            summary=EvaluationRunComparisonSummary(
+                improved_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "improved"
+                ),
+                regressed_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "regressed"
+                ),
+                unchanged_metric_count=sum(
+                    1 for metric in metrics if metric.direction == "unchanged"
+                ),
+                regressed_case_count=sum(1 for case in cases if case.transition == "regressed"),
+                improved_case_count=sum(1 for case in cases if case.transition == "improved"),
+                common_case_count=sum(
+                    1
+                    for case in cases
+                    if case.base_status is not None and case.candidate_status is not None
+                ),
+                base_only_case_count=sum(1 for case in cases if case.transition == "removed"),
+                candidate_only_case_count=sum(1 for case in cases if case.transition == "added"),
+            ),
+        )
+
+    def get_strategy_comparison(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationStrategyComparisonResponse:
+        detail = self.get_run_detail(db, evaluation_run_id=evaluation_run_id)
+        return EvaluationStrategyComparisonResponse(
+            evaluation_run_id=evaluation_run_id,
+            strategies=detail.strategies,
+            metrics=detail.strategy_comparison,
+        )
+
+    def list_failure_candidates(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> EvaluationFailureCandidatesResponse:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
+        if run is None:
+            raise ResourceNotFound()
+        return EvaluationFailureCandidatesResponse(
+            evaluation_run_id=evaluation_run_id,
+            candidates=self._failure_candidates(db, run=run),
+        )
+
+    def promote_failures(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+        payload: EvaluationFailurePromotionRequest,
+    ) -> EvaluationFailurePromotionResponse:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
+        if run is None:
+            raise ResourceNotFound()
+        target = self.repository.get_dataset(
+            db,
+            evaluation_dataset_id=payload.target_dataset_id,
+        )
+        if target is None:
+            raise ResourceNotFound()
+        if target.status != "active":
+            raise ValidationFailed({"target_dataset_id": "target dataset is archived"})
+
+        selected_types = set(payload.failure_types or [])
+        selected_promotion_keys = set(payload.promotion_keys or [])
+        candidates = [
+            candidate
+            for candidate in self._failure_candidates(db, run=run)
+            if (not selected_promotion_keys or candidate.promotion_key in selected_promotion_keys)
+            and (not selected_types or candidate.failure_type in selected_types)
+            and _severity_rank(candidate.severity) >= _severity_rank(payload.min_severity)
+        ]
+        candidates = _primary_failure_candidates(candidates)
+        limit = min(payload.limit, self.settings.evaluation_failure_max_promotions_per_run)
+        candidates = candidates[:limit]
+        source_cases = self._promotion_source_cases(db, run)
+
+        created_count = 0
+        skipped_count = 0
+        items: list[EvaluationFailurePromotionItem] = []
+        for candidate in candidates:
+            source_case = source_cases.get(candidate.evaluation_run_item_id)
+            if source_case is None:
+                skipped_count += 1
+                items.append(
+                    EvaluationFailurePromotionItem(
+                        promotion_key=candidate.promotion_key,
+                        failure_type=candidate.failure_type,
+                        strategy_type=candidate.strategy_type,
+                        evaluation_run_item_id=candidate.evaluation_run_item_id,
+                        evaluation_case_id=candidate.evaluation_case_id,
+                        result_code="source_case_missing",
+                    )
+                )
+                continue
+
+            if _source_case_changed(source_case, candidate):
+                skipped_count += 1
+                items.append(
+                    EvaluationFailurePromotionItem(
+                        promotion_key=candidate.promotion_key,
+                        failure_type=candidate.failure_type,
+                        strategy_type=candidate.strategy_type,
+                        evaluation_run_item_id=candidate.evaluation_run_item_id,
+                        evaluation_case_id=candidate.evaluation_case_id,
+                        result_code="source_case_changed",
+                    )
+                )
+                continue
+
+            case_key = f"failure_{candidate.promotion_key[:16]}"
+            existing = self.repository.get_case_by_key(
+                db,
+                evaluation_dataset_id=payload.target_dataset_id,
+                case_key=case_key,
+            )
+            if existing is not None:
+                skipped_count += 1
+                items.append(
+                    EvaluationFailurePromotionItem(
+                        promotion_key=candidate.promotion_key,
+                        failure_type=candidate.failure_type,
+                        strategy_type=candidate.strategy_type,
+                        evaluation_run_item_id=candidate.evaluation_run_item_id,
+                        evaluation_case_id=candidate.evaluation_case_id,
+                        promoted_case_id=existing.evaluation_case_id,
+                        case_key=existing.case_key,
+                        result_code="already_exists",
+                    )
+                )
+                continue
+
+            try:
+                with db.begin_nested():
+                    created = self.repository.create_case(
+                        db,
+                        evaluation_dataset_id=payload.target_dataset_id,
+                        case_key=case_key,
+                        question=source_case.question,
+                        expected_answer=source_case.expected_answer,
+                        expected_keywords=source_case.expected_keywords,
+                        expected_document_ids=source_case.expected_document_ids,
+                        expected_chunk_ids=source_case.expected_chunk_ids,
+                        required_citation=source_case.required_citation,
+                        tags=_promotion_tags(source_case.tags, candidate.recommended_tags),
+                        metadata_json=_promotion_metadata(candidate, source_case.metadata_json),
+                        status="active",
+                    )
+            except IntegrityError as exc:
+                existing = self.repository.get_case_by_key(
+                    db,
+                    evaluation_dataset_id=payload.target_dataset_id,
+                    case_key=case_key,
+                )
+                if existing is None:
+                    raise ConflictError("evaluation_case_conflict") from exc
+                skipped_count += 1
+                items.append(
+                    EvaluationFailurePromotionItem(
+                        promotion_key=candidate.promotion_key,
+                        failure_type=candidate.failure_type,
+                        strategy_type=candidate.strategy_type,
+                        evaluation_run_item_id=candidate.evaluation_run_item_id,
+                        evaluation_case_id=candidate.evaluation_case_id,
+                        promoted_case_id=existing.evaluation_case_id,
+                        case_key=existing.case_key,
+                        result_code="already_exists",
+                    )
+                )
+                continue
+            created_count += 1
+            items.append(
+                EvaluationFailurePromotionItem(
+                    promotion_key=candidate.promotion_key,
+                    failure_type=candidate.failure_type,
+                    strategy_type=candidate.strategy_type,
+                    evaluation_run_item_id=candidate.evaluation_run_item_id,
+                    evaluation_case_id=candidate.evaluation_case_id,
+                    promoted_case_id=created.evaluation_case_id,
+                    case_key=created.case_key,
+                    result_code="created",
+                )
+            )
+
+        db.commit()
+        return EvaluationFailurePromotionResponse(
+            evaluation_run_id=evaluation_run_id,
+            target_dataset_id=payload.target_dataset_id,
+            created_count=created_count,
+            skipped_count=skipped_count,
+            items=items,
+        )
+
+    def run_job(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+        request_id: str | None,
+    ) -> dict[str, object]:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id, for_update=True)
+        if run is None:
+            raise EvaluationFixtureError("evaluation_run_not_found")
+        if run.status == "succeeded":
+            return {"status": "succeeded", "evaluation_run_id": evaluation_run_id, "noop": True}
+
+        config = _config(run)
+        now = datetime.now(UTC)
+        self.repository.purge_expired_review_payloads(db, now=now)
+        cache_attempt_id = _evaluation_cache_attempt_id(evaluation_run_id, now)
+        self.repository.mark_run_running(db, run=run, started_at=now)
+        self.repository.delete_items_and_results(db, evaluation_run_id=evaluation_run_id)
+        db.commit()
+
+        try:
+            cases = self._load_cases_for_run(db, run)
+        except EvaluationFixtureError as exc:
+            run = self._require_run(db, evaluation_run_id)
+            self.repository.mark_run_failed(
+                db,
+                run=run,
+                error_code=str(exc),
+                error_message=None,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            raise
+
+        succeeded_count = 0
+        failed_count = 0
+        try:
+            generation_provider = cast(str | None, config["generation_provider"])
+            generation_model = cast(str | None, config["generation_model"])
+            rag_service = self._create_rag_service(
+                db,
+                generation_provider=generation_provider,
+                generation_model=generation_model,
+            )
+            strategy_targets = _strategy_targets_from_config(config)
+            requested_metrics = set(cast(list[str], config["metrics"]))
+            evaluation_scope = cast(EvaluationScope, config["evaluation_scope"])
+            claim_judge = (
+                self.claim_judge_factory(self.settings)
+                if evaluation_scope == "end_to_end"
+                and cast(str | None, config["corpus_fingerprint"]) is not None
+                else None
+            )
+            top_k = cast(int | None, config["top_k"])
+            rerank_top_n = cast(int | None, config["rerank_top_n"])
+            logical_document_ids = cast(list[int], config["logical_document_ids"])
+            corpus_fingerprint = cast(str | None, config["corpus_fingerprint"])
+            latency_baselines: dict[tuple[str, str], int] = {}
+            for loaded_case in cases:
+                for target in strategy_targets:
+                    item = self.repository.create_item(
+                        db,
+                        evaluation_run_id=evaluation_run_id,
+                        status="running",
+                        strategy_type=target.storage_strategy_type,
+                        evaluation_case_id=loaded_case.evaluation_case_id,
+                        case_key=loaded_case.case_key,
+                    )
+                    item_id = item.evaluation_run_item_id
+                    db.commit()
+                    try:
+                        baseline_key = (loaded_case.case_key, target.request_strategy_label)
+                        case_result = self._run_case(
+                            db,
+                            rag_service=rag_service,
+                            case=loaded_case.case,
+                            case_metadata_json=loaded_case.metadata_json,
+                            target=target,
+                            requested_metrics=requested_metrics,
+                            evaluation_scope=evaluation_scope,
+                            request_id=_case_request_id(
+                                request_id,
+                                case_key=loaded_case.case_key,
+                                strategy_type=target.comparison_label,
+                            ),
+                            top_k=top_k,
+                            rerank_top_n=rerank_top_n,
+                            logical_document_ids=logical_document_ids,
+                            corpus_fingerprint=corpus_fingerprint,
+                            evaluation_run_id=evaluation_run_id,
+                            cache_attempt_id=_evaluation_cache_target_id(
+                                cache_attempt_id,
+                                case_key=loaded_case.case_key,
+                                target_label=target.request_strategy_label,
+                            ),
+                            baseline_latency_ms=latency_baselines.get(baseline_key),
+                        )
+                    except Exception:
+                        db.rollback()
+                        failed_count += 1
+                        self._store_case_failure(
+                            db,
+                            item_id=item_id,
+                            case=loaded_case.case,
+                            target=target,
+                            requested_metrics=requested_metrics,
+                        )
+                        db.commit()
+                        continue
+                    if case_result["status"] == "succeeded":
+                        succeeded_count += 1
+                    else:
+                        failed_count += 1
+                    if target.cache_mode == EvaluationCacheMode.COLD and isinstance(
+                        case_result.get("latency_ms"), int
+                    ):
+                        latency_baselines[baseline_key] = cast(int, case_result["latency_ms"])
+                    self._store_case_result(
+                        db,
+                        item=item,
+                        case_result=case_result,
+                        target=target,
+                        claim_judge=claim_judge,
+                    )
+                    db.commit()
+        except Exception:
+            db.rollback()
+            run = self._require_run(db, evaluation_run_id)
+            self.repository.mark_run_failed(
+                db,
+                run=run,
+                error_code="internal_error",
+                error_message=None,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            raise
+
+        run = self._require_run(db, evaluation_run_id)
+        summary = self._summary(db, run)
+        item_count = len(cases) * len(_strategy_targets_from_config(config))
+        failure_candidates = self._failure_candidates(db, run=run)
+        run.strategy_metrics_summary_json = _strategy_metrics_summary_json(
+            strategies=_strategy_values(_config(run)),
+            strategy_comparison=summary.strategy_comparison,
+            metric_summary=summary.metric_summary,
+            case_count=item_count,
+            succeeded_count=succeeded_count,
+            failed_count=failed_count,
+            failure_candidates=failure_candidates,
+        )
+        if succeeded_count == 0:
+            self.repository.mark_run_failed(
+                db,
+                run=run,
+                error_code="all_cases_failed",
+                error_message=None,
+                finished_at=datetime.now(UTC),
+            )
+            db.commit()
+            self._export_evaluation_trace_safely(db, evaluation_run_id=evaluation_run_id)
+            raise EvaluationFixtureError("all_cases_failed")
+        self.repository.mark_run_succeeded(db, run=run, finished_at=datetime.now(UTC))
+        db.commit()
+        self._export_evaluation_trace_safely(db, evaluation_run_id=evaluation_run_id)
+        return {
+            "status": "succeeded",
+            "evaluation_run_id": evaluation_run_id,
+            "case_count": item_count,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+        }
+
+    def _export_evaluation_trace_safely(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> None:
+        try:
+            run = self._require_run(db, evaluation_run_id)
+            summary = self._summary(db, run)
+            self.trace_export_service.export_evaluation_summary(summary)
+        except Exception:
+            return
+
+    def _create_rag_service(
+        self,
+        db: Session,
+        *,
+        generation_provider: str | None,
+        generation_model: str | None,
+    ) -> EvaluationRagService:
+        if _factory_accepts_generation_selection(self.rag_service_factory):
+            return self.rag_service_factory(
+                self.settings,
+                db,
+                generation_provider=generation_provider,
+                generation_model=generation_model,
+            )
+        return self.rag_service_factory(self.settings, db)
+
+    def _run_case(
+        self,
+        db: Session,
+        *,
+        rag_service: EvaluationRagService,
+        case: EvaluationCase,
+        case_metadata_json: dict[str, object] | None,
+        target: EvaluationStrategyTarget,
+        requested_metrics: set[str],
+        evaluation_scope: EvaluationScope,
+        request_id: str | None,
+        top_k: int | None,
+        rerank_top_n: int | None,
+        logical_document_ids: Sequence[int],
+        corpus_fingerprint: str | None,
+        evaluation_run_id: int,
+        cache_attempt_id: str,
+        baseline_latency_ms: int | None,
+    ) -> dict[str, object]:
+        started = time.perf_counter()
+        target_runner = getattr(rag_service, "evaluate_strategy_target", None)
+        strategy_runner = getattr(rag_service, "evaluate_strategy", None)
+        generate_answer = evaluation_scope == "end_to_end"
+        common_kwargs: dict[str, object] = {
+            "question": case.question,
+            "request_id": request_id,
+            "strategy_type": target.retrieval_strategy,
+            "top_k": top_k,
+            "rerank_top_n": rerank_top_n,
+        }
+        if callable(target_runner) and (
+            _requires_strategy_target_runner(target) or generate_answer
+        ):
+            target_kwargs: dict[str, object] = {
+                "question": case.question,
+                "request_id": request_id,
+                "target": target,
+                "top_k": top_k,
+                "rerank_top_n": rerank_top_n,
+                "evaluation_run_id": evaluation_run_id,
+                "cache_attempt_id": cache_attempt_id,
+            }
+            if _callable_accepts_parameter(target_runner, "generate_answer"):
+                target_kwargs["generate_answer"] = generate_answer
+            rag_result = _call_evaluation_runner(
+                cast(Callable[..., RagEvaluationResult], target_runner),
+                db,
+                kwargs=target_kwargs,
+                logical_document_ids=logical_document_ids,
+                corpus_fingerprint=corpus_fingerprint,
+            )
+        elif generate_answer:
+            answer_runner = getattr(rag_service, "answer_question_with_strategy", None)
+            selected_runner = (
+                cast(Callable[..., RagEvaluationResult], answer_runner)
+                if callable(answer_runner)
+                else rag_service.evaluate_question
+            )
+            rag_result = _call_evaluation_runner(
+                selected_runner,
+                db,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
+            )
+        elif target.retrieval_strategy in ASK_ONLY_EVALUATION_STRATEGIES:
+            rag_result = _call_evaluation_runner(
+                rag_service.evaluate_question,
+                db,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
+            )
+        elif callable(strategy_runner):
+            rag_result = _call_evaluation_runner(
+                cast(Callable[..., RagEvaluationResult], strategy_runner),
+                db,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
+            )
+        else:
+            rag_result = _call_evaluation_runner(
+                rag_service.evaluate_question,
+                db,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
+            )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        metrics = _replace_metrics(
+            calculate_metrics(
+                EvaluationMetricInputs(
+                    case=case,
+                    answer_text=rag_result.answer_text,
+                    citations=rag_result.citations,
+                    confidence=rag_result.confidence,
+                    retrieval_summary=rag_result.retrieval_score_summary,
+                    retrieved_items=rag_result.retrieved_items,
+                    latency_ms=latency_ms,
+                    error_code=rag_result.error_code,
+                )
+            ),
+            self._agentic_metrics(
+                db,
+                strategy_type=target.retrieval_strategy,
+                case_metadata_json=case_metadata_json,
+                rag_result=rag_result,
+            ),
+        )
+        if _is_safe_provider_skip(rag_result):
+            metrics = _replace_metrics(
+                metrics,
+                _provider_skip_base_metric_replacements(target=target, rag_result=rag_result),
+            )
+        metrics = _replace_metrics(
+            metrics,
+            [
+                *self._graph_metrics(
+                    db,
+                    case=case,
+                    case_metadata_json=case_metadata_json,
+                    target=target,
+                    rag_result=rag_result,
+                ),
+                *self._retrieval_trace_metrics(
+                    db,
+                    target=target,
+                    rag_result=rag_result,
+                ),
+                *self._cache_metrics(
+                    db,
+                    target=target,
+                    rag_result=rag_result,
+                    latency_ms=latency_ms,
+                    baseline_latency_ms=baseline_latency_ms,
+                ),
+            ],
+        )
+        metrics = _filter_metrics(metrics, requested_metrics)
+        status = (
+            "succeeded"
+            if rag_result.status == "succeeded" or _is_safe_provider_skip(rag_result)
+            else "failed"
+        )
+        return {
+            "case": case,
+            "rag_result": rag_result,
+            "metrics": metrics,
+            "latency_ms": latency_ms,
+            "status": status,
+            "target": target,
+            "requested_metrics": requested_metrics,
+        }
+
+    def _store_case_result(
+        self,
+        db: Session,
+        *,
+        item: EvaluationRunItem,
+        case_result: dict[str, object],
+        target: EvaluationStrategyTarget,
+        claim_judge: EvaluationClaimJudgeService | None,
+    ) -> None:
+        rag_result = case_result["rag_result"]
+        case = case_result["case"]
+        metrics = case_result["metrics"]
+        result_target = case_result["target"]
+        if (
+            not isinstance(rag_result, RagEvaluationResult)
+            or not isinstance(case, EvaluationCase)
+            or not isinstance(metrics, list)
+            or not isinstance(result_target, EvaluationStrategyTarget)
+        ):
+            raise RuntimeError("invalid_evaluation_case_result")
+        latency_ms = case_result["latency_ms"]
+        if not isinstance(latency_ms, int):
+            raise RuntimeError("invalid_evaluation_case_result")
+        status = str(case_result["status"])
+        answer_outcome = _resolved_answer_outcome(rag_result)
+        requested_metrics = case_result.get("requested_metrics")
+        if not isinstance(requested_metrics, set):
+            raise RuntimeError("invalid_evaluation_case_result")
+        judge_metric = self._store_claim_judgment(
+            db,
+            item=item,
+            case=case,
+            rag_result=rag_result,
+            answer_outcome=answer_outcome,
+            claim_judge=claim_judge,
+        )
+        if (
+            judge_metric is not None
+            and EvaluationMetricName.CLAIM_FAITHFULNESS.value in requested_metrics
+        ):
+            metrics = _replace_metrics(metrics, [judge_metric])
+        generation_provider = (
+            _safe_optional_generation_label(
+                rag_result.generation_provider,
+                max_length=50,
+            )
+            if status == "succeeded"
+            else None
+        )
+        generation_model = (
+            _safe_optional_generation_label(
+                rag_result.generation_model,
+                max_length=128,
+            )
+            if status == "succeeded"
+            else None
+        )
+        input_tokens = (
+            _non_negative_int_or_none(rag_result.input_tokens) if status == "succeeded" else None
+        )
+        output_tokens = (
+            _non_negative_int_or_none(rag_result.output_tokens) if status == "succeeded" else None
+        )
+        total_tokens = (
+            _non_negative_int_or_none(rag_result.total_tokens) if status == "succeeded" else None
+        )
+        estimated_cost_usd = (
+            _decimal_cost_usd(rag_result.estimated_cost_usd) if status == "succeeded" else None
+        )
+        generation_latency_ms = (
+            _non_negative_int_or_none(rag_result.generation_latency_ms)
+            if status == "succeeded"
+            else None
+        )
+        metric_by_name = {
+            metric.metric_name: metric for metric in metrics if isinstance(metric, MetricValue)
+        }
+        metric_summary_json = _metric_summary_json(
+            metrics,
+            case=case,
+            target=result_target,
+            answer_generated=answer_outcome == EvaluationAnswerOutcome.ANSWERED.value,
+        )
+        self.repository.finish_item(
+            db,
+            item=item,
+            status=status,
+            answer_outcome=answer_outcome,
+            retrieval_run_id=rag_result.retrieval_run_id,
+            faithfulness_score=_metric_decimal(metric_by_name.get("faithfulness")),
+            groundedness_score=_metric_decimal(metric_by_name.get("groundedness")),
+            citation_coverage=_metric_decimal(metric_by_name.get("citation_coverage")),
+            latency_ms=latency_ms,
+            generation_provider=generation_provider,
+            generation_model=generation_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            generation_latency_ms=generation_latency_ms,
+            latency_breakdown_json=_latency_breakdown_json(latency_ms),
+            metric_summary_json=metric_summary_json,
+            error_code=rag_result.error_code if status == "failed" else None,
+            error_detail_code=(rag_result.error_detail_code if status == "failed" else None),
+            error_message=None,
+        )
+        self.repository.save_results(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            results=[
+                _result_input(metric, strategy_type=target.storage_strategy_type, target=target)
+                for metric in metrics
+                if isinstance(metric, MetricValue)
+            ],
+        )
+
+    def _store_claim_judgment(
+        self,
+        db: Session,
+        *,
+        item: EvaluationRunItem,
+        case: EvaluationCase,
+        rag_result: RagEvaluationResult,
+        answer_outcome: str | None,
+        claim_judge: EvaluationClaimJudgeService | None,
+    ) -> MetricValue | None:
+        metadata = case.metadata_json if isinstance(case.metadata_json, dict) else {}
+        if (
+            claim_judge is None
+            or metadata.get("manifest_schema_version") != DATASET_MANIFEST_V2_SCHEMA_VERSION
+            or answer_outcome
+            not in {
+                EvaluationAnswerOutcome.ANSWERED.value,
+                EvaluationAnswerOutcome.ABSTAINED.value,
+            }
+        ):
+            return None
+
+        required_facts = _safe_dict_list(metadata.get("required_facts"))
+        forbidden_claims = _string_list(metadata.get("forbidden_claims"))
+        context = [
+            value
+            for value in rag_result.context_sources_for_safety
+            if isinstance(value, str) and value.strip()
+        ]
+        citations = [
+            {
+                "citation_id": citation.citation_id,
+                "local_citation_id": citation.local_citation_id,
+                "source_label": citation.source_label,
+                "snippet": citation.snippet,
+            }
+            for citation in rag_result.citations
+        ]
+        answer_hash = hashlib.sha256(rag_result.answer_text.encode("utf-8")).hexdigest()
+        context_hash = hashlib.sha256("\\x00".join(context).encode("utf-8")).hexdigest()
+        now = datetime.now(UTC)
+        expires_at = now + timedelta(days=30)
+        metric_score: float | None = None
+        metric_label = "not_applicable"
+        reason_code = "judge_failed"
+        try:
+            judged = claim_judge.judge(
+                case_id=case.case_id,
+                answerable=metadata.get("answerable") is True,
+                required_citation=case.required_citation,
+                tags=list(case.tags),
+                answer_outcome=cast(
+                    Literal["answered", "abstained"],
+                    answer_outcome,
+                ),
+                answer_text=rag_result.answer_text,
+                citations=citations,
+                context=context,
+                required_facts=required_facts,
+                forbidden_claims=forbidden_claims,
+            )
+            decision = judged.decision
+            self.repository.upsert_auxiliary_judgment(
+                db,
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                values={
+                    "status": "succeeded",
+                    "rubric_version": decision.rubric_version,
+                    "judge_provider": claim_judge.provider,
+                    "judge_model": claim_judge.model,
+                    "required_facts_supported": decision.required_facts_supported.value,
+                    "citation_support": decision.citation_support.value,
+                    "forbidden_claims_absent": decision.forbidden_claims_absent.value,
+                    "abstention_correct": decision.abstention_correct.value,
+                    "prompt_injection_resisted": (decision.prompt_injection_resisted.value),
+                    "confidence": Decimal(str(decision.confidence)).quantize(Decimal("0.0001")),
+                    "reason_codes_json": [code.value for code in decision.reason_codes],
+                    "auxiliary_pass": judged.auxiliary_pass,
+                    "claim_faithfulness": _decimal_score(judged.claim_faithfulness),
+                    "failure_code": None,
+                    "answer_hash": judged.answer_hash,
+                    "context_hash": judged.context_hash,
+                },
+                updated_at=now,
+            )
+            metric_score = judged.claim_faithfulness
+            metric_label = (
+                _metric_label(metric_score) if metric_score is not None else "not_applicable"
+            )
+            reason_code = (
+                "claim_faithfulness_available"
+                if metric_score is not None
+                else "claim_faithfulness_not_applicable"
+            )
+        except Exception:
+            self.repository.upsert_auxiliary_judgment(
+                db,
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                values={
+                    "status": "failed",
+                    "rubric_version": JUDGE_RUBRIC_VERSION,
+                    "judge_provider": DEFAULT_JUDGE_PROVIDER,
+                    "judge_model": DEFAULT_JUDGE_MODEL,
+                    "required_facts_supported": None,
+                    "citation_support": None,
+                    "forbidden_claims_absent": None,
+                    "abstention_correct": None,
+                    "prompt_injection_resisted": None,
+                    "confidence": None,
+                    "reason_codes_json": [],
+                    "auxiliary_pass": None,
+                    "claim_faithfulness": None,
+                    "failure_code": "judge_failed",
+                    "answer_hash": answer_hash,
+                    "context_hash": context_hash,
+                },
+                updated_at=now,
+            )
+
+        self.repository.upsert_review_payload(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            values={
+                "answer_text": rag_result.answer_text,
+                "context_json": context,
+                "citations_json": citations,
+                "required_facts_json": required_facts,
+                "answer_hash": answer_hash,
+                "context_hash": context_hash,
+                "expires_at": expires_at,
+            },
+            updated_at=now,
+        )
+        return MetricValue(
+            metric_name=EvaluationMetricName.CLAIM_FAITHFULNESS.value,
+            metric_score=metric_score,
+            metric_label=metric_label,
+            details={
+                "schema_version": EVALUATION_SCHEMA_VERSION,
+                "method": "local_judge",
+                "reason_code": reason_code,
+                "judge_coverage": 1.0 if metric_score is not None else 0.0,
+            },
+        )
+
+    def _store_case_failure(
+        self,
+        db: Session,
+        *,
+        item_id: int,
+        case: EvaluationCase,
+        target: EvaluationStrategyTarget,
+        requested_metrics: set[str],
+    ) -> None:
+        item = db.get(EvaluationRunItem, item_id)
+        if item is None:
+            return
+        metrics = _filter_metrics(
+            failure_metrics(case, error_code="internal_error"),
+            requested_metrics,
+        )
+        self.repository.finish_item(
+            db,
+            item=item,
+            status="failed",
+            answer_outcome=EvaluationAnswerOutcome.RETRIEVAL_ERROR.value,
+            retrieval_run_id=None,
+            faithfulness_score=_metric_decimal(_find_metric(metrics, "faithfulness")),
+            groundedness_score=_metric_decimal(_find_metric(metrics, "groundedness")),
+            citation_coverage=_metric_decimal(_find_metric(metrics, "citation_coverage")),
+            latency_ms=None,
+            generation_provider=None,
+            generation_model=None,
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            estimated_cost_usd=None,
+            generation_latency_ms=None,
+            latency_breakdown_json=_latency_breakdown_json(None),
+            metric_summary_json=_metric_summary_json(
+                metrics,
+                case=case,
+                target=target,
+                answer_generated=False,
+            ),
+            error_code="internal_error",
+            error_detail_code=None,
+            error_message=redact_error_message("Evaluation case failed."),
+        )
+        self.repository.save_results(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            results=[
+                _result_input(metric, strategy_type=target.storage_strategy_type, target=target)
+                for metric in metrics
+            ],
+        )
+
+    def _summary(self, db: Session, run: EvaluationRun) -> EvaluationRunSummary:
+        items = self.repository.list_items(db, evaluation_run_id=run.evaluation_run_id)
+        results_by_item = self.repository.list_results(
+            db,
+            evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
+        )
+        return self._summary_from_loaded(db, run, items, results_by_item)
+
+    def _summary_from_loaded(
+        self,
+        db: Session,
+        run: EvaluationRun,
+        items: list[EvaluationRunItem],
+        results_by_item: dict[int, list[EvaluationResult]],
+    ) -> EvaluationRunSummary:
+        config = _config(run)
+        metric_summary = _metric_summary(items, results_by_item)
+        strategy_comparison = _strategy_comparison(items, results_by_item)
+        generation_summary = _generation_summary(items)
+        job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
+        planned_item_count = (
+            self._planned_item_count(db, run) if run.status in {"queued", "running"} else 0
+        )
+        case_count = max(len(items), planned_item_count)
+        answered_count = sum(
+            1 for item in items if item.answer_outcome == EvaluationAnswerOutcome.ANSWERED.value
+        )
+        abstained_count = sum(
+            1 for item in items if item.answer_outcome == EvaluationAnswerOutcome.ABSTAINED.value
+        )
+        pipeline_failed_count = sum(
+            1
+            for item in items
+            if item.answer_outcome
+            in {
+                EvaluationAnswerOutcome.NO_CONTEXT.value,
+                EvaluationAnswerOutcome.CITATION_ERROR.value,
+                EvaluationAnswerOutcome.GENERATION_ERROR.value,
+                EvaluationAnswerOutcome.RETRIEVAL_ERROR.value,
+            }
+        )
+        applicable_count = answered_count + abstained_count
+        judgments = self.repository.list_auxiliary_judgments(
+            db, evaluation_run_id=run.evaluation_run_id
+        )
+        succeeded_judgments = [judgment for judgment in judgments if judgment.status == "succeeded"]
+        calibrations = self.repository.list_human_calibrations(
+            db, evaluation_run_id=run.evaluation_run_id
+        )
+        judged_count = len(succeeded_judgments)
+        reviewed_count = len(calibrations)
+        provisional_rate = _boolean_rate(
+            judgment.auxiliary_pass for judgment in succeeded_judgments
+        )
+        calibrated_rate = (
+            _boolean_rate(calibration.human_pass for calibration in calibrations)
+            if applicable_count > 0 and reviewed_count == applicable_count
+            else None
+        )
+        quality_status = _evaluation_quality_status(
+            run_status=run.status,
+            evaluation_scope=cast(EvaluationScope, config["evaluation_scope"]),
+            applicable_count=applicable_count,
+            judged_count=judged_count,
+            reviewed_count=reviewed_count,
+            calibrated_rate=calibrated_rate,
+        )
+        return EvaluationRunSummary(
+            evaluation_run_id=run.evaluation_run_id,
+            job_id=job.job_id if job is not None else None,
+            evaluation_dataset_id=run.evaluation_dataset_id,
+            dataset_name=cast(str, config["dataset_name"]),
+            strategy_type=cast(RetrievalStrategy, run.strategy_type),
+            strategies=_strategy_values(config),
+            metric_names=cast(list[str], config["metrics"]),
+            evaluation_scope=cast(EvaluationScope, config["evaluation_scope"]),
+            trigger_type=run.trigger_type,
+            status=cast(EvaluationStatus, run.status),
+            case_count=case_count,
+            succeeded_count=sum(1 for item in items if item.status == "succeeded"),
+            failed_count=sum(1 for item in items if item.status == "failed"),
+            answered_count=answered_count,
+            abstained_count=abstained_count,
+            pipeline_failed_count=pipeline_failed_count,
+            judged_count=judged_count,
+            reviewed_count=reviewed_count,
+            answer_coverage=_coverage(answered_count + abstained_count, case_count),
+            judge_coverage=_coverage(judged_count, applicable_count),
+            review_coverage=_coverage(reviewed_count, applicable_count),
+            grounded_answer_pass_rate_provisional=provisional_rate,
+            grounded_answer_pass_rate_calibrated=calibrated_rate,
+            quality_status=quality_status,
+            corpus_fingerprint=run.corpus_fingerprint,
+            metric_summary=metric_summary,
+            strategy_comparison=strategy_comparison,
+            strategy_metrics_summary_json=run.strategy_metrics_summary_json,
+            total_estimated_cost_usd=generation_summary.total_estimated_cost_usd,
+            total_input_tokens=generation_summary.total_input_tokens,
+            total_output_tokens=generation_summary.total_output_tokens,
+            total_tokens=generation_summary.total_tokens,
+            avg_generation_latency_ms=generation_summary.avg_generation_latency_ms,
+            generation_providers=generation_summary.generation_providers,
+            generation_models=generation_summary.generation_models,
+            requested_generation_provider=cast(str | None, config["generation_provider"]),
+            requested_generation_model=cast(str | None, config["generation_model"]),
+            error_code=run.error_code,
+            error_message=redact_error_message(run.error_message) if run.error_message else None,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+
+    def _item_response(
+        self,
+        item: EvaluationRunItem,
+        results: list[EvaluationResult],
+    ) -> EvaluationRunItemResponse:
+        metric_by_name = {result.metric_name: result for result in results}
+        answer_generated = _item_answer_generated(item, metric_by_name)
+        metric_results = [_metric_response(result, answer_generated) for result in results]
+        context_precision = next(
+            (
+                result.metric_score
+                for result in results
+                if result.metric_name == "context_precision"
+            ),
+            None,
+        )
+        case_id = (
+            next(
+                (
+                    str(result.details_json.get("case_id"))
+                    for result in results
+                    if result.metric_name == "case_metadata"
+                    and isinstance(result.details_json, dict)
+                    and result.details_json.get("case_id")
+                ),
+                None,
+            )
+            or item.case_key
+        )
+        return EvaluationRunItemResponse(
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            evaluation_case_id=item.evaluation_case_id,
+            retrieval_run_id=item.retrieval_run_id,
+            strategy_type=cast(RetrievalStrategy, item.strategy_type),
+            status=cast(EvaluationStatus, item.status),
+            answer_outcome=cast(EvaluationAnswerOutcome | None, item.answer_outcome),
+            faithfulness_score=_decimal_float(item.faithfulness_score)
+            if answer_generated
+            else None,
+            groundedness_score=_decimal_float(item.groundedness_score)
+            if answer_generated
+            else None,
+            citation_coverage=_decimal_float(item.citation_coverage) if answer_generated else None,
+            context_precision=_decimal_float(context_precision),
+            latency_ms=item.latency_ms,
+            generation_provider=_safe_optional_generation_label(
+                item.generation_provider,
+                max_length=50,
+            ),
+            generation_model=_safe_optional_generation_label(
+                item.generation_model,
+                max_length=128,
+            ),
+            input_tokens=item.input_tokens,
+            output_tokens=item.output_tokens,
+            total_tokens=item.total_tokens,
+            estimated_cost_usd=_decimal_float(item.estimated_cost_usd),
+            generation_latency_ms=item.generation_latency_ms,
+            latency_breakdown_json=item.latency_breakdown_json,
+            metric_summary_json=_item_metric_summary_json(
+                item.metric_summary_json, answer_generated=answer_generated
+            ),
+            error_code=item.error_code,
+            error_detail_code=item.error_detail_code,
+            error_message=redact_error_message(item.error_message) if item.error_message else None,
+            case_id=case_id,
+            case_key=item.case_key,
+            metrics=metric_results,
+        )
+
+    def _agentic_metrics(
+        self,
+        db: Session,
+        *,
+        strategy_type: RetrievalStrategy,
+        case_metadata_json: dict[str, object] | None,
+        rag_result: RagEvaluationResult,
+    ) -> list[MetricValue]:
+        if strategy_type not in {
+            RetrievalStrategy.AGENTIC_ROUTER,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
+        }:
+            return []
+        retrieval_run = (
+            db.get(RetrievalRun, rag_result.retrieval_run_id)
+            if rag_result.retrieval_run_id is not None
+            else None
+        )
+        decision = _dict_or_empty(
+            retrieval_run.strategy_decision_json if retrieval_run is not None else None
+        )
+        score_summary = _dict_or_empty(
+            retrieval_run.retrieval_score_summary if retrieval_run is not None else None
+        )
+        expected_strategy, acceptable_strategies = _expected_strategy_hints(case_metadata_json)
+        selected_strategy = _safe_strategy_value(
+            decision.get("selected_strategy") or score_summary.get("selected_strategy")
+        )
+        execution_strategy = _safe_strategy_value(
+            decision.get("execution_strategy") or score_summary.get("execution_strategy")
+        )
+        accuracy: float | None = None
+        accuracy_label = "not_applicable"
+        not_applicable = True
+        has_strategy_decision = selected_strategy is not None
+        if (expected_strategy or acceptable_strategies) and has_strategy_decision:
+            accepted = set(acceptable_strategies)
+            if expected_strategy:
+                accepted.add(expected_strategy)
+            accuracy = 1.0 if selected_strategy in accepted else 0.0
+            accuracy_label = "correct" if accuracy == 1.0 else "incorrect"
+            not_applicable = False
+
+        fallback_used = _first_bool(
+            decision.get("fallback_used"),
+            score_summary.get("fallback_used"),
+        )
+        budget_exhausted = _first_bool(
+            decision.get("budget_exhausted"),
+            score_summary.get("budget_exhausted"),
+        )
+        sufficiency_score = _float_or_none(
+            decision.get("sufficiency_score") or score_summary.get("sufficiency_score")
+        )
+        retrieval_call_count = _float_or_none(
+            decision.get("retrieval_call_count") or score_summary.get("retrieval_call_count")
+        )
+        fallback_count = 1 if fallback_used else 0
+
+        return [
+            MetricValue(
+                metric_name="strategy_selection_accuracy",
+                metric_score=accuracy,
+                metric_label=accuracy_label,
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "not_applicable": not_applicable,
+                    "expected_strategy": expected_strategy,
+                    "acceptable_strategies": acceptable_strategies,
+                    "selected_strategy": selected_strategy,
+                    "execution_strategy": execution_strategy,
+                },
+            ),
+            MetricValue(
+                metric_name="fallback_rate",
+                metric_score=1.0 if fallback_used else 0.0,
+                metric_label="used" if fallback_used else "not_used",
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "fallback_used": fallback_used,
+                    "fallback_strategy": _safe_strategy_value(decision.get("fallback_strategy")),
+                    "fallback_reason": _safe_reason(decision.get("fallback_reason")),
+                    "execution_strategy": execution_strategy,
+                },
+            ),
+            MetricValue(
+                metric_name="budget_exhausted_rate",
+                metric_score=1.0 if budget_exhausted else 0.0,
+                metric_label="exhausted" if budget_exhausted else "available",
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "budget_exhausted": budget_exhausted,
+                    "retrieval_call_count": retrieval_call_count,
+                    "max_retrieval_calls": _float_or_none(
+                        decision.get("max_retrieval_calls")
+                        or score_summary.get("max_retrieval_calls")
+                    ),
+                },
+            ),
+            MetricValue(
+                metric_name="sufficiency_score_avg",
+                metric_score=sufficiency_score,
+                metric_label=_metric_label(sufficiency_score),
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "sufficiency_score": sufficiency_score,
+                    "sufficient": bool(decision.get("sufficient"))
+                    if "sufficient" in decision
+                    else None,
+                    "sufficiency_reason_codes": _string_values(
+                        decision.get("sufficiency_reason_codes")
+                    ),
+                },
+            ),
+            MetricValue(
+                metric_name="retrieval_call_count_avg",
+                metric_score=None,
+                metric_value=retrieval_call_count,
+                metric_label="count" if retrieval_call_count is not None else "not_applicable",
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "retrieval_call_count": retrieval_call_count,
+                    "fallback_count": fallback_count,
+                },
+            ),
+        ]
+
+    def _graph_metrics(
+        self,
+        db: Session,
+        *,
+        case: EvaluationCase,
+        case_metadata_json: dict[str, object] | None,
+        target: EvaluationStrategyTarget,
+        rag_result: RagEvaluationResult,
+    ) -> list[MetricValue]:
+        if target.retrieval_strategy != RetrievalStrategy.GRAPH:
+            return _not_applicable_graph_metrics(
+                target=target,
+                reason_code="not_graph_strategy",
+            )
+        retrieval_run = (
+            db.get(RetrievalRun, rag_result.retrieval_run_id)
+            if rag_result.retrieval_run_id is not None
+            else None
+        )
+        score_summary = _dict_or_empty(
+            retrieval_run.retrieval_score_summary if retrieval_run is not None else None
+        )
+        provider = _safe_graph_provider(
+            target.graph_store_provider or score_summary.get("graph_store_provider") or "postgres"
+        )
+        reason_codes = _string_values(score_summary.get("graph_reason_codes"))
+        if _is_graph_provider_unavailable(reason_codes):
+            return _not_applicable_graph_metrics(
+                target=target,
+                reason_code=_provider_skip_reason(reason_codes),
+                provider=provider,
+                reason_codes=reason_codes,
+            )
+        graph_paths = _filter_graph_paths_for_source_chunk_ids(
+            _list_graph_paths(db, retrieval_run_id=rag_result.retrieval_run_id),
+            _selected_retrieval_source_chunk_ids(
+                db,
+                retrieval_run_id=rag_result.retrieval_run_id,
+            ),
+        )
+        relevance = _graph_path_relevance_metric(
+            graph_paths=graph_paths,
+            metadata_json=case_metadata_json,
+            provider=provider,
+            reason_codes=reason_codes,
+        )
+        citation = _graph_citation_coverage_metric(
+            db,
+            graph_paths=graph_paths,
+            retrieval_run_id=rag_result.retrieval_run_id,
+            provider=provider,
+        )
+        answerability = _multi_hop_answerability_metric(
+            graph_paths=graph_paths,
+            metadata_json=case_metadata_json,
+            retrieval_summary=rag_result.retrieval_score_summary,
+            provider=provider,
+        )
+        quality_summary = _entity_relation_quality_metric(
+            graph_paths=graph_paths,
+            provider=provider,
+            score_summary=score_summary,
+            case=case,
+        )
+        return [relevance, citation, answerability, quality_summary]
+
+    def _retrieval_trace_metrics(
+        self,
+        db: Session,
+        *,
+        target: EvaluationStrategyTarget,
+        rag_result: RagEvaluationResult,
+    ) -> list[MetricValue]:
+        if target.retrieval_strategy in {
+            RetrievalStrategy.AGENTIC_ROUTER,
+            RetrievalStrategy.LLM_TOOL_ORCHESTRATOR,
+            RetrievalStrategy.LANGCHAIN_AGENTIC,
+            RetrievalStrategy.LANGGRAPH_AGENTIC,
+        }:
+            return []
+        retrieval_run = (
+            db.get(RetrievalRun, rag_result.retrieval_run_id)
+            if rag_result.retrieval_run_id is not None
+            else None
+        )
+        decision = _dict_or_empty(
+            retrieval_run.strategy_decision_json if retrieval_run is not None else None
+        )
+        score_summary = _dict_or_empty(
+            retrieval_run.retrieval_score_summary if retrieval_run is not None else None
+        )
+        fallback_used = _first_bool(
+            decision.get("fallback_used"),
+            score_summary.get("fallback_used"),
+            score_summary.get("graph_fallback_used"),
+        )
+        reason_codes = _string_values(score_summary.get("graph_reason_codes"))
+        if _is_graph_provider_unavailable(reason_codes):
+            reason_code = _provider_skip_reason(reason_codes)
+            return [
+                MetricValue(
+                    metric_name="fallback_rate",
+                    metric_score=None,
+                    metric_label="not_applicable",
+                    details={
+                        "schema_version": EVALUATION_SCHEMA_VERSION,
+                        "not_applicable": True,
+                        "reason_code": reason_code,
+                        "reason_codes": reason_codes or [reason_code],
+                        "graph_store_provider": _safe_graph_provider(
+                            target.graph_store_provider or score_summary.get("graph_store_provider")
+                        ),
+                    },
+                )
+            ]
+        return [
+            MetricValue(
+                metric_name="fallback_rate",
+                metric_score=1.0 if fallback_used else 0.0,
+                metric_label="used" if fallback_used else "not_used",
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "fallback_used": fallback_used,
+                    "fallback_strategy": _safe_strategy_value(decision.get("fallback_strategy")),
+                    "fallback_reason": _safe_reason(decision.get("fallback_reason")),
+                    "graph_store_provider": _safe_graph_provider(
+                        target.graph_store_provider or score_summary.get("graph_store_provider")
+                    ),
+                },
+            )
+        ]
+
+    def _cache_metrics(
+        self,
+        db: Session,
+        *,
+        target: EvaluationStrategyTarget,
+        rag_result: RagEvaluationResult,
+        latency_ms: int,
+        baseline_latency_ms: int | None,
+    ) -> list[MetricValue]:
+        if not _is_cacheable_target(target):
+            return _not_applicable_cache_metrics(
+                target=target, reason_code="strategy_not_cacheable"
+            )
+        retrieval_run = (
+            db.get(RetrievalRun, rag_result.retrieval_run_id)
+            if rag_result.retrieval_run_id is not None
+            else None
+        )
+        cache_summary = _dict_or_empty(
+            retrieval_run.cache_summary_json if retrieval_run is not None else None
+        )
+        status = _safe_cache_status(cache_summary.get("status"))
+        reason = _safe_reason(cache_summary.get("reason"))
+        hit_rate = 1.0 if status == "hit" else 0.0
+        saved_latency = (
+            max(0, baseline_latency_ms - latency_ms)
+            if status == "hit" and baseline_latency_ms is not None
+            else None
+        )
+        return [
+            MetricValue(
+                metric_name="cache_hit_rate",
+                metric_score=hit_rate,
+                metric_label=status,
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "cache_mode": target.cache_mode.value,
+                    "cache_status": status,
+                    "cache_reason": reason,
+                    "cache_enabled": bool(cache_summary.get("enabled", False)),
+                },
+            ),
+            MetricValue(
+                metric_name="cache_saved_latency",
+                metric_score=None,
+                metric_value=float(saved_latency) if saved_latency is not None else None,
+                metric_label="ms" if saved_latency is not None else "not_applicable",
+                details={
+                    "schema_version": EVALUATION_SCHEMA_VERSION,
+                    "cache_mode": target.cache_mode.value,
+                    "cache_status": status,
+                    "baseline_latency_available": baseline_latency_ms is not None,
+                    "sample_latency_ms": latency_ms,
+                },
+            ),
+        ]
+
+    def _failure_candidates(
+        self,
+        db: Session,
+        *,
+        run: EvaluationRun,
+    ) -> list[EvaluationFailureCandidate]:
+        items = self.repository.list_items(db, evaluation_run_id=run.evaluation_run_id)
+        if not items:
+            return []
+        results_by_item = self.repository.list_results(
+            db,
+            evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
+        )
+        source_cases = self._promotion_source_cases(db, run)
+        candidates: list[EvaluationFailureCandidate] = []
+        for item in items:
+            source_case = source_cases.get(item.evaluation_run_item_id)
+            results = results_by_item.get(item.evaluation_run_item_id, [])
+            stored_metric_by_name = {result.metric_name: result for result in results}
+            metric_by_name = _applicable_metric_results(item, stored_metric_by_name)
+            if _is_graph_provider_skip_item(item, metric_by_name):
+                continue
+            metric_snapshot = _metric_snapshot(metric_by_name)
+            case_metadata = _case_metadata_details(metric_by_name)
+            item_case_snapshot = _item_case_snapshot(item)
+            target_metadata = _item_target_metadata(item)
+            comparison_label = _metadata_comparison_label(target_metadata)
+            if comparison_label is not None:
+                metric_snapshot["evaluation_strategy_label"] = comparison_label
+            graph_provider = _metadata_graph_provider(target_metadata)
+            if graph_provider is not None:
+                metric_snapshot["graph_store_provider"] = graph_provider
+            cache_mode = _metadata_cache_mode(target_metadata)
+            if cache_mode is not None:
+                metric_snapshot["cache_mode"] = cache_mode.value
+            case_snapshot_hash = _safe_hash_value(
+                case_metadata.get("case_snapshot_hash")
+            ) or _safe_hash_value(item_case_snapshot.get("case_snapshot_hash"))
+            if case_snapshot_hash is not None:
+                metric_snapshot["case_snapshot_hash"] = case_snapshot_hash
+            question_hash = (
+                _safe_hash_value(case_metadata.get("question_hash"))
+                or _safe_hash_value(item_case_snapshot.get("question_hash"))
+                or _question_hash(source_case.question if source_case else item.case_key)
+            )
+            case_key = source_case.case_key if source_case is not None else item.case_key
+
+            for failure_type, severity, reason_codes in _failure_reasons(
+                item,
+                metric_by_name,
+                self.settings,
+            ):
+                promotion_key = _promotion_key(
+                    run=run,
+                    item=item,
+                    case_key=case_key,
+                    question_hash=question_hash,
+                    failure_type=failure_type,
+                    target_metadata=target_metadata,
+                )
+                candidates.append(
+                    EvaluationFailureCandidate(
+                        evaluation_run_id=run.evaluation_run_id,
+                        evaluation_run_item_id=item.evaluation_run_item_id,
+                        evaluation_case_id=item.evaluation_case_id,
+                        case_key=case_key,
+                        question_hash=question_hash,
+                        strategy_type=cast(RetrievalStrategy, item.strategy_type),
+                        failure_type=failure_type,
+                        severity=severity,
+                        failure_reason_codes=reason_codes,
+                        metric_snapshot=metric_snapshot,
+                        recommended_tags=[
+                            "failure_promoted",
+                            failure_type,
+                            f"strategy_{item.strategy_type}",
+                            *_target_failure_tags(target_metadata),
+                        ],
+                        promotion_key=promotion_key,
+                    )
+                )
+        return candidates
+
+    def _promotion_source_cases(
+        self,
+        db: Session,
+        run: EvaluationRun,
+    ) -> dict[int, PromotionSourceCase]:
+        items = self.repository.list_items(db, evaluation_run_id=run.evaluation_run_id)
+        source_cases: dict[int, PromotionSourceCase] = {}
+        fixture_by_key: dict[str, EvaluationCase] = {}
+        if run.evaluation_dataset_id is None:
+            try:
+                fixture_by_key = {
+                    case.case_id: case
+                    for case in load_evaluation_cases(
+                        cast(str, _config(run)["dataset_name"]),
+                        case_limit=cast(int | None, _config(run)["case_limit"]),
+                    )
+                }
+            except EvaluationFixtureError:
+                fixture_by_key = {}
+
+        for item in items:
+            source: PromotionSourceCase | None = None
+            if item.evaluation_case_id is not None:
+                model = db.get(EvaluationCaseModel, item.evaluation_case_id)
+                if model is not None:
+                    source = PromotionSourceCase(
+                        evaluation_case_id=model.evaluation_case_id,
+                        case_key=model.case_key,
+                        question=model.question,
+                        expected_answer=model.expected_answer,
+                        expected_keywords=_string_list(model.expected_keywords),
+                        expected_document_ids=_int_list(model.expected_document_ids),
+                        expected_chunk_ids=_int_list(model.expected_chunk_ids),
+                        required_citation=model.required_citation,
+                        tags=_string_list(model.tags),
+                        metadata_json=model.metadata_json,
+                    )
+            elif item.case_key is not None and item.case_key in fixture_by_key:
+                fixture = fixture_by_key[item.case_key]
+                source = PromotionSourceCase(
+                    evaluation_case_id=None,
+                    case_key=fixture.case_id,
+                    question=fixture.question,
+                    expected_answer=fixture.expected_answer,
+                    expected_keywords=list(fixture.expected_keywords),
+                    expected_document_ids=list(fixture.expected_document_ids),
+                    expected_chunk_ids=list(fixture.expected_chunk_ids),
+                    required_citation=fixture.required_citation,
+                    tags=list(fixture.tags),
+                    metadata_json=fixture.metadata_json,
+                )
+            if source is not None:
+                source_cases[item.evaluation_run_item_id] = source
+        return source_cases
+
+    def _require_run(self, db: Session, evaluation_run_id: int) -> EvaluationRun:
+        run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
+        if run is None:
+            raise EvaluationFixtureError("evaluation_run_not_found")
+        return run
+
+    def _load_cases_for_run(
+        self,
+        db: Session,
+        run: EvaluationRun,
+    ) -> list[LoadedEvaluationCase]:
+        config = _config(run)
+        case_limit = cast(int | None, config["case_limit"])
+        if run.evaluation_dataset_id is not None:
+            cases, _ = self.repository.list_cases(
+                db,
+                evaluation_dataset_id=run.evaluation_dataset_id,
+                offset=0,
+                limit=case_limit,
+                status="active",
+            )
+            if not cases:
+                raise EvaluationFixtureError("evaluation_dataset_empty")
+            return [_loaded_case_from_model(case) for case in cases]
+
+        fixture_cases = load_evaluation_cases(
+            cast(str, config["dataset_name"]),
+            case_limit=case_limit,
+        )
+        return [
+            LoadedEvaluationCase(
+                case=case,
+                evaluation_case_id=None,
+                case_key=case.case_id,
+                metadata_json=case.metadata_json,
+                tags=list(case.tags),
+            )
+            for case in fixture_cases
+        ]
+
+    def _planned_case_count(self, db: Session, run: EvaluationRun) -> int:
+        config = _config(run)
+        case_limit = cast(int | None, config["case_limit"])
+        if run.evaluation_dataset_id is not None:
+            count = self.repository.count_cases(
+                db,
+                evaluation_dataset_id=run.evaluation_dataset_id,
+                status="active",
+            )
+            return min(count, case_limit) if case_limit is not None else count
+        return _fixture_planned_case_count(run)
+
+    def _planned_item_count(self, db: Session, run: EvaluationRun) -> int:
+        config = _config(run)
+        return self._planned_case_count(db, run) * len(_strategy_values(config))
+
+    def _dataset_response(
+        self, db: Session, dataset: EvaluationDataset
+    ) -> EvaluationDatasetResponse:
+        return EvaluationDatasetResponse(
+            evaluation_dataset_id=dataset.evaluation_dataset_id,
+            dataset_name=dataset.dataset_name,
+            description=dataset.description,
+            version=dataset.version,
+            source_type=dataset.source_type,
+            status=dataset.status,
+            manifest_schema_version=getattr(
+                dataset,
+                "manifest_schema_version",
+                DATASET_MANIFEST_SCHEMA_VERSION,
+            ),
+            content_fingerprint=getattr(dataset, "content_fingerprint", None),
+            corpus_fingerprint=getattr(dataset, "corpus_fingerprint", None),
+            corpus_mode=getattr(dataset, "corpus_mode", "shared_legacy"),
+            corpus_status=getattr(
+                dataset,
+                "corpus_status",
+                "shared_legacy",
+            ),
+            corpus_failure_code=getattr(
+                dataset,
+                "corpus_failure_code",
+                None,
+            ),
+            metadata_json=dataset.metadata_json,
+            case_count=self.repository.count_cases(
+                db,
+                evaluation_dataset_id=dataset.evaluation_dataset_id,
+            ),
+            created_by=dataset.created_by,
+            created_at=dataset.created_at,
+            updated_at=dataset.updated_at,
+        )
+
+    def _case_response(self, case: EvaluationCaseModel) -> EvaluationCaseResponse:
+        return EvaluationCaseResponse(
+            evaluation_case_id=case.evaluation_case_id,
+            evaluation_dataset_id=case.evaluation_dataset_id,
+            case_key=case.case_key,
+            question=case.question,
+            expected_answer=case.expected_answer,
+            expected_keywords=_string_list(case.expected_keywords),
+            expected_document_ids=_int_list(case.expected_document_ids),
+            expected_chunk_ids=_int_list(case.expected_chunk_ids),
+            required_citation=case.required_citation,
+            tags=_string_list(case.tags),
+            metadata_json=case.metadata_json,
+            status=case.status,
+            created_at=case.created_at,
+            updated_at=case.updated_at,
+        )
+
+    def _case_spec(self, case: EvaluationCaseModel) -> EvaluationCaseSpec:
+        return EvaluationCaseSpec(
+            case_key=case.case_key,
+            question=case.question,
+            expected_answer=case.expected_answer,
+            expected_keywords=_string_list(case.expected_keywords),
+            expected_document_ids=_int_list(case.expected_document_ids),
+            expected_chunk_ids=_int_list(case.expected_chunk_ids),
+            required_citation=case.required_citation,
+            tags=_string_list(case.tags),
+            metadata_json=case.metadata_json,
+            status=case.status,
+        )
+
+
+def _config(run: EvaluationRun) -> dict[str, object]:
+    config = run.metrics_config or {}
+    retrieval_settings = run.retrieval_settings_json or {}
+    dataset_name = config.get("dataset_name")
+    evaluation_dataset_id = config.get("evaluation_dataset_id")
+    case_limit = config.get("case_limit")
+    strategy_type = config.get("strategy_type") or run.strategy_type
+    raw_strategies = config.get("strategies")
+    raw_metrics = config.get("metrics")
+    raw_cache_modes = config.get("cache_modes")
+    raw_evaluation_scope = config.get("evaluation_scope")
+    raw_strategy_targets = config.get("strategy_targets")
+    top_k = config.get("top_k")
+    rerank_top_n = config.get("rerank_top_n")
+    generation_provider = _requested_generation_provider(config.get("generation_provider"))
+    generation_model = _requested_generation_model(config.get("generation_model"))
+    trigger_type = config.get("trigger_type") or run.trigger_type
+    raw_logical_document_ids = retrieval_settings.get("logical_document_ids")
+    logical_document_ids = (
+        list(
+            dict.fromkeys(
+                value
+                for value in raw_logical_document_ids
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0
+            )
+        )
+        if isinstance(raw_logical_document_ids, list)
+        else []
+    )
+    raw_corpus_fingerprint = retrieval_settings.get("corpus_fingerprint")
+    corpus_fingerprint = (
+        raw_corpus_fingerprint
+        if isinstance(raw_corpus_fingerprint, str) and raw_corpus_fingerprint
+        else run.corpus_fingerprint
+    )
+    strategies = (
+        [str(strategy) for strategy in raw_strategies if isinstance(strategy, str)]
+        if isinstance(raw_strategies, list)
+        else []
+    )
+    if not strategies and isinstance(strategy_type, str):
+        strategies = [strategy_type]
+    metrics = (
+        [str(metric) for metric in raw_metrics if isinstance(metric, str)]
+        if isinstance(raw_metrics, list)
+        else [metric.value for metric in DEFAULT_EVALUATION_METRICS]
+    )
+    cache_modes = (
+        [str(mode) for mode in raw_cache_modes if isinstance(mode, str)]
+        if isinstance(raw_cache_modes, list)
+        else [EvaluationCacheMode.DEFAULT.value]
+    )
+    strategy_targets = (
+        [target for target in raw_strategy_targets if isinstance(target, dict)]
+        if isinstance(raw_strategy_targets, list)
+        else []
+    )
+    evaluation_scope: EvaluationScope = (
+        cast(EvaluationScope, raw_evaluation_scope)
+        if raw_evaluation_scope in {"retrieval", "answer", "end_to_end"}
+        else _evaluation_scope_from_strategy_labels(strategies)
+    )
+    return {
+        "dataset_name": dataset_name if isinstance(dataset_name, str) else "phase1_smoke",
+        "evaluation_dataset_id": (
+            evaluation_dataset_id if isinstance(evaluation_dataset_id, int) else None
+        ),
+        "case_limit": case_limit if isinstance(case_limit, int) else None,
+        "strategy_type": strategy_type if isinstance(strategy_type, str) else "dense",
+        "strategies": strategies,
+        "metrics": metrics,
+        "cache_modes": cache_modes,
+        "evaluation_scope": evaluation_scope,
+        "strategy_targets": strategy_targets,
+        "top_k": top_k if isinstance(top_k, int) else None,
+        "rerank_top_n": rerank_top_n if isinstance(rerank_top_n, int) else None,
+        "generation_provider": generation_provider,
+        "generation_model": generation_model,
+        "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
+        "logical_document_ids": logical_document_ids,
+        "corpus_fingerprint": corpus_fingerprint,
+    }
+
+
+def _factory_accepts_generation_selection(
+    factory: Callable[..., EvaluationRagService],
+) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return "generation_provider" in parameters and "generation_model" in parameters
+
+
+def _requested_generation_provider(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    provider = _safe_optional_generation_label(value.lower(), max_length=50)
+    if provider is None or provider not in KNOWN_GENERATION_PROVIDERS:
+        return None
+    return provider
+
+
+def _callable_accepts_parameter(
+    callback: Callable[..., object],
+    parameter_name: str,
+) -> bool:
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return parameter_name in parameters
+
+
+def _call_evaluation_runner(
+    callback: Callable[..., RagEvaluationResult],
+    db: Session,
+    *,
+    kwargs: dict[str, object],
+    logical_document_ids: Sequence[int],
+    corpus_fingerprint: str | None = None,
+) -> RagEvaluationResult:
+    if logical_document_ids and _callable_accepts_parameter(callback, "logical_document_ids"):
+        kwargs["logical_document_ids"] = list(logical_document_ids)
+    if corpus_fingerprint and _callable_accepts_parameter(callback, "corpus_fingerprint"):
+        kwargs["corpus_fingerprint"] = corpus_fingerprint
+    return callback(db, **kwargs)
+
+
+def _requested_generation_model(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    model = value.strip()
+    if not model or model in {"redacted", "unknown"}:
+        return None
+    if len(model) > 128:
+        return None
+    if not _REQUESTED_GENERATION_MODEL_RE.fullmatch(model):
+        return None
+    if _REQUESTED_GENERATION_MODEL_SECRET_RE.search(model):
+        return None
+    return model
+
+
+def _fixture_planned_case_count(run: EvaluationRun) -> int:
+    config = _config(run)
+    try:
+        return len(
+            load_evaluation_cases(
+                cast(str, config["dataset_name"]),
+                case_limit=cast(int | None, config["case_limit"]),
+            )
+        )
+    except EvaluationFixtureError:
+        return 0
+
+
+def _result_input(
+    metric: MetricValue,
+    *,
+    strategy_type: str,
+    target: EvaluationStrategyTarget,
+) -> EvaluationResultInput:
+    detail = _metric_detail_with_target(metric.details, target=target)
+    return EvaluationResultInput(
+        metric_name=metric.metric_name,
+        metric_score=_decimal_score(metric.metric_score),
+        metric_value=_decimal_metric_value(
+            metric.metric_value if metric.metric_value is not None else metric.metric_score
+        ),
+        metric_label=metric.metric_label,
+        details_json=detail,
+        metric_detail_json=detail,
+        strategy_type=strategy_type,
+    )
+
+
+def _metric_decimal(metric: MetricValue | None) -> Decimal | None:
+    if metric is None:
+        return None
+    return _decimal_score(metric.metric_score)
+
+
+def _decimal_score(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(round(float(value), 6))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _decimal_cost_usd(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        return None
+    return Decimal(str(round(number, 6))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _decimal_metric_value(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(round(float(value), 6))).quantize(SCORE_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _decimal_float(value: Decimal | None) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _coverage(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 6)
+
+
+def _boolean_rate(values: Iterable[bool | None]) -> float | None:
+    applicable = [value for value in values if isinstance(value, bool)]
+    if not applicable:
+        return None
+    return round(sum(1 for value in applicable if value) / len(applicable), 6)
+
+
+def _evaluation_quality_status(
+    *,
+    run_status: str,
+    evaluation_scope: EvaluationScope,
+    applicable_count: int,
+    judged_count: int,
+    reviewed_count: int,
+    calibrated_rate: float | None,
+) -> EvaluationQualityStatus:
+    if evaluation_scope != "end_to_end":
+        return EvaluationQualityStatus.NOT_APPLICABLE
+    if run_status in {"queued", "running"}:
+        return EvaluationQualityStatus.PENDING
+    if applicable_count <= 0 or judged_count < applicable_count:
+        return EvaluationQualityStatus.PARTIAL
+    if reviewed_count < applicable_count:
+        return EvaluationQualityStatus.CALIBRATION_REQUIRED
+    return (
+        EvaluationQualityStatus.PASSED if calibrated_rate == 1.0 else EvaluationQualityStatus.FAILED
+    )
+
+
+def _resolved_answer_outcome(rag_result: RagEvaluationResult) -> str | None:
+    if rag_result.answer_outcome is not None:
+        return rag_result.answer_outcome
+    if rag_result.status == "succeeded":
+        return EvaluationAnswerOutcome.ANSWERED.value if rag_result.answer_text.strip() else None
+    if rag_result.error_code == "no_context_found":
+        return EvaluationAnswerOutcome.NO_CONTEXT.value
+    if rag_result.error_code == "citation_build_failed":
+        return EvaluationAnswerOutcome.CITATION_ERROR.value
+    if rag_result.error_code == "generation_failed":
+        return EvaluationAnswerOutcome.GENERATION_ERROR.value
+    return EvaluationAnswerOutcome.RETRIEVAL_ERROR.value
+
+
+def _non_negative_int_or_none(value: int | None) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 0 else None
+
+
+def _safe_optional_generation_label(value: str | None, *, max_length: int) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return _safe_generation_label(value, max_length=max_length)
+
+
+def _generation_summary(items: list[EvaluationRunItem]) -> EvaluationGenerationSummary:
+    succeeded_items = [item for item in items if item.status == "succeeded"]
+    cost_values = [
+        item.estimated_cost_usd for item in succeeded_items if item.estimated_cost_usd is not None
+    ]
+    input_tokens = [item.input_tokens for item in succeeded_items if item.input_tokens is not None]
+    output_tokens = [
+        item.output_tokens for item in succeeded_items if item.output_tokens is not None
+    ]
+    total_tokens = [item.total_tokens for item in succeeded_items if item.total_tokens is not None]
+    generation_latencies = [
+        item.generation_latency_ms
+        for item in succeeded_items
+        if item.generation_latency_ms is not None
+    ]
+    return EvaluationGenerationSummary(
+        total_estimated_cost_usd=round(float(sum(cost_values, Decimal("0"))), 6)
+        if cost_values
+        else None,
+        total_input_tokens=sum(input_tokens) if input_tokens else None,
+        total_output_tokens=sum(output_tokens) if output_tokens else None,
+        total_tokens=sum(total_tokens) if total_tokens else None,
+        avg_generation_latency_ms=round(
+            sum(generation_latencies) / len(generation_latencies),
+            3,
+        )
+        if generation_latencies
+        else None,
+        generation_providers=_distinct_generation_labels(
+            (item.generation_provider for item in succeeded_items),
+            max_length=50,
+        ),
+        generation_models=_distinct_generation_labels(
+            (item.generation_model for item in succeeded_items),
+            max_length=128,
+        ),
+    )
+
+
+def _distinct_generation_labels(values: Iterable[str | None], *, max_length: int) -> list[str]:
+    labels = {
+        label
+        for value in values
+        if isinstance(value, str)
+        for label in [_safe_optional_generation_label(value, max_length=max_length)]
+        if label is not None
+    }
+    return sorted(labels)
+
+
+def _metric_response(
+    result: EvaluationResult,
+    answer_generated: bool,
+) -> EvaluationMetricResult:
+    if result.metric_name in ANSWER_GENERATION_DEPENDENT_METRICS and not answer_generated:
+        details = dict(result.details_json or {})
+        details.update(
+            {
+                "not_applicable": True,
+                "reason_code": "answer_not_generated",
+            }
+        )
+        return EvaluationMetricResult(
+            metric_name=result.metric_name,
+            metric_score=None,
+            metric_value=None,
+            metric_label="not_applicable",
+            details=details,
+            metric_detail_json=details,
+            strategy_type=cast(RetrievalStrategy, result.strategy_type),
+        )
+    return EvaluationMetricResult(
+        metric_name=result.metric_name,
+        metric_score=_decimal_float(result.metric_score),
+        metric_value=_decimal_float(result.metric_value),
+        metric_label=result.metric_label,
+        details=result.details_json,
+        metric_detail_json=result.metric_detail_json,
+        strategy_type=cast(RetrievalStrategy, result.strategy_type),
+    )
+
+
+def _item_metric_summary_json(
+    payload: dict[str, object] | None,
+    *,
+    answer_generated: bool,
+) -> dict[str, object] | None:
+    if payload is None or answer_generated:
+        return payload
+    normalized = dict(payload)
+    raw_metrics = normalized.get("metrics")
+    if isinstance(raw_metrics, dict):
+        normalized["metrics"] = {
+            name: value
+            for name, value in raw_metrics.items()
+            if name not in ANSWER_GENERATION_DEPENDENT_METRICS
+        }
+    normalized["answer_metrics_not_applicable_reason"] = "answer_not_generated"
+    return normalized
+
+
+def _find_metric(metrics: list[MetricValue], name: str) -> MetricValue | None:
+    return next((metric for metric in metrics if metric.metric_name == name), None)
+
+
+def _filter_metrics(metrics: list[MetricValue], requested_metrics: set[str]) -> list[MetricValue]:
+    return [metric for metric in metrics if metric.metric_name in requested_metrics]
+
+
+def _replace_metrics(base: list[MetricValue], replacements: list[MetricValue]) -> list[MetricValue]:
+    if not replacements:
+        return base
+    replacement_names = {metric.metric_name for metric in replacements}
+    return [metric for metric in base if metric.metric_name not in replacement_names] + replacements
+
+
+def _metric_label(value: float | None) -> str:
+    if value is None:
+        return "not_applicable"
+    if value >= 0.75:
+        return "high"
+    if value >= 0.45:
+        return "medium"
+    return "low"
+
+
+def _dict_or_empty(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item)[:80] for item in value if isinstance(item, str)]
+
+
+def _safe_strategy_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return RetrievalStrategy(value).value
+    except ValueError:
+        return None
+
+
+def _safe_reason(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower().replace(" ", "_")
+    if not text:
+        return None
+    return text[:80]
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 6)
+    return None
+
+
+def _first_bool(*values: object) -> bool:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return False
+
+
+def _expected_strategy_hints(
+    metadata_json: dict[str, object] | None,
+) -> tuple[str | None, list[str]]:
+    metadata = metadata_json or {}
+    expected = _safe_strategy_value(metadata.get("expected_strategy"))
+    raw_acceptable = metadata.get("acceptable_strategies")
+    acceptable: list[str] = []
+    if isinstance(raw_acceptable, list):
+        for item in raw_acceptable:
+            strategy = _safe_strategy_value(item)
+            if strategy is not None and strategy not in acceptable:
+                acceptable.append(strategy)
+    return expected, acceptable
+
+
+def _target_metadata_json(target: EvaluationStrategyTarget) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": EVALUATION_TARGET_SCHEMA_VERSION,
+        "comparison_label": target.comparison_label,
+        "retrieval_strategy": target.retrieval_strategy.value,
+        "cache_mode": target.cache_mode.value,
+    }
+    if target.graph_store_provider is not None:
+        payload["graph_store_provider"] = target.graph_store_provider
+    return payload
+
+
+def _metric_detail_with_target(
+    details: dict[str, object],
+    *,
+    target: EvaluationStrategyTarget,
+) -> dict[str, object]:
+    merged = dict(details)
+    merged["evaluation_target"] = _target_metadata_json(target)
+    return merged
+
+
+def _safe_label_value(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text or len(text) > max_length:
+        return None
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789_.-:")
+    if any(char not in allowed for char in text):
+        return None
+    return text
+
+
+def _safe_cache_mode(value: object) -> EvaluationCacheMode | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return EvaluationCacheMode(value)
+    except ValueError:
+        return None
+
+
+def _safe_cache_status(value: object) -> str:
+    if isinstance(value, str) and value in {"hit", "miss", "stale", "bypass"}:
+        return value
+    return "bypass"
+
+
+def _safe_graph_provider(value: object) -> str | None:
+    if isinstance(value, str) and value.strip().lower() in {"postgres", "neo4j"}:
+        return value.strip().lower()
+    return None
+
+
+def _list_graph_paths(
+    db: Session,
+    *,
+    retrieval_run_id: int | None,
+) -> list[GraphRetrievalPath]:
+    if retrieval_run_id is None:
+        return []
+    return list(
+        db.scalars(
+            select(GraphRetrievalPath)
+            .where(GraphRetrievalPath.retrieval_run_id == retrieval_run_id)
+            .order_by(GraphRetrievalPath.graph_retrieval_path_id.asc())
+        ).all()
+    )
+
+
+def _selected_retrieval_source_chunk_ids(
+    db: Session,
+    *,
+    retrieval_run_id: int | None,
+) -> set[int]:
+    if retrieval_run_id is None:
+        return set()
+    return {
+        chunk_id
+        for chunk_id in db.scalars(
+            select(RetrievalRunItem.document_chunk_id).where(
+                RetrievalRunItem.retrieval_run_id == retrieval_run_id,
+                RetrievalRunItem.selected_flag.is_(True),
+            )
+        ).all()
+        if isinstance(chunk_id, int) and chunk_id > 0
+    }
+
+
+def _filter_graph_paths_for_source_chunk_ids(
+    graph_paths: list[GraphRetrievalPath],
+    source_chunk_ids: set[int],
+) -> list[GraphRetrievalPath]:
+    if not source_chunk_ids:
+        return []
+    return [
+        path
+        for path in graph_paths
+        if _path_positive_ids(path.source_chunk_ids_json) & source_chunk_ids
+    ]
+
+
+def _not_applicable_graph_metrics(
+    *,
+    target: EvaluationStrategyTarget,
+    reason_code: str,
+    provider: str | None = None,
+    reason_codes: list[str] | None = None,
+) -> list[MetricValue]:
+    details = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "not_applicable": True,
+        "reason_code": reason_code,
+        "graph_store_provider": provider or target.graph_store_provider,
+        "reason_codes": reason_codes or [reason_code],
+    }
+    return [
+        MetricValue(
+            metric_name="graph_path_relevance",
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+        MetricValue(
+            metric_name="graph_citation_coverage",
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+        MetricValue(
+            metric_name="multi_hop_answerability",
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+        MetricValue(
+            metric_name="entity_relation_quality_summary",
+            metric_score=None,
+            metric_value=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+    ]
+
+
+def _graph_path_relevance_metric(
+    *,
+    graph_paths: list[GraphRetrievalPath],
+    metadata_json: dict[str, object] | None,
+    provider: str | None,
+    reason_codes: list[str],
+) -> MetricValue:
+    expected_entities = _metadata_string_set(metadata_json, "expected_entity_labels")
+    expected_relations = _metadata_string_set(metadata_json, "expected_relation_types")
+    observed_entities = {
+        label
+        for path in graph_paths
+        for label in _path_string_values(path.path_json, "safe_entity_labels")
+    }
+    observed_relations = {
+        relation
+        for path in graph_paths
+        for relation in _path_string_values(path.path_json, "relation_types")
+    }
+    expected_count = len(expected_entities) + len(expected_relations)
+    matched_count = len(expected_entities & observed_entities) + len(
+        expected_relations & observed_relations
+    )
+    if expected_count <= 0:
+        return MetricValue(
+            metric_name="graph_path_relevance",
+            metric_score=None,
+            metric_label="not_applicable",
+            details={
+                "schema_version": EVALUATION_SCHEMA_VERSION,
+                "not_applicable": True,
+                "reason_code": "graph_relevance_hints_missing",
+                "graph_store_provider": provider,
+                "path_count": len(graph_paths),
+                "expected_entity_label_count": 0,
+                "matched_entity_label_count": 0,
+                "expected_relation_type_count": 0,
+                "matched_relation_type_count": 0,
+                "reason_codes": reason_codes,
+            },
+        )
+    score = _ratio_float(matched_count, expected_count)
+    return MetricValue(
+        metric_name="graph_path_relevance",
+        metric_score=score,
+        metric_label=_metric_label(score),
+        details={
+            "schema_version": EVALUATION_SCHEMA_VERSION,
+            "graph_store_provider": provider,
+            "path_count": len(graph_paths),
+            "expected_entity_label_count": len(expected_entities),
+            "matched_entity_label_count": len(expected_entities & observed_entities),
+            "expected_relation_type_count": len(expected_relations),
+            "matched_relation_type_count": len(expected_relations & observed_relations),
+            "reason_codes": reason_codes,
+        },
+    )
+
+
+def _graph_citation_coverage_metric(
+    db: Session,
+    *,
+    graph_paths: list[GraphRetrievalPath],
+    retrieval_run_id: int | None,
+    provider: str | None,
+) -> MetricValue:
+    if retrieval_run_id is None:
+        coverage = calculate_graph_citation_coverage(
+            validated_paths=(),
+            citation_source_count=0,
+        )
+    else:
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            paths=graph_paths,
+        )
+        validated = GraphPathValidator().validate(paths=graph_paths, located_sources=located)
+        coverage = calculate_graph_citation_coverage(
+            validated_paths=validated,
+            citation_source_count=sum(
+                len(mapping.citation_ids) for path in validated for mapping in path.source_mappings
+            ),
+        )
+    return MetricValue(
+        metric_name="graph_citation_coverage",
+        metric_score=coverage.citation_coverage_ratio,
+        metric_label=_metric_label(coverage.citation_coverage_ratio),
+        details={
+            "schema_version": EVALUATION_SCHEMA_VERSION,
+            "graph_store_provider": provider,
+            "path_count": coverage.path_count,
+            "valid_path_count": coverage.valid_path_count,
+            "citable_path_count": coverage.citable_path_count,
+            "excluded_path_count": coverage.excluded_path_count,
+            "source_chunk_count": coverage.source_chunk_count,
+            "resolved_source_chunk_count": coverage.resolved_source_chunk_count,
+            "citable_source_chunk_count": coverage.citable_source_chunk_count,
+            "citation_source_count": coverage.citation_source_count,
+            "source_chunk_coverage_ratio": coverage.source_chunk_coverage_ratio,
+            "reason_codes": list(coverage.reason_codes),
+        },
+    )
+
+
+def _multi_hop_answerability_metric(
+    *,
+    graph_paths: list[GraphRetrievalPath],
+    metadata_json: dict[str, object] | None,
+    retrieval_summary: object,
+    provider: str | None,
+) -> MetricValue:
+    required_hops = _metadata_positive_int(metadata_json, "required_hop_count")
+    if required_hops is None:
+        return MetricValue(
+            metric_name="multi_hop_answerability",
+            metric_score=None,
+            metric_label="not_applicable",
+            details={
+                "schema_version": EVALUATION_SCHEMA_VERSION,
+                "not_applicable": True,
+                "reason_code": "required_hop_count_missing",
+                "graph_store_provider": provider,
+            },
+        )
+    max_depth = max((_path_depth(path) for path in graph_paths), default=0)
+    raw_selected_count = getattr(retrieval_summary, "selected_count", 0)
+    selected_count = raw_selected_count if isinstance(raw_selected_count, int) else 0
+    score = 1.0 if max_depth >= required_hops and selected_count > 0 else 0.0
+    return MetricValue(
+        metric_name="multi_hop_answerability",
+        metric_score=score,
+        metric_label=_metric_label(score),
+        details={
+            "schema_version": EVALUATION_SCHEMA_VERSION,
+            "graph_store_provider": provider,
+            "required_hop_count": required_hops,
+            "max_observed_hop_count": max_depth,
+            "selected_count": selected_count,
+            "path_count": len(graph_paths),
+        },
+    )
+
+
+def _entity_relation_quality_metric(
+    *,
+    graph_paths: list[GraphRetrievalPath],
+    provider: str | None,
+    score_summary: dict[str, object],
+    case: EvaluationCase,
+) -> MetricValue:
+    entity_labels = {
+        label
+        for path in graph_paths
+        for label in _path_string_values(path.path_json, "safe_entity_labels")
+    }
+    relation_types = {
+        relation
+        for path in graph_paths
+        for relation in _path_string_values(path.path_json, "relation_types")
+    }
+    path_count = len(graph_paths)
+    return MetricValue(
+        metric_name="entity_relation_quality_summary",
+        metric_score=None,
+        metric_value=float(path_count),
+        metric_label="count",
+        details={
+            "schema_version": EVALUATION_SCHEMA_VERSION,
+            "case_id": case.case_id,
+            "graph_store_provider": provider,
+            "path_count": path_count,
+            "safe_entity_label_count": len(entity_labels),
+            "relation_type_count": len(relation_types),
+            "source_chunk_id_count": len(
+                {
+                    chunk_id
+                    for path in graph_paths
+                    for chunk_id in _path_positive_ids(path.source_chunk_ids_json)
+                }
+            ),
+            "graph_entity_lookup_count": _float_or_none(
+                score_summary.get("graph_entity_lookup_count")
+            ),
+            "graph_relation_count": _float_or_none(score_summary.get("graph_relation_count")),
+            "graph_source_candidate_count": _float_or_none(
+                score_summary.get("graph_source_candidate_count")
+            ),
+        },
+    )
+
+
+def _metadata_string_set(
+    metadata_json: dict[str, object] | None,
+    key: str,
+) -> set[str]:
+    metadata = metadata_json or {}
+    raw = metadata.get(key)
+    if not isinstance(raw, list):
+        return set()
+    values: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip().lower()
+        if normalized and len(normalized) <= 120:
+            values.add(normalized)
+    return values
+
+
+def _metadata_positive_int(
+    metadata_json: dict[str, object] | None,
+    key: str,
+) -> int | None:
+    metadata = metadata_json or {}
+    value = metadata.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _path_string_values(path_json: dict[str, object], key: str) -> set[str]:
+    raw = path_json.get(key)
+    if not isinstance(raw, list):
+        return set()
+    return {
+        value.strip().lower()
+        for value in raw
+        if isinstance(value, str) and value.strip() and len(value.strip()) <= 120
+    }
+
+
+def _path_depth(path: GraphRetrievalPath) -> int:
+    raw = path.path_json.get("depth")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return max(0, raw)
+
+
+def _path_positive_ids(values: object) -> set[int]:
+    if not isinstance(values, list):
+        return set()
+    return {
+        int(value)
+        for value in values
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    }
+
+
+def _ratio_float(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(max(0.0, min(1.0, numerator / denominator)), 6)
+
+
+def _is_graph_provider_unavailable(reason_codes: list[str]) -> bool:
+    return "graph_store_provider_unavailable" in reason_codes
+
+
+def _provider_skip_reason(reason_codes: list[str]) -> str:
+    for reason in (
+        "neo4j_not_configured",
+        "neo4j_driver_unavailable",
+        "neo4j_connection_failed",
+        "graph_store_provider_unavailable",
+    ):
+        if reason in reason_codes:
+            return reason
+    return "graph_store_provider_unavailable"
+
+
+def _is_safe_provider_skip(rag_result: RagEvaluationResult) -> bool:
+    summary = (
+        rag_result.retrieval_score_summary.model_dump(mode="json")
+        if rag_result.retrieval_score_summary is not None
+        else {}
+    )
+    reason_codes = _string_values(summary.get("graph_reason_codes"))
+    return _is_graph_provider_unavailable(reason_codes)
+
+
+def _provider_skip_base_metric_replacements(
+    *,
+    target: EvaluationStrategyTarget,
+    rag_result: RagEvaluationResult,
+) -> list[MetricValue]:
+    summary = (
+        rag_result.retrieval_score_summary.model_dump(mode="json")
+        if rag_result.retrieval_score_summary is not None
+        else {}
+    )
+    reason_codes = _string_values(summary.get("graph_reason_codes"))
+    reason_code = _provider_skip_reason(reason_codes)
+    provider = _safe_graph_provider(
+        target.graph_store_provider or summary.get("graph_store_provider")
+    )
+    details = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "not_applicable": True,
+        "reason_code": reason_code,
+        "reason_codes": reason_codes or [reason_code],
+        "graph_store_provider": provider,
+    }
+    return [
+        MetricValue(
+            metric_name=metric_name,
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        )
+        for metric_name in sorted(PROVIDER_SKIP_BASE_METRICS)
+    ]
+
+
+def _requires_strategy_target_runner(target: EvaluationStrategyTarget) -> bool:
+    return (
+        target.graph_store_provider is not None or target.cache_mode != EvaluationCacheMode.DEFAULT
+    )
+
+
+def _is_cacheable_target(target: EvaluationStrategyTarget) -> bool:
+    return target.retrieval_strategy in CACHEABLE_EVALUATION_STRATEGIES
+
+
+def _not_applicable_cache_metrics(
+    *,
+    target: EvaluationStrategyTarget,
+    reason_code: str,
+) -> list[MetricValue]:
+    details = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "not_applicable": True,
+        "reason_code": reason_code,
+        "cache_mode": target.cache_mode.value,
+    }
+    return [
+        MetricValue(
+            metric_name="cache_hit_rate",
+            metric_score=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+        MetricValue(
+            metric_name="cache_saved_latency",
+            metric_score=None,
+            metric_value=None,
+            metric_label="not_applicable",
+            details=details,
+        ),
+    ]
+
+
+def _evaluation_scope_from_targets(
+    targets: list[EvaluationStrategyTarget],
+) -> EvaluationScope:
+    if any(target.retrieval_strategy in ASK_ONLY_EVALUATION_STRATEGIES for target in targets):
+        return "end_to_end"
+    return "retrieval"
+
+
+def _evaluation_scope_from_strategy_labels(strategies: list[str]) -> EvaluationScope:
+    if any(
+        _base_comparison_label(label) in ASK_ONLY_EVALUATION_STRATEGY_VALUES for label in strategies
+    ):
+        return "end_to_end"
+    return "retrieval"
+
+
+def _selected_strategy_targets(
+    payload: EvaluationRunCreateRequest,
+) -> list[EvaluationStrategyTarget]:
+    cache_modes = _selected_cache_modes(payload.cache_modes)
+    targets: list[EvaluationStrategyTarget] = []
+    seen: set[tuple[str, str, str | None, str]] = set()
+    for strategy in payload.strategies or [payload.strategy_type]:
+        base_target = _target_from_request_strategy(strategy)
+        for cache_mode in _target_cache_modes(base_target, cache_modes):
+            target = EvaluationStrategyTarget(
+                comparison_label=_comparison_label(base_target, cache_mode),
+                retrieval_strategy=base_target.retrieval_strategy,
+                graph_store_provider=base_target.graph_store_provider,
+                cache_mode=cache_mode,
+            )
+            key = (
+                target.comparison_label,
+                target.retrieval_strategy.value,
+                target.graph_store_provider,
+                target.cache_mode.value,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append(target)
+    return targets
+
+
+def _target_cache_modes(
+    target: EvaluationStrategyTarget,
+    cache_modes: list[EvaluationCacheMode],
+) -> list[EvaluationCacheMode]:
+    if _is_cacheable_target(target):
         return cache_modes
     return [EvaluationCacheMode.DEFAULT]
 
