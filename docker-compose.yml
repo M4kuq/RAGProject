@@ -61,6 +61,9 @@ x-backend-env: &backend-env
   LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
   LMSTUDIO_API_KEY: ${LMSTUDIO_API_KEY:-lm-studio}
   LMSTUDIO_TIMEOUT_SECONDS: ${LMSTUDIO_TIMEOUT_SECONDS:-600}
+  NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+  NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+  NVIDIA_TIMEOUT_SECONDS: ${NVIDIA_TIMEOUT_SECONDS:-60}
   LLM_ORCHESTRATOR_TIMEOUT_SECONDS: ${LLM_ORCHESTRATOR_TIMEOUT_SECONDS:-600}
   LANGCHAIN_AGENTIC_TIMEOUT_SECONDS: ${LANGCHAIN_AGENTIC_TIMEOUT_SECONDS:-600}
   MCP_TRANSPORT: ${MCP_TRANSPORT:-stdio}
@@ -247,6 +250,7 @@ services:
       target: dev
     environment:
       VITE_API_BASE_URL: ""
+      VITE_ENABLE_NVIDIA_API: ${VITE_ENABLE_NVIDIA_API:-true}
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:
@@ -264,3 +268,4 @@ volumes:
     name: ragproject_upload_storage
   neo4j_data:
     name: ragproject_neo4j_data
+

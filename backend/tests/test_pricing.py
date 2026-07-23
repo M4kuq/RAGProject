@@ -19,6 +19,16 @@ def test_estimate_cost_usd_for_known_model() -> None:
     assert cost == 6.25
 
 
+def test_estimate_cost_usd_treats_nvidia_catalog_endpoint_as_free() -> None:
+    cost = estimate_cost_usd(
+        "nvidia",
+        "meta/llama-3.3-70b-instruct",
+        TokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+    )
+
+    assert cost == 0.0
+
+
 def test_estimate_cost_usd_unknown_model_returns_none() -> None:
     cost = estimate_cost_usd(
         "openai",
@@ -94,3 +104,4 @@ def test_settings_empty_generation_pricing_overrides_env_degrades_to_empty(
     settings = Settings(_env_file=None)
 
     assert settings.generation_pricing_overrides == {}
+

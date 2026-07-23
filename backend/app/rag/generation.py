@@ -276,12 +276,14 @@ class OpenAICompatibleChatAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int = 8192,
+        disable_thinking: bool = True,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.disable_thinking = disable_thinking
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
@@ -295,8 +297,14 @@ class OpenAICompatibleChatAnswerGenerator:
                 },
                 json={
                     "model": self.model_name,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "enable_thinking": False,
+                    **(
+                        {
+                            "chat_template_kwargs": {"enable_thinking": False},
+                            "enable_thinking": False,
+                        }
+                        if self.disable_thinking
+                        else {}
+                    ),
                     "messages": [
                         {"role": "system", "content": _system_instructions(request)},
                         {"role": "user", "content": _openai_input(request)},
@@ -550,6 +558,21 @@ def create_answer_generator(
             timeout_seconds=timeout_seconds or settings.lmstudio_timeout_seconds,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
         )
+    if generation_provider == "nvidia":
+        if (
+            settings.app_env.lower() not in {"local", "test"}
+            or not settings.nvidia_api_key
+            or not settings.nvidia_base_url
+        ):
+            raise AnswerGenerationError()
+        return OpenAICompatibleChatAnswerGenerator(
+            api_key=settings.nvidia_api_key,
+            base_url=settings.nvidia_base_url,
+            model_name=generation_model_name,
+            timeout_seconds=timeout_seconds or settings.nvidia_timeout_seconds,
+            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+            disable_thinking=False,
+        )
     if generation_provider == "openai" and settings.openai_api_key:
         return OpenAIResponsesAnswerGenerator(
             api_key=settings.openai_api_key,
@@ -752,7 +775,7 @@ def _openai_input(request: GenerationRequest) -> str:
         "'analysis', step-by-step reasoning, or a draft. Return the final answer only. "
         "Use the insufficient-evidence sentence only when none of the shown context items "
         "directly supports an answer. In that case, write exactly this sentence: "
-        "検索された文書には、この質問に答えるための十分な根拠がありません。"
+        "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ縲・
     )
 
 
@@ -1082,8 +1105,8 @@ def _final_answer_text(value: str) -> str:
         "Drafting the response:",
         "Draft:",
         "Response:",
-        "最終回答:",
-        "回答:",
+        "譛邨ょ屓遲・",
+        "蝗樒ｭ・",
     ):
         if marker in text:
             text = text.rsplit(marker, 1)[1].strip()
@@ -1106,7 +1129,7 @@ def _final_answer_text(value: str) -> str:
         "\nActually,",
         " Let's ",
         "\nLet's ",
-        "检查",
+        "譽譟･",
     ):
         if marker in text:
             text = text.split(marker, 1)[0].strip()
@@ -1117,9 +1140,9 @@ def _final_answer_text(value: str) -> str:
 
 def _trim_incomplete_tail(text: str) -> str:
     stripped = text.strip()
-    if not stripped or stripped.endswith(("。", ".", "!", "?", "！", "？", "]")):
+    if not stripped or stripped.endswith(("縲・, ".", "!", "?", "・・, "・・, "]")):
         return stripped
-    last_sentence_end = max(stripped.rfind(marker) for marker in ("。", ".", "!", "?", "！", "？"))
+    last_sentence_end = max(stripped.rfind(marker) for marker in ("縲・, ".", "!", "?", "・・, "・・))
     if last_sentence_end < 0:
         return stripped
     return stripped[: last_sentence_end + 1].strip()
@@ -1169,7 +1192,7 @@ def _rewrite_insufficient_evidence_answer(value: str) -> str:
         return value
     marker_match = re.search(r"\[(\d+)\]", value)
     marker = f" [{marker_match.group(1)}]" if marker_match else ""
-    return f"検索された引用では、この質問への回答を確定できません{marker}。"
+    return f"讀懃ｴ｢縺輔ｌ縺溷ｼ慕畑縺ｧ縺ｯ縲√％縺ｮ雉ｪ蝠上∈縺ｮ蝗樒ｭ斐ｒ遒ｺ螳壹〒縺阪∪縺帙ｓ{marker}縲・
 
 
 def _normalize_generated_text(value: str) -> str:
@@ -1180,3 +1203,4 @@ def _normalize_generated_text(value: str) -> str:
 def _safe_label(value: str) -> str:
     normalized = " ".join(value.replace("\x00", " ").split())
     return normalized.replace("[", "(").replace("]", ")")[:255]
+

@@ -270,6 +270,7 @@ afterEach(() => {
   document.cookie = "rag_csrf=; Max-Age=0; path=/";
   window.localStorage.clear();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 test("shows temporary chat action only on the blank new chat screen", async () => {
@@ -338,8 +339,8 @@ test("renders a ChatGPT-style shell with saved chats in the sidebar", async () =
   const actionMenu = screen.getByRole("menu");
   expect(actionMenu).toHaveClass("floating");
   expect(actionMenu.closest(".chat-thread-list")).toBeNull();
-  expect(screen.getByRole("menuitem", { name: "編集" })).toHaveClass("chat-menu-item");
-  expect(screen.getByRole("menuitem", { name: "削除" })).toHaveClass("danger");
+  expect(screen.getByRole("menuitem", { name: "邱ｨ髮・ })).toHaveClass("chat-menu-item");
+  expect(screen.getByRole("menuitem", { name: "蜑企勁" })).toHaveClass("danger");
   expect(screen.getByRole("link", { name: "Admin" })).toBeInTheDocument();
   expect(screen.getByText(/Each chat keeps its own history in Postgres/)).toBeInTheDocument();
 });
@@ -387,7 +388,7 @@ test("renders citation filenames for persisted assistant messages", async () => 
   expect(confidenceBadge).toBeInTheDocument();
   expect(confidenceBadge).toHaveAttribute(
     "title",
-    expect.stringContaining("回答の正確さを保証するものではありません")
+    expect.stringContaining("蝗樒ｭ斐・豁｣遒ｺ縺輔ｒ菫晁ｨｼ縺吶ｋ繧ゅ・縺ｧ縺ｯ縺ゅｊ縺ｾ縺帙ｓ")
   );
   expect(screen.getByText(/\[1\] phase1-seed\.md/)).toBeInTheDocument();
   expect(screen.getByText("Architecture")).toBeInTheDocument();
@@ -443,22 +444,22 @@ test("opens a bounded citation source preview with admin deep link", async () =>
   renderChat("/chat/10");
 
   expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "出典を表示" }));
+  fireEvent.click(screen.getByRole("button", { name: "蜃ｺ蜈ｸ繧定｡ｨ遉ｺ" }));
 
   expect(await screen.findByText("Safe bounded source preview")).toBeInTheDocument();
   expect(screen.getByText("v3")).toBeInTheDocument();
   expect(screen.getByText("#301")).toBeInTheDocument();
-  expect(screen.getByText("外部URL")).toBeInTheDocument();
-  expect(screen.getByText("プレビューは一部のみ表示しています。")).toBeInTheDocument();
+  expect(screen.getByText("螟夜ΚURL")).toBeInTheDocument();
+  expect(screen.getByText("繝励Ξ繝薙Η繝ｼ縺ｯ荳驛ｨ縺ｮ縺ｿ陦ｨ遉ｺ縺励※縺・∪縺吶・)).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "https://example.com/redacted/guide" })).toHaveAttribute(
     "rel",
     "noopener noreferrer"
   );
-  expect(screen.getByRole("link", { name: "文書 #77 を開く" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "譁・嶌 #77 繧帝幕縺・ })).toHaveAttribute(
     "href",
     "/admin/documents/77"
   );
-  expect(screen.getByRole("link", { name: "版比較を開く" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "迚域ｯ碑ｼ・ｒ髢九￥" })).toHaveAttribute(
     "href",
     "/admin/documents/77#version-compare"
   );
@@ -493,17 +494,17 @@ test("keeps the active citation source loading when a stale request fails", asyn
   renderChat("/chat/10");
 
   expect(await screen.findByText("Phase1 uses local RAG components [1].")).toBeInTheDocument();
-  fireEvent.click(screen.getAllByRole("button", { name: "出典を表示" })[0]);
-  expect(await screen.findByText("出典を読み込み中...")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "出典を表示" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "蜃ｺ蜈ｸ繧定｡ｨ遉ｺ" })[0]);
+  expect(await screen.findByText("蜃ｺ蜈ｸ繧定ｪｭ縺ｿ霎ｼ縺ｿ荳ｭ...")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "蜃ｺ蜈ｸ繧定｡ｨ遉ｺ" }));
 
   await act(async () => {
     rejectFirstSource?.(new Error("stale source failed"));
     await Promise.resolve();
   });
 
-  expect(screen.getByText("出典を読み込み中...")).toBeInTheDocument();
-  expect(screen.queryByText("出典プレビューを読み込めませんでした。")).not.toBeInTheDocument();
+  expect(screen.getByText("蜃ｺ蜈ｸ繧定ｪｭ縺ｿ霎ｼ縺ｿ荳ｭ...")).toBeInTheDocument();
+  expect(screen.queryByText("蜃ｺ蜈ｸ繝励Ξ繝薙Η繝ｼ繧定ｪｭ縺ｿ霎ｼ繧√∪縺帙ｓ縺ｧ縺励◆縲・)).not.toBeInTheDocument();
 
   await act(async () => {
     resolveSecondSource?.(
@@ -522,7 +523,7 @@ test("keeps the active citation source loading when a stale request fails", asyn
   });
 
   expect(await screen.findByText("Second source preview")).toBeInTheDocument();
-  expect(screen.queryByText("出典プレビューを読み込めませんでした。")).not.toBeInTheDocument();
+  expect(screen.queryByText("蜃ｺ蜈ｸ繝励Ξ繝薙Η繝ｼ繧定ｪｭ縺ｿ霎ｼ繧√∪縺帙ｓ縺ｧ縺励◆縲・)).not.toBeInTheDocument();
 });
 
 test("can delete a saved chat from the sidebar", async () => {
@@ -544,9 +545,9 @@ test("can delete a saved chat from the sidebar", async () => {
   renderChat("/chat/10");
   await screen.findByRole("heading", { name: "Demo chat" });
   fireEvent.click(screen.getByRole("button", { name: "Chat actions for Demo chat" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "削除" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "蜑企勁" }));
   const dialog = await screen.findByRole("dialog", { name: "Delete chat" });
-  const permanent = within(dialog).getByRole("checkbox", { name: "完全に削除しますか？" });
+  const permanent = within(dialog).getByRole("checkbox", { name: "螳悟・縺ｫ蜑企勁縺励∪縺吶°・・ });
   expect(permanent).toBeChecked();
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
@@ -583,7 +584,7 @@ test("can edit a saved chat from the action menu", async () => {
   renderChat("/chat/10");
   await screen.findByRole("heading", { name: "Demo chat" });
   fireEvent.click(screen.getByRole("button", { name: "Chat actions for Demo chat" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "編集" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "邱ｨ髮・ }));
   const dialog = await screen.findByRole("dialog", { name: "Edit chat" });
   fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Edited chat" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -621,9 +622,9 @@ test("can archive instead of hard deleting from the delete dialog", async () => 
   renderChat("/chat/10");
   await screen.findByRole("heading", { name: "Demo chat" });
   fireEvent.click(screen.getByRole("button", { name: "Chat actions for Demo chat" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "削除" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "蜑企勁" }));
   const dialog = await screen.findByRole("dialog", { name: "Delete chat" });
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: "完全に削除しますか？" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "螳悟・縺ｫ蜑企勁縺励∪縺吶°・・ }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
   await waitFor(() =>
@@ -701,7 +702,7 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
   expect(await screen.findByText("RAG answers with grounded citations [1].")).toBeInTheDocument();
   expect(screen.getByText("Auto: dense + hybrid")).toBeInTheDocument();
   expect(screen.getByText("Confidence High")).toBeInTheDocument();
-  expect(screen.getByText("旧版")).toBeInTheDocument();
+  expect(screen.getByText("譌ｧ迚・)).toBeInTheDocument();
   expect(screen.getByText(/handbook\.pdf/)).toBeInTheDocument();
   expect(screen.getByText("Grounded citation preview")).toBeInTheDocument();
   expect(screen.queryByText("999")).not.toBeInTheDocument();
@@ -867,7 +868,7 @@ test("renders fallback confidence and sparse citation fields without crashing", 
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
   expect(await screen.findByText("Confidence Unknown")).toBeInTheDocument();
-  expect(screen.getByText(/\[1\] 出典/)).toBeInTheDocument();
+  expect(screen.getByText(/\[1\] 蜃ｺ蜈ｸ/)).toBeInTheDocument();
 });
 
 test("no_context keeps the user message, removes loading, and shows safe error", async () => {
@@ -1076,3 +1077,51 @@ test("reload after failed ask renders only the persisted user message", async ()
   expect(screen.queryByText("Assistant")).not.toBeInTheDocument();
   expect(screen.queryByText("Generating answer...")).not.toBeInTheDocument();
 });
+
+test("sends an enabled NVIDIA model key and shows the external data warning", async () => {
+  vi.stubEnv("VITE_ENABLE_NVIDIA_API", "true");
+  document.cookie = "rag_csrf=csrf-token";
+  vi.stubGlobal("crypto", { randomUUID: () => "nvidia-fixed" });
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/api/v1/auth/me")) return jsonResponse(meResponse());
+    if (path.includes("/api/v1/chat/sessions?")) return jsonResponse(historyResponse());
+    if (path.endsWith("/api/v1/chat/sessions/10")) return jsonResponse(sessionResponse());
+    if (path.includes("/api/v1/chat/sessions/10/messages")) return jsonResponse(emptyMessages());
+    if (path.endsWith("/api/v1/rag/ask") && init?.method === "POST") {
+      return jsonResponse(askSuccess());
+    }
+    return jsonResponse({ data: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderChat("/chat/10");
+
+  await screen.findByRole("heading", { name: "Demo chat" });
+  const nvidiaModelKey = "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5";
+  expect(
+    screen.getByRole("option", {
+      name: "NVIDIA Nemotron Super 49B (fast, recommended, external)"
+    })
+  ).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("model"), {
+    target: { value: nvidiaModelKey }
+  });
+  expect(screen.getByRole("status")).toHaveTextContent("NVIDIA");
+  fireEvent.change(screen.getByLabelText("message"), {
+    target: { value: "What is RAG?" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  const askCall = await waitFor(() => {
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/api/v1/rag/ask") && init?.method === "POST"
+    );
+    expect(call).toBeTruthy();
+    return call as [string, RequestInit];
+  });
+  expect(JSON.parse(String(askCall[1].body))).toMatchObject({
+    model_key: nvidiaModelKey
+  });
+});
+

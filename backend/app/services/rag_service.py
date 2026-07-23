@@ -645,6 +645,8 @@ class RagService:
             rerank_top_n=rerank_top_n,
             filters=filters,
             strategy_type=requested_strategy,
+            generation_provider=generation_selection.provider,
+            generation_model=generation_selection.model_name,
         )
         if requested_strategy == RetrievalStrategy.AGENTIC_ROUTER:
             assert router_decision is not None
@@ -2807,7 +2809,7 @@ class RagService:
         if provider == "google":
             provider = "gemini"
         if (
-            provider not in {"lmstudio", "openai", "anthropic", "gemini", "bedrock"}
+            provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
             or not separator
             or not model_name
         ):
@@ -3334,6 +3336,8 @@ def _retrieval_settings_snapshot(
     rerank_top_n: int,
     filters: RetrievalFilters,
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY,
+    generation_provider: str | None = None,
+    generation_model: str | None = None,
 ) -> dict[str, object]:
     snapshot = build_retrieval_settings_snapshot(
         settings=settings,
@@ -3342,6 +3346,14 @@ def _retrieval_settings_snapshot(
         filters=filters,
         strategy_type=strategy_type,
     )
+    if generation_provider is not None:
+        snapshot["generation_provider"] = _safe_generation_label(
+            generation_provider,
+            max_length=100,
+        )
+    if generation_model is not None:
+        snapshot["generation_model"] = _safe_generation_label(generation_model, max_length=128)
+
     if strategy_type == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
         snapshot.update(
             TraceRedactor.safe_dict(
@@ -4632,8 +4644,8 @@ def _insufficient_citation_fallback(
         raise CitationBuildError("citation_build_failed")
     first_source = prompt_citation_sources[0]
     fallback = (
-        "検索された文書には、この質問に直接答えるための十分な根拠がありません "
-        f"[{first_source.local_citation_id}]。"
+        "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓逶ｴ謗･遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ "
+        f"[{first_source.local_citation_id}]縲・
     )
     parsed_generation = parse_generation_output(fallback)
     cited_sources = validate_generation_citations(
@@ -4840,3 +4852,4 @@ def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+

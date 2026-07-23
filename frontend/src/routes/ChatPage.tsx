@@ -19,18 +19,17 @@ import {
   useUpdateChatSessionTitle
 } from "../features/chat/chatHooks";
 import { ApiError } from "../lib/apiClient";
+import {
+  buildChatModelOptions,
+  DEFAULT_MODEL,
+  isNvidiaModelKey,
+  NVIDIA_EXTERNAL_DATA_WARNING,
+  resolveSavedChatModel
+} from "../lib/modelCatalog";
 import { queryKeys } from "../lib/queryKeys";
 
 const DEFAULT_TOP_K = 20;
 const DEFAULT_RERANK_TOP_N = 5;
-const DEFAULT_MODEL = "lmstudio:qwen3.5-9b";
-const MODEL_OPTIONS = [
-  { value: DEFAULT_MODEL, label: "Local Qwen3.5" },
-  { value: "openai:gpt-5.5", label: "GPT 5.5" },
-  { value: "openai:gpt-5.4", label: "GPT 5.4" },
-  { value: "anthropic:claude-sonnet-4-20250514", label: "Claude" },
-  { value: "gemini:gemini-2.5-flash", label: "Gemini" }
-];
 const RAG_STRATEGY_OPTIONS = [
   {
     value: "llm_tool_orchestrator" as const,
@@ -70,7 +69,7 @@ const RAG_STRATEGY_OPTIONS = [
   {
     value: "agentic_router" as const,
     label: "Agentic Router",
-    description: "LLM plannerで検索戦略を選び、失敗時はルールベースに戻して回答生成します。"
+    description: "LLM planner縺ｧ讀懃ｴ｢謌ｦ逡･繧帝∈縺ｳ縲∝､ｱ謨玲凾縺ｯ繝ｫ繝ｼ繝ｫ繝吶・繧ｹ縺ｫ謌ｻ縺励※蝗樒ｭ皮函謌舌＠縺ｾ縺吶・
   }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
@@ -200,8 +199,7 @@ function readInitialModel(): string {
   if (typeof window === "undefined") {
     return DEFAULT_MODEL;
   }
-  const saved = window.localStorage.getItem(MODEL_STORAGE_KEY);
-  return MODEL_OPTIONS.some((option) => option.value === saved) ? saved ?? DEFAULT_MODEL : DEFAULT_MODEL;
+  return resolveSavedChatModel(window.localStorage.getItem(MODEL_STORAGE_KEY));
 }
 
 function ChatSidebar({
@@ -324,8 +322,7 @@ function ChatSidebar({
             role="menuitem"
             type="button"
           >
-            編集
-          </button>
+            邱ｨ髮・          </button>
           <button
             className="chat-menu-item danger"
             onClick={() => {
@@ -335,7 +332,7 @@ function ChatSidebar({
             role="menuitem"
             type="button"
           >
-            削除
+            蜑企勁
           </button>
         </div>
       ) : null}
@@ -385,8 +382,7 @@ function EditChatModal({
         <div className="delete-chat-modal-header">
           <h2 id="edit-chat-title">Edit chat</h2>
           <button aria-label="Close edit dialog" disabled={saving} onClick={onCancel} type="button">
-            ×
-          </button>
+            ﾃ・          </button>
         </div>
         <label className="edit-chat-field">
           <span>Title</span>
@@ -434,8 +430,7 @@ function DeleteChatModal({
         <div className="delete-chat-modal-header">
           <h2 id="delete-chat-title">Delete chat</h2>
           <button aria-label="Close delete dialog" disabled={deleting} onClick={onCancel} type="button">
-            ×
-          </button>
+            ﾃ・          </button>
         </div>
         <p className="delete-chat-target">{dialog.session.title}</p>
         <label className="delete-chat-checkbox">
@@ -445,12 +440,12 @@ function DeleteChatModal({
             onChange={(event) => onPermanentChange(event.target.checked)}
             type="checkbox"
           />
-          <span>完全に削除しますか？</span>
+          <span>螳悟・縺ｫ蜑企勁縺励∪縺吶°・・/span>
         </label>
         <p className="delete-chat-help">
           {dialog.permanent
-            ? "このチャット、メッセージ、関連する検索結果と引用をPostgresから削除します。"
-            : "チェックを外すと、チャット一覧から非表示にします。Postgresの履歴は残ります。"}
+            ? "縺薙・繝√Ε繝・ヨ縲√Γ繝・そ繝ｼ繧ｸ縲・未騾｣縺吶ｋ讀懃ｴ｢邨先棡縺ｨ蠑慕畑繧単ostgres縺九ｉ蜑企勁縺励∪縺吶・
+            : "繝√ぉ繝・け繧貞､悶☆縺ｨ縲√メ繝｣繝・ヨ荳隕ｧ縺九ｉ髱櫁｡ｨ遉ｺ縺ｫ縺励∪縺吶１ostgres縺ｮ螻･豁ｴ縺ｯ谿九ｊ縺ｾ縺吶・}
         </p>
         <div className="delete-chat-actions">
           <button className="secondary-action" disabled={deleting} onClick={onCancel} type="button">
@@ -469,6 +464,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const modelOptions = buildChatModelOptions();
   const routeSessionParam = mode === "temporary" ? params.temporaryChatId : params.chatSessionId;
   const hasRouteSessionParam = routeSessionParam !== undefined;
   const routeSessionId = parseId(routeSessionParam);
@@ -794,10 +790,13 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         {chatHistory.isError ? <p className="notice">Chat history could not be loaded.</p> : null}
         <div className="composer-shell">
           <MessageInput
+            externalDataWarning={
+              isNvidiaModelKey(selectedModel) ? NVIDIA_EXTERNAL_DATA_WARNING : null
+            }
             disabled={Boolean(inputDisabledReason) || currentUser.isLoading || currentUser.isError}
             disabledReason={inputDisabledReason}
             isSending={isSending}
-            modelOptions={MODEL_OPTIONS}
+            modelOptions={modelOptions}
             onChange={setQuestion}
             onModelChange={changeModel}
             onStrategyChange={setSelectedStrategy}
@@ -812,3 +811,4 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
     </main>
   );
 }
+

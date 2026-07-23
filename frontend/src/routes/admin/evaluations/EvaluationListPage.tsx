@@ -13,22 +13,21 @@ import {
   useEvaluationDatasets,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
+import { buildEvaluationGenerationProviders } from "../../../features/evaluations/generationProviders";
 import type {
   EvaluationCacheMode,
   EvaluationGenerationProvider,
   EvaluationRunnableStrategy
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
+import {
+  isNvidiaApiEnabled,
+  NVIDIA_EXTERNAL_DATA_WARNING,
+  nvidiaModelIds,
+  NVIDIA_RECOMMENDED_MODEL_ID
+} from "../../../lib/modelCatalog";
 
 const PAGE_SIZE = 20;
-const GENERATION_PROVIDERS: EvaluationGenerationProvider[] = [
-  "fake",
-  "ollama",
-  "lmstudio",
-  "openai",
-  "anthropic",
-  "gemini"
-];
 const ANSWER_GENERATION_STRATEGIES: EvaluationRunnableStrategy[] = [
   "llm_tool_orchestrator",
   "langchain_agentic",
@@ -37,6 +36,11 @@ const ANSWER_GENERATION_STRATEGIES: EvaluationRunnableStrategy[] = [
 
 export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const nvidiaApiEnabled = isNvidiaApiEnabled();
+  const nvidiaModels = nvidiaModelIds();
+  const generationProviders: EvaluationGenerationProvider[] =
+    buildEvaluationGenerationProviders(nvidiaApiEnabled);
+
   const [datasetName, setDatasetName] = useState("phase1_smoke");
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
@@ -68,15 +72,27 @@ export function EvaluationListPage() {
   const generationSelectionBlocked =
     generationSelectionRequested && !hasAnswerGenerationStrategy;
   const generationGuardMessage = providerWithoutModel
-    ? "生成 provider を指定する場合は生成 model も入力してください。"
+    ? "逕滓・ provider 繧呈欠螳壹☆繧句ｴ蜷医・逕滓・ model 繧ょ・蜉帙＠縺ｦ縺上□縺輔＞縲・
     : generationSelectionBlocked
-      ? "provider/model 比較には llm_tool_orchestrator、langchain_agentic、langgraph_agentic のいずれかを選択してください。"
+      ? "provider/model 豈碑ｼ・↓縺ｯ llm_tool_orchestrator縲〕angchain_agentic縲〕anggraph_agentic 縺ｮ縺・★繧後°繧帝∈謚槭＠縺ｦ縺上□縺輔＞縲・
       : null;
 
   function updatePage(page: number) {
     const next = new URLSearchParams(searchParams);
     next.set("page", String(page));
     setSearchParams(next);
+  }
+
+  function changeGenerationProvider(
+    provider: EvaluationGenerationProvider | ""
+  ) {
+    setGenerationProvider(provider);
+    if (
+      provider === "nvidia" &&
+      (!generationModel.trim() || generationModel === "meta/llama-3.3-70b-instruct")
+    ) {
+      setGenerationModel(NVIDIA_RECOMMENDED_MODEL_ID);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -99,7 +115,7 @@ export function EvaluationListPage() {
       generation_model: trimmedGenerationModel || undefined,
       trigger_type: "manual"
     });
-    setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
+    setMessage(`隧穂ｾ｡ run #${result.evaluation_run_id} 繧偵ず繝ｧ繝・#${result.job_id} 縺ｨ縺励※逋ｻ骭ｲ縺励∪縺励◆縲Ａ);
   }
 
   function toggleSelectedRun(evaluationRunId: number, checked: boolean) {
@@ -126,21 +142,22 @@ export function EvaluationListPage() {
     <main className="admin-main">
       <header className="page-header">
         <div>
-          <h1>評価</h1>
+          <h1>隧穂ｾ｡</h1>
           <p className="muted">
-            評価 dataset や fixture を使って検索品質を確認し、安全な metric summary を確認します。
-          </p>
+            隧穂ｾ｡ dataset 繧・fixture 繧剃ｽｿ縺｣縺ｦ讀懃ｴ｢蜩∬ｳｪ繧堤｢ｺ隱阪＠縲∝ｮ牙・縺ｪ metric summary 繧堤｢ｺ隱阪＠縺ｾ縺吶・          </p>
         </div>
       </header>
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {generationGuardMessage ? (
         <InlineAlert tone="error">{generationGuardMessage}</InlineAlert>
       ) : null}
+      {generationProvider === "nvidia" ? (
+        <InlineAlert>{NVIDIA_EXTERNAL_DATA_WARNING}</InlineAlert>
+      ) : null}
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
         <label>
-          fixture 名
-          <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
+          fixture 蜷・          <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
         </label>
         <label>
           dataset
@@ -150,7 +167,7 @@ export function EvaluationListPage() {
               setEvaluationDatasetId(event.target.value ? Number(event.target.value) : null)
             }
           >
-            <option value="">fixture のみ</option>
+            <option value="">fixture 縺ｮ縺ｿ</option>
             {datasets.data?.items.map((dataset) => (
               <option key={dataset.evaluation_dataset_id} value={dataset.evaluation_dataset_id}>
                 {dataset.dataset_name}
@@ -210,22 +227,22 @@ export function EvaluationListPage() {
         </div>
         <label>
           <span className="metric-heading">
-            生成 provider
+            逕滓・ provider
             <HelpTooltip
-              description="未指定ならサーバの既定 provider を使います。"
-              direction="provider を指定する場合は model も入力してください。"
-              title="生成 provider"
+              description="譛ｪ謖・ｮ壹↑繧峨し繝ｼ繝舌・譌｢螳・provider 繧剃ｽｿ縺・∪縺吶・
+              direction="provider 繧呈欠螳壹☆繧句ｴ蜷医・ model 繧ょ・蜉帙＠縺ｦ縺上□縺輔＞縲・
+              title="逕滓・ provider"
             />
           </span>
           <select
-            aria-label="生成 provider"
+            aria-label="逕滓・ provider"
             value={generationProvider}
             onChange={(event) =>
-              setGenerationProvider(event.target.value as EvaluationGenerationProvider | "")
+              changeGenerationProvider(event.target.value as EvaluationGenerationProvider | "")
             }
           >
-            <option value="">システム既定</option>
-            {GENERATION_PROVIDERS.map((provider) => (
+            <option value="">繧ｷ繧ｹ繝・Β譌｢螳・/option>
+            {generationProviders.map((provider) => (
               <option key={provider} value={provider}>
                 {provider}
               </option>
@@ -234,23 +251,31 @@ export function EvaluationListPage() {
         </label>
         <label>
           <span className="metric-heading">
-            生成 model
+            逕滓・ model
             <HelpTooltip
-              description="provider/model とも未指定ならサーバ既定モデルを使います。"
-              direction="API key や token ではなく model 名だけを入力してください。"
-              title="生成 model"
+              description="provider/model 縺ｨ繧よ悴謖・ｮ壹↑繧峨し繝ｼ繝先里螳壹Δ繝・Ν繧剃ｽｿ縺・∪縺吶・
+              direction="API key 繧・token 縺ｧ縺ｯ縺ｪ縺・model 蜷阪□縺代ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・
+              title="逕滓・ model"
             />
           </span>
           <input
-            aria-label="生成 model"
+            aria-label="逕滓・ model"
+            list={generationProvider === "nvidia" ? "nvidia-generation-models" : undefined}
             maxLength={128}
-            placeholder="例: gpt-4.1-mini"
+            placeholder="萓・ gpt-4.1-mini"
             value={generationModel}
             onChange={(event) => setGenerationModel(event.target.value)}
           />
+          {nvidiaApiEnabled ? (
+            <datalist id="nvidia-generation-models">
+              {nvidiaModels.map((modelId) => (
+                <option key={modelId} value={modelId} />
+              ))}
+            </datalist>
+          ) : null}
         </label>
         <label>
-          ケース上限
+          繧ｱ繝ｼ繧ｹ荳企剞
           <input
             type="number"
             min={1}
@@ -263,43 +288,40 @@ export function EvaluationListPage() {
           type="submit"
           disabled={createRun.isPending || providerWithoutModel || generationSelectionBlocked}
         >
-          評価を実行
-        </button>
+          隧穂ｾ｡繧貞ｮ溯｡・        </button>
         <button type="button" onClick={() => void runs.refetch()}>
-          更新
+          譖ｴ譁ｰ
         </button>
       </form>
-      {runs.isLoading ? <LoadingState label="評価 run を読み込んでいます..." /> : null}
+      {runs.isLoading ? <LoadingState label="隧穂ｾ｡ run 繧定ｪｭ縺ｿ霎ｼ繧薙〒縺・∪縺・.." /> : null}
       {runs.error ? <ErrorState error={runs.error} /> : null}
       {runs.data?.items.length === 0 ? (
-        <EmptyState title="評価 run がありません">上のフォームから評価を実行すると、結果と metric がここに表示されます。</EmptyState>
+        <EmptyState title="隧穂ｾ｡ run 縺後≠繧翫∪縺帙ｓ">荳翫・繝輔か繝ｼ繝縺九ｉ隧穂ｾ｡繧貞ｮ溯｡後☆繧九→縲∫ｵ先棡縺ｨ metric 縺後％縺薙↓陦ｨ遉ｺ縺輔ｌ縺ｾ縺吶・/EmptyState>
       ) : null}
       {runs.data && runs.data.items.length > 0 ? (
         <>
           <div className="comparison-toolbar">
             <span className="muted">
-              比較する run を 2 件選択してください。選択順に base / candidate として扱います。
-            </span>
+              豈碑ｼ・☆繧・run 繧・2 莉ｶ驕ｸ謚槭＠縺ｦ縺上□縺輔＞縲る∈謚樣・↓ base / candidate 縺ｨ縺励※謇ｱ縺・∪縺吶・            </span>
             <button type="button" disabled={selectedRunIds.length !== 2} onClick={openComparison}>
-              比較
-            </button>
+              豈碑ｼ・            </button>
             <button
               type="button"
               disabled={selectedRunIds.length === 0}
               onClick={() => setSelectedRunIds([])}
             >
-              選択解除
+              驕ｸ謚櫁ｧ｣髯､
             </button>
           </div>
           <table className="admin-table">
             <thead>
               <tr>
-                <th>評価 run</th>
-                <th>比較</th>
+                <th>隧穂ｾ｡ run</th>
+                <th>豈碑ｼ・/th>
                 <th>dataset</th>
                 <th>strategy</th>
-                <th>状態</th>
-                <th>ケース</th>
+                <th>迥ｶ諷・/th>
+                <th>繧ｱ繝ｼ繧ｹ</th>
                 <th>
                   <span className="metric-heading">
                     Metrics
@@ -308,17 +330,16 @@ export function EvaluationListPage() {
                 </th>
                 <th>
                   <span className="metric-heading">
-                    推定コスト
-                    <HelpTooltip
-                      description="評価 run の成功ケースで記録された LLM 生成コストの概算合計です。"
-                      direction="usage や pricing が取得できない場合は - になります。"
-                      title="推定コスト（概算）"
+                    謗ｨ螳壹さ繧ｹ繝・                    <HelpTooltip
+                      description="隧穂ｾ｡ run 縺ｮ謌仙粥繧ｱ繝ｼ繧ｹ縺ｧ險倬鹸縺輔ｌ縺・LLM 逕滓・繧ｳ繧ｹ繝医・讎らｮ怜粋險医〒縺吶・
+                      direction="usage 繧・pricing 縺悟叙蠕励〒縺阪↑縺・ｴ蜷医・ - 縺ｫ縺ｪ繧翫∪縺吶・
+                      title="謗ｨ螳壹さ繧ｹ繝茨ｼ域ｦらｮ暦ｼ・
                     />
                   </span>
                 </th>
-                <th>ジョブ</th>
-                <th>開始日時</th>
-                <th>終了日時</th>
+                <th>繧ｸ繝ｧ繝・/th>
+                <th>髢句ｧ区律譎・/th>
+                <th>邨ゆｺ・律譎・/th>
               </tr>
             </thead>
             <tbody>
@@ -329,7 +350,7 @@ export function EvaluationListPage() {
                   </td>
                   <td>
                     <input
-                      aria-label={`比較対象 run #${run.evaluation_run_id} を選択`}
+                      aria-label={`豈碑ｼ・ｯｾ雎｡ run #${run.evaluation_run_id} 繧帝∈謚杼}
                       checked={selectedRunIds.includes(run.evaluation_run_id)}
                       disabled={
                         !selectedRunIds.includes(run.evaluation_run_id) &&
@@ -347,8 +368,8 @@ export function EvaluationListPage() {
                     <StatusBadge status={run.status} />
                   </td>
                   <td>
-                    成功 {run.succeeded_count}/{run.case_count}
-                    {run.failed_count ? ` / 失敗 ${run.failed_count}` : ""}
+                    謌仙粥 {run.succeeded_count}/{run.case_count}
+                    {run.failed_count ? ` / 螟ｱ謨・${run.failed_count}` : ""}
                   </td>
                   <td>{formatMetricSummary(run.metric_summary)}</td>
                   <td>{formatCost(run.total_estimated_cost_usd)}</td>
@@ -365,16 +386,16 @@ export function EvaluationListPage() {
 
       <section className="admin-section">
         <h2>Datasets</h2>
-        {datasets.isLoading ? <LoadingState label="dataset を読み込んでいます..." /> : null}
+        {datasets.isLoading ? <LoadingState label="dataset 繧定ｪｭ縺ｿ霎ｼ繧薙〒縺・∪縺・.." /> : null}
         {datasets.error ? <ErrorState error={datasets.error} /> : null}
         {datasets.data && datasets.data.items.length > 0 ? (
           <table className="admin-table">
             <thead>
               <tr>
                 <th>dataset</th>
-                <th>状態</th>
+                <th>迥ｶ諷・/th>
                 <th>source</th>
-                <th>ケース</th>
+                <th>繧ｱ繝ｼ繧ｹ</th>
                 <th>Version</th>
               </tr>
             </thead>
@@ -436,3 +457,4 @@ function nextCacheModes(
   }
   return current.filter((item) => item !== mode);
 }
+

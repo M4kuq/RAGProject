@@ -306,6 +306,9 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_seconds: float = Field(default=30.0, gt=0)
+    nvidia_api_key: str | None = None
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_timeout_seconds: float = Field(default=60.0, gt=0)
     citation_preview_max_chars: int = Field(default=240, ge=20, le=2000)
     confidence_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -626,11 +629,12 @@ class Settings(BaseSettings):
             "openai",
             "anthropic",
             "gemini",
+            "nvidia",
             "bedrock",
         }:
             raise ValueError(
                 "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, "
-                "gemini, or bedrock"
+                "gemini, nvidia, or bedrock"
             )
         if self.generation_provider == "bedrock":
             self.generation_model_name = self.bedrock_generation_model_id
@@ -642,6 +646,8 @@ class Settings(BaseSettings):
         self.anthropic_base_url = self.anthropic_base_url.rstrip("/")
         self.gemini_api_key = self.gemini_api_key.strip() if self.gemini_api_key else None
         self.gemini_base_url = self.gemini_base_url.rstrip("/")
+        self.nvidia_api_key = self.nvidia_api_key.strip() if self.nvidia_api_key else None
+        self.nvidia_base_url = self.nvidia_base_url.rstrip("/")
         if self.generation_provider == "openai" and not self.openai_base_url:
             raise ValueError("OPENAI_BASE_URL is required when GENERATION_PROVIDER=openai")
         if self.generation_provider == "openai" and not self.openai_api_key:
@@ -654,6 +660,12 @@ class Settings(BaseSettings):
             raise ValueError("GEMINI_BASE_URL is required when GENERATION_PROVIDER=gemini")
         if self.generation_provider == "gemini" and not self.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is required when GENERATION_PROVIDER=gemini")
+        if self.generation_provider == "nvidia" and self.app_env.lower() not in {"local", "test"}:
+            raise ValueError("GENERATION_PROVIDER=nvidia is only available in local environments")
+        if self.generation_provider == "nvidia" and not self.nvidia_base_url:
+            raise ValueError("NVIDIA_BASE_URL is required when GENERATION_PROVIDER=nvidia")
+        if self.generation_provider == "nvidia" and not self.nvidia_api_key:
+            raise ValueError("NVIDIA_API_KEY is required when GENERATION_PROVIDER=nvidia")
         self.mcp_transport = self.mcp_transport.strip().lower()
         self.mcp_http_api_key = self.mcp_http_api_key.strip() if self.mcp_http_api_key else None
         if self.mcp_transport not in {"stdio", "http"}:
@@ -722,3 +734,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

@@ -113,23 +113,11 @@ The committed Kubernetes Secret is a template with local placeholders only.
 Do not commit real Kubernetes secrets, `.env` values, API keys, DB dumps,
 Qdrant data, generated logs, or debug artifacts.
 
-RAGProject は、文書アップロード、抽出、chunking、embedding、Qdrant index、retrieval、rerank、回答生成、citation、confidence、evaluation、MCP stdio / Streamable HTTP server までを Docker Compose のローカル環境で確認する Phase1 RAG ポートフォリオである。
+RAGProject 縺ｯ縲∵枚譖ｸ繧｢繝・・繝ｭ繝ｼ繝峨∵歓蜃ｺ縲…hunking縲‘mbedding縲＿drant index縲〉etrieval縲〉erank縲∝屓遲皮函謌舌…itation縲…onfidence縲‘valuation縲｀CP stdio / Streamable HTTP server 縺ｾ縺ｧ繧・Docker Compose 縺ｮ繝ｭ繝ｼ繧ｫ繝ｫ迺ｰ蠅・〒遒ｺ隱阪☆繧・Phase1 RAG 繝昴・繝医ヵ繧ｩ繝ｪ繧ｪ縺ｧ縺ゅｋ縲・
+Phase1 縺ｮ逶ｮ逧・・縲√け繝ｩ繧ｦ繝牙・髢九〒縺ｯ縺ｪ縺上∫ｬｬ荳芽・′ README 騾壹ｊ縺ｫ襍ｷ蜍輔＠縲・蛻・ョ繝｢繧貞ｮ溯｡後＠縲∵焔蜍輔ユ繧ｹ繝医こ繝ｼ繧ｹ縺ｨ smoke 縺ｧ蜿励￠蜈･繧檎｢ｺ隱阪〒縺阪ｋ迥ｶ諷九↓縺吶ｋ縺薙→縺ｫ縺ゅｋ縲・
+## Phase1 讖溯・
 
-Phase1 の目的は、クラウド公開ではなく、第三者が README 通りに起動し、5分デモを実行し、手動テストケースと smoke で受け入れ確認できる状態にすることにある。
-
-## Phase1 機能
-
-- Auth / Session / CSRF / RBAC を提供する。
-- Chat Session / History / Tags API を提供する。
-- Document Management / Upload / Version / Approve / Archive API を提供する。
-- Worker / Job Queue / Lease / Retry の基盤を提供する。
-- Extraction / Chunking / Embedding / Qdrant Indexing を提供する。
-- `/api/v1/rag/search` で retrieval / rerank の確認導線を提供する。
-- `/api/v1/rag/ask` で chat persistence、citation、confidence、groundedness を確認する。
-- React UI で chat、citation panel、admin document/job、evaluation を確認する。
-- Evaluation minimal runner と fixture を提供する。
-- MCP stdio と Streamable HTTP (spec 2025-06-18) で local-only の read-mostly tools/resources/prompts を提供する。
-
+- Auth / Session / CSRF / RBAC 繧呈署萓帙☆繧九・- Chat Session / History / Tags API 繧呈署萓帙☆繧九・- Document Management / Upload / Version / Approve / Archive API 繧呈署萓帙☆繧九・- Worker / Job Queue / Lease / Retry 縺ｮ蝓ｺ逶､繧呈署萓帙☆繧九・- Extraction / Chunking / Embedding / Qdrant Indexing 繧呈署萓帙☆繧九・- `/api/v1/rag/search` 縺ｧ retrieval / rerank 縺ｮ遒ｺ隱榊ｰ守ｷ壹ｒ謠蝉ｾ帙☆繧九・- `/api/v1/rag/ask` 縺ｧ chat persistence縲…itation縲…onfidence縲“roundedness 繧堤｢ｺ隱阪☆繧九・- React UI 縺ｧ chat縲…itation panel縲∥dmin document/job縲‘valuation 繧堤｢ｺ隱阪☆繧九・- Evaluation minimal runner 縺ｨ fixture 繧呈署萓帙☆繧九・- MCP stdio 縺ｨ Streamable HTTP (spec 2025-06-18) 縺ｧ local-only 縺ｮ read-mostly tools/resources/prompts 繧呈署萓帙☆繧九・
 ## Architecture
 
 ```text
@@ -143,61 +131,41 @@ Browser
      -> MCP stdio / HTTP server: local client integration
 ```
 
-Phase1 は Docker Compose ローカル検証環境を基準にする。AWS deploy、Terraform、external remote MCP、OAuth、OCR、GraphRAG、Agentic RAG は Phase2 以降の範囲とする。
-
+Phase1 縺ｯ Docker Compose 繝ｭ繝ｼ繧ｫ繝ｫ讀懆ｨｼ迺ｰ蠅・ｒ蝓ｺ貅悶↓縺吶ｋ縲・WS deploy縲ゝerraform縲‘xternal remote MCP縲＾Auth縲＾CR縲；raphRAG縲、gentic RAG 縺ｯ Phase2 莉･髯阪・遽・峇縺ｨ縺吶ｋ縲・
 ## Tech Stack
 
 | Area | Choice | Reason |
 |---|---|---|
-| Backend | FastAPI / Python 3.11 | 型付き schema、依存注入、OpenAPI、非同期 upload との相性がよい。 |
-| ORM / Migration | SQLAlchemy 2.x / Alembic | DB 制約と migration 履歴を明示し、Phase1 の状態遷移を追いやすくする。 |
-| Frontend | React / TypeScript / Vite | 管理 UI と chat UI を小さく保ち、typecheck と build を CI で再現しやすくする。 |
-| RDB | PostgreSQL | session、RBAC、job、retrieval trace、evaluation を制約付きで扱う。 |
-| Vector DB | Qdrant | local compose で起動しやすく、chunk vector の upsert と search を分離できる。 |
-| Runtime | Docker Compose | Windows Docker Desktop と Ubuntu の両方で同じ構成を確認する。 |
-| MCP | stdio + Streamable HTTP (2025-06-18) | local-only で外部公開なしに tool/resource/prompt を確認する。 |
+| Backend | FastAPI / Python 3.11 | 蝙倶ｻ倥″ schema縲∽ｾ晏ｭ俶ｳｨ蜈･縲＾penAPI縲・撼蜷梧悄 upload 縺ｨ縺ｮ逶ｸ諤ｧ縺後ｈ縺・・|
+| ORM / Migration | SQLAlchemy 2.x / Alembic | DB 蛻ｶ邏・→ migration 螻･豁ｴ繧呈・遉ｺ縺励￣hase1 縺ｮ迥ｶ諷矩・遘ｻ繧定ｿｽ縺・ｄ縺吶￥縺吶ｋ縲・|
+| Frontend | React / TypeScript / Vite | 邂｡逅・UI 縺ｨ chat UI 繧貞ｰ上＆縺丈ｿ昴■縲》ypecheck 縺ｨ build 繧・CI 縺ｧ蜀咲樟縺励ｄ縺吶￥縺吶ｋ縲・|
+| RDB | PostgreSQL | session縲ヽBAC縲）ob縲〉etrieval trace縲‘valuation 繧貞宛邏・ｻ倥″縺ｧ謇ｱ縺・・|
+| Vector DB | Qdrant | local compose 縺ｧ襍ｷ蜍輔＠繧・☆縺上…hunk vector 縺ｮ upsert 縺ｨ search 繧貞・髮｢縺ｧ縺阪ｋ縲・|
+| Runtime | Docker Compose | Windows Docker Desktop 縺ｨ Ubuntu 縺ｮ荳｡譁ｹ縺ｧ蜷後§讒区・繧堤｢ｺ隱阪☆繧九・|
+| MCP | stdio + Streamable HTTP (2025-06-18) | local-only 縺ｧ螟夜Κ蜈ｬ髢九↑縺励↓ tool/resource/prompt 繧堤｢ｺ隱阪☆繧九・|
 
 ## Security Design
 
-- Session cookie は HttpOnly にし、CSRF token を別に扱う。
-- Admin / viewer の RBAC で管理 API と閲覧系導線を分ける。
-- login rate limit、session expiry、CSRF pre-auth flow を使う。
-- upload は拡張子 allowlist と size limit を使う。PR-34 時点の通常取り込みは PDF / DOCX / TXT / Markdown / CSV / XLSX / PPTX を対象にし、macro-enabled Office files、legacy `.xls` / `.ppt`、OCR は対象外とする。
-- audit log には action と target の要約だけを残す。
-- UI と MCP は raw token、credential、password_hash、session、csrf、full prompt、full context を表示しない。
-- MCP は `MCP_LOCAL_ONLY=true` と stdio / Streamable HTTP を前提にし、HTTP は API key を必須にする。write tools は Phase1 で提供しない。
-- `.env` の値は README や docs に転記しない。必要な変数名は `.env.example` を見る。
-
+- Session cookie 縺ｯ HttpOnly 縺ｫ縺励，SRF token 繧貞挨縺ｫ謇ｱ縺・・- Admin / viewer 縺ｮ RBAC 縺ｧ邂｡逅・API 縺ｨ髢ｲ隕ｧ邉ｻ蟆守ｷ壹ｒ蛻・￠繧九・- login rate limit縲《ession expiry縲，SRF pre-auth flow 繧剃ｽｿ縺・・- upload 縺ｯ諡｡蠑ｵ蟄・allowlist 縺ｨ size limit 繧剃ｽｿ縺・１R-34 譎らせ縺ｮ騾壼ｸｸ蜿悶ｊ霎ｼ縺ｿ縺ｯ PDF / DOCX / TXT / Markdown / CSV / XLSX / PPTX 繧貞ｯｾ雎｡縺ｫ縺励［acro-enabled Office files縲〕egacy `.xls` / `.ppt`縲＾CR 縺ｯ蟇ｾ雎｡螟悶→縺吶ｋ縲・- audit log 縺ｫ縺ｯ action 縺ｨ target 縺ｮ隕∫ｴ・□縺代ｒ谿九☆縲・- UI 縺ｨ MCP 縺ｯ raw token縲…redential縲｝assword_hash縲《ession縲…srf縲’ull prompt縲’ull context 繧定｡ｨ遉ｺ縺励↑縺・・- MCP 縺ｯ `MCP_LOCAL_ONLY=true` 縺ｨ stdio / Streamable HTTP 繧貞燕謠舌↓縺励？TTP 縺ｯ API key 繧貞ｿ・医↓縺吶ｋ縲Ｘrite tools 縺ｯ Phase1 縺ｧ謠蝉ｾ帙＠縺ｪ縺・・- `.env` 縺ｮ蛟､縺ｯ README 繧・docs 縺ｫ霆｢險倥＠縺ｪ縺・ょｿ・ｦ√↑螟画焚蜷阪・ `.env.example` 繧定ｦ九ｋ縲・
 ## Hallucination Mitigation
 
-- 回答は retrieval result に基づく。
-- citation は selected chunk と retrieval run に紐づける。
-- confidence と groundedness を保存し、UI で確認する。
-- no-context の質問は通常回答と分けて扱う。
-- evaluation fixture で expected keywords と citation coverage を確認する。
-- CI は fake adapter を使い、外部 API や大きな model download を通常確認に含めない。
-
+- 蝗樒ｭ斐・ retrieval result 縺ｫ蝓ｺ縺･縺上・- citation 縺ｯ selected chunk 縺ｨ retrieval run 縺ｫ邏舌▼縺代ｋ縲・- confidence 縺ｨ groundedness 繧剃ｿ晏ｭ倥＠縲ゞI 縺ｧ遒ｺ隱阪☆繧九・- no-context 縺ｮ雉ｪ蝠上・騾壼ｸｸ蝗樒ｭ斐→蛻・￠縺ｦ謇ｱ縺・・- evaluation fixture 縺ｧ expected keywords 縺ｨ citation coverage 繧堤｢ｺ隱阪☆繧九・- CI 縺ｯ fake adapter 繧剃ｽｿ縺・∝､夜Κ API 繧・､ｧ縺阪↑ model download 繧帝壼ｸｸ遒ｺ隱阪↓蜷ｫ繧√↑縺・・
 ## Citation / Confidence
 
-`/api/v1/rag/ask` は user message、assistant message、retrieval_run、retrieval_run_items、citations を同じ流れで保存する。citation panel は source label、page、section、snippet preview を表示する。confidence は `High`、`Medium`、`Low` の label と score を返す。
-
+`/api/v1/rag/ask` 縺ｯ user message縲∥ssistant message縲〉etrieval_run縲〉etrieval_run_items縲…itations 繧貞酔縺俶ｵ√ｌ縺ｧ菫晏ｭ倥☆繧九Ｄitation panel 縺ｯ source label縲｝age縲《ection縲《nippet preview 繧定｡ｨ遉ｺ縺吶ｋ縲Ｄonfidence 縺ｯ `High`縲～Medium`縲～Low` 縺ｮ label 縺ｨ score 繧定ｿ斐☆縲・
 ## Evaluation
 
-Phase1 の evaluation は `backend/app/evaluation/fixtures/phase1_smoke.json` を入口にする。default dataset は `phase1_smoke` で、seed 文書と sample questions に合わせた質問を含む。CI と demo では fake generation / fake rerank を使えるため、外部 LLM を必須にしない。
-
+Phase1 縺ｮ evaluation 縺ｯ `backend/app/evaluation/fixtures/phase1_smoke.json` 繧貞・蜿｣縺ｫ縺吶ｋ縲Ｅefault dataset 縺ｯ `phase1_smoke` 縺ｧ縲《eed 譁・嶌縺ｨ sample questions 縺ｫ蜷医ｏ縺帙◆雉ｪ蝠上ｒ蜷ｫ繧縲・I 縺ｨ demo 縺ｧ縺ｯ fake generation / fake rerank 繧剃ｽｿ縺医ｋ縺溘ａ縲∝､夜Κ LLM 繧貞ｿ・医↓縺励↑縺・・
 ## MCP Support
 
-MCP server は local-only で、stdio と Streamable HTTP (spec 2025-06-18) を提供する。デフォルトは stdio である。
-
+MCP server 縺ｯ local-only 縺ｧ縲《tdio 縺ｨ Streamable HTTP (spec 2025-06-18) 繧呈署萓帙☆繧九ゅョ繝輔か繝ｫ繝医・ stdio 縺ｧ縺ゅｋ縲・
 ```bash
 cd backend
 python -m app.mcp.server --transport stdio
 ```
 
-HTTP transport は `MCP_TRANSPORT=http` と `MCP_HTTP_API_KEY` を設定した backend で `POST /mcp` として有効になる。Dify などからの接続手順は [docs/MCP_HTTP_DIFY.md](docs/MCP_HTTP_DIFY.md) を参照する。
-
-主な tools は次の通りである。
-
+HTTP transport 縺ｯ `MCP_TRANSPORT=http` 縺ｨ `MCP_HTTP_API_KEY` 繧定ｨｭ螳壹＠縺・backend 縺ｧ `POST /mcp` 縺ｨ縺励※譛牙柑縺ｫ縺ｪ繧九・ify 縺ｪ縺ｩ縺九ｉ縺ｮ謗･邯壽焔鬆・・ [docs/MCP_HTTP_DIFY.md](docs/MCP_HTTP_DIFY.md) 繧貞盾辣ｧ縺吶ｋ縲・
+荳ｻ縺ｪ tools 縺ｯ谺｡縺ｮ騾壹ｊ縺ｧ縺ゅｋ縲・
 - `rag_search`
 - `rag_ask`
 - `list_documents`
@@ -206,20 +174,18 @@ HTTP transport は `MCP_TRANSPORT=http` と `MCP_HTTP_API_KEY` を設定した b
 - `list_evaluation_runs`
 - `get_evaluation_result`
 
-Claude Desktop / Cursor / Codex などの stdio local MCP client には、secret を含めずに command と working directory だけを設定する。例は [docs/demo/mcp_demo.md](docs/demo/mcp_demo.md) に置く。
-
+Claude Desktop / Cursor / Codex 縺ｪ縺ｩ縺ｮ stdio local MCP client 縺ｫ縺ｯ縲《ecret 繧貞性繧√★縺ｫ command 縺ｨ working directory 縺縺代ｒ險ｭ螳壹☆繧九ゆｾ九・ [docs/demo/mcp_demo.md](docs/demo/mcp_demo.md) 縺ｫ鄂ｮ縺上・
 ## Requirements
 
-- Docker Desktop または Docker Engine + Docker Compose plugin
+- Docker Desktop 縺ｾ縺溘・ Docker Engine + Docker Compose plugin
 - Git
 - Windows: Windows 11 + Docker Desktop Linux containers
 - Ubuntu: Ubuntu 24.04.4 LTS + Docker Engine
-- Optional local development: Python 3.11、uv、Node.js 20
+- Optional local development: Python 3.11縲「v縲¨ode.js 20
 
 ## Windows Docker Desktop
 
-PowerShell を開き、Linux containers が起動していることを確認する。
-
+PowerShell 繧帝幕縺阪´inux containers 縺瑚ｵｷ蜍輔＠縺ｦ縺・ｋ縺薙→繧堤｢ｺ隱阪☆繧九・
 ```powershell
 git clone https://github.com/M4kuq/RAGProject.git
 cd RAGProject
@@ -228,8 +194,7 @@ docker compose config
 docker compose up --build
 ```
 
-別 PowerShell で確認する。
-
+蛻･ PowerShell 縺ｧ遒ｺ隱阪☆繧九・
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
 Invoke-RestMethod http://localhost:8000/ready
@@ -238,8 +203,7 @@ Invoke-RestMethod http://localhost:8000/ready
 
 ## Ubuntu 24.04.4 LTS
 
-Docker Engine と Compose plugin を使う。
-
+Docker Engine 縺ｨ Compose plugin 繧剃ｽｿ縺・・
 ```bash
 git clone https://github.com/M4kuq/RAGProject.git
 cd RAGProject
@@ -248,8 +212,7 @@ docker compose config
 docker compose up --build
 ```
 
-別 shell で確認する。
-
+蛻･ shell 縺ｧ遒ｺ隱阪☆繧九・
 ```bash
 curl -fsS http://localhost:8000/health
 curl -fsS http://localhost:8000/ready
@@ -258,41 +221,31 @@ sh scripts/smoke_phase1.sh
 
 ## Quick Start
 
-1. `.env.example` を `.env` にコピーする。
-2. `docker compose up --build` を実行する。
-3. `http://localhost:5173` を開く。
-4. local demo account で login する。`admin@example.com` / `password` はローカルデモ用の dummy credential である。
-5. sample questions は [docs/demo/sample_questions.md](docs/demo/sample_questions.md) を使う。
-
+1. `.env.example` 繧・`.env` 縺ｫ繧ｳ繝斐・縺吶ｋ縲・2. `docker compose up --build` 繧貞ｮ溯｡後☆繧九・3. `http://localhost:5173` 繧帝幕縺上・4. local demo account 縺ｧ login 縺吶ｋ縲Ａadmin@example.com` / `password` 縺ｯ繝ｭ繝ｼ繧ｫ繝ｫ繝・Δ逕ｨ縺ｮ dummy credential 縺ｧ縺ゅｋ縲・5. sample questions 縺ｯ [docs/demo/sample_questions.md](docs/demo/sample_questions.md) 繧剃ｽｿ縺・・
 ## Migration / Seed
 
-Compose 起動時に `migrate` と `seed` service が実行される。個別実行する場合は次を使う。
-
+Compose 襍ｷ蜍墓凾縺ｫ `migrate` 縺ｨ `seed` service 縺悟ｮ溯｡後＆繧後ｋ縲ょ句挨螳溯｡後☆繧句ｴ蜷医・谺｡繧剃ｽｿ縺・・
 ```bash
 docker compose run --rm migrate
 docker compose run --rm seed
 ```
 
-seed は idempotent に作る。admin / viewer、user_settings、system_settings、demo documents、old/new version pair、sample question metadata、evaluation fixture reference を投入する。
-
+seed 縺ｯ idempotent 縺ｫ菴懊ｋ縲Ｂdmin / viewer縲「ser_settings縲《ystem_settings縲‥emo documents縲｛ld/new version pair縲《ample question metadata縲‘valuation fixture reference 繧呈兜蜈･縺吶ｋ縲・
 ## Start / Stop
 
 ```bash
 docker compose up --build
 ```
 
-停止だけなら次を使う。
-
+蛛懈ｭ｢縺縺代↑繧画ｬ｡繧剃ｽｿ縺・・
 ```bash
 docker compose stop
 ```
 
-初期状態に戻す前に、次の注意を確認する。
-
+蛻晄悄迥ｶ諷九↓謌ｻ縺吝燕縺ｫ縲∵ｬ｡縺ｮ豕ｨ諢上ｒ遒ｺ隱阪☆繧九・
 > docker compose down -v deletes local database, qdrant data, and uploaded files.
 
-このコマンドは local volume を消す。必要な demo data や検証結果を残したい場合は使わない。
-
+縺薙・繧ｳ繝槭Φ繝峨・ local volume 繧呈ｶ医☆縲ょｿ・ｦ√↑ demo data 繧・､懆ｨｼ邨先棡繧呈ｮ九＠縺溘＞蝣ｴ蜷医・菴ｿ繧上↑縺・・
 ## Local Validation Commands
 
 Windows:
@@ -358,19 +311,17 @@ sh scripts/run_retrieval_eval_smoke.sh
 
 ## CI/CD
 
-GitHub Actions は次の workflow を使う。
-
+GitHub Actions 縺ｯ谺｡縺ｮ workflow 繧剃ｽｿ縺・・
 | workflow | Target | Local equivalent |
 |---|---|---|
-| Backend CI | ruff format check、ruff check、mypy、pytest | `cd backend && uv run --extra dev pytest` など |
-| Frontend CI | npm install、lint、typecheck、Vitest、build | `cd frontend && npm run build` など |
-| Docker CI | compose config、image build | `docker compose -f docker-compose.ci.yml build ...` |
-| Compose Smoke | migration、seed、backend readiness、worker health、Qdrant、frontend artifact | `scripts/test.* -Smoke` |
+| Backend CI | ruff format check縲〉uff check縲［ypy縲｝ytest | `cd backend && uv run --extra dev pytest` 縺ｪ縺ｩ |
+| Frontend CI | npm install縲〕int縲》ypecheck縲〃itest縲｜uild | `cd frontend && npm run build` 縺ｪ縺ｩ |
+| Docker CI | compose config縲（mage build | `docker compose -f docker-compose.ci.yml build ...` |
+| Compose Smoke | migration縲《eed縲｜ackend readiness縲『orker health縲＿drant縲’rontend artifact | `scripts/test.* -Smoke` |
 | Retrieval Evaluation Smoke | manual/scheduled deterministic strategy evaluation | `scripts/run_retrieval_eval_smoke.*` |
 | Retrieval Model Experiment | local opt-in embedding/reranker comparison | `scripts/run_retrieval_model_experiment.*` |
 
-Retrieval Evaluation Smoke は workflow_dispatch / optional schedule で実行する real retrieval smoke です。PostgreSQL、Qdrant、indexed demo documents、小型 local embedding model cache を使い、answer generation は実行しません。fake embedding / fake reranker / fake evaluator には fallback せず、local model/cache が不足する場合は safe artifact で `blocked` として報告し、通常 PR CI の必須 gate にはしません。
-
+Retrieval Evaluation Smoke 縺ｯ workflow_dispatch / optional schedule 縺ｧ螳溯｡後☆繧・real retrieval smoke 縺ｧ縺吶１ostgreSQL縲＿drant縲（ndexed demo documents縲∝ｰ丞梛 local embedding model cache 繧剃ｽｿ縺・∥nswer generation 縺ｯ螳溯｡後＠縺ｾ縺帙ｓ縲Ｇake embedding / fake reranker / fake evaluator 縺ｫ縺ｯ fallback 縺帙★縲〕ocal model/cache 縺御ｸ崎ｶｳ縺吶ｋ蝣ｴ蜷医・ safe artifact 縺ｧ `blocked` 縺ｨ縺励※蝣ｱ蜻翫＠縲・壼ｸｸ PR CI 縺ｮ蠢・・gate 縺ｫ縺ｯ縺励∪縺帙ｓ縲・
 Optional trace export:
 
 ```text
@@ -404,6 +355,7 @@ metrics and reason codes. See
 ## Demo / Test Docs
 
 - [5min demo](docs/demo/5min_demo.md)
+- [local NVIDIA Build API generation](docs/demo/nvidia_build_api.md)
 - [UI demo](docs/demo/ui_demo.md)
 - [CLI demo](docs/demo/cli_demo.md)
 - [MCP demo](docs/demo/mcp_demo.md)
@@ -421,8 +373,7 @@ metrics and reason codes. See
 
 ## Troubleshooting
 
-詳細は [docs/troubleshooting.md](docs/troubleshooting.md) に置く。よく使う確認は次である。
-
+隧ｳ邏ｰ縺ｯ [docs/troubleshooting.md](docs/troubleshooting.md) 縺ｫ鄂ｮ縺上ゅｈ縺丈ｽｿ縺・｢ｺ隱阪・谺｡縺ｧ縺ゅｋ縲・
 ```bash
 docker compose ps
 docker compose logs backend
@@ -432,18 +383,9 @@ docker compose -f docker-compose.ci.yml config
 
 ## Known Limitations
 
-- Phase1 は local Docker Compose 検証向けであり、cloud deploy は扱わない。
-- MCP は local-only であり、HTTP は localhost bind と API key 前提である。SSE streaming、session management、OAuth、external remote MCP は扱わない。
-- OCR and multimodal input remain future work. Text GraphRAG is covered by the
+- Phase1 縺ｯ local Docker Compose 讀懆ｨｼ蜷代￠縺ｧ縺ゅｊ縲…loud deploy 縺ｯ謇ｱ繧上↑縺・・- MCP 縺ｯ local-only 縺ｧ縺ゅｊ縲？TTP 縺ｯ localhost bind 縺ｨ API key 蜑肴署縺ｧ縺ゅｋ縲４SE streaming縲《ession management縲＾Auth縲‘xternal remote MCP 縺ｯ謇ｱ繧上↑縺・・- OCR and multimodal input remain future work. Text GraphRAG is covered by the
   Phase3 PR-54 docs and remains opt-in for local demos.
-- CI の通常確認は fake adapter を優先する。
-- PDF / DOCX の大きな demo fixture は repository に追加しない。必要な場合は手動 upload 手順で確認する。
-- worker の重い実ジョブ確認は環境差が出るため、最終受け入れでは manual test と optional smoke に分ける。
-
+- CI 縺ｮ騾壼ｸｸ遒ｺ隱阪・ fake adapter 繧貞━蜈医☆繧九・- PDF / DOCX 縺ｮ螟ｧ縺阪↑ demo fixture 縺ｯ repository 縺ｫ霑ｽ蜉縺励↑縺・ょｿ・ｦ√↑蝣ｴ蜷医・謇句虚 upload 謇矩・〒遒ｺ隱阪☆繧九・- worker 縺ｮ驥阪＞螳溘ず繝ｧ繝也｢ｺ隱阪・迺ｰ蠅・ｷｮ縺悟・繧九◆繧√∵怙邨ょ女縺大・繧後〒縺ｯ manual test 縺ｨ optional smoke 縺ｫ蛻・￠繧九・
 ## Phase2 Roadmap
 
-- cloud deploy と secrets management を設計する。
-- real embedding / reranker / generator の検証 profile を追加する。
-- OCR と large document handling を拡張する。
-- evaluation metrics と regression dashboard を拡張する。
-- external remote MCP、OAuth、client-specific integration を検討する。
+- cloud deploy 縺ｨ secrets management 繧定ｨｭ險医☆繧九・- real embedding / reranker / generator 縺ｮ讀懆ｨｼ profile 繧定ｿｽ蜉縺吶ｋ縲・- OCR 縺ｨ large document handling 繧呈僑蠑ｵ縺吶ｋ縲・- evaluation metrics 縺ｨ regression dashboard 繧呈僑蠑ｵ縺吶ｋ縲・- external remote MCP縲＾Auth縲…lient-specific integration 繧呈､懆ｨ弱☆繧九・

@@ -48,7 +48,7 @@ _FORBIDDEN_KEY_PARTS = (
     "token",
 )
 KNOWN_GENERATION_PROVIDERS = frozenset(
-    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini", "bedrock"}
+    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
 )
 
 
@@ -446,7 +446,7 @@ class EvaluationRunCreateRequest(BaseModel):
     metrics: list[EvaluationMetricName] = Field(
         default_factory=lambda: list(DEFAULT_EVALUATION_METRICS),
         min_length=1,
-        max_length=32,
+        max_length=20,
     )
     cache_modes: list[EvaluationCacheMode] | None = Field(
         default=None,
@@ -872,3 +872,4 @@ def _assert_safe_json(value: Any) -> None:
         return
     if isinstance(value, str):
         _safe_text(value, max_length=2000)
+
