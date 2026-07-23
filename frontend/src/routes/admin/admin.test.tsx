@@ -528,9 +528,6 @@ test("evaluation list opens comparison for two selected runs", async () => {
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
-      if (url.endsWith("/api/v1/evaluations/metric-catalog")) {
-        return jsonResponse({ data: evaluationMetricCatalogPayload() });
-      }
       if (url.includes("/api/v1/evaluations/runs/compare")) {
         comparisonRequests.push(url);
         return jsonResponse({ data: evaluationComparisonPayload() });
@@ -577,6 +574,9 @@ test("evaluation comparison page shows direction colors and lower-is-better hint
       }
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.endsWith("/api/v1/evaluations/metric-catalog")) {
+        return jsonResponse({ data: evaluationMetricCatalogPayload() });
       }
       if (url.includes("/api/v1/evaluations/runs/compare")) {
         return jsonResponse({ data: evaluationComparisonPayload() });
