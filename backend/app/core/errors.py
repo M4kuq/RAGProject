@@ -58,6 +58,7 @@ ERROR_MESSAGES: dict[str, str] = {
     "temporary_session_not_archivable": "Temporary session cannot be archived.",
     "no_context_found": "No context found.",
     "evaluation_corpus_not_ready": "Evaluation corpus is not ready.",
+    "evaluation_generation_not_ready": "Evaluation generation model is not ready.",
     "dataset_version_conflict": "Dataset version content does not match.",
     "citation_marker_missing": "Citation marker is missing.",
     "citation_index_out_of_range": "Citation index is out of range.",
@@ -135,6 +136,11 @@ class ConflictError(AppError):
 class EvaluationCorpusNotReady(ConflictError):
     def __init__(self, details: object | None = None) -> None:
         super().__init__("evaluation_corpus_not_ready", details=details)
+
+
+class EvaluationGenerationNotReady(ConflictError):
+    def __init__(self, details: object | None = None) -> None:
+        super().__init__("evaluation_generation_not_ready", details=details)
 
 
 class RequestInProgress(ConflictError):

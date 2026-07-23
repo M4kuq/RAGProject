@@ -120,6 +120,19 @@ ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
 
 
+def _ready_lmstudio_model(
+    settings: Settings,
+    model_name: str,
+) -> LMStudioModelReadiness:
+    del settings
+    return LMStudioModelReadiness(
+        ready=True,
+        requested_model=model_name,
+        resolved_model="qwen/qwen3.5-9b",
+        reason_code="ready",
+    )
+
+
 @pytest.fixture
 def evaluation_client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     engine = create_engine(
@@ -1485,7 +1498,9 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
         with session_factory() as db:
             user = _seed_admin(db)
             service = EvaluationService(
-                rag_service_factory=factory, settings=Settings(app_env="test")
+                rag_service_factory=factory,
+                settings=Settings(app_env="test"),
+                generation_readiness_checker=_ready_lmstudio_model,
             )
             created = service.create_run(
                 db,
@@ -1502,7 +1517,9 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
 
         with session_factory() as db:
             service = EvaluationService(
-                rag_service_factory=factory, settings=Settings(app_env="test")
+                rag_service_factory=factory,
+                settings=Settings(app_env="test"),
+                generation_readiness_checker=_ready_lmstudio_model,
             )
             result = service.run_job(
                 db,
@@ -1539,7 +1556,9 @@ def test_evaluation_run_job_preserves_lmstudio_url_generation_model() -> None:
         with session_factory() as db:
             user = _seed_admin(db)
             service = EvaluationService(
-                rag_service_factory=factory, settings=Settings(app_env="test")
+                rag_service_factory=factory,
+                settings=Settings(app_env="test"),
+                generation_readiness_checker=_ready_lmstudio_model,
             )
             created = service.create_run(
                 db,
@@ -4321,8 +4340,13 @@ def test_evaluation_create_allows_agentic_strategies_and_rejects_fallback_dense(
 
 def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_strategies(
     evaluation_client: tuple[TestClient, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _ = evaluation_client
+    monkeypatch.setattr(
+        "app.services.evaluation_service.check_lmstudio_model_readiness",
+        _ready_lmstudio_model,
+    )
     _login_as(client, "admin@example.com")
     csrf_token = _session_csrf(client)
 
@@ -4375,6 +4399,49 @@ def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_str
         )
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_evaluation_api_rejects_run_when_lmstudio_model_is_not_ready(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_factory = evaluation_client
+    monkeypatch.setattr(
+        "app.services.evaluation_service.check_lmstudio_model_readiness",
+        lambda settings, model_name: LMStudioModelReadiness(
+            ready=False,
+            requested_model=model_name,
+            resolved_model="qwen/qwen3.5-9b",
+            reason_code="model_not_loaded",
+        ),
+    )
+    _login_as(client, "admin@example.com")
+    csrf_token = _session_csrf(client)
+
+    response = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["dense"],
+            "evaluation_scope": "end_to_end",
+            "generation_provider": "lmstudio",
+            "generation_model": "qwen3.5-9b",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "evaluation_generation_not_ready"
+    assert response.json()["error"]["details"] == {
+        "generation_provider": "lmstudio",
+        "requested_model": "qwen3.5-9b",
+        "resolved_model": "qwen/qwen3.5-9b",
+        "ready": False,
+        "reason_code": "model_not_loaded",
+    }
+    with session_factory() as db:
+        assert db.scalars(select(EvaluationRun)).all() == []
 
 
 def test_evaluation_api_rejects_unknown_provider_and_secret_like_generation_model(

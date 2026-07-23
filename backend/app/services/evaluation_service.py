@@ -21,6 +21,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import (
     ConflictError,
     EvaluationCorpusNotReady,
+    EvaluationGenerationNotReady,
     ResourceNotFound,
     ValidationFailed,
 )
@@ -60,7 +61,7 @@ from app.evaluation.metrics import (
 )
 from app.evaluation.rag_service import RagEvaluationResult, create_evaluation_rag_service
 from app.observability.trace_export import TraceExportService
-from app.rag.generation import check_lmstudio_model_readiness
+from app.rag.generation import LMStudioModelReadiness, check_lmstudio_model_readiness
 from app.rag.graph_citations import (
     GraphPathSourceLocator,
     GraphPathValidator,
@@ -778,6 +779,9 @@ class EvaluationService:
         settings: Settings | None = None,
         trace_export_service: TraceExportService | None = None,
         claim_judge_factory: Callable[[Settings], EvaluationClaimJudgeService] | None = None,
+        generation_readiness_checker: (
+            Callable[[Settings, str], LMStudioModelReadiness] | None
+        ) = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.job_repository = job_repository or JobRepository()
@@ -785,6 +789,9 @@ class EvaluationService:
         self.settings = settings or get_settings()
         self.trace_export_service = trace_export_service or TraceExportService(self.settings)
         self.claim_judge_factory = claim_judge_factory or EvaluationClaimJudgeService
+        self.generation_readiness_checker = (
+            generation_readiness_checker or check_lmstudio_model_readiness
+        )
 
     @staticmethod
     def get_metric_catalog() -> EvaluationMetricCatalog:
@@ -837,6 +844,21 @@ class EvaluationService:
         evaluation_scope = payload.evaluation_scope or _evaluation_scope_from_targets(
             strategy_targets
         )
+        if (
+            evaluation_scope == "end_to_end"
+            and payload.generation_provider == "lmstudio"
+            and payload.generation_model is not None
+        ):
+            generation_readiness = self.get_generation_readiness(
+                payload=EvaluationGenerationReadinessRequest(
+                    generation_provider=payload.generation_provider,
+                    generation_model=payload.generation_model,
+                )
+            )
+            if not generation_readiness.ready:
+                raise EvaluationGenerationNotReady(
+                    details=generation_readiness.model_dump(mode="json")
+                )
         strategy_type = strategy_targets[0].storage_strategy_type
         cache_modes = [mode.value for mode in _selected_cache_modes(payload.cache_modes)]
         trigger_type = payload.trigger_type.value
@@ -924,7 +946,7 @@ class EvaluationService:
                 ready=True,
                 reason_code="provider_not_checked",
             )
-        readiness = check_lmstudio_model_readiness(
+        readiness = self.generation_readiness_checker(
             self.settings,
             payload.generation_model,
         )
