@@ -106,7 +106,7 @@ def test_graph_migration_downgrade_upgrade_roundtrip(
         assert _setting_value(pg_engine, GRAPH_EXTRACTION_MIN_CONFIDENCE_SETTING_KEY) == 0.5
         assert _retrieval_cache_corpus_marker_value(pg_engine) is not None
 
-        command.downgrade(config, "-1")
+        command.downgrade(config, PRE_LLM_FORWARD_REVISION)
         with pg_engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         assert version == PRE_LLM_FORWARD_REVISION

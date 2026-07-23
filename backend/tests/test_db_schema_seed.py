@@ -128,7 +128,7 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_retrieval_cache_entries_document_fp",
         "ck_retrieval_cache_entries_graph_fp",
         "ck_retrieval_cache_entries_scope_hash",
-        "uq_evaluation_datasets_name",
+        "uq_evaluation_datasets_name_version",
         "uq_evaluation_cases_dataset_key",
         "ck_evaluation_runs_strategy_type",
         "ck_evaluation_run_items_strategy_type",
