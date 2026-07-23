@@ -100,4 +100,3 @@ available on the relevant Build page before changing the code:
 - provider response bodies, request headers, and API keys are never included in
   API errors or generation metadata;
 - non-local environments: NVIDIA selection is rejected even if a key exists.
-

@@ -91,4 +91,3 @@ foreach ($model in $Models) {
 
 Write-Host "NVIDIA generation checks passed."
 exit 0
-

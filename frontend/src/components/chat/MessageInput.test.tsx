@@ -46,4 +46,3 @@ test("does not render an external data warning for local models", () => {
 
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
-

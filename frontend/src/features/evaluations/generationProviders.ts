@@ -17,4 +17,3 @@ export function buildEvaluationGenerationProviders(
     ? [...BASE_GENERATION_PROVIDERS, "nvidia"]
     : [...BASE_GENERATION_PROVIDERS];
 }
-

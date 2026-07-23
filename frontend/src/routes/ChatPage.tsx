@@ -69,7 +69,7 @@ const RAG_STRATEGY_OPTIONS = [
   {
     value: "agentic_router" as const,
     label: "Agentic Router",
-    description: "LLM planner縺ｧ讀懃ｴ｢謌ｦ逡･繧帝∈縺ｳ縲∝､ｱ謨玲凾縺ｯ繝ｫ繝ｼ繝ｫ繝吶・繧ｹ縺ｫ謌ｻ縺励※蝗樒ｭ皮函謌舌＠縺ｾ縺吶・
+    description: "LLM plannerで検索戦略を選び、失敗時はルールベースに戻して回答生成します。"
   }
 ];
 const MODEL_STORAGE_KEY = "rag_selected_model";
@@ -322,7 +322,8 @@ function ChatSidebar({
             role="menuitem"
             type="button"
           >
-            邱ｨ髮・          </button>
+            編集
+          </button>
           <button
             className="chat-menu-item danger"
             onClick={() => {
@@ -332,7 +333,7 @@ function ChatSidebar({
             role="menuitem"
             type="button"
           >
-            蜑企勁
+            削除
           </button>
         </div>
       ) : null}
@@ -382,7 +383,8 @@ function EditChatModal({
         <div className="delete-chat-modal-header">
           <h2 id="edit-chat-title">Edit chat</h2>
           <button aria-label="Close edit dialog" disabled={saving} onClick={onCancel} type="button">
-            ﾃ・          </button>
+            ×
+          </button>
         </div>
         <label className="edit-chat-field">
           <span>Title</span>
@@ -430,7 +432,8 @@ function DeleteChatModal({
         <div className="delete-chat-modal-header">
           <h2 id="delete-chat-title">Delete chat</h2>
           <button aria-label="Close delete dialog" disabled={deleting} onClick={onCancel} type="button">
-            ﾃ・          </button>
+            ×
+          </button>
         </div>
         <p className="delete-chat-target">{dialog.session.title}</p>
         <label className="delete-chat-checkbox">
@@ -440,12 +443,12 @@ function DeleteChatModal({
             onChange={(event) => onPermanentChange(event.target.checked)}
             type="checkbox"
           />
-          <span>螳悟・縺ｫ蜑企勁縺励∪縺吶°・・/span>
+          <span>完全に削除しますか？</span>
         </label>
         <p className="delete-chat-help">
           {dialog.permanent
-            ? "縺薙・繝√Ε繝・ヨ縲√Γ繝・そ繝ｼ繧ｸ縲・未騾｣縺吶ｋ讀懃ｴ｢邨先棡縺ｨ蠑慕畑繧単ostgres縺九ｉ蜑企勁縺励∪縺吶・
-            : "繝√ぉ繝・け繧貞､悶☆縺ｨ縲√メ繝｣繝・ヨ荳隕ｧ縺九ｉ髱櫁｡ｨ遉ｺ縺ｫ縺励∪縺吶１ostgres縺ｮ螻･豁ｴ縺ｯ谿九ｊ縺ｾ縺吶・}
+            ? "このチャット、メッセージ、関連する検索結果と引用をPostgresから削除します。"
+            : "チェックを外すと、チャット一覧から非表示にします。Postgresの履歴は残ります。"}
         </p>
         <div className="delete-chat-actions">
           <button className="secondary-action" disabled={deleting} onClick={onCancel} type="button">
@@ -811,4 +814,3 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
     </main>
   );
 }
-

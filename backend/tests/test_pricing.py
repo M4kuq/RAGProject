@@ -104,4 +104,3 @@ def test_settings_empty_generation_pricing_overrides_env_degrades_to_empty(
     settings = Settings(_env_file=None)
 
     assert settings.generation_pricing_overrides == {}
-

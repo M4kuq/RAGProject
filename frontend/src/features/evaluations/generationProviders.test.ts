@@ -16,4 +16,3 @@ test("keeps the existing evaluation providers unchanged when NVIDIA is disabled"
     "gemini"
   ]);
 });
-

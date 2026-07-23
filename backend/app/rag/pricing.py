@@ -117,4 +117,3 @@ def _non_negative_number(value: object) -> float | None:
     if not math.isfinite(number) or number < 0:
         return None
     return number
-

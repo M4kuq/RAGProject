@@ -63,12 +63,12 @@ from app.services.rag_service import RagService, _retrieval_summary_response, _s
 ALLOWED_ORIGIN = "http://localhost:5173"
 TEST_PASSWORD = "password"
 TEST_LMSTUDIO_MODEL = "qwen3.5-9b"
-OBSERVED_CITED_ANSWER = "謠蝉ｾ帙＆繧後◆譁・ц縺ｧ縺ｯ縲∥lpha policy 縺ｮ隕∫せ縺檎｢ｺ隱阪〒縺阪∪縺・[1]縲・
+OBSERVED_CITED_ANSWER = "提供された文脈では、alpha policy の要点が確認できます [1]。"
 OBSERVED_INSUFFICIENT_EVIDENCE_ANSWER = (
-    "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ縲・[1]"
+    "検索された文書には、この質問に答えるための十分な根拠がありません。 [1]"
 )
 INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER = (
-    "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓逶ｴ謗･遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ [1]縲・
+    "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
 )
 
 
@@ -1325,10 +1325,10 @@ def test_rag_ask_live_lmstudio_generation_does_not_fall_back_to_fake(
             "chat_session_id": chat_session_id,
             "client_message_id": "live-lmstudio-insufficient-msg-1",
             "message": (
-                "縺薙・譁・嶌縺縺代↓蝓ｺ縺･縺・※縲｀ercury 險育判縺ｮ謇薙■荳翫￡逡ｪ蜿ｷ繧堤ｭ斐∴縺ｦ縺上□縺輔＞縲・
-                "譁・嶌縺ｫ逶ｴ謗･譬ｹ諡縺後↑縺・ｴ蜷医・"
-                "縲梧､懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ縲・
-                "縺ｨ遲斐∴縺ｦ縺上□縺輔＞縲・
+                "この文書だけに基づいて、Mercury 計画の打ち上げ番号を答えてください。"
+                "文書に直接根拠がない場合は"
+                "「検索された文書には、この質問に答えるための十分な根拠がありません」"
+                "と答えてください。"
             ),
             "strategy": "dense",
             "top_k": 2,
@@ -2551,7 +2551,7 @@ def test_rag_ask_llm_tool_orchestrator_falls_back_to_hybrid_for_dense_hybrid_com
         json={
             "chat_session_id": chat_session_id,
             "client_message_id": "llm-hybrid-compare-msg-1",
-            "message": "dense縺ｨhybrid縺ｧ豈碑ｼ・＠縺ｦ縺上□縺輔＞",
+            "message": "denseとhybridで比較してください",
             "strategy": "llm_tool_orchestrator",
         },
         headers=_unsafe_headers(csrf_token),
@@ -2683,7 +2683,7 @@ def test_rag_ask_llm_tool_orchestrator_insufficient_answer_with_context_returns_
         json={
             "chat_session_id": chat_session_id,
             "client_message_id": "llm-insufficient-msg-1",
-            "message": "dense縺ｨhybrid縺ｧ豈碑ｼ・＠縺ｦ縺上□縺輔＞",
+            "message": "denseとhybridで比較してください",
             "strategy": "llm_tool_orchestrator",
         },
         headers=_unsafe_headers(csrf_token),
@@ -3256,7 +3256,7 @@ def test_rag_ask_no_context_and_generation_failure_do_not_create_assistant(
     assert marker_only.status_code == 200
     marker_only_data = marker_only.json()["data"]
     assert marker_only_data["assistant_message"]["content"] == (
-        "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓逶ｴ謗･遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ [1]縲・
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません [1]。"
     )
     assert marker_only_data["citations"][0]["local_citation_id"] == 1
     assert marker_only_data["citations"][0]["document_chunk_id"] == 100
@@ -3865,4 +3865,3 @@ def _assert_safe_run_trace(run: RetrievalRun, *, raw_query: str) -> None:
     assert "raw_chunk" not in dumped
     assert "content_text" not in dumped
     assert "full_context" not in dumped
-

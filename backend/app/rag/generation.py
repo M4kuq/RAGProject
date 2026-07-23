@@ -775,7 +775,7 @@ def _openai_input(request: GenerationRequest) -> str:
         "'analysis', step-by-step reasoning, or a draft. Return the final answer only. "
         "Use the insufficient-evidence sentence only when none of the shown context items "
         "directly supports an answer. In that case, write exactly this sentence: "
-        "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ縲・
+        "検索された文書には、この質問に答えるための十分な根拠がありません。"
     )
 
 
@@ -1105,8 +1105,8 @@ def _final_answer_text(value: str) -> str:
         "Drafting the response:",
         "Draft:",
         "Response:",
-        "譛邨ょ屓遲・",
-        "蝗樒ｭ・",
+        "最終回答:",
+        "回答:",
     ):
         if marker in text:
             text = text.rsplit(marker, 1)[1].strip()
@@ -1129,7 +1129,7 @@ def _final_answer_text(value: str) -> str:
         "\nActually,",
         " Let's ",
         "\nLet's ",
-        "譽譟･",
+        "检查",
     ):
         if marker in text:
             text = text.split(marker, 1)[0].strip()
@@ -1140,9 +1140,9 @@ def _final_answer_text(value: str) -> str:
 
 def _trim_incomplete_tail(text: str) -> str:
     stripped = text.strip()
-    if not stripped or stripped.endswith(("縲・, ".", "!", "?", "・・, "・・, "]")):
+    if not stripped or stripped.endswith(("。", ".", "!", "?", "！", "？", "]")):
         return stripped
-    last_sentence_end = max(stripped.rfind(marker) for marker in ("縲・, ".", "!", "?", "・・, "・・))
+    last_sentence_end = max(stripped.rfind(marker) for marker in ("。", ".", "!", "?", "！", "？"))
     if last_sentence_end < 0:
         return stripped
     return stripped[: last_sentence_end + 1].strip()
@@ -1192,7 +1192,7 @@ def _rewrite_insufficient_evidence_answer(value: str) -> str:
         return value
     marker_match = re.search(r"\[(\d+)\]", value)
     marker = f" [{marker_match.group(1)}]" if marker_match else ""
-    return f"讀懃ｴ｢縺輔ｌ縺溷ｼ慕畑縺ｧ縺ｯ縲√％縺ｮ雉ｪ蝠上∈縺ｮ蝗樒ｭ斐ｒ遒ｺ螳壹〒縺阪∪縺帙ｓ{marker}縲・
+    return f"検索された引用では、この質問への回答を確定できません{marker}。"
 
 
 def _normalize_generated_text(value: str) -> str:
@@ -1203,4 +1203,3 @@ def _normalize_generated_text(value: str) -> str:
 def _safe_label(value: str) -> str:
     normalized = " ".join(value.replace("\x00", " ").split())
     return normalized.replace("[", "(").replace("]", ")")[:255]
-

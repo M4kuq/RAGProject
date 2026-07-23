@@ -51,4 +51,3 @@ describe("NVIDIA local model catalog", () => {
     expect(NVIDIA_EXTERNAL_DATA_WARNING).toContain("\u516c\u958b\u30fb\u30c7\u30e2\u6587\u66f8");
   });
 });
-

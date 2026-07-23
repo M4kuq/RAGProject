@@ -252,4 +252,3 @@ def _request() -> GenerationRequest:
         ],
         max_output_chars=500,
     )
-

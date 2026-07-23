@@ -268,4 +268,3 @@ volumes:
     name: ragproject_upload_storage
   neo4j_data:
     name: ragproject_neo4j_data
-

@@ -4644,8 +4644,8 @@ def _insufficient_citation_fallback(
         raise CitationBuildError("citation_build_failed")
     first_source = prompt_citation_sources[0]
     fallback = (
-        "讀懃ｴ｢縺輔ｌ縺滓枚譖ｸ縺ｫ縺ｯ縲√％縺ｮ雉ｪ蝠上↓逶ｴ謗･遲斐∴繧九◆繧√・蜊∝・縺ｪ譬ｹ諡縺後≠繧翫∪縺帙ｓ "
-        f"[{first_source.local_citation_id}]縲・
+        "検索された文書には、この質問に直接答えるための十分な根拠がありません "
+        f"[{first_source.local_citation_id}]。"
     )
     parsed_generation = parse_generation_output(fallback)
     cited_sources = validate_generation_citations(
@@ -4852,4 +4852,3 @@ def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
-
