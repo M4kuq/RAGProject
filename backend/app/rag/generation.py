@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -66,6 +66,20 @@ class AnswerGenerationError(RuntimeError):
         # rate_limited, auth, http_<status>, connection). Never carries response
         # bodies or credentials.
         self.error_category = error_category
+
+
+@dataclass(frozen=True)
+class LMStudioModelReadiness:
+    ready: bool
+    requested_model: str
+    resolved_model: str
+    reason_code: Literal[
+        "ready",
+        "provider_unreachable",
+        "model_not_found",
+        "model_not_loaded",
+        "invalid_response",
+    ]
 
 
 def _httpx_error_category(exc: httpx.HTTPError) -> str:
@@ -561,7 +575,7 @@ def create_answer_generator(
         return OpenAICompatibleChatAnswerGenerator(
             api_key=settings.lmstudio_api_key,
             base_url=settings.lmstudio_base_url,
-            model_name=_lmstudio_model_name(generation_model_name),
+            model_name=_lmstudio_native_model_name(generation_model_name),
             timeout_seconds=timeout_seconds or settings.lmstudio_timeout_seconds,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
         )
@@ -1102,6 +1116,8 @@ def _lmstudio_native_base_url(value: str) -> str:
 def _lmstudio_model_name(value: str) -> str:
     normalized = value.strip()
     lower = normalized.lower()
+    if lower == "qwen3.5:9b":
+        return "qwen3.5-9b"
     if lower.startswith("https://huggingface.co/lmstudio-community/qwen3.5-4b-gguf"):
         return "qwen3.5-4b"
     if lower.startswith("lmstudio-community/qwen3.5-4b-gguf"):
@@ -1111,6 +1127,72 @@ def _lmstudio_model_name(value: str) -> str:
     if lower.startswith("lmstudio-community/qwen3.5-9b-gguf"):
         return "qwen3.5-9b"
     return normalized
+
+
+def _lmstudio_native_model_name(value: str) -> str:
+    normalized = _lmstudio_model_name(value)
+    if normalized.lower() == "qwen3.5-9b":
+        return "qwen/qwen3.5-9b"
+    return normalized
+
+
+def check_lmstudio_model_readiness(
+    settings: Settings,
+    model_name: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> LMStudioModelReadiness:
+    requested_model = model_name.strip()
+    resolved_model = _lmstudio_native_model_name(requested_model)
+
+    def result(
+        ready: bool,
+        reason_code: Literal[
+            "ready",
+            "provider_unreachable",
+            "model_not_found",
+            "model_not_loaded",
+            "invalid_response",
+        ],
+    ) -> LMStudioModelReadiness:
+        return LMStudioModelReadiness(
+            ready=ready,
+            requested_model=requested_model,
+            resolved_model=resolved_model,
+            reason_code=reason_code,
+        )
+
+    try:
+        response = httpx.get(
+            f"{_lmstudio_native_base_url(settings.lmstudio_base_url)}/api/v1/models",
+            headers={"Authorization": f"Bearer {settings.lmstudio_api_key}"},
+            timeout=min(timeout_seconds, settings.lmstudio_timeout_seconds),
+        )
+    except httpx.HTTPError:
+        return result(False, "provider_unreachable")
+    if response.status_code >= 400:
+        return result(False, "provider_unreachable")
+    try:
+        payload = response.json()
+    except ValueError:
+        return result(False, "invalid_response")
+    if not isinstance(payload, dict):
+        return result(False, "invalid_response")
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return result(False, "invalid_response")
+    model_entry = next(
+        (item for item in models if isinstance(item, dict) and item.get("key") == resolved_model),
+        None,
+    )
+    if model_entry is None:
+        return result(False, "model_not_found")
+    loaded_instances = model_entry.get("loaded_instances")
+    if not isinstance(loaded_instances, list):
+        return result(False, "invalid_response")
+    if not loaded_instances:
+        return result(False, "model_not_loaded")
+    return result(True, "ready")
 
 
 def _final_answer_text(value: str) -> str:

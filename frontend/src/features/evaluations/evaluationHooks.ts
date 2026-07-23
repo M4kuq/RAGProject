@@ -7,6 +7,7 @@ import {
   exportEvaluationDataset,
   getEvaluationDataset,
   getEvaluationDatasetCorpusReadiness,
+  getEvaluationGenerationReadiness,
   getEvaluationHumanCalibrations,
   getEvaluationMetricCatalog,
   getEvaluationRunDetail,
@@ -24,6 +25,7 @@ import type {
   EvaluationDatasetCreateRequest,
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
+  EvaluationGenerationProvider,
   EvaluationHumanCalibrationUpsertRequest,
   EvaluationRunCreateRequest
 } from "./evaluationTypes";
@@ -42,6 +44,24 @@ export function useEvaluationMetricCatalog() {
     queryKey: queryKeys.evaluations.metricCatalog,
     queryFn: getEvaluationMetricCatalog,
     staleTime: Number.POSITIVE_INFINITY
+  });
+}
+
+export function useEvaluationGenerationReadiness(
+  generationProvider: EvaluationGenerationProvider,
+  generationModel: string,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: queryKeys.evaluations.generationReadiness(
+      generationProvider,
+      generationModel
+    ),
+    queryFn: () =>
+      getEvaluationGenerationReadiness(generationProvider, generationModel),
+    enabled: enabled && generationModel.length > 0,
+    staleTime: 5000,
+    refetchInterval: (query) => (query.state.data?.ready === false ? 5000 : false)
   });
 }
 

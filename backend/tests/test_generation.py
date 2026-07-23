@@ -13,6 +13,7 @@ from app.rag.generation import (
     OpenAICompatibleChatAnswerGenerator,
     TokenUsage,
     _openai_input,
+    check_lmstudio_model_readiness,
     create_answer_generator,
 )
 
@@ -190,6 +191,74 @@ def test_create_answer_generator_supports_lmstudio() -> None:
     generator = create_answer_generator(settings)
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
+    assert generator.model_name == "qwen/qwen3.5-9b"
+
+
+def test_lmstudio_model_readiness_resolves_default_native_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {
+                        "key": "qwen/qwen3.5-9b",
+                        "loaded_instances": [{"id": "qwen/qwen3.5-9b"}],
+                    }
+                ]
+            }
+
+    def fake_get(url: str, **kwargs: object) -> Response:
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.get", fake_get)
+    result = check_lmstudio_model_readiness(
+        Settings(
+            _env_file=None,
+            lmstudio_base_url="http://host.docker.internal:1234/v1",
+        ),
+        "qwen3.5-9b",
+    )
+
+    assert result.ready is True
+    assert result.requested_model == "qwen3.5-9b"
+    assert result.resolved_model == "qwen/qwen3.5-9b"
+    assert result.reason_code == "ready"
+    assert captured["url"] == "http://host.docker.internal:1234/api/v1/models"
+    assert "lm-studio" in str(captured["headers"])
+
+
+def test_lmstudio_model_readiness_reports_unloaded_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {
+                        "key": "qwen/qwen3.5-9b",
+                        "loaded_instances": [],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("app.rag.generation.httpx.get", lambda *args, **kwargs: Response())
+    result = check_lmstudio_model_readiness(
+        Settings(_env_file=None),
+        "qwen3.5:9b",
+    )
+
+    assert result.ready is False
+    assert result.resolved_model == "qwen/qwen3.5-9b"
+    assert result.reason_code == "model_not_loaded"
 
 
 def test_create_answer_generator_uses_ollama_generation_timeout() -> None:

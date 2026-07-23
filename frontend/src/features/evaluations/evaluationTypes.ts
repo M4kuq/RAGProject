@@ -184,6 +184,20 @@ export type EvaluationRunCreateResponse = {
   evaluation_scope: EvaluationScope;
 };
 
+export type EvaluationGenerationReadiness = {
+  generation_provider: EvaluationGenerationProvider;
+  requested_model: string;
+  resolved_model: string;
+  ready: boolean;
+  reason_code:
+    | "ready"
+    | "provider_not_checked"
+    | "provider_unreachable"
+    | "model_not_found"
+    | "model_not_loaded"
+    | "invalid_response";
+};
+
 export type EvaluationMetricResult = {
   metric_name: string;
   metric_score: number | null;

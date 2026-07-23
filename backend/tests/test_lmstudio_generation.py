@@ -239,7 +239,7 @@ def test_lmstudio_factory_normalizes_huggingface_repo_model_name(
     result = generator.generate(_request())
 
     assert result.content == "Qdrant is used for Phase1 vector search [1]."
-    assert captured["json"]["model"] == "qwen3.5-9b"
+    assert captured["json"]["model"] == "qwen/qwen3.5-9b"
 
 
 def test_lmstudio_generation_with_local_server_when_enabled() -> None:

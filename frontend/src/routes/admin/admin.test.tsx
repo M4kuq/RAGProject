@@ -416,6 +416,17 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
       if (url.endsWith("/api/v1/auth/csrf")) {
         return jsonResponse({ data: { csrf_token: "session-token" } });
       }
+      if (url.includes("/api/v1/evaluations/generation/readiness")) {
+        return jsonResponse({
+          data: {
+            generation_provider: "lmstudio",
+            requested_model: "qwen3.5-9b",
+            resolved_model: "qwen/qwen3.5-9b",
+            ready: true,
+            reason_code: "ready"
+          }
+        });
+      }
       if (url.includes("/api/v1/evaluations/runs")) {
         return jsonResponse({ data: [], meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } } });
       }
@@ -439,6 +450,62 @@ test("keeps the existing admin evaluation run action on the evaluations page", a
   expect(screen.getByRole("combobox", { name: "生成 provider" })).toHaveValue("lmstudio");
   expect(screen.getByRole("textbox", { name: "生成 model" })).toHaveValue("qwen3.5-9b");
   expect(screen.queryByRole("option", { name: "fake" })).not.toBeInTheDocument();
+  expect(await screen.findByText("LM Studio接続確認済み: qwen/qwen3.5-9b")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeEnabled();
+});
+
+test("evaluation create form blocks an unloaded LM Studio model", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/auth/me")) {
+        return jsonResponse({
+          data: { user_id: 1, email: "admin@example.com", display_name: "Admin", role: "admin" }
+        });
+      }
+      if (url.endsWith("/api/v1/auth/csrf")) {
+        return jsonResponse({ data: { csrf_token: "session-token" } });
+      }
+      if (url.includes("/api/v1/evaluations/generation/readiness")) {
+        return jsonResponse({
+          data: {
+            generation_provider: "lmstudio",
+            requested_model: "qwen3.5-9b",
+            resolved_model: "qwen/qwen3.5-9b",
+            ready: false,
+            reason_code: "model_not_loaded"
+          }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/runs")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 20, total: 0, has_next: false } }
+        });
+      }
+      if (url.includes("/api/v1/evaluations/datasets")) {
+        return jsonResponse({
+          data: [],
+          meta: { pagination: { page: 1, page_size: 50, total: 0, has_next: false } }
+        });
+      }
+      return jsonResponse({ data: [] });
+    })
+  );
+  window.history.pushState({}, "", "/admin/evaluations");
+
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(
+    await screen.findByText(
+      "指定したモデルがロードされていません。LM Studioでロードしてから再実行してください。"
+    )
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "評価を実行" })).toBeDisabled();
 });
 
 test("evaluation create form submits requested generation provider and model", async () => {

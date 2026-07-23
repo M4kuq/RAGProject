@@ -16,6 +16,7 @@ from app.schemas.evaluations import (
     EvaluationDatasetCreateRequest,
     EvaluationDatasetUpdateRequest,
     EvaluationFailurePromotionRequest,
+    EvaluationGenerationReadinessRequest,
     EvaluationHumanCalibrationUpsertRequest,
     EvaluationRunCreateRequest,
 )
@@ -30,6 +31,16 @@ def evaluation_metric_catalog(
     _: User = Depends(require_admin),
 ) -> dict[str, object]:
     result = EvaluationService.get_metric_catalog()
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/generation/readiness")
+def evaluation_generation_readiness(
+    request: Request,
+    payload: EvaluationGenerationReadinessRequest = Depends(),
+    _: User = Depends(require_admin),
+) -> dict[str, object]:
+    result = EvaluationService().get_generation_readiness(payload=payload)
     return success_response(result.model_dump(mode="json"), request)
 
 

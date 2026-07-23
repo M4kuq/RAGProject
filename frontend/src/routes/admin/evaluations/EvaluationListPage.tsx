@@ -14,6 +14,7 @@ import {
   useCreateEvaluationRun,
   useEvaluationCorpusReadiness,
   useEvaluationDatasets,
+  useEvaluationGenerationReadiness,
   useEvaluationMetricCatalog,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
@@ -86,6 +87,18 @@ export function EvaluationListPage() {
   const trimmedGenerationModel = generationModel.trim();
   const generatesAnswers = evaluationScope === "end_to_end";
   const providerWithoutModel = generatesAnswers && !trimmedGenerationModel;
+  const checksLocalGeneration =
+    generatesAnswers && generationProvider === "lmstudio" && !providerWithoutModel;
+  const generationReadiness = useEvaluationGenerationReadiness(
+    generationProvider,
+    trimmedGenerationModel,
+    checksLocalGeneration
+  );
+  const generationReadinessBlocked =
+    checksLocalGeneration &&
+    (generationReadiness.isLoading ||
+      generationReadiness.isError ||
+      generationReadiness.data?.ready !== true);
   const generationGuardMessage = providerWithoutModel
     ? "回答生成まで評価する場合は生成 model を入力してください。"
     : null;
@@ -153,6 +166,24 @@ export function EvaluationListPage() {
       {message ? <InlineAlert tone="success">{message}</InlineAlert> : null}
       {generationGuardMessage ? (
         <InlineAlert tone="error">{generationGuardMessage}</InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.isLoading ? (
+        <InlineAlert tone="info">LM Studioのモデル状態を確認しています。</InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.data?.ready ? (
+        <InlineAlert tone="success">
+          LM Studio接続確認済み: {generationReadiness.data.resolved_model}
+        </InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.data?.ready === false ? (
+        <InlineAlert tone="error">
+          {generationReadinessMessage(generationReadiness.data.reason_code)}
+        </InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.isError ? (
+        <InlineAlert tone="error">
+          LM Studioの状態を確認できません。サーバーとモデルのロード状態を確認してください。
+        </InlineAlert>
       ) : null}
       {corpusNotReady ? (
         <InlineAlert tone="info">
@@ -336,7 +367,12 @@ export function EvaluationListPage() {
         </label>
         <button
           type="submit"
-          disabled={createRun.isPending || providerWithoutModel || corpusNotReady}
+          disabled={
+            createRun.isPending ||
+            providerWithoutModel ||
+            corpusNotReady ||
+            generationReadinessBlocked
+          }
         >
           評価を実行
         </button>
@@ -479,6 +515,19 @@ export function EvaluationListPage() {
       </section>
     </main>
   );
+}
+
+function generationReadinessMessage(reasonCode: string): string {
+  if (reasonCode === "provider_unreachable") {
+    return "LM Studioへ接続できません。Local Serverを起動してください。";
+  }
+  if (reasonCode === "model_not_found") {
+    return "指定したモデルがLM Studioにありません。モデル名を確認してください。";
+  }
+  if (reasonCode === "model_not_loaded") {
+    return "指定したモデルがロードされていません。LM Studioでロードしてから再実行してください。";
+  }
+  return "LM Studioのモデル状態を判定できません。サーバー設定を確認してください。";
 }
 
 function formatEvaluationScope(scope: EvaluationScope) {

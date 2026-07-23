@@ -74,6 +74,7 @@ from app.rag.generation import (
     GenerationContextItem,
     GenerationRequest,
     GenerationResult,
+    LMStudioModelReadiness,
     TokenUsage,
 )
 from app.rag.rerank import FakeRerankerClient
@@ -524,6 +525,42 @@ def test_evaluation_metric_catalog_api_is_admin_only(
     assert by_name["p95_latency"]["higher_is_better"] is False
     assert by_name["p95_latency"]["value_unit"] == "ms"
     assert TEST_PASSWORD.lower() not in response.text.lower()
+
+
+def test_evaluation_generation_readiness_api_is_admin_only_and_safe(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = evaluation_client
+    path = (
+        "/api/v1/evaluations/generation/readiness"
+        "?generation_provider=lmstudio&generation_model=qwen3.5-9b"
+    )
+
+    unauthenticated = client.get(path)
+    assert unauthenticated.status_code == 401
+
+    monkeypatch.setattr(
+        "app.services.evaluation_service.check_lmstudio_model_readiness",
+        lambda settings, model_name: LMStudioModelReadiness(
+            ready=True,
+            requested_model=model_name,
+            resolved_model="qwen/qwen3.5-9b",
+            reason_code="ready",
+        ),
+    )
+    _login_as(client, "admin@example.com")
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "generation_provider": "lmstudio",
+        "requested_model": "qwen3.5-9b",
+        "resolved_model": "qwen/qwen3.5-9b",
+        "ready": True,
+        "reason_code": "ready",
+    }
+    assert "api_key" not in response.text.lower()
 
 
 def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:

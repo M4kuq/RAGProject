@@ -9,6 +9,8 @@ import type {
   EvaluationDatasetImportResult,
   EvaluationDatasetManifest,
   EvaluationDatasetValidation,
+  EvaluationGenerationReadiness,
+  EvaluationGenerationProvider,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
   EvaluationHumanCalibrationRecord,
@@ -39,6 +41,19 @@ function toQuery(params: Record<string, string | number | undefined>): string {
 export async function getEvaluationMetricCatalog(): Promise<EvaluationMetricCatalog> {
   const response = await apiFetch<ApiResponse<EvaluationMetricCatalog>>(
     "/api/v1/evaluations/metric-catalog"
+  );
+  return response.data;
+}
+
+export async function getEvaluationGenerationReadiness(
+  generationProvider: EvaluationGenerationProvider,
+  generationModel: string
+): Promise<EvaluationGenerationReadiness> {
+  const response = await apiFetch<ApiResponse<EvaluationGenerationReadiness>>(
+    `/api/v1/evaluations/generation/readiness${toQuery({
+      generation_provider: generationProvider,
+      generation_model: generationModel
+    })}`
   );
   return response.data;
 }

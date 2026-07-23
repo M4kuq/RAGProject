@@ -60,6 +60,7 @@ from app.evaluation.metrics import (
 )
 from app.evaluation.rag_service import RagEvaluationResult, create_evaluation_rag_service
 from app.observability.trace_export import TraceExportService
+from app.rag.generation import check_lmstudio_model_readiness
 from app.rag.graph_citations import (
     GraphPathSourceLocator,
     GraphPathValidator,
@@ -103,6 +104,8 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
     EvaluationGenerationComparison,
+    EvaluationGenerationReadinessRequest,
+    EvaluationGenerationReadinessResponse,
     EvaluationHumanCalibrationResponse,
     EvaluationHumanCalibrationSummary,
     EvaluationHumanCalibrationTarget,
@@ -906,6 +909,31 @@ class EvaluationService:
             status="queued",
             strategies=strategies,
             evaluation_scope=evaluation_scope,
+        )
+
+    def get_generation_readiness(
+        self,
+        *,
+        payload: EvaluationGenerationReadinessRequest,
+    ) -> EvaluationGenerationReadinessResponse:
+        if payload.generation_provider != "lmstudio":
+            return EvaluationGenerationReadinessResponse(
+                generation_provider=payload.generation_provider,
+                requested_model=payload.generation_model,
+                resolved_model=payload.generation_model,
+                ready=True,
+                reason_code="provider_not_checked",
+            )
+        readiness = check_lmstudio_model_readiness(
+            self.settings,
+            payload.generation_model,
+        )
+        return EvaluationGenerationReadinessResponse(
+            generation_provider="lmstudio",
+            requested_model=readiness.requested_model,
+            resolved_model=readiness.resolved_model,
+            ready=readiness.ready,
+            reason_code=readiness.reason_code,
         )
 
     def create_dataset(

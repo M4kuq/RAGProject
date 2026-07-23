@@ -604,6 +604,46 @@ class EvaluationRunCreateResponse(BaseModel):
     evaluation_scope: EvaluationScope = "retrieval"
 
 
+class EvaluationGenerationReadinessRequest(BaseModel):
+    generation_provider: str = Field(min_length=1, max_length=50)
+    generation_model: str = Field(min_length=1, max_length=128)
+
+    @field_validator("generation_provider")
+    @classmethod
+    def validate_generation_provider(cls, value: str) -> str:
+        provider = _safe_key(value, field_name="generation_provider")
+        if provider not in KNOWN_GENERATION_PROVIDERS:
+            raise ValueError("generation_provider is not supported")
+        return provider
+
+    @field_validator("generation_model")
+    @classmethod
+    def validate_generation_model(cls, value: str) -> str:
+        model = _safe_text(value, max_length=128)
+        if model is None or not _SAFE_GENERATION_MODEL_RE.fullmatch(model):
+            raise ValueError("generation_model is invalid")
+        if _GENERATION_MODEL_SECRET_RE.search(model):
+            raise ValueError("generation_model must not contain secret-like text")
+        if model.lower() in {"redacted", "unknown"}:
+            raise ValueError("generation_model must not use a reserved label")
+        return model
+
+
+class EvaluationGenerationReadinessResponse(BaseModel):
+    generation_provider: str
+    requested_model: str
+    resolved_model: str
+    ready: bool
+    reason_code: Literal[
+        "ready",
+        "provider_not_checked",
+        "provider_unreachable",
+        "model_not_found",
+        "model_not_loaded",
+        "invalid_response",
+    ]
+
+
 class EvaluationMetricResult(BaseModel):
     metric_name: str
     metric_score: float | None = None
