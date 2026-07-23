@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -28,6 +29,20 @@ _SECRET_VALUE_RE = re.compile(
 
 class GoldV2ValidationError(RuntimeError):
     pass
+
+
+class GroundedAnswerCaseContract(Protocol):
+    @property
+    def case_id(self) -> str: ...
+
+    @property
+    def answerable(self) -> bool: ...
+
+    @property
+    def required_citation(self) -> bool: ...
+
+    @property
+    def tags(self) -> Sequence[str]: ...
 
 
 class EvidenceRole(StrEnum):
@@ -484,7 +499,10 @@ def validate_dataset_against_catalog(
             raise GoldV2ValidationError("gold_v2_required_fact_uncovered")
 
 
-def grounded_answer_pass(case: GoldCaseV2, decision: AuxiliaryJudgeDecision) -> bool:
+def grounded_answer_pass(
+    case: GroundedAnswerCaseContract,
+    decision: AuxiliaryJudgeDecision,
+) -> bool:
     _validate_decision_shape(case, decision)
     if decision.forbidden_claims_absent != JudgeOutcome.PASS:
         return False
@@ -540,7 +558,7 @@ def calibration_agreement(records: list[HumanCalibrationRecord]) -> float | None
 
 
 def _validate_decision_shape(
-    case: GoldCaseV2,
+    case: GroundedAnswerCaseContract,
     decision: AuxiliaryJudgeDecision,
 ) -> None:
     if case.case_id != decision.case_id:

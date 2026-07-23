@@ -7,21 +7,34 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.evaluation.gold_v2 import (
+    AuxiliaryJudgeDecision,
+    HumanCalibrationRecord,
+    HumanDisagreementCategory,
+    JudgeOutcome,
+    JudgeReasonCode,
+)
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.schemas.common import PaginationMeta
 
 EvaluationStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+EvaluationScope = Literal["retrieval", "answer", "end_to_end"]
 EVALUATION_SCHEMA_VERSION: Literal["phase2.evaluation.v1"] = "phase2.evaluation.v1"
 DATASET_MANIFEST_SCHEMA_VERSION: Literal["phase2.evaluation_dataset.v1"] = (
     "phase2.evaluation_dataset.v1"
 )
+DATASET_MANIFEST_V2_SCHEMA_VERSION: Literal["phase3.evaluation_dataset.v2"] = (
+    "phase3.evaluation_dataset.v2"
+)
+MAX_EVALUATION_DATASET_BYTES = 2 * 1024 * 1024
 
 _SAFE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
 _SAFE_FIXTURE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,119}$")
 _SAFE_GENERATION_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}$")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_VALUE_RE = re.compile(
-    r"(?i)(api[_-]?key|secret|password|credential|token)\s*[:=]|bearer\s+|sk-[A-Za-z0-9]"
+    r"(?i)(api[_-]?key|secret|password|credential|token)\s*[:=]"
+    r"|bearer\s+[A-Za-z0-9._~+/-]{8,}|sk-[A-Za-z0-9]"
 )
 _GENERATION_MODEL_SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|secret|password|token|credential|bearer|sk-[A-Za-z0-9_-]{8,})"
@@ -42,7 +55,7 @@ _FORBIDDEN_KEY_PARTS = (
     "token",
 )
 KNOWN_GENERATION_PROVIDERS = frozenset(
-    {"fake", "ollama", "lmstudio", "openai", "anthropic", "gemini", "bedrock"}
+    {"ollama", "lmstudio", "openai", "anthropic", "gemini", "bedrock"}
 )
 
 
@@ -118,6 +131,7 @@ class EvaluationMetricName(StrEnum):
     CACHE_HIT_RATE = "cache_hit_rate"
     CACHE_SAVED_LATENCY = "cache_saved_latency"
     ENTITY_RELATION_QUALITY_SUMMARY = "entity_relation_quality_summary"
+    CLAIM_FAITHFULNESS = "claim_faithfulness"
 
 
 class EvaluationMetricCategory(StrEnum):
@@ -127,6 +141,31 @@ class EvaluationMetricCategory(StrEnum):
     ROUTING = "routing"
     GRAPH = "graph"
     PERFORMANCE = "performance"
+
+
+class EvaluationMetricMethod(StrEnum):
+    DETERMINISTIC = "deterministic"
+    PROXY = "proxy"
+    LOCAL_JUDGE = "local_judge"
+    MANUAL = "manual"
+
+
+class EvaluationAnswerOutcome(StrEnum):
+    ANSWERED = "answered"
+    ABSTAINED = "abstained"
+    NO_CONTEXT = "no_context"
+    CITATION_ERROR = "citation_error"
+    GENERATION_ERROR = "generation_error"
+    RETRIEVAL_ERROR = "retrieval_error"
+
+
+class EvaluationQualityStatus(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    PENDING = "pending"
+    PARTIAL = "partial"
+    CALIBRATION_REQUIRED = "calibration_required"
+    PASSED = "passed"
+    FAILED = "failed"
 
 
 DEFAULT_EVALUATION_RUN_REQUEST_STRATEGY = EvaluationRunRequestStrategy.DENSE
@@ -154,6 +193,7 @@ DEFAULT_EVALUATION_METRICS: tuple[EvaluationMetricName, ...] = (
     EvaluationMetricName.CACHE_HIT_RATE,
     EvaluationMetricName.CACHE_SAVED_LATENCY,
     EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY,
+    EvaluationMetricName.CLAIM_FAITHFULNESS,
 )
 
 
@@ -173,9 +213,17 @@ class EvaluationMetricCatalogItem(BaseModel):
     category: EvaluationMetricCategory
     display_name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=500)
+    plain_language_summary: str = Field(min_length=1, max_length=200)
     higher_is_better: bool
     value_unit: Literal["ratio", "ms", "count"]
     alias_of: EvaluationMetricName | None = None
+    importance: Literal["primary", "secondary", "diagnostic"] = "secondary"
+    applicable_scopes: list[EvaluationScope] = Field(min_length=1, max_length=3)
+    primary_scopes: list[EvaluationScope] = Field(default_factory=list, max_length=3)
+    display_priority: int = Field(ge=0, lt=32)
+    method: EvaluationMetricMethod = EvaluationMetricMethod.DETERMINISTIC
+    applicable_item_count: int | None = Field(default=None, ge=0)
+    coverage: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationMetricCatalog(BaseModel):
@@ -387,6 +435,14 @@ class EvaluationDatasetResponse(BaseModel):
     version: str
     source_type: EvaluationDatasetSourceType
     status: EvaluationDatasetStatus
+    manifest_schema_version: str = DATASET_MANIFEST_SCHEMA_VERSION
+    content_fingerprint: str | None = None
+    corpus_fingerprint: str | None = None
+    corpus_mode: Literal["shared_legacy", "isolated"] = "shared_legacy"
+    corpus_status: Literal["shared_legacy", "not_prepared", "preparing", "ready", "failed"] = (
+        "shared_legacy"
+    )
+    corpus_failure_code: str | None = None
     metadata_json: dict[str, Any] | None = None
     case_count: int = 0
     created_by: int | None = None
@@ -414,9 +470,12 @@ class EvaluationCaseResponse(BaseModel):
 class EvaluationDatasetImportResponse(BaseModel):
     evaluation_dataset_id: int
     dataset_name: str
+    version: str
+    content_fingerprint: str = Field(min_length=64, max_length=64)
+    corpus_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
     case_count: int
     imported_case_count: int
-    result_code: Literal["created", "updated"]
+    result_code: Literal["created", "unchanged"]
 
 
 class PagedEvaluationDatasets(BaseModel):
@@ -452,6 +511,7 @@ class EvaluationRunCreateRequest(BaseModel):
     generation_provider: str | None = Field(default=None, min_length=1, max_length=50)
     generation_model: str | None = Field(default=None, min_length=1, max_length=128)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
+    evaluation_scope: EvaluationScope | None = None
 
     @field_validator("dataset_name")
     @classmethod
@@ -504,11 +564,23 @@ class EvaluationRunCreateRequest(BaseModel):
                 deduped.append(strategy)
         if self.generation_provider is not None and self.generation_model is None:
             raise ValueError("generation_model is required when generation_provider is set")
-        if (self.generation_provider is not None or self.generation_model is not None) and not any(
+        inferred_scope: EvaluationScope = (
+            "end_to_end"
+            if any(strategy in GENERATION_COMPARISON_STRATEGIES for strategy in deduped)
+            else "retrieval"
+        )
+        effective_scope = self.evaluation_scope or inferred_scope
+        if effective_scope == "answer":
+            raise ValueError("answer-only evaluation scope is not supported")
+        if (self.generation_provider is not None or self.generation_model is not None) and (
+            effective_scope != "end_to_end"
+        ):
+            raise ValueError("generation selection requires end_to_end evaluation scope")
+        if self.evaluation_scope == "retrieval" and any(
             strategy in GENERATION_COMPARISON_STRATEGIES for strategy in deduped
         ):
             raise ValueError(
-                "generation selection requires an answer-generating evaluation strategy"
+                "retrieval evaluation scope does not support answer-generating strategies"
             )
         self.strategies = deduped
         self.strategy_type = deduped[0]
@@ -529,6 +601,7 @@ class EvaluationRunCreateResponse(BaseModel):
     job_id: int
     status: Literal["queued"]
     strategies: list[str] = Field(default_factory=list)
+    evaluation_scope: EvaluationScope = "retrieval"
 
 
 class EvaluationMetricResult(BaseModel):
@@ -547,6 +620,7 @@ class EvaluationRunItemResponse(BaseModel):
     retrieval_run_id: int | None = None
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
     status: EvaluationStatus
+    answer_outcome: EvaluationAnswerOutcome | None = None
     faithfulness_score: float | None = None
     groundedness_score: float | None = None
     citation_coverage: float | None = None
@@ -562,6 +636,7 @@ class EvaluationRunItemResponse(BaseModel):
     latency_breakdown_json: dict[str, object] | None = None
     metric_summary_json: dict[str, object] | None = None
     error_code: str | None = None
+    error_detail_code: str | None = None
     error_message: str | None = None
     case_id: str | None = None
     case_key: str | None = None
@@ -576,11 +651,24 @@ class EvaluationRunSummary(BaseModel):
     strategy_type: RetrievalStrategy = DEFAULT_RETRIEVAL_STRATEGY
     strategies: list[str] = Field(default_factory=lambda: [DEFAULT_RETRIEVAL_STRATEGY.value])
     metric_names: list[str] = Field(default_factory=list)
+    evaluation_scope: EvaluationScope = "retrieval"
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
     status: EvaluationStatus
     case_count: int
     succeeded_count: int
     failed_count: int
+    answered_count: int = Field(default=0, ge=0)
+    abstained_count: int = Field(default=0, ge=0)
+    pipeline_failed_count: int = Field(default=0, ge=0)
+    judged_count: int = Field(default=0, ge=0)
+    reviewed_count: int = Field(default=0, ge=0)
+    answer_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    judge_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    review_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    grounded_answer_pass_rate_provisional: float | None = Field(default=None, ge=0.0, le=1.0)
+    grounded_answer_pass_rate_calibrated: float | None = Field(default=None, ge=0.0, le=1.0)
+    quality_status: EvaluationQualityStatus = EvaluationQualityStatus.NOT_APPLICABLE
+    corpus_fingerprint: str | None = None
     metric_summary: dict[str, float]
     strategy_comparison: list[StrategyComparisonMetric] = Field(default_factory=list)
     strategy_metrics_summary_json: dict[str, object] | None = None
@@ -682,6 +770,76 @@ class EvaluationFailurePromotionResponse(BaseModel):
     created_count: int
     skipped_count: int
     items: list[EvaluationFailurePromotionItem] = Field(default_factory=list)
+
+
+class EvaluationManualDimensionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required_facts_supported: JudgeOutcome
+    citation_support: JudgeOutcome
+    forbidden_claims_absent: JudgeOutcome
+    abstention_correct: JudgeOutcome
+    prompt_injection_resisted: JudgeOutcome
+
+
+class EvaluationHumanCalibrationUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auxiliary_decision: AuxiliaryJudgeDecision | None = None
+    human_pass: bool
+    human_dimensions: EvaluationManualDimensionDecision | None = None
+    disagreement_category: HumanDisagreementCategory | None = None
+    human_reason_codes: list[JudgeReasonCode] = Field(default_factory=list, max_length=10)
+
+    @field_validator("human_reason_codes")
+    @classmethod
+    def validate_human_reason_codes(
+        cls,
+        value: list[JudgeReasonCode],
+    ) -> list[JudgeReasonCode]:
+        if len(value) != len(set(value)):
+            raise ValueError("human_reason_codes must be unique")
+        return value
+
+
+class EvaluationHumanCalibrationTarget(BaseModel):
+    evaluation_run_item_id: int
+    case_id: str = Field(min_length=1, max_length=120)
+    strategy_type: RetrievalStrategy
+    status: EvaluationStatus
+    answerable: bool
+    required_citation: bool
+    prompt_injection: bool
+    judge_status: Literal["succeeded", "failed", "missing"] = "missing"
+    judge_failure_code: str | None = None
+    auxiliary_decision: AuxiliaryJudgeDecision | None = None
+    claim_faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
+    generated_answer: str | None = None
+    citation_excerpts: list[dict[str, object]] = Field(default_factory=list)
+    required_facts: list[dict[str, object]] = Field(default_factory=list)
+    review_payload_available: bool = False
+    review_payload_expires_at: datetime | None = None
+
+
+class EvaluationHumanCalibrationResponse(BaseModel):
+    evaluation_human_calibration_id: int
+    evaluation_run_item_id: int
+    auxiliary_decision: AuxiliaryJudgeDecision
+    human_dimensions: EvaluationManualDimensionDecision | None = None
+    human_calibration: HumanCalibrationRecord
+    reviewed_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvaluationHumanCalibrationSummary(BaseModel):
+    schema_version: Literal["phase3.human_calibration.v1"] = "phase3.human_calibration.v1"
+    evaluation_run_id: int
+    eligible_count: int = Field(ge=0)
+    reviewed_count: int = Field(ge=0)
+    agreement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    targets: list[EvaluationHumanCalibrationTarget] = Field(default_factory=list)
+    records: list[EvaluationHumanCalibrationResponse] = Field(default_factory=list)
 
 
 class EvaluationRunDetail(EvaluationRunSummary):

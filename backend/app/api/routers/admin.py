@@ -5,17 +5,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import pagination_params, require_admin, require_csrf
-from app.api.responses import paginate, success_response
+from app.api.responses import get_request_id, paginate, success_response
 from app.db.models import AuditLog, SystemSetting, User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
+from app.schemas.evaluation_datasets_v2 import EvaluationDatasetManifestInput
 from app.schemas.evaluations import (
     EvaluationCaseCreateRequest,
     EvaluationCaseUpdateRequest,
     EvaluationDatasetCreateRequest,
-    EvaluationDatasetManifest,
     EvaluationDatasetUpdateRequest,
     EvaluationFailurePromotionRequest,
+    EvaluationHumanCalibrationUpsertRequest,
     EvaluationRunCreateRequest,
 )
 from app.services.evaluation_service import EvaluationService
@@ -55,10 +56,20 @@ def create_evaluation_dataset(
     return success_response(result.model_dump(mode="json"), request)
 
 
+@router.post("/evaluations/datasets/validate")
+def validate_evaluation_dataset(
+    request: Request,
+    manifest: EvaluationDatasetManifestInput,
+    _: User = Depends(require_admin),
+) -> dict[str, object]:
+    result = EvaluationService().validate_dataset_manifest(manifest=manifest)
+    return success_response(result.model_dump(mode="json"), request)
+
+
 @router.post("/evaluations/datasets/import")
 def import_evaluation_dataset(
     request: Request,
-    manifest: EvaluationDatasetManifest,
+    manifest: EvaluationDatasetManifestInput,
     _csrf: None = Depends(require_csrf),
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -75,6 +86,37 @@ def evaluation_dataset_detail(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     result = EvaluationService().get_dataset_detail(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/evaluations/datasets/{evaluation_dataset_id}/corpus/prepare")
+def prepare_evaluation_dataset_corpus(
+    evaluation_dataset_id: int,
+    request: Request,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().prepare_dataset_corpus(
+        db,
+        evaluation_dataset_id=evaluation_dataset_id,
+        user=user,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/datasets/{evaluation_dataset_id}/corpus/readiness")
+def evaluation_dataset_corpus_readiness(
+    evaluation_dataset_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_corpus_readiness(
         db,
         evaluation_dataset_id=evaluation_dataset_id,
     )
@@ -259,6 +301,41 @@ def evaluation_run_detail(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     result = EvaluationService().get_run_detail(db, evaluation_run_id=evaluation_run_id)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/runs/{evaluation_run_id}/human-calibrations")
+def evaluation_human_calibrations(
+    evaluation_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_human_calibrations(
+        db,
+        evaluation_run_id=evaluation_run_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.put("/evaluations/runs/{evaluation_run_id}/human-calibrations/{evaluation_run_item_id}")
+def upsert_evaluation_human_calibration(
+    evaluation_run_id: int,
+    evaluation_run_item_id: int,
+    request: Request,
+    payload: EvaluationHumanCalibrationUpsertRequest,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().upsert_human_calibration(
+        db,
+        evaluation_run_id=evaluation_run_id,
+        evaluation_run_item_id=evaluation_run_item_id,
+        payload=payload,
+        user=user,
+        request_id=get_request_id(request),
+    )
     return success_response(result.model_dump(mode="json"), request)
 
 

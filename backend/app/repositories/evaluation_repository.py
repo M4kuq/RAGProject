@@ -5,11 +5,25 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, null, select
 from sqlalchemy.orm import Session
 
-from app.db.evaluation_models import EvaluationResult
-from app.db.models import EvaluationCase, EvaluationDataset, EvaluationRun, EvaluationRunItem, Job
+from app.db.evaluation_models import (
+    EvaluationAuxiliaryJudgment,
+    EvaluationCorpusSource,
+    EvaluationHumanCalibration,
+    EvaluationResult,
+    EvaluationReviewPayload,
+)
+from app.db.models import (
+    DocumentChunk,
+    DocumentVersion,
+    EvaluationCase,
+    EvaluationDataset,
+    EvaluationRun,
+    EvaluationRunItem,
+    Job,
+)
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY
 
 
@@ -36,11 +50,13 @@ class EvaluationRepository:
         strategy_type: str,
         strategies: list[str],
         metrics: list[str],
+        evaluation_scope: str,
         top_k: int | None,
         rerank_top_n: int | None,
         generation_provider: str | None,
         generation_model: str | None,
         trigger_type: str,
+        corpus_fingerprint: str | None,
         retrieval_settings_json: dict[str, object] | None,
     ) -> EvaluationRun:
         metrics_config: dict[str, object] = {
@@ -51,6 +67,7 @@ class EvaluationRepository:
             "strategies": strategies,
             "trigger_type": trigger_type,
             "metrics": metrics,
+            "evaluation_scope": evaluation_scope,
             "top_k": top_k,
             "rerank_top_n": rerank_top_n,
         }
@@ -66,6 +83,7 @@ class EvaluationRepository:
             evaluation_dataset_id=evaluation_dataset_id,
             strategy_type=strategy_type,
             trigger_type=trigger_type,
+            corpus_fingerprint=corpus_fingerprint,
             retrieval_settings_json=retrieval_settings_json,
             metrics_config=metrics_config,
         )
@@ -84,6 +102,11 @@ class EvaluationRepository:
         status: str,
         metadata_json: dict[str, object] | None,
         created_by: int | None,
+        manifest_schema_version: str = "phase2.evaluation_dataset.v1",
+        content_fingerprint: str | None = None,
+        corpus_fingerprint: str | None = None,
+        corpus_mode: str = "shared_legacy",
+        corpus_status: str = "shared_legacy",
     ) -> EvaluationDataset:
         dataset = EvaluationDataset(
             dataset_name=dataset_name,
@@ -92,6 +115,11 @@ class EvaluationRepository:
             source_type=source_type,
             status=status,
             metadata_json=metadata_json,
+            manifest_schema_version=manifest_schema_version,
+            content_fingerprint=content_fingerprint,
+            corpus_fingerprint=corpus_fingerprint,
+            corpus_mode=corpus_mode,
+            corpus_status=corpus_status,
             created_by=created_by,
         )
         db.add(dataset)
@@ -108,7 +136,26 @@ class EvaluationRepository:
 
     def get_dataset_by_name(self, db: Session, *, dataset_name: str) -> EvaluationDataset | None:
         return db.scalar(
-            select(EvaluationDataset).where(EvaluationDataset.dataset_name == dataset_name)
+            select(EvaluationDataset)
+            .where(EvaluationDataset.dataset_name == dataset_name)
+            .order_by(
+                EvaluationDataset.created_at.desc(),
+                EvaluationDataset.evaluation_dataset_id.desc(),
+            )
+        )
+
+    def get_dataset_by_name_and_version(
+        self,
+        db: Session,
+        *,
+        dataset_name: str,
+        version: str,
+    ) -> EvaluationDataset | None:
+        return db.scalar(
+            select(EvaluationDataset).where(
+                EvaluationDataset.dataset_name == dataset_name,
+                EvaluationDataset.version == version,
+            )
         )
 
     def list_datasets(
@@ -288,6 +335,208 @@ class EvaluationRepository:
             stmt = stmt.where(EvaluationCase.status == status)
         return int(db.scalar(stmt) or 0)
 
+    def create_corpus_source(
+        self,
+        db: Session,
+        *,
+        evaluation_dataset_id: int,
+        source_key: str,
+        title: str,
+        body_text: str,
+        facts_json: list[dict[str, object]],
+        content_hash: str,
+    ) -> EvaluationCorpusSource:
+        source = EvaluationCorpusSource(
+            evaluation_dataset_id=evaluation_dataset_id,
+            source_key=source_key,
+            title=title,
+            body_text=body_text,
+            facts_json=facts_json,
+            content_hash=content_hash,
+            status="pending",
+        )
+        db.add(source)
+        db.flush()
+        return source
+
+    def list_corpus_sources(
+        self,
+        db: Session,
+        *,
+        evaluation_dataset_id: int,
+    ) -> list[EvaluationCorpusSource]:
+        return list(
+            db.scalars(
+                select(EvaluationCorpusSource)
+                .where(EvaluationCorpusSource.evaluation_dataset_id == evaluation_dataset_id)
+                .order_by(EvaluationCorpusSource.evaluation_corpus_source_id.asc())
+            ).all()
+        )
+
+    def get_corpus_source_by_key(
+        self,
+        db: Session,
+        *,
+        evaluation_dataset_id: int,
+        source_key: str,
+    ) -> EvaluationCorpusSource | None:
+        return db.scalar(
+            select(EvaluationCorpusSource).where(
+                EvaluationCorpusSource.evaluation_dataset_id == evaluation_dataset_id,
+                EvaluationCorpusSource.source_key == source_key,
+            )
+        )
+
+    def count_chunks_for_version(
+        self,
+        db: Session,
+        *,
+        document_version_id: int | None,
+        require_active: bool = True,
+    ) -> int:
+        if document_version_id is None:
+            return 0
+        query = (
+            select(func.count())
+            .select_from(DocumentChunk)
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id == DocumentChunk.document_version_id,
+            )
+            .where(
+                DocumentChunk.document_version_id == document_version_id,
+                DocumentVersion.status == "ready",
+            )
+        )
+        if require_active:
+            query = query.where(DocumentVersion.is_active.is_(True))
+        return int(db.scalar(query) or 0)
+
+    def list_auxiliary_judgments(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> list[EvaluationAuxiliaryJudgment]:
+        return list(
+            db.scalars(
+                select(EvaluationAuxiliaryJudgment)
+                .join(
+                    EvaluationRunItem,
+                    EvaluationRunItem.evaluation_run_item_id
+                    == EvaluationAuxiliaryJudgment.evaluation_run_item_id,
+                )
+                .where(EvaluationRunItem.evaluation_run_id == evaluation_run_id)
+                .order_by(EvaluationAuxiliaryJudgment.evaluation_run_item_id.asc())
+            ).all()
+        )
+
+    def get_auxiliary_judgment(
+        self,
+        db: Session,
+        *,
+        evaluation_run_item_id: int,
+    ) -> EvaluationAuxiliaryJudgment | None:
+        return db.scalar(
+            select(EvaluationAuxiliaryJudgment).where(
+                EvaluationAuxiliaryJudgment.evaluation_run_item_id == evaluation_run_item_id
+            )
+        )
+
+    def upsert_auxiliary_judgment(
+        self,
+        db: Session,
+        *,
+        evaluation_run_item_id: int,
+        values: dict[str, object],
+        updated_at: datetime,
+    ) -> EvaluationAuxiliaryJudgment:
+        row = self.get_auxiliary_judgment(
+            db,
+            evaluation_run_item_id=evaluation_run_item_id,
+        )
+        if row is None:
+            row = EvaluationAuxiliaryJudgment(
+                evaluation_run_item_id=evaluation_run_item_id,
+                **values,
+            )
+            db.add(row)
+        else:
+            for key, value in values.items():
+                setattr(row, key, value)
+            row.updated_at = updated_at
+        db.flush()
+        return row
+
+    def list_review_payloads(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> dict[int, EvaluationReviewPayload]:
+        rows = db.scalars(
+            select(EvaluationReviewPayload)
+            .join(
+                EvaluationRunItem,
+                EvaluationRunItem.evaluation_run_item_id
+                == EvaluationReviewPayload.evaluation_run_item_id,
+            )
+            .where(EvaluationRunItem.evaluation_run_id == evaluation_run_id)
+        ).all()
+        return {row.evaluation_run_item_id: row for row in rows}
+
+    def upsert_review_payload(
+        self,
+        db: Session,
+        *,
+        evaluation_run_item_id: int,
+        values: dict[str, object],
+        updated_at: datetime,
+    ) -> EvaluationReviewPayload:
+        row = db.scalar(
+            select(EvaluationReviewPayload).where(
+                EvaluationReviewPayload.evaluation_run_item_id == evaluation_run_item_id
+            )
+        )
+        if row is None:
+            row = EvaluationReviewPayload(
+                evaluation_run_item_id=evaluation_run_item_id,
+                **values,
+            )
+            db.add(row)
+        else:
+            for key, value in values.items():
+                setattr(row, key, value)
+            row.updated_at = updated_at
+            row.purged_at = None
+        db.flush()
+        return row
+
+    def purge_expired_review_payloads(
+        self,
+        db: Session,
+        *,
+        now: datetime,
+    ) -> int:
+        rows = list(
+            db.scalars(
+                select(EvaluationReviewPayload).where(
+                    EvaluationReviewPayload.expires_at <= now,
+                    EvaluationReviewPayload.purged_at.is_(None),
+                )
+            ).all()
+        )
+        for row in rows:
+            row.answer_text = None
+            row.context_json = null()
+            row.citations_json = null()
+            row.required_facts_json = null()
+            row.purged_at = now
+            row.updated_at = now
+        if rows:
+            db.flush()
+        return len(rows)
+
     def get_run(
         self,
         db: Session,
@@ -347,6 +596,121 @@ class EvaluationRepository:
                 )
             ).all()
         )
+
+    def get_item(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+        evaluation_run_item_id: int,
+        for_update: bool = False,
+    ) -> EvaluationRunItem | None:
+        statement = select(EvaluationRunItem).where(
+            EvaluationRunItem.evaluation_run_id == evaluation_run_id,
+            EvaluationRunItem.evaluation_run_item_id == evaluation_run_item_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return db.scalar(statement)
+
+    def list_human_calibrations(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> list[EvaluationHumanCalibration]:
+        return list(
+            db.scalars(
+                select(EvaluationHumanCalibration)
+                .join(
+                    EvaluationRunItem,
+                    EvaluationRunItem.evaluation_run_item_id
+                    == EvaluationHumanCalibration.evaluation_run_item_id,
+                )
+                .where(EvaluationRunItem.evaluation_run_id == evaluation_run_id)
+                .order_by(EvaluationHumanCalibration.evaluation_run_item_id.asc())
+            ).all()
+        )
+
+    def upsert_human_calibration(
+        self,
+        db: Session,
+        *,
+        evaluation_run_item_id: int,
+        case_id: str,
+        rubric_version: str,
+        required_facts_supported: str,
+        citation_support: str,
+        forbidden_claims_absent: str,
+        abstention_correct: str,
+        prompt_injection_resisted: str,
+        human_required_facts_supported: str | None,
+        human_citation_support: str | None,
+        human_forbidden_claims_absent: str | None,
+        human_abstention_correct: str | None,
+        human_prompt_injection_resisted: str | None,
+        auxiliary_confidence: Decimal,
+        auxiliary_reason_codes: list[str],
+        auxiliary_pass: bool,
+        human_pass: bool,
+        disagreement_category: str | None,
+        human_reason_codes: list[str],
+        reviewed_by: int,
+        updated_at: datetime,
+    ) -> EvaluationHumanCalibration:
+        calibration = db.scalar(
+            select(EvaluationHumanCalibration).where(
+                EvaluationHumanCalibration.evaluation_run_item_id == evaluation_run_item_id
+            )
+        )
+        if calibration is None:
+            calibration = EvaluationHumanCalibration(
+                evaluation_run_item_id=evaluation_run_item_id,
+                case_id=case_id,
+                rubric_version=rubric_version,
+                required_facts_supported=required_facts_supported,
+                citation_support=citation_support,
+                forbidden_claims_absent=forbidden_claims_absent,
+                abstention_correct=abstention_correct,
+                prompt_injection_resisted=prompt_injection_resisted,
+                human_required_facts_supported=human_required_facts_supported,
+                human_citation_support=human_citation_support,
+                human_forbidden_claims_absent=human_forbidden_claims_absent,
+                human_abstention_correct=human_abstention_correct,
+                human_prompt_injection_resisted=human_prompt_injection_resisted,
+                auxiliary_confidence=auxiliary_confidence,
+                auxiliary_reason_codes_json=auxiliary_reason_codes,
+                auxiliary_pass=auxiliary_pass,
+                human_pass=human_pass,
+                disagreement_category=disagreement_category,
+                human_reason_codes_json=human_reason_codes,
+                reviewed_by=reviewed_by,
+                updated_at=updated_at,
+            )
+            db.add(calibration)
+        else:
+            calibration.case_id = case_id
+            calibration.rubric_version = rubric_version
+            calibration.required_facts_supported = required_facts_supported
+            calibration.citation_support = citation_support
+            calibration.forbidden_claims_absent = forbidden_claims_absent
+            calibration.abstention_correct = abstention_correct
+            calibration.prompt_injection_resisted = prompt_injection_resisted
+            calibration.human_required_facts_supported = human_required_facts_supported
+            calibration.human_citation_support = human_citation_support
+            calibration.human_forbidden_claims_absent = human_forbidden_claims_absent
+            calibration.human_abstention_correct = human_abstention_correct
+            calibration.human_prompt_injection_resisted = human_prompt_injection_resisted
+            calibration.auxiliary_confidence = auxiliary_confidence
+            calibration.auxiliary_reason_codes_json = auxiliary_reason_codes
+            calibration.auxiliary_pass = auxiliary_pass
+            calibration.human_pass = human_pass
+            calibration.disagreement_category = disagreement_category
+            calibration.human_reason_codes_json = human_reason_codes
+            calibration.reviewed_by = reviewed_by
+            calibration.updated_at = updated_at
+        db.flush()
+        return calibration
 
     def list_results(
         self,
@@ -416,6 +780,11 @@ class EvaluationRepository:
         ]
         if item_ids:
             db.execute(
+                delete(EvaluationHumanCalibration).where(
+                    EvaluationHumanCalibration.evaluation_run_item_id.in_(item_ids)
+                )
+            )
+            db.execute(
                 delete(EvaluationResult).where(
                     EvaluationResult.evaluation_run_item_id.in_(item_ids)
                 )
@@ -454,6 +823,7 @@ class EvaluationRepository:
         *,
         item: EvaluationRunItem,
         status: str,
+        answer_outcome: str | None,
         retrieval_run_id: int | None,
         faithfulness_score: Decimal | None,
         groundedness_score: Decimal | None,
@@ -469,9 +839,11 @@ class EvaluationRepository:
         latency_breakdown_json: dict[str, object] | None,
         metric_summary_json: dict[str, object] | None,
         error_code: str | None,
+        error_detail_code: str | None,
         error_message: str | None,
     ) -> None:
         item.status = status
+        item.answer_outcome = answer_outcome
         item.retrieval_run_id = retrieval_run_id
         item.faithfulness_score = faithfulness_score
         item.groundedness_score = groundedness_score
@@ -487,6 +859,7 @@ class EvaluationRepository:
         item.latency_breakdown_json = latency_breakdown_json
         item.metric_summary_json = metric_summary_json
         item.error_code = error_code
+        item.error_detail_code = error_detail_code
         item.error_message = error_message
         db.flush()
 

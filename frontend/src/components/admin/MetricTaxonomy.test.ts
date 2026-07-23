@@ -15,9 +15,14 @@ function catalogItem(
     category,
     display_name: metricName,
     description: `${metricName} description`,
+    plain_language_summary: `${metricName} summary`,
     higher_is_better: true,
     value_unit: "ratio",
-    alias_of: null
+    alias_of: null,
+    importance: "secondary",
+    applicable_scopes: ["retrieval", "end_to_end"],
+    primary_scopes: [],
+    display_priority: metricName === "recall_at_k" ? 0 : metricName === "mrr" ? 1 : 10
   };
 }
 

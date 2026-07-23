@@ -21,9 +21,14 @@ from app.core.config import Settings
 from app.core.errors import ConflictError, ResourceNotFound
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.evaluation_models import EvaluationResult
+from app.db.evaluation_models import (
+    EvaluationAuxiliaryJudgment,
+    EvaluationHumanCalibration,
+    EvaluationResult,
+)
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import (
+    AuditLog,
     DocumentChunk,
     DocumentVersion,
     EvaluationDataset,
@@ -46,6 +51,7 @@ from app.evaluation.fixtures import (
     evaluation_case_snapshot_hash,
     load_evaluation_cases,
 )
+from app.evaluation.gold_v2 import load_gold_v2_bundle
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
     RetrievedEvaluationItem,
@@ -57,6 +63,7 @@ from app.evaluation.rag_service import (
     EvaluationRagQuestionService,
     RagEvaluationResult,
     _evaluation_cache_namespace,
+    _evaluation_target_settings,
     create_evaluation_rag_service,
 )
 from app.ingest.embedding import FakeEmbeddingAdapter
@@ -64,6 +71,8 @@ from app.main import create_app
 from app.rag.generation import (
     AnswerGenerationError,
     FakeAnswerGenerator,
+    GenerationContextItem,
+    GenerationRequest,
     GenerationResult,
     TokenUsage,
 )
@@ -195,6 +204,7 @@ def test_fixture_loader_and_metric_clamp() -> None:
     )
 
     by_name = {metric.metric_name: metric for metric in metrics}
+    assert by_name["case_metadata"].details["answer_generated"] is True
     assert by_name["faithfulness"].metric_score == 1.0
     assert by_name["groundedness"].metric_score == 1.0
     assert by_name["citation_coverage"].metric_score == 1.0
@@ -301,12 +311,130 @@ def test_fixture_loader_and_metric_clamp() -> None:
         EvaluationRunCreateRequest(dataset_name="phase1.smoke", case_limit=1)
 
 
+def test_metrics_mark_answer_and_citation_not_applicable_without_generated_answer() -> None:
+    metrics = calculate_metrics(
+        EvaluationMetricInputs(
+            case=EvaluationCase(
+                case_id="retrieval_only",
+                question="Which vector database is used?",
+                expected_keywords=("Qdrant",),
+                required_citation=True,
+                expected_chunk_ids=(11,),
+                metadata_json={"expected_answer_slots": ["Qdrant"]},
+            ),
+            answer_text="",
+            citations=[
+                RagAskCitation(
+                    citation_id=1,
+                    local_citation_id=1,
+                    document_chunk_id=11,
+                    source_label="architecture.md",
+                    snippet="Qdrant stores retrieval vectors.",
+                    old_version_flag=False,
+                )
+            ],
+            confidence=None,
+            retrieval_summary=RetrievalScoreSummary(
+                requested_top_k=5,
+                qdrant_candidate_count=1,
+                post_filter_candidate_count=1,
+                selected_count=1,
+                excluded_by_rdb_check_count=0,
+            ),
+            retrieved_items=[
+                RetrievedEvaluationItem(
+                    document_chunk_id=11,
+                    logical_document_id=7,
+                    rank_order=1,
+                    snippet="Qdrant stores retrieval vectors.",
+                )
+            ],
+        )
+    )
+    by_name = {metric.metric_name: metric for metric in metrics}
+    assert by_name["case_metadata"].details["answer_generated"] is False
+
+    for metric_name in (
+        "faithfulness",
+        "answer_completeness",
+        "groundedness",
+        "citation_coverage",
+        "citation_presence",
+        "citation_correctness",
+    ):
+        assert by_name[metric_name].metric_score is None
+        assert by_name[metric_name].metric_label == "not_applicable"
+        assert by_name[metric_name].details["reason_code"] == "answer_not_generated"
+    assert by_name["recall_at_k"].metric_score == 1.0
+    assert by_name["context_precision"].metric_score == 1.0
+    assert by_name["no_context_rate"].metric_score == 0.0
+
+
+def test_run_detail_normalizes_legacy_retrieval_answer_metrics_to_not_applicable() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            run = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="phase1_smoke",
+                items=[_comparison_item("phase1_seed_stack", "succeeded")],
+                metrics={
+                    "recall_at_k": Decimal("1"),
+                    "faithfulness": Decimal("0"),
+                    "groundedness": Decimal("0"),
+                    "citation_coverage": Decimal("0"),
+                },
+            )
+            item = db.scalar(
+                select(EvaluationRunItem).where(
+                    EvaluationRunItem.evaluation_run_id == run.evaluation_run_id
+                )
+            )
+            assert item is not None
+            item.faithfulness_score = Decimal("0")
+            item.groundedness_score = Decimal("0")
+            item.citation_coverage = Decimal("0")
+            db.commit()
+            run_id = run.evaluation_run_id
+
+        with session_factory() as db:
+            detail = EvaluationService(settings=Settings(app_env="test")).get_run_detail(
+                db,
+                evaluation_run_id=run_id,
+            )
+
+        assert detail.evaluation_scope == "retrieval"
+        assert detail.metric_summary == {"recall_at_k": 1.0}
+        assert detail.items[0].faithfulness_score is None
+        assert detail.items[0].groundedness_score is None
+        assert detail.items[0].citation_coverage is None
+        metric_by_name = {metric.metric_name: metric for metric in detail.items[0].metrics}
+        for metric_name in ("faithfulness", "groundedness", "citation_coverage"):
+            metric = metric_by_name[metric_name]
+            assert metric.metric_score is None
+            assert metric.metric_label == "not_applicable"
+            assert metric.details is not None
+            assert metric.details["reason_code"] == "answer_not_generated"
+        comparison_by_name = {metric.metric_name: metric for metric in detail.strategy_comparison}
+        assert comparison_by_name["faithfulness"].average is None
+        assert comparison_by_name["faithfulness"].not_applicable_count == 1
+        assert not {
+            "low_faithfulness",
+            "low_groundedness",
+            "low_citation_coverage",
+        }.intersection(candidate.failure_type for candidate in detail.failure_candidates)
+    finally:
+        engine.dispose()
+
+
 def test_evaluation_metric_catalog_classifies_every_metric_once() -> None:
     catalog = EvaluationService.get_metric_catalog()
     metric_names = [item.metric_name for item in catalog.metrics]
 
     assert catalog.schema_version == "phase3.evaluation_metric_taxonomy.v1"
-    assert len(metric_names) == 22
+    assert len(metric_names) == 23
     assert len(metric_names) == len(set(metric_names))
     assert set(metric_names) == set(EvaluationMetricName)
     assert set(EVALUATION_METRIC_CATEGORY_BY_NAME) == set(EvaluationMetricName)
@@ -316,7 +444,7 @@ def test_evaluation_metric_catalog_classifies_every_metric_once() -> None:
     }
     assert counts == {
         EvaluationMetricCategory.RETRIEVAL: 4,
-        EvaluationMetricCategory.ANSWER: 3,
+        EvaluationMetricCategory.ANSWER: 4,
         EvaluationMetricCategory.CITATION: 3,
         EvaluationMetricCategory.ROUTING: 5,
         EvaluationMetricCategory.GRAPH: 4,
@@ -334,6 +462,27 @@ def test_evaluation_metric_catalog_classifies_every_metric_once() -> None:
     assert citation_coverage.alias_of == EvaluationMetricName.CITATION_PRESENCE
     assert all(
         item.display_name and item.description and item.value_unit for item in catalog.metrics
+    )
+    assert all(
+        item.plain_language_summary
+        and item.applicable_scopes
+        and 0 <= item.display_priority < len(catalog.metrics)
+        for item in catalog.metrics
+    )
+    assert len({item.display_priority for item in catalog.metrics}) == len(catalog.metrics)
+    primary_by_scope = {
+        scope: [
+            item.metric_name
+            for item in sorted(catalog.metrics, key=lambda item: item.display_priority)
+            if scope in item.primary_scopes
+        ]
+        for scope in ("retrieval", "answer", "end_to_end")
+    }
+    assert primary_by_scope["retrieval"] == ["recall_at_k", "mrr", "context_precision"]
+    assert (
+        primary_by_scope["answer"]
+        == primary_by_scope["end_to_end"]
+        == ["faithfulness", "claim_faithfulness", "answer_completeness", "citation_correctness"]
     )
 
 
@@ -357,10 +506,15 @@ def test_evaluation_metric_catalog_api_is_admin_only(
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["schema_version"] == "phase3.evaluation_metric_taxonomy.v1"
-    assert len(payload["metrics"]) == 22
+    assert len(payload["metrics"]) == 23
     by_name = {item["metric_name"]: item for item in payload["metrics"]}
     assert by_name["citation_coverage"]["category"] == "citation"
     assert by_name["citation_coverage"]["alias_of"] == "citation_presence"
+    assert by_name["faithfulness"]["display_name"] == "Faithfulness（簡易）"
+    assert by_name["faithfulness"]["importance"] == "primary"
+    assert by_name["faithfulness"]["primary_scopes"] == ["answer", "end_to_end"]
+    assert by_name["claim_faithfulness"]["method"] == "local_judge"
+    assert by_name["recall_at_k"]["plain_language_summary"]
     assert by_name["p95_latency"]["higher_is_better"] is False
     assert by_name["p95_latency"]["value_unit"] == "ms"
     assert TEST_PASSWORD.lower() not in response.text.lower()
@@ -403,6 +557,8 @@ def test_phase2_strategy_fixture_manifest_and_metric_specs_are_safe() -> None:
         fixture_path.read_text(encoding="utf-8")
     )
     assert manifest.dataset.dataset_name == "phase2_strategy_smoke"
+    assert manifest.dataset.metadata_json is not None
+    assert manifest.dataset.metadata_json["evaluation_scope"] == "retrieval"
     assert {spec.metric_name.value for spec in STRATEGY_METRIC_SPECS} >= {
         "recall_at_k",
         "mrr",
@@ -1026,8 +1182,10 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
                 "cache_hit_rate",
                 "cache_saved_latency",
                 "entity_relation_quality_summary",
+                "claim_faithfulness",
             ],
             "cache_modes": ["default"],
+            "evaluation_scope": "retrieval",
             "strategy_targets": [
                 {
                     "schema_version": "phase3.evaluation_target.v1",
@@ -1108,6 +1266,97 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
             .count()
             == 5
         )
+
+
+def test_v2_dataset_validate_import_readiness_and_preflight_guard(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = evaluation_client
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "evaluation"
+        / "fixtures"
+        / "gold_answer_quality_v2_evaluation_dataset.json"
+    )
+    manifest = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert client.post("/api/v1/evaluations/datasets/validate", json=manifest).status_code == 401
+    _login_as(client, "viewer@example.com")
+    assert client.post("/api/v1/evaluations/datasets/validate", json=manifest).status_code == 403
+
+    _logout(client)
+    _login_as(client, "admin@example.com")
+    csrf = _session_csrf(client)
+    validated = client.post("/api/v1/evaluations/datasets/validate", json=manifest)
+    assert validated.status_code == 200
+    validation = validated.json()["data"]
+    assert validation["manifest_schema_version"] == "phase3.evaluation_dataset.v2"
+    assert validation["composition"] == {
+        "case_count": 50,
+        "source_count": 15,
+        "fact_count": 45,
+        "answerable_count": 30,
+        "unanswerable_count": 20,
+        "language_ja_count": 25,
+        "language_en_count": 25,
+        "single_hop_count": 25,
+        "multi_hop_count": 25,
+        "prompt_injection_count": 10,
+    }
+    assert len(validation["corpus_fingerprint"]) == 64
+
+    missing_csrf = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=manifest,
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing_csrf.status_code == 403
+    imported = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=manifest,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    imported_again = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=manifest,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["data"]["result_code"] == "created"
+    assert imported_again.status_code == 200
+    assert imported_again.json()["data"]["result_code"] == "unchanged"
+    dataset_id = imported.json()["data"]["evaluation_dataset_id"]
+
+    readiness = client.get(f"/api/v1/evaluations/datasets/{dataset_id}/corpus/readiness")
+    assert readiness.status_code == 200
+    readiness_data = readiness.json()["data"]
+    assert readiness_data["ready"] is False
+    assert readiness_data["run_allowed"] is False
+    assert readiness_data["source_count"] == 15
+    assert readiness_data["fact_count"] == 45
+
+    rejected_run = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "evaluation_dataset_id": dataset_id,
+            "strategies": ["hybrid"],
+            "evaluation_scope": "end_to_end",
+        },
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert rejected_run.status_code == 409
+    assert rejected_run.json()["error"]["code"] == "evaluation_corpus_not_ready"
+
+    changed = json.loads(json.dumps(manifest))
+    changed["dataset"]["description"] = "Changed content requires a new version."
+    conflict = client.post(
+        "/api/v1/evaluations/datasets/import",
+        json=changed,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "dataset_version_conflict"
 
 
 def test_evaluation_summary_uses_planned_case_count_while_running() -> None:
@@ -1200,8 +1449,9 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
                 payload=EvaluationRunCreateRequest(
                     dataset_name="phase1_smoke",
                     case_limit=1,
-                    strategies=[EvaluationRunRequestStrategy.LLM_TOOL_ORCHESTRATOR],
-                    generation_provider="fake",
+                    strategies=[EvaluationRunRequestStrategy.DENSE],
+                    evaluation_scope="end_to_end",
+                    generation_provider="lmstudio",
                     generation_model="eval-model-a",
                 ),
                 user=user,
@@ -1219,8 +1469,8 @@ def test_evaluation_run_job_passes_requested_generation_selection_to_factory() -
             detail = service.get_run_detail(db, evaluation_run_id=created.evaluation_run_id)
 
         assert result["status"] == "succeeded"
-        assert recorded == [("fake", "eval-model-a")]
-        assert detail.requested_generation_provider == "fake"
+        assert recorded == [("lmstudio", "eval-model-a")]
+        assert detail.requested_generation_provider == "lmstudio"
         assert detail.requested_generation_model == "eval-model-a"
     finally:
         engine.dispose()
@@ -1585,6 +1835,65 @@ def test_evaluation_generation_metadata_unknown_model_cost_is_null() -> None:
     assert metadata.total_tokens == 15
     assert metadata.estimated_cost_usd is None
     assert metadata.latency_ms == 7
+
+
+def test_evaluation_generation_retries_missing_citation_with_real_generator_contract() -> None:
+    requests: list[GenerationRequest] = []
+    results = iter(
+        [
+            GenerationResult(
+                content="Answer without a marker",
+                usage=TokenUsage(3, 1, 4),
+            ),
+            GenerationResult(
+                content="Answer with evidence [1]",
+                usage=TokenUsage(4, 2, 6),
+            ),
+        ]
+    )
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        return next(results)
+
+    settings = Settings(
+        app_env="test",
+        generation_provider="lmstudio",
+        generation_model_name="qwen3.5-9b",
+    )
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=settings,
+        ),
+    )
+    evaluator = EvaluationRagQuestionService(rag_service)
+
+    generation, metadata = evaluator._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert generation.content == "Answer with evidence [1]"
+    assert generation.usage == TokenUsage(7, 3, 10)
+    assert metadata.input_tokens == 7
+    assert metadata.output_tokens == 3
+    assert metadata.total_tokens == 10
+    assert len(requests) == 2
+    assert requests[1].temperature == 0.0
+    assert requests[1].system_instructions is not None
+    assert "Retry instruction" in requests[1].system_instructions
 
 
 def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
@@ -2600,6 +2909,29 @@ def test_evaluation_cache_namespace_preserves_eval_suffix_when_long() -> None:
     assert len(result) <= 80
     assert result.endswith(f".eval.{suffix}")
     assert result != f"{namespace}.eval.{suffix}"
+
+
+def test_default_evaluation_cache_namespace_includes_corpus_fingerprint() -> None:
+    original = Settings(
+        app_env="test",
+        retrieval_cache_namespace="rag.retrieval",
+    )
+    service = cast(Any, SimpleNamespace(settings=original))
+
+    with _evaluation_target_settings(
+        service,
+        strategy_type=RetrievalStrategy.HYBRID,
+        graph_store_provider=None,
+        cache_mode="default",
+        evaluation_run_id=41,
+        cache_attempt_id="case-a",
+        corpus_fingerprint="f" * 64,
+    ):
+        assert (
+            service.settings.retrieval_cache_namespace == "rag.retrieval.eval.corpus.ffffffffffff"
+        )
+
+    assert service.settings is original
 
 
 def test_failure_promotion_metadata_preserves_safe_graph_hints() -> None:
@@ -3964,12 +4296,28 @@ def test_evaluation_api_allows_agentic_strategies_and_rejects_fallback_dense_str
         headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
     )
     assert accepted.status_code == 202
+    assert accepted.json()["data"]["evaluation_scope"] == "end_to_end"
     assert accepted.json()["data"]["strategies"] == [
         "dense",
         "llm_tool_orchestrator",
         "langchain_agentic",
         "langgraph_agentic",
     ]
+    dense_end_to_end = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["dense"],
+            "evaluation_scope": "end_to_end",
+            "generation_provider": "lmstudio",
+            "generation_model": "qwen3.5-9b",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert dense_end_to_end.status_code == 202
+    assert dense_end_to_end.json()["data"]["evaluation_scope"] == "end_to_end"
+    assert dense_end_to_end.json()["data"]["strategies"] == ["dense"]
 
     for payload in (
         {"dataset_name": "phase1_smoke", "case_limit": 1, "strategy_type": "fallback_dense"},
@@ -4002,6 +4350,20 @@ def test_evaluation_api_rejects_unknown_provider_and_secret_like_generation_mode
     )
     assert unknown_provider.status_code == 422
     assert unknown_provider.json()["error"]["code"] == "validation_error"
+    fake_provider = client.post(
+        "/api/v1/evaluations/runs",
+        json={
+            "dataset_name": "phase1_smoke",
+            "case_limit": 1,
+            "strategies": ["dense"],
+            "evaluation_scope": "end_to_end",
+            "generation_provider": "fake",
+            "generation_model": "fake-rag-answer",
+        },
+        headers={"X-CSRF-Token": csrf_token, "Origin": ALLOWED_ORIGIN},
+    )
+    assert fake_provider.status_code == 422
+    assert fake_provider.json()["error"]["code"] == "validation_error"
 
     provider_without_model = client.post(
         "/api/v1/evaluations/runs",
@@ -5059,6 +5421,223 @@ def _comparison_item(
         "case_id": case_id,
         "status": status,
         "include_case_metadata": include_case_metadata,
+    }
+
+
+def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert admin is not None
+        run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="gold_answer_quality_v2",
+            items=[_comparison_item("gold_v2_001", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        db.commit()
+        item = db.scalar(
+            select(EvaluationRunItem).where(
+                EvaluationRunItem.evaluation_run_id == run.evaluation_run_id
+            )
+        )
+        assert item is not None
+        db.add(
+            EvaluationAuxiliaryJudgment(
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                status="succeeded",
+                rubric_version="phase3.grounded_answer_judge.v1",
+                judge_provider="lmstudio",
+                judge_model="qwen3.5-9b",
+                required_facts_supported="pass",
+                citation_support="pass",
+                forbidden_claims_absent="pass",
+                abstention_correct="not_applicable",
+                prompt_injection_resisted="not_applicable",
+                confidence=Decimal("0.9500"),
+                reason_codes_json=[],
+                auxiliary_pass=True,
+                claim_faithfulness=Decimal("1"),
+                failure_code=None,
+                answer_hash="a" * 64,
+                context_hash="b" * 64,
+            )
+        )
+        db.commit()
+        run_id = run.evaluation_run_id
+        item_id = item.evaluation_run_item_id
+
+    _login_as(client, "admin@example.com")
+    listing = client.get(f"/api/v1/evaluations/runs/{run_id}/human-calibrations")
+    assert listing.status_code == 200
+    assert listing.json()["data"]["eligible_count"] == 1
+    assert listing.json()["data"]["reviewed_count"] == 0
+    target = listing.json()["data"]["targets"][0]
+    assert target["evaluation_run_item_id"] == item_id
+    assert target["case_id"] == "gold_v2_001"
+    assert target["strategy_type"] == "dense"
+    assert target["status"] == "succeeded"
+    assert target["answerable"] is True
+    assert target["required_citation"] is True
+    assert target["prompt_injection"] is False
+    assert target["judge_status"] == "succeeded"
+    assert target["auxiliary_decision"]["case_id"] == "gold_v2_001"
+    assert target["claim_faithfulness"] == 1.0
+    assert target["review_payload_available"] is False
+
+    payload = _human_calibration_payload("gold_v2_001")
+    missing_csrf = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=payload,
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_missing"
+
+    csrf = _session_csrf(client)
+    created = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=payload,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert created.status_code == 200
+    created_data = created.json()["data"]
+    assert created_data["human_calibration"]["auxiliary_pass"] is True
+    assert created_data["human_calibration"]["human_pass"] is True
+    calibration_id = created_data["evaluation_human_calibration_id"]
+
+    failed_payload = _human_calibration_payload(
+        "gold_v2_001",
+        required_facts_supported="fail",
+        human_pass=False,
+        disagreement_category="auxiliary_false_positive",
+        reason_codes=["missing_required_fact"],
+    )
+    updated = client.put(
+        f"/api/v1/evaluations/runs/{run_id}/human-calibrations/{item_id}",
+        json=failed_payload,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert updated.status_code == 200
+    updated_data = updated.json()["data"]
+    assert updated_data["evaluation_human_calibration_id"] == calibration_id
+    assert updated_data["human_calibration"]["auxiliary_pass"] is True
+    assert updated_data["human_calibration"]["human_pass"] is False
+    assert updated_data["human_calibration"]["disagreement_category"] == "auxiliary_false_positive"
+
+    refreshed = client.get(f"/api/v1/evaluations/runs/{run_id}/human-calibrations")
+    assert refreshed.status_code == 200
+    refreshed_data = refreshed.json()["data"]
+    assert refreshed_data["reviewed_count"] == 1
+    assert refreshed_data["agreement_rate"] == 0.0
+    assert len(refreshed_data["records"]) == 1
+
+    gold_case = load_gold_v2_bundle()[0].cases[0]
+    assert gold_case.question not in refreshed.text
+    assert gold_case.reference_answer not in refreshed.text
+    with session_factory() as db:
+        calibrations = db.scalars(select(EvaluationHumanCalibration)).all()
+        assert len(calibrations) == 1
+        audit_row = db.scalar(
+            select(AuditLog)
+            .where(AuditLog.action_type == "evaluation.human_calibration_saved")
+            .order_by(AuditLog.audit_log_id.desc())
+        )
+        assert audit_row is not None
+        assert audit_row.metadata_json is not None
+        assert audit_row.metadata_json["case_id"] == "gold_v2_001"
+        assert "question" not in audit_row.metadata_json
+        assert "answer" not in audit_row.metadata_json
+        assert "context" not in audit_row.metadata_json
+
+
+def test_human_calibration_api_enforces_admin_and_supports_any_dataset_contract(
+    evaluation_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = evaluation_client
+    with session_factory() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assert admin is not None
+        gold_run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="gold_answer_quality_v2",
+            items=[_comparison_item("gold_v2_001", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        other_run = _seed_comparison_run(
+            db,
+            created_by=admin.user_id,
+            dataset_name="phase1_smoke",
+            items=[_comparison_item("phase1_seed_stack", "succeeded")],
+            metrics={"groundedness": Decimal("1")},
+        )
+        db.commit()
+        gold_item = db.scalar(
+            select(EvaluationRunItem).where(
+                EvaluationRunItem.evaluation_run_id == gold_run.evaluation_run_id
+            )
+        )
+        assert gold_item is not None
+        gold_run_id = gold_run.evaluation_run_id
+        other_run_id = other_run.evaluation_run_id
+        gold_item_id = gold_item.evaluation_run_item_id
+
+    _login_as(client, "viewer@example.com")
+    forbidden = client.get(f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations")
+    assert forbidden.status_code == 403
+    _logout(client)
+    _login_as(client, "admin@example.com")
+
+    generic_dataset = client.get(f"/api/v1/evaluations/runs/{other_run_id}/human-calibrations")
+    assert generic_dataset.status_code == 200
+    assert generic_dataset.json()["data"]["eligible_count"] == 1
+    assert generic_dataset.json()["data"]["targets"][0]["case_id"] == "phase1_seed_stack"
+
+    csrf = _session_csrf(client)
+    invalid_shape = _human_calibration_payload("gold_v2_002")
+    invalid = client.put(
+        f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations/{gold_item_id}",
+        json=invalid_shape,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert invalid.status_code == 422
+
+    missing_disagreement = _human_calibration_payload(
+        "gold_v2_001",
+        human_pass=False,
+    )
+    inconsistent = client.put(
+        f"/api/v1/evaluations/runs/{gold_run_id}/human-calibrations/{gold_item_id}",
+        json=missing_disagreement,
+        headers={"X-CSRF-Token": csrf, "Origin": ALLOWED_ORIGIN},
+    )
+    assert inconsistent.status_code == 422
+
+
+def _human_calibration_payload(
+    case_id: str,
+    *,
+    required_facts_supported: str = "pass",
+    human_pass: bool = True,
+    disagreement_category: str | None = None,
+    reason_codes: list[str] | None = None,
+) -> dict[str, object]:
+    del case_id
+    return {
+        "human_dimensions": {
+            "required_facts_supported": required_facts_supported,
+            "citation_support": "pass",
+            "forbidden_claims_absent": "pass",
+            "abstention_correct": "not_applicable",
+            "prompt_injection_resisted": "not_applicable",
+        },
+        "human_pass": human_pass,
+        "disagreement_category": disagreement_category,
+        "human_reason_codes": reason_codes or [],
     }
 
 

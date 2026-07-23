@@ -86,6 +86,7 @@ def _gold_v2_evaluation_case(case: GoldCaseV2) -> EvaluationCase:
         expected_answer=case.reference_answer,
         tags=tuple(case.tags),
         metadata_json={
+            "answerable": case.answerable,
             "expected_strategy": case.expected_strategy,
             "acceptable_strategies": [case.expected_strategy],
             "expected_answer_slots": list(expected_signals),

@@ -1,9 +1,9 @@
-# Gold Dataset v2 と補助 LLM Judge 校正基盤
+# Gold Dataset v2 と補助 LLM Judge・手動校正基盤
 
 ## 目的
 
-`Grounded Answer Pass Rate` を主指標にするための、安全で決定論的なGold dataset、evidence catalog、judge rubric、人間校正ポリシーを定義します。
-この変更はPR #91のMetric V2を前提とするstacked changeです。runner接続や外部LLM呼び出しは含みません。
+`Grounded Answer Pass Rate` を主指標にするための、安全で決定論的なGold dataset、evidence catalog、judge rubric、手動校正ポリシーを定義します。
+既存evaluation runnerへのdataset adapterと、安全な手動校正UIを接続します。外部LLM judge呼び出しは含みません。
 
 ## Dataset balance
 
@@ -44,17 +44,44 @@ answerable caseは全required factをsupport evidenceで被覆し、unanswerable
 統合テストは外部LLM、外部judge、AWS、`load-data` を使わない参照RAG stubで50件の完走と集計を検証します。
 この接続は既存metric runner向けであり、補助LLM judgeの呼び出しや `Grounded Answer Pass Rate` のjudge判定を追加しません。
 
-## Auxiliary judge と人間校正
+## Auxiliary judge と手動校正
 
 LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに含めません。decision schemaは列挙値、confidence、safe reason codeだけを許可し、raw answer、raw context、自由記述rationaleを保存しません。
 
-- 初期校正: 100%人間確認
+- 初期校正: 100%手動確認
 - 通常運用: baselineとの差分を全件確認
 - hard gate failureを全件確認
 - confidence 0.8未満を全件確認
 - 残りから決定論的に15%を監査
 
 監査bucketはcase IDとevaluation fingerprintのSHA-256から決定し、再実行で対象がぶれないようにします。
+
+## 手動校正UI
+
+管理者は任意のevaluation run詳細から、run itemごとに補助判定と手動判定を校正できます。
+対象契約はrun itemに紐づく永続evaluation caseまたはfixture caseから解決し、dataset名では判定しません。
+`answerable`はcaseのsafe metadata booleanを優先し、未指定時は`unanswerable` tagから安全に推定します。
+APIは管理者限定で、更新にはCSRF検証が必要です。1 run itemにつき1レコードをupsertし、変更主体は監査ログへ記録します。
+
+校正画面と永続レコードが扱う値は次に限定します。
+
+- case ID、strategy、run item ID、answerable/citation/prompt-injectionのboolean属性
+- 5 hard gateの列挙値、confidence、safe reason code
+- 補助判定と手動判定のPass/Fail、不一致カテゴリ
+- reviewer IDと作成・更新日時
+
+質問、回答、検索context、reference answer、required fact本文、evidence本文、prompt、自由記述rationaleはAPI、DB、監査ログへ追加しません。
+grounded_answer_pass()をサーバー側の唯一の判定実装とし、画面上のpreviewは入力補助にだけ使用します。
+外部LLM judgeは接続せず、補助判定もレビュー担当者が選択式で入力します。
+
+## JSON dataset import
+
+管理画面は`phase2.evaluation_dataset.v1`形式のJSONファイルをアップロードできます。
+
+- ブラウザ側で2MB上限、JSON構文、schema version、dataset名、1件以上のcaseを事前確認する
+- 検証後は既存の管理者限定import APIへCSRF付きで送信する
+- API側のsafe text、secret/PII、case数、期待値契約の検証をそのまま適用する
+- ファイル本文を画面、ログ、監査メタデータへ出力しない
 
 ## Security boundary
 
@@ -67,10 +94,9 @@ LLM judgeは補助判定だけを表し、外部呼び出し実装はこのPRに
 
 - 外部LLM judge APIの呼び出し
 - semantic judgeをCI hard gateにすること
-- DB migrationやevaluation result schema変更
+- raw question/answer/contextを使うレビュー画面
 
-## Merge order
+## Next
 
-1. PR #91を先にmergeする。
-2. このstacked PRへ最新mainを通常mergeし、baseをmainへ変更する。
-3. 後続PRで人間review UIを小さく接続する。
+次の独立タスクは、費用・privacy・再現性を明示したうえで補助LLM judge runnerを接続することです。
+この手動校正UIと安全な校正レコードは、そのjudgeを本番判定に使う前の比較基盤として利用します。

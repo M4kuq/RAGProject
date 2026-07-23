@@ -278,7 +278,7 @@ class OpenAICompatibleChatAnswerGenerator:
         max_output_tokens: int = 8192,
     ) -> None:
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _lmstudio_native_base_url(base_url)
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
@@ -286,26 +286,41 @@ class OpenAICompatibleChatAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        if request.response_format is None:
+            endpoint = f"{self.base_url}/api/v1/chat"
+            request_payload: dict[str, object] = {
+                "model": self.model_name,
+                "input": _openai_input(request),
+                "system_prompt": _system_instructions(request),
+                "max_output_tokens": _max_output_tokens(self.max_output_tokens),
+                "temperature": request.temperature if request.temperature is not None else 0.2,
+                "reasoning": "off",
+                "stream": False,
+                "store": False,
+            }
+        else:
+            endpoint = f"{self.base_url}/v1/chat/completions"
+            request_payload = {
+                "model": self.model_name,
+                "messages": [
+                    {"role": "system", "content": _system_instructions(request)},
+                    {"role": "user", "content": _openai_input(request)},
+                ],
+                "max_tokens": _max_output_tokens(
+                    min(self.max_output_tokens, max(128, request.max_output_chars // 4))
+                ),
+                "temperature": request.temperature if request.temperature is not None else 0.2,
+                "stream": False,
+                "response_format": request.response_format,
+            }
         try:
             response = httpx.post(
-                f"{self.base_url}/chat/completions",
+                endpoint,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model_name,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "enable_thinking": False,
-                    "messages": [
-                        {"role": "system", "content": _system_instructions(request)},
-                        {"role": "user", "content": _openai_input(request)},
-                    ],
-                    "max_tokens": _max_output_tokens(self.max_output_tokens),
-                    "temperature": request.temperature if request.temperature is not None else 0.2,
-                    "stream": False,
-                    **_chat_response_format_payload(request),
-                },
+                json=request_payload,
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
@@ -318,7 +333,7 @@ class OpenAICompatibleChatAnswerGenerator:
             raise AnswerGenerationError() from exc
         if not isinstance(payload, dict):
             raise AnswerGenerationError()
-        raw_content = _extract_chat_completion_output_text(payload)
+        raw_content = _extract_lmstudio_output_text(payload)
         if not raw_content:
             raise AnswerGenerationError()
         final_content = _generation_output_text(
@@ -330,7 +345,7 @@ class OpenAICompatibleChatAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=final_content,
-            usage=_extract_chat_completion_usage(payload),
+            usage=_extract_lmstudio_usage(payload),
         )
 
 
@@ -776,12 +791,6 @@ def _temperature_payload(request: GenerationRequest) -> dict[str, float]:
     return {"temperature": request.temperature}
 
 
-def _chat_response_format_payload(request: GenerationRequest) -> dict[str, object]:
-    if request.response_format is None:
-        return {}
-    return {"response_format": request.response_format}
-
-
 def _responses_text_format_payload(request: GenerationRequest) -> dict[str, object]:
     if request.response_format is None:
         return {}
@@ -870,6 +879,21 @@ def _extract_chat_completion_output_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _extract_lmstudio_output_text(payload: dict[str, Any]) -> str:
+    output = payload.get("output")
+    parts: list[str] = []
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content.strip())
+    if parts:
+        return "\n".join(parts).strip()
+    return _extract_chat_completion_output_text(payload)
+
+
 def _extract_anthropic_output_text(payload: dict[str, Any]) -> str:
     parts: list[str] = []
     content = payload.get("content")
@@ -915,6 +939,20 @@ def _extract_openai_responses_usage(payload: dict[str, Any]) -> TokenUsage | Non
         total_tokens=usage.get("total_tokens"),
         derive_total=False,
     )
+
+
+def _extract_lmstudio_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        usage = _usage_from_values(
+            input_tokens=stats.get("input_tokens"),
+            output_tokens=stats.get("total_output_tokens"),
+            total_tokens=None,
+            derive_total=True,
+        )
+        if usage is not None:
+            return usage
+    return _extract_chat_completion_usage(payload)
 
 
 def _extract_chat_completion_usage(payload: dict[str, Any]) -> TokenUsage | None:
@@ -1052,6 +1090,13 @@ def _request_max_output_tokens(
 
 def _max_output_tokens_for_chars(max_output_chars: int) -> int:
     return max(1, min(8192, max_output_chars // 4))
+
+
+def _lmstudio_native_base_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized[:-3]
+    return normalized
 
 
 def _lmstudio_model_name(value: str) -> str:

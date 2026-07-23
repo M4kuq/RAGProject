@@ -159,6 +159,41 @@ def test_document_ingest_handler_success_for_supported_types(
         assert all(chunk.chunk_hash and len(chunk.chunk_hash) == 64 for chunk in chunks)
 
 
+def test_evaluation_corpus_ingest_activates_version_after_success(
+    ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
+) -> None:
+    session_factory, storage = ingest_session_factory
+    version_id = _create_document_version(
+        session_factory,
+        storage,
+        file_name="evaluation-corpus.txt",
+        mime_type="text/plain",
+        content=b"Evaluation corpus fact.",
+    )
+    context = JobExecutionContext(
+        job_id=100 + version_id,
+        job_type="document_ingest",
+        target_type="document_version",
+        target_id=version_id,
+        payload={
+            "document_version_id": version_id,
+            "logical_document_id": 1,
+            "evaluation_corpus_activate": True,
+            "evaluation_dataset_id": 7,
+        },
+        worker_instance_id="worker-1",
+    )
+
+    result = _handler(session_factory, storage).handle(context)
+
+    assert result.status == "succeeded"
+    with session_factory() as db:
+        version = db.get(DocumentVersion, version_id)
+        assert version is not None
+        assert version.status == "ready"
+        assert version.is_active is True
+
+
 def test_document_ingest_handler_preserves_url_source_metadata(
     ingest_session_factory: tuple[sessionmaker[Session], LocalFileStorage],
 ) -> None:

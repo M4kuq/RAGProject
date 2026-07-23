@@ -11,11 +11,12 @@ from app.rag.generation import (
     GenerationContextItem,
     GenerationRequest,
     OpenAICompatibleChatAnswerGenerator,
+    TokenUsage,
     create_answer_generator,
 )
 
 
-def test_lmstudio_generator_calls_openai_compatible_chat_api(
+def test_lmstudio_generator_calls_native_chat_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -25,14 +26,13 @@ def test_lmstudio_generator_calls_openai_compatible_chat_api(
 
         def json(self) -> dict[str, Any]:
             return {
-                "choices": [
+                "output": [
                     {
-                        "message": {
-                            "role": "assistant",
-                            "content": "Qwen3.5 cites the local context [1].",
-                        }
+                        "type": "message",
+                        "content": "Qwen3.5 cites the local context [1].",
                     }
-                ]
+                ],
+                "stats": {"input_tokens": 12, "total_output_tokens": 8},
             }
 
     def fake_post(
@@ -59,13 +59,16 @@ def test_lmstudio_generator_calls_openai_compatible_chat_api(
     result = generator.generate(_request())
 
     assert result.content == "Qwen3.5 cites the local context [1]."
-    assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
+    assert result.usage == TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20)
+    assert captured["url"] == "http://host.docker.internal:1234/api/v1/chat"
     assert captured["headers"]["Authorization"] == "Bearer lm-studio"
     assert captured["json"]["model"] == "lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M"
-    assert captured["json"]["messages"][0]["role"] == "system"
-    assert captured["json"]["messages"][1]["role"] == "user"
-    assert captured["json"]["max_tokens"] == 8192
+    assert captured["json"]["input"].startswith("/no_think\n")
+    assert "/no_think" in captured["json"]["system_prompt"]
+    assert captured["json"]["max_output_tokens"] == 8192
+    assert captured["json"]["reasoning"] == "off"
     assert captured["json"]["stream"] is False
+    assert captured["json"]["store"] is False
 
 
 def test_lmstudio_generator_removes_qwen_thinking_text(
@@ -143,7 +146,8 @@ def test_lmstudio_task_request_preserves_raw_json(
         json: dict[str, Any],
         timeout: float,
     ) -> Response:
-        del url, headers, timeout
+        del headers, timeout
+        captured["url"] = url
         captured["json"] = json
         return Response()
 
@@ -176,11 +180,17 @@ def test_lmstudio_task_request_preserves_raw_json(
 
     payload = captured["json"]
     assert isinstance(payload, dict)
+    assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
     assert payload["response_format"] == {"type": "json_object"}
+    assert payload["max_tokens"] == 128
+    assert payload["stream"] is False
+    assert "reasoning" not in payload
     messages = payload["messages"]
     assert isinstance(messages, list)
-    assert "Task:" in messages[1]["content"]
-    assert "Return the final answer only." not in messages[1]["content"]
+    assert messages[0] == {"role": "system", "content": "Return JSON only."}
+    user_content = messages[1]["content"]
+    assert "Task:" in user_content
+    assert "Return the final answer only." not in user_content
     assert result.content == raw_json
     assert json_module.loads(result.content)["relations"][0]["confidence"] == 0.92
 

@@ -2,11 +2,18 @@ import { apiFetch } from "../../lib/apiClient";
 import type { ApiResponse } from "../../types/api";
 import type {
   EvaluationCase,
+  EvaluationCorpusPrepareResult,
+  EvaluationCorpusReadiness,
   EvaluationDataset,
   EvaluationDatasetCreateRequest,
+  EvaluationDatasetImportResult,
   EvaluationDatasetManifest,
+  EvaluationDatasetValidation,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
+  EvaluationHumanCalibrationRecord,
+  EvaluationHumanCalibrationSummary,
+  EvaluationHumanCalibrationUpsertRequest,
   EvaluationMetricCatalog,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
@@ -69,6 +76,30 @@ export async function listEvaluationRuns(params: {
 export async function getEvaluationRunDetail(evaluationRunId: number): Promise<EvaluationRunDetail> {
   const response = await apiFetch<ApiResponse<EvaluationRunDetail>>(
     `/api/v1/evaluations/runs/${evaluationRunId}`
+  );
+  return response.data;
+}
+
+export async function getEvaluationHumanCalibrations(
+  evaluationRunId: number
+): Promise<EvaluationHumanCalibrationSummary> {
+  const response = await apiFetch<ApiResponse<EvaluationHumanCalibrationSummary>>(
+    `/api/v1/evaluations/runs/${evaluationRunId}/human-calibrations`
+  );
+  return response.data;
+}
+
+export async function upsertEvaluationHumanCalibration(
+  evaluationRunId: number,
+  evaluationRunItemId: number,
+  payload: EvaluationHumanCalibrationUpsertRequest
+): Promise<EvaluationHumanCalibrationRecord> {
+  const response = await apiFetch<ApiResponse<EvaluationHumanCalibrationRecord>>(
+    `/api/v1/evaluations/runs/${evaluationRunId}/human-calibrations/${evaluationRunItemId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
   return response.data;
 }
@@ -136,14 +167,47 @@ export async function exportEvaluationDataset(
   return response.data;
 }
 
+export async function validateEvaluationDataset(
+  manifest: EvaluationDatasetManifest
+): Promise<EvaluationDatasetValidation> {
+  const response = await apiFetch<ApiResponse<EvaluationDatasetValidation>>(
+    "/api/v1/evaluations/datasets/validate",
+    {
+      method: "POST",
+      body: JSON.stringify(manifest)
+    }
+  );
+  return response.data;
+}
+
 export async function importEvaluationDataset(
   manifest: EvaluationDatasetManifest
-): Promise<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }> {
-  const response = await apiFetch<
-    ApiResponse<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }>
-  >("/api/v1/evaluations/datasets/import", {
-    method: "POST",
-    body: JSON.stringify(manifest)
-  });
+): Promise<EvaluationDatasetImportResult> {
+  const response = await apiFetch<ApiResponse<EvaluationDatasetImportResult>>(
+    "/api/v1/evaluations/datasets/import",
+    {
+      method: "POST",
+      body: JSON.stringify(manifest)
+    }
+  );
+  return response.data;
+}
+
+export async function prepareEvaluationDatasetCorpus(
+  evaluationDatasetId: number
+): Promise<EvaluationCorpusPrepareResult> {
+  const response = await apiFetch<ApiResponse<EvaluationCorpusPrepareResult>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/corpus/prepare`,
+    { method: "POST" }
+  );
+  return response.data;
+}
+
+export async function getEvaluationDatasetCorpusReadiness(
+  evaluationDatasetId: number
+): Promise<EvaluationCorpusReadiness> {
+  const response = await apiFetch<ApiResponse<EvaluationCorpusReadiness>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/corpus/readiness`
+  );
   return response.data;
 }

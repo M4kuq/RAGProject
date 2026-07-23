@@ -49,6 +49,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     if not retrieval_evidence_text:
         retrieval_evidence_text = " ".join(citation.snippet for citation in inputs.citations)
 
+    has_answer = bool(inputs.answer_text.strip())
     answer_keyword_hits = _keyword_hits(inputs.answer_text, inputs.case.expected_keywords)
     answer_hit = _expected_answer_hit(inputs.answer_text, inputs.case)
     expected_answer_slots = _metadata_string_values(
@@ -59,23 +60,45 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
     expected_signal_count = len(inputs.case.expected_keywords) + (
         1 if inputs.case.expected_answer and not inputs.case.expected_keywords else 0
     )
-    faithfulness = _ratio(answer_keyword_hits + answer_hit, expected_signal_count)
+    faithfulness = (
+        _ratio(answer_keyword_hits + answer_hit, expected_signal_count) if has_answer else None
+    )
     answer_completeness = (
-        None if not expected_answer_slots else _ratio(answer_slot_hits, len(expected_answer_slots))
+        _ratio(answer_slot_hits, len(expected_answer_slots))
+        if has_answer and expected_answer_slots
+        else None
     )
-    citation_presence = 1.0 if not inputs.case.required_citation or inputs.citations else 0.0
-    citation_correctness, citation_correctness_details = _citation_correctness(
-        inputs.case,
-        inputs.citations,
-        retrieved_items,
+    citation_presence = (
+        (1.0 if not inputs.case.required_citation or inputs.citations else 0.0)
+        if has_answer
+        else None
     )
+    if has_answer:
+        citation_correctness, citation_correctness_details = _citation_correctness(
+            inputs.case,
+            inputs.citations,
+            retrieved_items,
+        )
+    else:
+        citation_correctness = None
+        citation_correctness_details = {
+            "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
+            "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
+            "citation_count": len(inputs.citations),
+            "not_applicable": True,
+            "reason_code": "answer_not_generated",
+        }
     selected_count = (
         inputs.retrieval_summary.selected_count if inputs.retrieval_summary is not None else 0
     )
     groundedness = (
-        inputs.confidence.groundedness_score
-        if inputs.confidence
-        else (1.0 if selected_count > 0 else 0.0)
+        (
+            inputs.confidence.groundedness_score
+            if inputs.confidence
+            else (1.0 if selected_count > 0 else 0.0)
+        )
+        if has_answer
+        else None
     )
     retrieval_signal_hits = _expected_signal_hits(retrieval_evidence_text, inputs.case)
     context_precision = _context_precision(
@@ -98,6 +121,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         "expected_keyword_count": len(inputs.case.expected_keywords),
         "expected_answer_slot_count": len(expected_answer_slots),
         "required_citation": inputs.case.required_citation,
+        "answer_generated": has_answer,
     }
     if inputs.error_code:
         metadata_details["error_code"] = inputs.error_code
@@ -153,7 +177,7 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
         MetricValue(
             metric_name="faithfulness",
             metric_score=faithfulness,
-            metric_label=_label(faithfulness),
+            metric_label=_optional_label(faithfulness),
             details={
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
@@ -162,6 +186,8 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 "matched_expected_answer": bool(answer_hit),
                 "expected_keyword_count": len(inputs.case.expected_keywords),
                 "expected_signal_count": expected_signal_count,
+                "not_applicable": not has_answer,
+                "reason_code": None if has_answer else "answer_not_generated",
             },
         ),
         MetricValue(
@@ -175,39 +201,54 @@ def calculate_metrics(inputs: EvaluationMetricInputs) -> list[MetricValue]:
                 "expected_answer_slot_count": len(expected_answer_slots),
                 "matched_answer_slot_count": answer_slot_hits,
                 "not_applicable": answer_completeness is None,
+                "reason_code": (
+                    None
+                    if answer_completeness is not None
+                    else "answer_not_generated"
+                    if not has_answer
+                    else "expected_answer_slots_missing"
+                ),
             },
         ),
         MetricValue(
             metric_name="groundedness",
-            metric_score=_clamp01(groundedness),
-            metric_label=_label(groundedness),
+            metric_score=_clamp01(groundedness) if groundedness is not None else None,
+            metric_label=_optional_label(groundedness),
             details={
-                "source": "rag_confidence" if inputs.confidence else "retrieval_presence",
+                "source": ("rag_confidence" if inputs.confidence else "retrieval_presence")
+                if has_answer
+                else "not_applicable",
                 "has_confidence": inputs.confidence is not None,
                 "selected_count": selected_count,
+                "not_applicable": not has_answer,
+                "reason_code": None if has_answer else "answer_not_generated",
             },
         ),
         MetricValue(
             metric_name="citation_coverage",
             metric_score=citation_presence,
-            metric_label=_label(citation_presence),
+            metric_label=_optional_label(citation_presence),
             details={
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
                 "legacy_alias_for": "citation_presence",
                 "required_citation": inputs.case.required_citation,
                 "citation_count": len(inputs.citations),
+                "not_applicable": not has_answer,
+                "reason_code": None if has_answer else "answer_not_generated",
             },
         ),
         MetricValue(
             metric_name="citation_presence",
             metric_score=citation_presence,
-            metric_label=_label(citation_presence),
+            metric_label=_optional_label(citation_presence),
             details={
                 "schema_version": EVALUATION_DETAIL_SCHEMA_VERSION,
                 "metric_semantics_version": EVALUATION_METRIC_SEMANTICS_VERSION,
                 "required_citation": inputs.case.required_citation,
                 "citation_count": len(inputs.citations),
+                "not_applicable": not has_answer,
+                "reason_code": None if has_answer else "answer_not_generated",
             },
         ),
         MetricValue(
