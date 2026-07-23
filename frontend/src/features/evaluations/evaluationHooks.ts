@@ -6,19 +6,22 @@ import {
   createEvaluationRun,
   exportEvaluationDataset,
   getEvaluationDataset,
+  getEvaluationHumanCalibrations,
   getEvaluationMetricCatalog,
   getEvaluationRunDetail,
   importEvaluationDataset,
   listEvaluationCases,
   listEvaluationDatasets,
   listEvaluationRuns,
-  promoteEvaluationFailures
+  promoteEvaluationFailures,
+  upsertEvaluationHumanCalibration
 } from "./evaluationApi";
 import type {
   EvaluationDataset,
   EvaluationDatasetCreateRequest,
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
+  EvaluationHumanCalibrationUpsertRequest,
   EvaluationRunCreateRequest
 } from "./evaluationTypes";
 
@@ -44,6 +47,36 @@ export function useEvaluationRunDetail(evaluationRunId: number) {
     queryKey: queryKeys.evaluations.detail(evaluationRunId),
     queryFn: () => getEvaluationRunDetail(evaluationRunId),
     enabled: Number.isFinite(evaluationRunId)
+  });
+}
+
+export function useEvaluationHumanCalibrations(
+  evaluationRunId: number,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: queryKeys.evaluations.humanCalibrations(evaluationRunId),
+    queryFn: () => getEvaluationHumanCalibrations(evaluationRunId),
+    enabled: enabled && Number.isFinite(evaluationRunId)
+  });
+}
+
+export function useUpsertEvaluationHumanCalibration(evaluationRunId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      evaluationRunItemId,
+      payload
+    }: {
+      evaluationRunItemId: number;
+      payload: EvaluationHumanCalibrationUpsertRequest;
+    }) =>
+      upsertEvaluationHumanCalibration(evaluationRunId, evaluationRunItemId, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.evaluations.humanCalibrations(evaluationRunId)
+      });
+    }
   });
 }
 

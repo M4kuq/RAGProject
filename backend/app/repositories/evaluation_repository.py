@@ -8,7 +8,7 @@ from decimal import Decimal
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.db.evaluation_models import EvaluationResult
+from app.db.evaluation_models import EvaluationHumanCalibration, EvaluationResult
 from app.db.models import EvaluationCase, EvaluationDataset, EvaluationRun, EvaluationRunItem, Job
 from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY
 
@@ -348,6 +348,106 @@ class EvaluationRepository:
             ).all()
         )
 
+    def get_item(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+        evaluation_run_item_id: int,
+        for_update: bool = False,
+    ) -> EvaluationRunItem | None:
+        statement = select(EvaluationRunItem).where(
+            EvaluationRunItem.evaluation_run_id == evaluation_run_id,
+            EvaluationRunItem.evaluation_run_item_id == evaluation_run_item_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return db.scalar(statement)
+
+    def list_human_calibrations(
+        self,
+        db: Session,
+        *,
+        evaluation_run_id: int,
+    ) -> list[EvaluationHumanCalibration]:
+        return list(
+            db.scalars(
+                select(EvaluationHumanCalibration)
+                .join(
+                    EvaluationRunItem,
+                    EvaluationRunItem.evaluation_run_item_id
+                    == EvaluationHumanCalibration.evaluation_run_item_id,
+                )
+                .where(EvaluationRunItem.evaluation_run_id == evaluation_run_id)
+                .order_by(EvaluationHumanCalibration.evaluation_run_item_id.asc())
+            ).all()
+        )
+
+    def upsert_human_calibration(
+        self,
+        db: Session,
+        *,
+        evaluation_run_item_id: int,
+        case_id: str,
+        rubric_version: str,
+        required_facts_supported: str,
+        citation_support: str,
+        forbidden_claims_absent: str,
+        abstention_correct: str,
+        prompt_injection_resisted: str,
+        auxiliary_confidence: Decimal,
+        auxiliary_reason_codes: list[str],
+        auxiliary_pass: bool,
+        human_pass: bool,
+        disagreement_category: str | None,
+        human_reason_codes: list[str],
+        reviewed_by: int,
+        updated_at: datetime,
+    ) -> EvaluationHumanCalibration:
+        calibration = db.scalar(
+            select(EvaluationHumanCalibration).where(
+                EvaluationHumanCalibration.evaluation_run_item_id == evaluation_run_item_id
+            )
+        )
+        if calibration is None:
+            calibration = EvaluationHumanCalibration(
+                evaluation_run_item_id=evaluation_run_item_id,
+                case_id=case_id,
+                rubric_version=rubric_version,
+                required_facts_supported=required_facts_supported,
+                citation_support=citation_support,
+                forbidden_claims_absent=forbidden_claims_absent,
+                abstention_correct=abstention_correct,
+                prompt_injection_resisted=prompt_injection_resisted,
+                auxiliary_confidence=auxiliary_confidence,
+                auxiliary_reason_codes_json=auxiliary_reason_codes,
+                auxiliary_pass=auxiliary_pass,
+                human_pass=human_pass,
+                disagreement_category=disagreement_category,
+                human_reason_codes_json=human_reason_codes,
+                reviewed_by=reviewed_by,
+                updated_at=updated_at,
+            )
+            db.add(calibration)
+        else:
+            calibration.case_id = case_id
+            calibration.rubric_version = rubric_version
+            calibration.required_facts_supported = required_facts_supported
+            calibration.citation_support = citation_support
+            calibration.forbidden_claims_absent = forbidden_claims_absent
+            calibration.abstention_correct = abstention_correct
+            calibration.prompt_injection_resisted = prompt_injection_resisted
+            calibration.auxiliary_confidence = auxiliary_confidence
+            calibration.auxiliary_reason_codes_json = auxiliary_reason_codes
+            calibration.auxiliary_pass = auxiliary_pass
+            calibration.human_pass = human_pass
+            calibration.disagreement_category = disagreement_category
+            calibration.human_reason_codes_json = human_reason_codes
+            calibration.reviewed_by = reviewed_by
+            calibration.updated_at = updated_at
+        db.flush()
+        return calibration
+
     def list_results(
         self,
         db: Session,
@@ -415,6 +515,11 @@ class EvaluationRepository:
             ).all()
         ]
         if item_ids:
+            db.execute(
+                delete(EvaluationHumanCalibration).where(
+                    EvaluationHumanCalibration.evaluation_run_item_id.in_(item_ids)
+                )
+            )
             db.execute(
                 delete(EvaluationResult).where(
                     EvaluationResult.evaluation_run_item_id.in_(item_ids)

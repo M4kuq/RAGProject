@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { HumanCalibrationPanel } from "../../../components/admin/HumanCalibrationPanel";
 import {
   compareMetricNames,
   HelpTooltip,
@@ -177,6 +178,11 @@ export function EvaluationDetailPage() {
           </div>
         </dl>
       </section>
+
+      <HumanCalibrationPanel
+        datasetName={run.data.dataset_name}
+        evaluationRunId={run.data.evaluation_run_id}
+      />
 
       <section className="admin-section">
         <h2>指標サマリー</h2>

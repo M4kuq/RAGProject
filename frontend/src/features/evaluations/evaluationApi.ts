@@ -7,6 +7,9 @@ import type {
   EvaluationDatasetManifest,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
+  EvaluationHumanCalibrationRecord,
+  EvaluationHumanCalibrationSummary,
+  EvaluationHumanCalibrationUpsertRequest,
   EvaluationMetricCatalog,
   EvaluationRunCreateRequest,
   EvaluationRunCreateResponse,
@@ -69,6 +72,30 @@ export async function listEvaluationRuns(params: {
 export async function getEvaluationRunDetail(evaluationRunId: number): Promise<EvaluationRunDetail> {
   const response = await apiFetch<ApiResponse<EvaluationRunDetail>>(
     `/api/v1/evaluations/runs/${evaluationRunId}`
+  );
+  return response.data;
+}
+
+export async function getEvaluationHumanCalibrations(
+  evaluationRunId: number
+): Promise<EvaluationHumanCalibrationSummary> {
+  const response = await apiFetch<ApiResponse<EvaluationHumanCalibrationSummary>>(
+    `/api/v1/evaluations/runs/${evaluationRunId}/human-calibrations`
+  );
+  return response.data;
+}
+
+export async function upsertEvaluationHumanCalibration(
+  evaluationRunId: number,
+  evaluationRunItemId: number,
+  payload: EvaluationHumanCalibrationUpsertRequest
+): Promise<EvaluationHumanCalibrationRecord> {
+  const response = await apiFetch<ApiResponse<EvaluationHumanCalibrationRecord>>(
+    `/api/v1/evaluations/runs/${evaluationRunId}/human-calibrations/${evaluationRunItemId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
   return response.data;
 }

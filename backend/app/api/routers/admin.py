@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import pagination_params, require_admin, require_csrf
-from app.api.responses import paginate, success_response
+from app.api.responses import get_request_id, paginate, success_response
 from app.db.models import AuditLog, SystemSetting, User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
@@ -16,6 +16,7 @@ from app.schemas.evaluations import (
     EvaluationDatasetManifest,
     EvaluationDatasetUpdateRequest,
     EvaluationFailurePromotionRequest,
+    EvaluationHumanCalibrationUpsertRequest,
     EvaluationRunCreateRequest,
 )
 from app.services.evaluation_service import EvaluationService
@@ -259,6 +260,41 @@ def evaluation_run_detail(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     result = EvaluationService().get_run_detail(db, evaluation_run_id=evaluation_run_id)
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.get("/evaluations/runs/{evaluation_run_id}/human-calibrations")
+def evaluation_human_calibrations(
+    evaluation_run_id: int,
+    request: Request,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().get_human_calibrations(
+        db,
+        evaluation_run_id=evaluation_run_id,
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.put("/evaluations/runs/{evaluation_run_id}/human-calibrations/{evaluation_run_item_id}")
+def upsert_evaluation_human_calibration(
+    evaluation_run_id: int,
+    evaluation_run_item_id: int,
+    request: Request,
+    payload: EvaluationHumanCalibrationUpsertRequest,
+    _csrf: None = Depends(require_csrf),
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    result = EvaluationService().upsert_human_calibration(
+        db,
+        evaluation_run_id=evaluation_run_id,
+        evaluation_run_item_id=evaluation_run_item_id,
+        payload=payload,
+        user=user,
+        request_id=get_request_id(request),
+    )
     return success_response(result.model_dump(mode="json"), request)
 
 
