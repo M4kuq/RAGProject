@@ -21,7 +21,7 @@ GRAPH_TABLES = {
     "graph_retrieval_paths",
 }
 CACHE_TABLES = {"retrieval_cache_entries"}
-HEAD_REVISION = "0020_graph_llm_extractor"
+HEAD_REVISION = "0022_eval_reliability"
 PRE_LLM_FORWARD_REVISION = "0019_graph_provider_neo4j"
 PRE_PROVIDER_FORWARD_REVISION = "0018_evaluation_generation_usage"
 PRE_CACHE_REVISION = "0016_graph_store_provider_seed"
