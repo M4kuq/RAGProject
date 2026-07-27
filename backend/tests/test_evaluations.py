@@ -1214,6 +1214,7 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
         assert run.trigger_type == "manual"
         assert run.retrieval_settings_json == {
             "schema_version": "phase2.evaluation.v1",
+            "evaluation_backend": "deterministic_db",
             "strategy_type": "dense",
             "strategies": ["dense"],
             "metrics": [
@@ -1242,6 +1243,7 @@ def test_evaluation_dataset_case_api_import_export_and_safe_validation(
             ],
             "cache_modes": ["default"],
             "evaluation_scope": "retrieval",
+            "repeat_number": 1,
             "strategy_targets": [
                 {
                     "schema_version": "phase3.evaluation_target.v1",
