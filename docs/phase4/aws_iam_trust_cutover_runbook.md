@@ -523,6 +523,147 @@ function Get-RequiredOidcSubjectProperty {
   return $SubjectProperties[0]
 }
 
+function ConvertTo-NormalizedJsonValue {
+  param([AllowNull()][object]$Value)
+  if ($null -eq $Value) {
+    return $null
+  }
+  if ($Value -is [array]) {
+    $NormalizedItems = [Collections.Generic.List[object]]::new()
+    foreach ($Item in $Value) {
+      [void]$NormalizedItems.Add((ConvertTo-NormalizedJsonValue $Item))
+    }
+    Write-Output -NoEnumerate $NormalizedItems.ToArray()
+    return
+  }
+  if ($Value -is [pscustomobject]) {
+    $NormalizedObject = [ordered]@{}
+    $PropertyNames = @(
+      $Value.PSObject.Properties.Name | Sort-Object -CaseSensitive
+    )
+    foreach ($PropertyName in $PropertyNames) {
+      $NormalizedObject[$PropertyName] = ConvertTo-NormalizedJsonValue (
+        $Value.PSObject.Properties[$PropertyName].Value
+      )
+    }
+    return $NormalizedObject
+  }
+  return $Value
+}
+
+function ConvertTo-NormalizedJson {
+  param([AllowNull()][object]$Value)
+  $NormalizedValue = ConvertTo-NormalizedJsonValue $Value
+  return ConvertTo-Json -InputObject $NormalizedValue -Depth 30 -Compress
+}
+
+function Get-JsonDifferencePaths {
+  param(
+    [AllowNull()][object]$Expected,
+    [AllowNull()][object]$Actual,
+    [Parameter(Mandatory = $true)][string]$Path
+  )
+  $ExpectedIsArray = $Expected -is [array]
+  $ActualIsArray = $Actual -is [array]
+  if ($ExpectedIsArray -ne $ActualIsArray) {
+    $Path
+    return
+  }
+  if ($ExpectedIsArray) {
+    if ($Expected.Count -ne $Actual.Count) {
+      "$Path.Count"
+    }
+    $CommonCount = [Math]::Min($Expected.Count, $Actual.Count)
+    for ($Index = 0; $Index -lt $CommonCount; $Index++) {
+      Get-JsonDifferencePaths $Expected[$Index] $Actual[$Index] "$Path[$Index]"
+    }
+    return
+  }
+
+  $ExpectedIsObject = $Expected -is [pscustomobject]
+  $ActualIsObject = $Actual -is [pscustomobject]
+  if ($ExpectedIsObject -ne $ActualIsObject) {
+    $Path
+    return
+  }
+  if ($ExpectedIsObject) {
+    $PropertyNames = @(
+      @(
+        $Expected.PSObject.Properties.Name
+        $Actual.PSObject.Properties.Name
+      ) | Sort-Object -CaseSensitive -Unique
+    )
+    foreach ($PropertyName in $PropertyNames) {
+      $ExpectedProperty = $Expected.PSObject.Properties[$PropertyName]
+      $ActualProperty = $Actual.PSObject.Properties[$PropertyName]
+      $PropertyPath = "$Path.$PropertyName"
+      if ($null -eq $ExpectedProperty -or $null -eq $ActualProperty) {
+        $PropertyPath
+        continue
+      }
+      Get-JsonDifferencePaths $ExpectedProperty.Value $ActualProperty.Value $PropertyPath
+    }
+    return
+  }
+
+  if ((ConvertTo-NormalizedJson $Expected) -cne (ConvertTo-NormalizedJson $Actual)) {
+    $Path
+  }
+}
+
+function Assert-TrustPolicySubjectOnlyChange {
+  param(
+    [Parameter(Mandatory = $true)][object]$BeforePolicy,
+    [Parameter(Mandatory = $true)][object]$ActualPolicy,
+    [Parameter(Mandatory = $true)][string]$ExpectedBranch,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  try {
+    $ExpectedPolicy = ConvertFrom-Json -InputObject (
+      ConvertTo-Json -InputObject $BeforePolicy -Depth 30 -Compress
+    )
+  } catch {
+    throw "Could not copy the trust policy for comparison; policy content was suppressed."
+  }
+  $ExpectedStatements = @($ExpectedPolicy.Statement)
+  if ($ExpectedStatements.Count -ne 1) {
+    throw "Expected exactly one trust statement before subject replacement: $Label"
+  }
+  $ExpectedConditionProperty = $ExpectedStatements[0].PSObject.Properties["Condition"]
+  if ($null -eq $ExpectedConditionProperty) {
+    throw "Expected trust policy has no Condition: $Label"
+  }
+  $ExpectedSubjectProperty = Get-RequiredOidcSubjectProperty `
+    $ExpectedConditionProperty.Value `
+    $Label
+  $ExpectedSubjectValues = @($ExpectedSubjectProperty.Value)
+  if ($ExpectedSubjectValues.Count -ne 1) {
+    throw "Expected exactly one OIDC subject value before replacement: $Label"
+  }
+  $ExpectedSubject = "repo:${Repository}:ref:refs/heads/${ExpectedBranch}"
+  if ($ExpectedSubjectProperty.Value -is [array]) {
+    $ExpectedSubjectProperty.Value = @($ExpectedSubject)
+  } else {
+    $ExpectedSubjectProperty.Value = $ExpectedSubject
+  }
+
+  $ExpectedJson = ConvertTo-NormalizedJson $ExpectedPolicy
+  $ActualJson = ConvertTo-NormalizedJson $ActualPolicy
+  if ($ExpectedJson -cne $ActualJson) {
+    $DifferencePaths = @(
+      Get-JsonDifferencePaths $ExpectedPolicy $ActualPolicy '$' |
+        Select-Object -First 8
+    )
+    if ($DifferencePaths.Count -eq 0) {
+      $DifferencePaths = @('$')
+    }
+    throw (
+      "Trust policy is not an exact subject-only change at key(s): {0}. " +
+      "Policy values were suppressed."
+    ) -f ($DifferencePaths -join ", ")
+  }
+}
+
 function Write-RoleTrustPolicyForBranch {
   param(
     [Parameter(Mandatory = $true)][string]$BackupPath,
@@ -533,7 +674,14 @@ function Write-RoleTrustPolicyForBranch {
   if ($TargetBranch -notin @($OldBranch, $NewBranch)) {
     throw "Refusing to generate a trust policy for an unexpected branch: $Label"
   }
-  $Policy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
+  try {
+    $BeforePolicy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
+    $Policy = ConvertFrom-Json -InputObject (
+      ConvertTo-Json -InputObject $BeforePolicy -Depth 30 -Compress
+    )
+  } catch {
+    throw "Could not parse the trust backup; policy content was suppressed."
+  }
   $Statements = @($Policy.Statement)
   if ($Statements.Count -ne 1) {
     throw "Unexpected trust statement count while generating policy: $Label"
@@ -566,6 +714,11 @@ function Write-RoleTrustPolicyForBranch {
   } else {
     $SubjectProperty.Value = $ExpectedTargetSubject
   }
+  Assert-TrustPolicySubjectOnlyChange `
+    $BeforePolicy `
+    $Policy `
+    $TargetBranch `
+    "generated direct trust policy"
   [IO.File]::WriteAllText(
     $DestinationPath,
     ($Policy | ConvertTo-Json -Depth 20 -Compress),
@@ -699,6 +852,8 @@ if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
 
 `-target`は通常運用向けではないが、このcutoverではbootstrap stackの他resourceを変更しないための例外的なblast-radius制限として使う。saved planの対象が2 roleのin-place updateだけであることを確認してから、そのplan fileをapplyする。
 
+`Assert-TrustOnlyPlanChanges`は、planの更新前policyをdeep copyし、OIDC subjectの値だけを1箇所置換した期待値を作る。更新後policyはJSON objectのキー順序と空白・改行だけを正規化して完全一致させる。scalarと1要素配列、配列順序は同一shapeのまま比較するため、`Effect`、`Action`、`Principal`（`Federated` providerを含む）、audience、subject以外の全condition、statement数、condition operatorの種類と構成は不変でなければならない。
+
 ```powershell
 function Assert-TrustOnlyPlanChanges {
   param(
@@ -738,25 +893,26 @@ function Assert-TrustOnlyPlanChanges {
     if ($ChangedAttributes.Count -ne 1 -or $ChangedAttributes[0] -cne "assume_role_policy") {
       throw "Plan changes a role attribute other than assume_role_policy."
     }
-    $AfterPolicy = ConvertFrom-Json -InputObject (
-      [string]$ResourceChange.change.after.assume_role_policy
-    )
-    $AfterStatements = @($AfterPolicy.Statement)
-    if ($AfterStatements.Count -ne 1) {
-      throw "Planned trust policy has an unexpected statement count."
+    $BeforePolicyProperty = $ResourceChange.change.before.PSObject.Properties[
+      "assume_role_policy"
+    ]
+    $AfterPolicyProperty = $ResourceChange.change.after.PSObject.Properties[
+      "assume_role_policy"
+    ]
+    if ($null -eq $BeforePolicyProperty -or $null -eq $AfterPolicyProperty) {
+      throw "Plan does not contain both trust policy versions."
     }
-    $AfterConditionProperty = $AfterStatements[0].PSObject.Properties["Condition"]
-    if ($null -eq $AfterConditionProperty) {
-      throw "Planned trust policy has no Condition."
+    try {
+      $BeforePolicy = ConvertFrom-Json -InputObject ([string]$BeforePolicyProperty.Value)
+      $AfterPolicy = ConvertFrom-Json -InputObject ([string]$AfterPolicyProperty.Value)
+    } catch {
+      throw "Could not parse a planned trust policy; policy content was suppressed."
     }
-    $AfterSubjectProperty = Get-RequiredOidcSubjectProperty `
-      $AfterConditionProperty.Value `
+    Assert-TrustPolicySubjectOnlyChange `
+      $BeforePolicy `
+      $AfterPolicy `
+      $ExpectedBranch `
       "planned trust policy"
-    $AfterSubject = @($AfterSubjectProperty.Value)
-    $ExpectedSubject = "repo:${Repository}:ref:refs/heads/${ExpectedBranch}"
-    if ($AfterSubject.Count -ne 1 -or [string]$AfterSubject[0] -cne $ExpectedSubject) {
-      throw "Planned trust subject is not the expected exact branch."
-    }
   }
 }
 
@@ -1040,6 +1196,7 @@ Write-Host "OIDC smoke trust: main"
 **期待される結果**
 
 - IAM updateは既存1 statementのsubjectだけを`refs/heads/main`へ変える。
+- 生成policyはbackupのsubjectだけを置換した期待値と完全一致し、provider、Action、audience、その他のconditionを保持する。
 - branch検証が`main`になる。この時点で`main`からpermissionless smoke roleのAssumeRoleが可能になる。
 
 **失敗時**
@@ -1216,6 +1373,18 @@ if ($LASTEXITCODE -ne 0) {
   throw "Could not inspect bootstrap post-cutover full plan."
 }
 Assert-TerraformPlanCallerAccount $BootstrapPostPlanJson "bootstrap post-cutover full plan"
+$BootstrapPostChanges = @(
+  (ConvertFrom-Json -InputObject $BootstrapPostPlanJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+$BootstrapPostTrustChanges = @(
+  $BootstrapPostChanges |
+    Where-Object { $_.address -in $AllowedBootstrapAddresses }
+)
+Assert-TrustOnlyPlanChanges `
+  $BootstrapPostTrustChanges `
+  $AllowedBootstrapAddresses `
+  $NewBranch
 
 $RootPostPlan = Join-Path $CutoverDir "root-post-cutover.tfplan"
 $RootPostLog = Join-Path $CutoverDir "root-post-cutover.plan.log"
@@ -1237,8 +1406,25 @@ if ($LASTEXITCODE -ne 0) {
   throw "Could not inspect root post-cutover full plan."
 }
 Assert-TerraformPlanCallerAccount $RootPostPlanJson "root post-cutover full plan"
+$RootPostChanges = @(
+  (ConvertFrom-Json -InputObject $RootPostPlanJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+$RootPostTrustChanges = @(
+  $RootPostChanges |
+    Where-Object { $_.address -ceq "module.iam.aws_iam_role.github_deploy" }
+)
+Assert-TrustOnlyPlanChanges `
+  $RootPostTrustChanges `
+  @("module.iam.aws_iam_role.github_deploy") `
+  $NewBranch
 Assert-MainShaUnchanged "after final operational inspection"
 Write-Host "Post-cutover full plan exit codes: bootstrap=$BootstrapPostExit root=$RootPostExit"
+Write-Host (
+  "Post-cutover trust changes: bootstrap={0} root={1}" -f
+  $BootstrapPostTrustChanges.Count,
+  $RootPostTrustChanges.Count
+)
 ```
 
 **期待される結果**
@@ -1246,10 +1432,12 @@ Write-Host "Post-cutover full plan exit codes: bootstrap=$BootstrapPostExit root
 - 4 roleのbranchがすべて`main`、`DEPLOY_BRANCH`も`main`になる。
 - operational fileに旧branch参照がない。歴史説明を持つdocs内の旧branch名は対象外である。
 - 通常planの`-detailed-exitcode`は、差分なしなら`0`、差分ありなら`2`である。
+- Terraform管理のtrust roleに差分がある場合は、targeted saved planと同じsubject-only完全比較を通る。
 
 **失敗時**
 
 - full planが`2`でも、この手順ではapplyしない。local logを安全な場所でreviewし、targetingで見落としたtrust関連差分ならD1a内で修正、無関係なdriftなら別issueへ分離する。
+- trust roleの差分がsubject-only完全比較に失敗した場合は、providerや追加conditionなどの値を表示せず停止する。
 - full planが`1`ならbackend、tfvars、権限を確認する。trustとsmokeの個別検証が成功済みでも、D1a完了チェックには失敗として記録する。
 - 一時ファイルはrollback判断が完了するまで削除しない。
 
@@ -1305,17 +1493,38 @@ Write-Host "AWS_PROFILE: restored to the process start state"
 | 手順5以後 | repository variable、smoke、root、bootstrap | `DEPLOY_BRANCH`を`$CurrentDeployBranch`へ戻してから、roleを逆順で各開始時branchへ戻す |
 | 手順6 smoke失敗 | 原因に応じて継続または全rollback | workflowは再実行せず、trust / secret対応 / allowlistを確認 |
 
-rollbackの基準は旧branchではなく、手順1で記録した開始時状態である。preferred rollbackはTerraform stateを使い、root / bootstrapの各roleをそれぞれの`$BeforeBranches`へ個別に戻す。開始時に`main`だったroleはrollback後も`main`のままであり、旧branchへ強制してはならない。
+rollbackの基準は旧branchではなく、手順1で記録した開始時状態である。preferred rollbackはTerraform stateを使い、root / bootstrapの各roleをそれぞれの`$BeforeBranches`へ個別に戻す。開始時に`main`だったroleはrollback後も`main`のままであり、旧branchへ強制してはならない。backupを直接適用する経路も、現在policyのsubjectだけを記録済みbranchへ置換した期待値とbackup全体を比較し、一致しなければ適用前に停止する。
 
 ```powershell
 function Restore-RoleTrust {
   param(
     [Parameter(Mandatory = $true)][string]$RoleName,
-    [Parameter(Mandatory = $true)][string]$BackupPath
+    [Parameter(Mandatory = $true)][string]$BackupPath,
+    [Parameter(Mandatory = $true)][string]$ExpectedBranch
   )
   if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
     throw "Trust backup not found."
   }
+  $CurrentRoleJson = (
+    aws iam get-role --profile $AwsProfile --role-name $RoleName --output json --no-cli-pager |
+      Out-String
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read the current trust before restore."
+  }
+  try {
+    $CurrentPolicy = (
+      ConvertFrom-Json -InputObject $CurrentRoleJson
+    ).Role.AssumeRolePolicyDocument
+    $BackupPolicy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
+  } catch {
+    throw "Could not parse a trust policy before restore; policy content was suppressed."
+  }
+  Assert-TrustPolicySubjectOnlyChange `
+    $CurrentPolicy `
+    $BackupPolicy `
+    $ExpectedBranch `
+    "direct trust restore"
   aws iam update-assume-role-policy `
     --profile $AwsProfile `
     --role-name $RoleName `
@@ -1337,7 +1546,7 @@ if (-not $DeployBranchRollbackOk) {
 }
 
 $SmokeBeforePath = Join-Path $CutoverDir "oidc-smoke.before.json"
-Restore-RoleTrust $SmokeRoleName $SmokeBeforePath
+Restore-RoleTrust $SmokeRoleName $SmokeBeforePath $BeforeBranches.oidc_smoke
 if (
   (Backup-RoleTrustAndGetBranch "oidc-smoke-rollback-check" $SmokeRoleName) -cne
   $BeforeBranches.oidc_smoke
@@ -1488,7 +1697,10 @@ $DirectRecoveryRoles = @(
 )
 foreach ($RecoveryRole in $DirectRecoveryRoles) {
   $BackupPath = Join-Path $CutoverDir "$($RecoveryRole.Label).before.json"
-  Restore-RoleTrust $RecoveryRole.RoleName $BackupPath
+  Restore-RoleTrust `
+    $RecoveryRole.RoleName `
+    $BackupPath `
+    $RecoveryRole.ExpectedBranch
   if (
     (Backup-RoleTrustAndGetBranch "$($RecoveryRole.Label)-recovered" $RecoveryRole.RoleName) -cne
     $RecoveryRole.ExpectedBranch
