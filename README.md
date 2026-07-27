@@ -414,6 +414,7 @@ metrics and reason codes. See
 - [GraphRAG manual test cases](docs/phase3/graph_rag_manual_test_cases.md)
 - [GraphRAG acceptance checklist](docs/phase3/graph_rag_acceptance_checklist.md)
 - [GraphRAG known limitations](docs/phase3/graph_rag_known_limitations.md)
+- [Qwen3.5 9B local RAG accuracy workflow](docs/local_rag_accuracy.md)
 - [sample questions](docs/demo/sample_questions.md)
 - [demo data](docs/demo/demo_data.md)
 - [manual test cases](docs/test-cases/phase1_manual_test_cases.md)

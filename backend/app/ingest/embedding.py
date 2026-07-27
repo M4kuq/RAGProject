@@ -17,6 +17,10 @@ from app.core.config import Settings
 logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
+SAFE_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,179}$")
+SECRET_MODEL_ID_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|password|credential|token|bearer|sk-)"
+)
 STOPWORDS = {
     "a",
     "an",
@@ -226,6 +230,73 @@ class LMStudioEmbeddingAdapter:
         vectors = _extract_lmstudio_embeddings(payload, expected_count=len(texts))
         _validate_vectors(vectors, expected_count=len(texts), dimension=self._dimension)
         return vectors
+
+
+@dataclass(frozen=True)
+class LMStudioEmbeddingProbe:
+    requested_model: str
+    resolved_model: str
+    dimension: int
+
+
+def probe_lmstudio_embedding_dimension(
+    settings: Settings,
+    *,
+    model_name: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> LMStudioEmbeddingProbe:
+    """Probe LM Studio with non-sensitive fixed text before creating a collection."""
+    requested_model = (model_name or settings.embedding_model).strip()
+    try:
+        response = httpx.post(
+            f"{settings.lmstudio_base_url.rstrip('/')}/embeddings",
+            headers={
+                "Authorization": f"Bearer {settings.lmstudio_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": requested_model,
+                "input": ["RAGProject embedding dimension probe."],
+            },
+            timeout=min(timeout_seconds, settings.lmstudio_timeout_seconds),
+        )
+    except httpx.HTTPError as exc:
+        raise EmbeddingAdapterError(
+            "embedding_dimension_probe_failed",
+            error_category="provider_unreachable",
+        ) from exc
+    if response.status_code >= 400:
+        raise EmbeddingAdapterError(
+            "embedding_dimension_probe_failed",
+            error_category=f"http_{response.status_code}",
+        )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise EmbeddingAdapterError(
+            "embedding_dimension_probe_failed",
+            error_category="invalid_response",
+        ) from exc
+    vectors = _extract_lmstudio_embeddings(payload, expected_count=1)
+    if not vectors or not vectors[0]:
+        raise EmbeddingAdapterError(
+            "embedding_dimension_probe_failed",
+            error_category="invalid_response",
+        )
+    resolved_model = requested_model
+    if isinstance(payload, dict):
+        raw_model = payload.get("model")
+        if isinstance(raw_model, str):
+            candidate_model = raw_model.strip()
+            if SAFE_MODEL_ID_RE.fullmatch(candidate_model) and not SECRET_MODEL_ID_RE.search(
+                candidate_model
+            ):
+                resolved_model = candidate_model
+    return LMStudioEmbeddingProbe(
+        requested_model=requested_model,
+        resolved_model=resolved_model,
+        dimension=len(vectors[0]),
+    )
 
 
 class BedrockTitanEmbeddingAdapter:
