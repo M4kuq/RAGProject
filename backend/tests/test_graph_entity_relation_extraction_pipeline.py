@@ -227,7 +227,10 @@ def test_graph_index_build_persists_safe_rows_and_rebuilds_idempotently(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     repository = _RecordingGraphRepository()
-    service = GraphIndexService(repository=repository)
+    service = GraphIndexService(
+        repository=repository,
+        settings=Settings(app_env="test", generation_provider="fake"),
+    )
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -1716,7 +1719,7 @@ def test_graph_index_worker_records_retryable_llm_failure_without_fallback(
 def test_neo4j_projection_service_projects_safe_rows_idempotently(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -1817,7 +1820,7 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
 def test_neo4j_projection_service_retries_startup_connection_failure(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -1972,7 +1975,7 @@ def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commi
 ) -> None:
     projection_service = _RecordingNeo4jProjectionService()
     job_repository = JobRepository()
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -2002,7 +2005,8 @@ def test_graph_index_build_worker_triggers_optional_neo4j_projection_after_commi
             GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
                 session_factory=graph_session_factory,
                 service_factory=lambda: GraphIndexService(
-                    neo4j_projection_service=projection_service
+                    neo4j_projection_service=projection_service,
+                    extractor_type="rule_based",
                 ),
             )
         }
@@ -2045,7 +2049,7 @@ def test_graph_index_build_worker_records_projection_failure_metadata_then_retri
         ]
     )
     job_repository = JobRepository()
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -2076,7 +2080,8 @@ def test_graph_index_build_worker_records_projection_failure_metadata_then_retri
             GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
                 session_factory=graph_session_factory,
                 service_factory=lambda: GraphIndexService(
-                    neo4j_projection_service=projection_service
+                    neo4j_projection_service=projection_service,
+                    extractor_type="rule_based",
                 ),
             )
         }
@@ -2130,7 +2135,7 @@ def test_graph_index_build_worker_retries_projection_for_already_succeeded_run(
 ) -> None:
     projection_service = _RecordingNeo4jProjectionService()
     job_repository = JobRepository()
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -2170,7 +2175,8 @@ def test_graph_index_build_worker_retries_projection_for_already_succeeded_run(
             GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
                 session_factory=graph_session_factory,
                 service_factory=lambda: GraphIndexService(
-                    neo4j_projection_service=projection_service
+                    neo4j_projection_service=projection_service,
+                    extractor_type="rule_based",
                 ),
             )
         }
@@ -2199,7 +2205,7 @@ def test_graph_index_build_worker_reports_projection_failure_for_already_succeed
 ) -> None:
     projection_service = _FailingDbReadProjectionService()
     job_repository = JobRepository()
-    graph_service = GraphIndexService()
+    graph_service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -2239,7 +2245,8 @@ def test_graph_index_build_worker_reports_projection_failure_for_already_succeed
             GRAPH_INDEX_BUILD_JOB_TYPE: GraphIndexBuildHandler(
                 session_factory=graph_session_factory,
                 service_factory=lambda: GraphIndexService(
-                    neo4j_projection_service=projection_service
+                    neo4j_projection_service=projection_service,
+                    extractor_type="rule_based",
                 ),
             )
         }
@@ -2259,7 +2266,7 @@ def test_graph_index_build_worker_reports_projection_failure_for_already_succeed
         assert stored_job.result_json is not None
         assert stored_job.result_json["status"] == "already_succeeded"
         assert stored_job.result_json["result_code"] == "no_op"
-        assert stored_job.result_json["extractor_type"] == "llm"
+        assert stored_job.result_json["extractor_type"] == "rule_based"
         assert stored_job.result_json["neo4j_projection_result_code"] == "neo4j_projection_failed"
         assert projection_service.calls == [(version_id, run_id)]
 
@@ -2329,7 +2336,7 @@ def test_graph_index_build_worker_retries_failed_run_with_new_run(
     graph_session_factory: sessionmaker[Session],
 ) -> None:
     job_repository = JobRepository()
-    service = GraphIndexService()
+    service = GraphIndexService(extractor_type="rule_based")
     with graph_session_factory() as db:
         version = _seed_ready_version(
             db,
@@ -2353,6 +2360,7 @@ def test_graph_index_build_worker_retries_failed_run_with_new_run(
             payload_json=service.build_graph_index_job_payload(
                 document_version_id=version.document_version_id,
                 graph_index_run_id=failed_run.graph_index_run_id,
+                extractor_type="rule_based",
             ),
         )
         db.commit()

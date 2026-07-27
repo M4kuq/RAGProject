@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -105,6 +106,7 @@ def test_config_rejects_non_finite_thresholds(
 def test_preflight_blocks_fake_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     config = config_from_args(["--preflight-only"])
     settings = Settings(
+        app_env="test",
         embedding_provider="fake",
         rerank_provider="fake",
         generation_provider="fake",
@@ -148,6 +150,7 @@ def test_run_smoke_attaches_noop_trace_export_status(
 ) -> None:
     config = config_from_args(["--preflight-only"])
     settings = Settings(
+        app_env="test",
         embedding_provider="fake",
         rerank_provider="fake",
         generation_provider="fake",
@@ -257,8 +260,9 @@ def test_smoke_langgraph_agentic_uses_ask_path_without_raising() -> None:
             request_id: str | None,
             top_k: int | None,
             rerank_top_n: int | None,
+            logical_document_ids: Sequence[int] | None = None,
         ) -> RagEvaluationResult:
-            del db, request_id, top_k, rerank_top_n
+            del db, request_id, top_k, rerank_top_n, logical_document_ids
             self.ask_calls.append(question)
             return sentinel
 
@@ -307,8 +311,9 @@ def test_smoke_search_strategy_still_uses_search_override() -> None:
             strategy_type: RetrievalStrategy,
             top_k: int | None = None,
             rerank_top_n: int | None = None,
+            logical_document_ids: Sequence[int] | None = None,
         ) -> RagEvaluationResult:
-            del db, request_id, top_k, rerank_top_n
+            del db, request_id, top_k, rerank_top_n, logical_document_ids
             self.search_calls.append(strategy_type.value)
             return sentinel
 

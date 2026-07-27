@@ -19,7 +19,7 @@ class SparseQuery(Protocol):
     def terms(self) -> tuple[str, ...]: ...
 
     @property
-    def search_text(self) -> str: ...
+    def tsquery_text(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ class SparseRetrievalRepository:
     ) -> list[SparseSearchCandidate]:
         language_literal = _postgres_language_literal(language)
         vector = func.to_tsvector(language_literal, DocumentChunk.content_text)
-        query = func.plainto_tsquery(language_literal, normalized_query.search_text)
+        query = func.to_tsquery(language_literal, normalized_query.tsquery_text)
         rank = func.ts_rank_cd(vector, query)
         statement = (
             select(DocumentChunk.document_chunk_id, rank.label("raw_score"))

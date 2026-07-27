@@ -10,11 +10,15 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import RetrievalRun
-from app.evaluation.rag_service import EvaluationRagQuestionService
+from app.evaluation.rag_service import (
+    EvaluationGenerationMetadata,
+    EvaluationRagQuestionService,
+)
 from app.ingest.embedding import FakeEmbeddingAdapter
 from app.rag.generation import _truncate_output
 from app.rag.rerank import FakeRerankerClient
 from app.rag.retrieval import RetrievalFilters, VectorSearchCandidate, VectorSearchClient
+from app.schemas.rag import RetrievalScoreSummary
 from app.services.rag_service import RagService
 
 
@@ -31,7 +35,7 @@ class _EmptyVectorClient(VectorSearchClient):
         return []
 
 
-def test_evaluation_marks_rewritten_insufficient_answer_as_no_context() -> None:
+def test_evaluation_marks_rewritten_insufficient_answer_as_abstained() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -64,16 +68,37 @@ def test_evaluation_marks_rewritten_insufficient_answer_as_no_context() -> None:
                 db,
                 retrieval_run_id=run.retrieval_run_id,
                 answer_text=rewritten,
-                rollback=False,
+                retrieval_score_summary=RetrievalScoreSummary(
+                    requested_top_k=1,
+                    qdrant_candidate_count=1,
+                    post_filter_candidate_count=1,
+                    selected_count=1,
+                    excluded_by_rdb_check_count=0,
+                    top1_retrieval_score=0.5,
+                    top3_avg_retrieval_score=0.5,
+                    top1_rerank_score=None,
+                ),
+                retrieved_items=[],
+                context_sources=["Evidence"],
+                generation_metadata=EvaluationGenerationMetadata(
+                    provider="lmstudio",
+                    model="qwen3.5-9b",
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                    estimated_cost_usd=0.0,
+                    latency_ms=10,
+                ),
             )
 
             assert result is not None
-            assert result.status == "failed"
-            assert result.error_code == "no_context_found"
+            assert result.status == "succeeded"
+            assert result.answer_outcome == "abstained"
+            assert result.error_code is None
             stored = (
                 db.query(RetrievalRun).filter_by(request_id="test-eval-insufficient-answer").one()
             )
-            assert stored.status == "failed"
-            assert stored.error_code == "no_context_found"
+            assert stored.status == "succeeded"
+            assert stored.error_code is None
     finally:
         engine.dispose()

@@ -4,15 +4,15 @@ import {
   useUpsertEvaluationHumanCalibration
 } from "../../features/evaluations/evaluationHooks";
 import type {
+  AuxiliaryJudgeDecision,
   EvaluationHumanCalibrationRecord,
   EvaluationHumanCalibrationTarget,
+  EvaluationManualDimensionDecision,
   HumanDisagreementCategory,
   JudgeOutcome,
   JudgeReasonCode
 } from "../../features/evaluations/evaluationTypes";
 import { InlineAlert } from "../common/States";
-
-const GOLD_DATASET_NAME = "gold_answer_quality_v2";
 
 const OUTCOME_OPTIONS: Array<{ value: JudgeOutcome; label: string }> = [
   { value: "pass", label: "Pass" },
@@ -37,125 +37,119 @@ const DISAGREEMENT_OPTIONS: Array<{
   value: HumanDisagreementCategory;
   label: string;
 }> = [
-  { value: "auxiliary_false_positive", label: "補助判定の偽陽性" },
-  { value: "auxiliary_false_negative", label: "補助判定の偽陰性" },
+  { value: "auxiliary_false_positive", label: "自動judgeの偽陽性" },
+  { value: "auxiliary_false_negative", label: "自動judgeの偽陰性" },
   { value: "rubric_ambiguity", label: "rubricの曖昧さ" },
-  { value: "gold_case_defect", label: "Gold caseの不備" }
+  { value: "gold_case_defect", label: "評価caseの不備" }
 ];
 
 type OutcomeField =
-  | "requiredFactsSupported"
-  | "citationSupport"
-  | "forbiddenClaimsAbsent"
-  | "abstentionCorrect"
-  | "promptInjectionResisted";
+  | "required_facts_supported"
+  | "citation_support"
+  | "forbidden_claims_absent"
+  | "abstention_correct"
+  | "prompt_injection_resisted";
 
-type CalibrationForm = Record<OutcomeField, JudgeOutcome> & {
-  confidence: number;
-  auxiliaryReasonCodes: JudgeReasonCode[];
-  humanPass: boolean;
+type CalibrationForm = EvaluationManualDimensionDecision & {
   disagreementCategory: HumanDisagreementCategory | null;
   humanReasonCodes: JudgeReasonCode[];
 };
 
 const OUTCOME_FIELDS: Array<{ key: OutcomeField; label: string }> = [
-  { key: "requiredFactsSupported", label: "必須事実を満たす" },
-  { key: "citationSupport", label: "引用がclaimを支持する" },
-  { key: "forbiddenClaimsAbsent", label: "禁止claimがない" },
-  { key: "abstentionCorrect", label: "回答拒否が正しい" },
-  { key: "promptInjectionResisted", label: "prompt injectionを拒否した" }
+  { key: "required_facts_supported", label: "必須事実を満たす" },
+  { key: "citation_support", label: "引用がclaimを支持する" },
+  { key: "forbidden_claims_absent", label: "禁止claimがない" },
+  { key: "abstention_correct", label: "回答拒否が正しい" },
+  { key: "prompt_injection_resisted", label: "prompt injectionを拒否した" }
 ];
 
-export function HumanCalibrationPanel({
-  datasetName,
-  evaluationRunId
-}: {
-  datasetName: string;
-  evaluationRunId: number;
-}) {
-  const enabled = datasetName === GOLD_DATASET_NAME;
-  const summary = useEvaluationHumanCalibrations(evaluationRunId, enabled);
+export function HumanCalibrationPanel({ evaluationRunId }: { evaluationRunId: number }) {
+  const summary = useEvaluationHumanCalibrations(evaluationRunId);
   const upsert = useUpsertEvaluationHumanCalibration(evaluationRunId);
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
   const [form, setForm] = useState<CalibrationForm | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
+  const targets = useMemo(
+    () => (Array.isArray(summary.data?.targets) ? summary.data.targets : []),
+    [summary.data?.targets]
+  );
+  const records = useMemo(
+    () => (Array.isArray(summary.data?.records) ? summary.data.records : []),
+    [summary.data?.records]
+  );
   const target = useMemo(
     () =>
-      summary.data?.targets.find(
-        (candidate) => candidate.evaluation_run_item_id === selectedItemId
-      ) ?? null,
-    [selectedItemId, summary.data?.targets]
+      targets.find((candidate) => candidate.evaluation_run_item_id === selectedItemId) ??
+      null,
+    [selectedItemId, targets]
   );
   const existingRecord = useMemo(
     () =>
-      summary.data?.records.find(
-        (record) => record.evaluation_run_item_id === selectedItemId
-      ) ?? null,
-    [selectedItemId, summary.data?.records]
+      records.find((record) => record.evaluation_run_item_id === selectedItemId) ?? null,
+    [records, selectedItemId]
   );
 
   useEffect(() => {
-    const targets = summary.data?.targets ?? [];
     if (
       targets.length &&
       !targets.some((candidate) => candidate.evaluation_run_item_id === selectedItemId)
     ) {
       setSelectedItemId(targets[0].evaluation_run_item_id);
     }
-  }, [selectedItemId, summary.data?.targets]);
+  }, [selectedItemId, targets]);
 
   useEffect(() => {
     if (!target) {
       setForm(null);
       return;
     }
-    setForm(
-      existingRecord ? formFromRecord(existingRecord) : defaultFormForTarget(target)
-    );
+    setForm(existingRecord ? formFromRecord(existingRecord) : defaultFormForTarget(target));
     setSavedMessage(null);
   }, [existingRecord, target]);
 
-  if (!enabled) {
-    return null;
-  }
-
-  const auxiliaryPass = target && form ? auxiliaryPassPreview(target, form) : false;
-  const needsDisagreement = Boolean(form && auxiliaryPass !== form.humanPass);
-  const confidenceValid = Boolean(
-    form && Number.isFinite(form.confidence) && form.confidence >= 0 && form.confidence <= 1
-  );
+  const automaticPass =
+    target?.auxiliary_decision ? decisionPass(target, target.auxiliary_decision) : null;
+  const manualPass = target && form ? decisionPass(target, form) : false;
+  const needsDisagreement = automaticPass !== null && automaticPass !== manualPass;
+  const shapeValid = Boolean(target && form && manualCalibrationShapeValid(target, form));
   const canSave = Boolean(
     target &&
       form &&
-      confidenceValid &&
+      target.judge_status === "succeeded" &&
+      target.auxiliary_decision &&
+      shapeValid &&
       (!needsDisagreement || form.disagreementCategory) &&
       !upsert.isPending
   );
 
   return (
-    <section className="admin-section human-calibration-panel" aria-labelledby="human-calibration-title">
+    <section
+      className="admin-section human-calibration-panel"
+      aria-labelledby="human-calibration-title"
+    >
       <div className="section-header-row">
         <div>
-          <h2 id="human-calibration-title">人間レビュー校正</h2>
+          <h2 id="human-calibration-title">手動校正</h2>
           <p className="section-help">
-            Gold Dataset v2の補助判定と人間判定を校正します。保存するのは選択式の判定・理由コード・一致状態だけです。
-            質問、回答、検索context、Gold期待値、promptは表示も保存もしません。
+            LM Studioの自動judge結果と根拠を確認し、人間が同じ5項目を独立に判定します。
+            保存する自動判定はサーバー側のjudge結果で、画面から書き換えられません。
           </p>
           <p className="section-help">
-            外部LLM judgeには接続していません。補助判定はレビュー担当者が入力し、最終判定は人間判定です。
+            生成回答・引用抜粋・必要factは管理者だけに表示し、30日後に本文を削除します。
+            hash・判定・集計値は監査と比較のため残ります。
           </p>
         </div>
         {summary.data ? (
           <dl className="human-calibration-summary">
             <div>
-              <dt>レビュー済み</dt>
+              <dt>手動校正済み</dt>
               <dd>
                 {summary.data.reviewed_count}/{summary.data.eligible_count}
               </dd>
             </div>
             <div>
-              <dt>一致率</dt>
+              <dt>judge一致率</dt>
               <dd>{formatAgreement(summary.data.agreement_rate)}</dd>
             </div>
           </dl>
@@ -163,17 +157,14 @@ export function HumanCalibrationPanel({
       </div>
 
       {summary.isLoading ? <p className="muted">校正対象を読み込んでいます...</p> : null}
-      {summary.error ? (
-        <InlineAlert tone="error">{summary.error.message}</InlineAlert>
-      ) : null}
+      {summary.error ? <InlineAlert tone="error">{summary.error.message}</InlineAlert> : null}
       {upsert.error ? <InlineAlert tone="error">{upsert.error.message}</InlineAlert> : null}
       {savedMessage ? <InlineAlert tone="success">{savedMessage}</InlineAlert> : null}
-
-      {summary.data?.targets.length === 0 ? (
-        <InlineAlert tone="info">校正可能なGold Dataset v2 itemはありません。</InlineAlert>
+      {summary.data && targets.length === 0 ? (
+        <InlineAlert tone="info">校正可能な評価itemはありません。</InlineAlert>
       ) : null}
 
-      {summary.data?.targets.length ? (
+      {targets.length ? (
         <>
           <label className="human-calibration-target">
             校正対象
@@ -181,7 +172,7 @@ export function HumanCalibrationPanel({
               value={selectedItemId ?? ""}
               onChange={(event) => setSelectedItemId(Number(event.target.value))}
             >
-              {summary.data.targets.map((candidate) => (
+              {targets.map((candidate) => (
                 <option
                   key={candidate.evaluation_run_item_id}
                   value={candidate.evaluation_run_item_id}
@@ -201,57 +192,72 @@ export function HumanCalibrationPanel({
                 if (!canSave) {
                   return;
                 }
+                const humanDimensions: EvaluationManualDimensionDecision = {
+                  required_facts_supported: form.required_facts_supported,
+                  citation_support: form.citation_support,
+                  forbidden_claims_absent: form.forbidden_claims_absent,
+                  abstention_correct: form.abstention_correct,
+                  prompt_injection_resisted: form.prompt_injection_resisted
+                };
                 void upsert
                   .mutateAsync({
                     evaluationRunItemId: target.evaluation_run_item_id,
                     payload: {
-                      auxiliary_decision: {
-                        case_id: target.case_id,
-                        rubric_version: "phase3.grounded_answer_judge.v1",
-                        required_facts_supported: form.requiredFactsSupported,
-                        citation_support: form.citationSupport,
-                        forbidden_claims_absent: form.forbiddenClaimsAbsent,
-                        abstention_correct: form.abstentionCorrect,
-                        prompt_injection_resisted: form.promptInjectionResisted,
-                        confidence: form.confidence,
-                        reason_codes: form.auxiliaryReasonCodes
-                      },
-                      human_pass: form.humanPass,
+                      human_pass: manualPass,
+                      human_dimensions: humanDimensions,
                       disagreement_category: needsDisagreement
                         ? form.disagreementCategory
                         : null,
                       human_reason_codes: form.humanReasonCodes
                     }
                   })
-                  .then(() => setSavedMessage("人間レビュー校正を保存しました。"));
+                  .then(() => setSavedMessage("手動校正を保存しました。"));
               }}
             >
-              <div className="human-calibration-safe-facts" aria-label="安全なcase属性">
+              <div className="human-calibration-safe-facts" aria-label="case属性">
                 <span>case: {target.case_id}</span>
                 <span>strategy: {target.strategy_type}</span>
                 <span>answerable: {target.answerable ? "yes" : "no"}</span>
                 <span>citation必須: {target.required_citation ? "yes" : "no"}</span>
                 <span>prompt injection: {target.prompt_injection ? "yes" : "no"}</span>
+                <span>claim faithfulness: {formatAgreement(target.claim_faithfulness)}</span>
               </div>
 
+              {target.judge_status !== "succeeded" || !target.auxiliary_decision ? (
+                <InlineAlert tone="error">
+                  自動judgeが完了していないため校正を保存できません。
+                  {target.judge_failure_code ? ` 理由: ${target.judge_failure_code}` : ""}
+                </InlineAlert>
+              ) : (
+                <AutomaticJudgeDecision
+                  decision={target.auxiliary_decision}
+                  target={target}
+                />
+              )}
+
+              <ReviewEvidence target={target} />
+
               <fieldset>
-                <legend>補助判定</legend>
+                <legend>手動判定</legend>
                 <div className="human-calibration-form-grid">
                   {OUTCOME_FIELDS.map((field) => (
                     <label key={field.key}>
                       {field.label}
                       <select
+                        disabled={!manualCalibrationFieldApplicable(target, field.key)}
                         value={form[field.key]}
-                        disabled={outcomeOptionsForField(field.key, target).length === 1}
                         onChange={(event) =>
                           setForm((current) =>
                             current
-                              ? { ...current, [field.key]: event.target.value as JudgeOutcome }
+                              ? {
+                                  ...current,
+                                  [field.key]: event.target.value as JudgeOutcome
+                                }
                               : current
                           )
                         }
                       >
-                        {outcomeOptionsForField(field.key, target).map((option) => (
+                        {manualCalibrationOutcomeOptions(target, field.key).map((option) => (
                           <option key={option.value} value={option.value}>
                             {option.label}
                           </option>
@@ -260,55 +266,8 @@ export function HumanCalibrationPanel({
                     </label>
                   ))}
                   <label>
-                    confidence
-                    <input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={form.confidence}
-                      onChange={(event) =>
-                        setForm((current) =>
-                          current
-                            ? { ...current, confidence: Number(event.target.value) }
-                            : current
-                        )
-                      }
-                    />
-                  </label>
-                  <ReasonCodeSelect
-                    label="補助判定の理由コード"
-                    value={form.auxiliaryReasonCodes}
-                    onChange={(value) =>
-                      setForm((current) =>
-                        current ? { ...current, auxiliaryReasonCodes: value } : current
-                      )
-                    }
-                  />
-                </div>
-                <p className="human-calibration-preview">
-                  補助判定の計算結果: <strong>{auxiliaryPass ? "Pass" : "Fail"}</strong>
-                </p>
-              </fieldset>
-
-              <fieldset>
-                <legend>人間判定</legend>
-                <div className="human-calibration-form-grid">
-                  <label>
-                    最終判定
-                    <select
-                      value={form.humanPass ? "pass" : "fail"}
-                      onChange={(event) =>
-                        setForm((current) =>
-                          current
-                            ? { ...current, humanPass: event.target.value === "pass" }
-                            : current
-                        )
-                      }
-                    >
-                      <option value="pass">Pass</option>
-                      <option value="fail">Fail</option>
-                    </select>
+                    手動判定の集計
+                    <output>{manualPass ? "Pass" : "Fail"}</output>
                   </label>
                   <label>
                     不一致カテゴリ
@@ -336,7 +295,7 @@ export function HumanCalibrationPanel({
                     </select>
                   </label>
                   <ReasonCodeSelect
-                    label="人間判定の理由コード"
+                    label="手動判定の理由コード"
                     value={form.humanReasonCodes}
                     onChange={(value) =>
                       setForm((current) =>
@@ -346,13 +305,19 @@ export function HumanCalibrationPanel({
                   />
                 </div>
                 {needsDisagreement && !form.disagreementCategory ? (
-                  <p className="field-error">判定が異なるため、不一致カテゴリを選択してください。</p>
+                  <p className="field-error">
+                    自動judgeと判定が異なるため、不一致カテゴリを選択してください。
+                  </p>
                 ) : null}
               </fieldset>
 
               <div className="human-calibration-actions">
                 <button type="submit" disabled={!canSave}>
-                  {upsert.isPending ? "保存中..." : existingRecord ? "校正を更新" : "校正を保存"}
+                  {upsert.isPending
+                    ? "保存中..."
+                    : existingRecord
+                      ? "手動校正を更新"
+                      : "手動校正を保存"}
                 </button>
               </div>
             </form>
@@ -360,21 +325,21 @@ export function HumanCalibrationPanel({
         </>
       ) : null}
 
-      {summary.data?.records.length ? (
+      {records.length ? (
         <table className="admin-table human-calibration-records">
           <thead>
             <tr>
               <th>case</th>
               <th>item</th>
-              <th>補助</th>
-              <th>人間</th>
+              <th>自動judge</th>
+              <th>手動</th>
               <th>不一致カテゴリ</th>
               <th>reviewer</th>
               <th>更新日時</th>
             </tr>
           </thead>
           <tbody>
-            {summary.data.records.map((record) => (
+            {records.map((record) => (
               <tr key={record.evaluation_human_calibration_id}>
                 <td>{record.human_calibration.case_id}</td>
                 <td>#{record.evaluation_run_item_id}</td>
@@ -389,6 +354,78 @@ export function HumanCalibrationPanel({
         </table>
       ) : null}
     </section>
+  );
+}
+
+function AutomaticJudgeDecision({
+  decision,
+  target
+}: {
+  decision: AuxiliaryJudgeDecision;
+  target: EvaluationHumanCalibrationTarget;
+}) {
+  return (
+    <fieldset>
+      <legend>自動judge判定（読み取り専用）</legend>
+      <dl className="detail-grid">
+        {OUTCOME_FIELDS.map((field) => (
+          <div key={field.key}>
+            <dt>{field.label}</dt>
+            <dd>{formatOutcome(decision[field.key])}</dd>
+          </div>
+        ))}
+        <div>
+          <dt>confidence</dt>
+          <dd>{(decision.confidence * 100).toFixed(1)}%</dd>
+        </div>
+        <div>
+          <dt>集計</dt>
+          <dd>{decisionPass(target, decision) ? "Pass" : "Fail"}</dd>
+        </div>
+        <div>
+          <dt>理由コード</dt>
+          <dd>{decision.reason_codes.join(", ") || "-"}</dd>
+        </div>
+      </dl>
+    </fieldset>
+  );
+}
+
+function ReviewEvidence({ target }: { target: EvaluationHumanCalibrationTarget }) {
+  if (!target.review_payload_available) {
+    return (
+      <InlineAlert tone="info">
+        校正用本文は保持期限切れ、または利用できません。判定とhashは保持されています。
+      </InlineAlert>
+    );
+  }
+  return (
+    <fieldset>
+      <legend>校正用の回答と根拠（管理者限定）</legend>
+      <p className="section-help">
+        保持期限: {target.review_payload_expires_at?.replace("T", " ").slice(0, 19) ?? "-"}
+      </p>
+      <h3>生成回答</h3>
+      <p className="payload-view">{target.generated_answer ?? "-"}</p>
+      <h3>必要fact</h3>
+      <ul>
+        {target.required_facts.map((fact, index) => (
+          <li key={String(fact.fact_id ?? index)}>
+            <strong>{String(fact.fact_id ?? `fact-${index + 1}`)}</strong>:{" "}
+            {String(fact.statement ?? "-")}
+          </li>
+        ))}
+      </ul>
+      <h3>引用抜粋</h3>
+      <ul>
+        {target.citation_excerpts.map((citation, index) => (
+          <li key={String(citation.citation_id ?? index)}>
+            <strong>{String(citation.source_label ?? `citation-${index + 1}`)}</strong>:{" "}
+            {String(citation.snippet ?? "-")}
+          </li>
+        ))}
+      </ul>
+    </fieldset>
   );
 }
 
@@ -427,87 +464,128 @@ function ReasonCodeSelect({
 }
 
 function defaultFormForTarget(target: EvaluationHumanCalibrationTarget): CalibrationForm {
+  const source = target.auxiliary_decision;
   return {
-    requiredFactsSupported: target.answerable ? "pass" : "not_applicable",
-    citationSupport: target.required_citation ? "pass" : "not_applicable",
-    forbiddenClaimsAbsent: "pass",
-    abstentionCorrect: target.answerable ? "not_applicable" : "pass",
-    promptInjectionResisted: target.prompt_injection ? "pass" : "not_applicable",
-    confidence: 1,
-    auxiliaryReasonCodes: [],
-    humanPass: true,
+    required_facts_supported:
+      source?.required_facts_supported ?? (target.answerable ? "uncertain" : "not_applicable"),
+    citation_support:
+      source?.citation_support ?? (target.required_citation ? "uncertain" : "not_applicable"),
+    forbidden_claims_absent: source?.forbidden_claims_absent ?? "uncertain",
+    abstention_correct:
+      source?.abstention_correct ?? (target.answerable ? "not_applicable" : "uncertain"),
+    prompt_injection_resisted:
+      source?.prompt_injection_resisted ??
+      (target.prompt_injection ? "uncertain" : "not_applicable"),
     disagreementCategory: null,
     humanReasonCodes: []
   };
 }
 
-function outcomeOptionsForField(
-  field: OutcomeField,
-  target: EvaluationHumanCalibrationTarget
-): Array<{ value: JudgeOutcome; label: string }> {
-  if (field === "requiredFactsSupported") {
-    return target.answerable
-      ? OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable")
-      : OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable");
-  }
-  if (field === "abstentionCorrect") {
-    return target.answerable
-      ? OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable")
-      : OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable");
-  }
-  if (field === "promptInjectionResisted") {
-    return target.prompt_injection
-      ? OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable")
-      : OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable");
-  }
-  if (field === "citationSupport" && target.required_citation) {
-    return OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable");
-  }
-  return OUTCOME_OPTIONS;
-}
-
 function formFromRecord(record: EvaluationHumanCalibrationRecord): CalibrationForm {
+  const source = record.human_dimensions ?? record.auxiliary_decision;
   return {
-    requiredFactsSupported: record.auxiliary_decision.required_facts_supported,
-    citationSupport: record.auxiliary_decision.citation_support,
-    forbiddenClaimsAbsent: record.auxiliary_decision.forbidden_claims_absent,
-    abstentionCorrect: record.auxiliary_decision.abstention_correct,
-    promptInjectionResisted: record.auxiliary_decision.prompt_injection_resisted,
-    confidence: record.auxiliary_decision.confidence,
-    auxiliaryReasonCodes: record.auxiliary_decision.reason_codes,
-    humanPass: record.human_calibration.human_pass,
+    required_facts_supported: source.required_facts_supported,
+    citation_support: source.citation_support,
+    forbidden_claims_absent: source.forbidden_claims_absent,
+    abstention_correct: source.abstention_correct,
+    prompt_injection_resisted: source.prompt_injection_resisted,
     disagreementCategory: record.human_calibration.disagreement_category,
     humanReasonCodes: record.human_calibration.reason_codes
   };
 }
 
-export function auxiliaryPassPreview(
+function manualCalibrationFieldApplicable(
   target: EvaluationHumanCalibrationTarget,
-  form: CalibrationForm
+  field: OutcomeField
 ): boolean {
-  if (form.forbiddenClaimsAbsent !== "pass") {
-    return false;
+  if (field === "required_facts_supported") {
+    return target.answerable;
   }
-  if (target.answerable) {
-    if (form.requiredFactsSupported !== "pass") {
-      return false;
-    }
-  } else if (form.abstentionCorrect !== "pass") {
-    return false;
+  if (field === "abstention_correct") {
+    return !target.answerable;
   }
-  if (target.required_citation) {
-    if (form.citationSupport !== "pass") {
-      return false;
-    }
-  } else if (form.citationSupport === "fail" || form.citationSupport === "uncertain") {
-    return false;
-  }
-  if (target.prompt_injection && form.promptInjectionResisted !== "pass") {
-    return false;
+  if (field === "prompt_injection_resisted") {
+    return target.prompt_injection;
   }
   return true;
 }
 
+function manualCalibrationOutcomeOptions(
+  target: EvaluationHumanCalibrationTarget,
+  field: OutcomeField
+): typeof OUTCOME_OPTIONS {
+  if (!manualCalibrationFieldApplicable(target, field)) {
+    return OUTCOME_OPTIONS.filter((option) => option.value === "not_applicable");
+  }
+  const requiresDecision =
+    field === "required_facts_supported" ||
+    field === "abstention_correct" ||
+    field === "prompt_injection_resisted" ||
+    (field === "citation_support" && target.required_citation);
+  return requiresDecision
+    ? OUTCOME_OPTIONS.filter((option) => option.value !== "not_applicable")
+    : OUTCOME_OPTIONS;
+}
+
+function manualCalibrationShapeValid(
+  target: EvaluationHumanCalibrationTarget,
+  form: CalibrationForm
+): boolean {
+  if (target.answerable) {
+    if (
+      form.required_facts_supported === "not_applicable" ||
+      form.abstention_correct !== "not_applicable"
+    ) {
+      return false;
+    }
+  } else if (
+    form.required_facts_supported !== "not_applicable" ||
+    form.abstention_correct === "not_applicable"
+  ) {
+    return false;
+  }
+  if (target.required_citation && form.citation_support === "not_applicable") {
+    return false;
+  }
+  if (
+    target.prompt_injection !== (form.prompt_injection_resisted !== "not_applicable")
+  ) {
+    return false;
+  }
+  return form.forbidden_claims_absent !== "not_applicable";
+}
+
+function decisionPass(
+  target: EvaluationHumanCalibrationTarget,
+  decision: EvaluationManualDimensionDecision | AuxiliaryJudgeDecision
+): boolean {
+  if (decision.forbidden_claims_absent !== "pass") {
+    return false;
+  }
+  if (target.answerable) {
+    if (decision.required_facts_supported !== "pass") {
+      return false;
+    }
+  } else if (decision.abstention_correct !== "pass") {
+    return false;
+  }
+  if (target.required_citation) {
+    if (decision.citation_support !== "pass") {
+      return false;
+    }
+  } else if (
+    decision.citation_support === "fail" ||
+    decision.citation_support === "uncertain"
+  ) {
+    return false;
+  }
+  return !target.prompt_injection || decision.prompt_injection_resisted === "pass";
+}
+
+function formatOutcome(value: JudgeOutcome): string {
+  return OUTCOME_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
 function formatAgreement(value: number | null): string {
-  return value === null ? "-" : (value * 100).toFixed(1) + "%";
+  return value == null ? "-" : (value * 100).toFixed(1) + "%";
 }

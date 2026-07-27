@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -66,6 +66,20 @@ class AnswerGenerationError(RuntimeError):
         # rate_limited, auth, http_<status>, connection). Never carries response
         # bodies or credentials.
         self.error_category = error_category
+
+
+@dataclass(frozen=True)
+class LMStudioModelReadiness:
+    ready: bool
+    requested_model: str
+    resolved_model: str
+    reason_code: Literal[
+        "ready",
+        "provider_unreachable",
+        "model_not_found",
+        "model_not_loaded",
+        "invalid_response",
+    ]
 
 
 def _httpx_error_category(exc: httpx.HTTPError) -> str:
@@ -278,7 +292,7 @@ class OpenAICompatibleChatAnswerGenerator:
         max_output_tokens: int = 8192,
     ) -> None:
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _lmstudio_native_base_url(base_url)
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
@@ -286,26 +300,40 @@ class OpenAICompatibleChatAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        if request.response_format is None:
+            endpoint = f"{self.base_url}/api/v1/chat"
+            request_payload: dict[str, object] = {
+                "model": self.model_name,
+                "input": _openai_input(request),
+                "system_prompt": _system_instructions(request),
+                "max_output_tokens": _max_output_tokens(self.max_output_tokens),
+                "temperature": request.temperature if request.temperature is not None else 0.2,
+                "stream": False,
+                "store": False,
+            }
+        else:
+            endpoint = f"{self.base_url}/v1/chat/completions"
+            request_payload = {
+                "model": self.model_name,
+                "messages": [
+                    {"role": "system", "content": _system_instructions(request)},
+                    {"role": "user", "content": _openai_input(request)},
+                ],
+                "max_tokens": _max_output_tokens(
+                    min(self.max_output_tokens, max(128, request.max_output_chars // 4))
+                ),
+                "temperature": request.temperature if request.temperature is not None else 0.2,
+                "stream": False,
+                "response_format": request.response_format,
+            }
         try:
             response = httpx.post(
-                f"{self.base_url}/chat/completions",
+                endpoint,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model_name,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "enable_thinking": False,
-                    "messages": [
-                        {"role": "system", "content": _system_instructions(request)},
-                        {"role": "user", "content": _openai_input(request)},
-                    ],
-                    "max_tokens": _max_output_tokens(self.max_output_tokens),
-                    "temperature": request.temperature if request.temperature is not None else 0.2,
-                    "stream": False,
-                    **_chat_response_format_payload(request),
-                },
+                json=request_payload,
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as exc:
@@ -318,7 +346,7 @@ class OpenAICompatibleChatAnswerGenerator:
             raise AnswerGenerationError() from exc
         if not isinstance(payload, dict):
             raise AnswerGenerationError()
-        raw_content = _extract_chat_completion_output_text(payload)
+        raw_content = _extract_lmstudio_output_text(payload)
         if not raw_content:
             raise AnswerGenerationError()
         final_content = _generation_output_text(
@@ -330,7 +358,7 @@ class OpenAICompatibleChatAnswerGenerator:
             raise AnswerGenerationError()
         return GenerationResult(
             content=final_content,
-            usage=_extract_chat_completion_usage(payload),
+            usage=_extract_lmstudio_usage(payload),
         )
 
 
@@ -546,7 +574,7 @@ def create_answer_generator(
         return OpenAICompatibleChatAnswerGenerator(
             api_key=settings.lmstudio_api_key,
             base_url=settings.lmstudio_base_url,
-            model_name=_lmstudio_model_name(generation_model_name),
+            model_name=_lmstudio_native_model_name(generation_model_name),
             timeout_seconds=timeout_seconds or settings.lmstudio_timeout_seconds,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
         )
@@ -776,12 +804,6 @@ def _temperature_payload(request: GenerationRequest) -> dict[str, float]:
     return {"temperature": request.temperature}
 
 
-def _chat_response_format_payload(request: GenerationRequest) -> dict[str, object]:
-    if request.response_format is None:
-        return {}
-    return {"response_format": request.response_format}
-
-
 def _responses_text_format_payload(request: GenerationRequest) -> dict[str, object]:
     if request.response_format is None:
         return {}
@@ -870,6 +892,21 @@ def _extract_chat_completion_output_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _extract_lmstudio_output_text(payload: dict[str, Any]) -> str:
+    output = payload.get("output")
+    parts: list[str] = []
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content.strip())
+    if parts:
+        return "\n".join(parts).strip()
+    return _extract_chat_completion_output_text(payload)
+
+
 def _extract_anthropic_output_text(payload: dict[str, Any]) -> str:
     parts: list[str] = []
     content = payload.get("content")
@@ -915,6 +952,20 @@ def _extract_openai_responses_usage(payload: dict[str, Any]) -> TokenUsage | Non
         total_tokens=usage.get("total_tokens"),
         derive_total=False,
     )
+
+
+def _extract_lmstudio_usage(payload: dict[str, Any]) -> TokenUsage | None:
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        usage = _usage_from_values(
+            input_tokens=stats.get("input_tokens"),
+            output_tokens=stats.get("total_output_tokens"),
+            total_tokens=None,
+            derive_total=True,
+        )
+        if usage is not None:
+            return usage
+    return _extract_chat_completion_usage(payload)
 
 
 def _extract_chat_completion_usage(payload: dict[str, Any]) -> TokenUsage | None:
@@ -1054,9 +1105,18 @@ def _max_output_tokens_for_chars(max_output_chars: int) -> int:
     return max(1, min(8192, max_output_chars // 4))
 
 
+def _lmstudio_native_base_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized[:-3]
+    return normalized
+
+
 def _lmstudio_model_name(value: str) -> str:
     normalized = value.strip()
     lower = normalized.lower()
+    if lower == "qwen3.5:9b":
+        return "qwen3.5-9b"
     if lower.startswith("https://huggingface.co/lmstudio-community/qwen3.5-4b-gguf"):
         return "qwen3.5-4b"
     if lower.startswith("lmstudio-community/qwen3.5-4b-gguf"):
@@ -1066,6 +1126,72 @@ def _lmstudio_model_name(value: str) -> str:
     if lower.startswith("lmstudio-community/qwen3.5-9b-gguf"):
         return "qwen3.5-9b"
     return normalized
+
+
+def _lmstudio_native_model_name(value: str) -> str:
+    normalized = _lmstudio_model_name(value)
+    if normalized.lower() == "qwen3.5-9b":
+        return "qwen/qwen3.5-9b"
+    return normalized
+
+
+def check_lmstudio_model_readiness(
+    settings: Settings,
+    model_name: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> LMStudioModelReadiness:
+    requested_model = model_name.strip()
+    resolved_model = _lmstudio_native_model_name(requested_model)
+
+    def result(
+        ready: bool,
+        reason_code: Literal[
+            "ready",
+            "provider_unreachable",
+            "model_not_found",
+            "model_not_loaded",
+            "invalid_response",
+        ],
+    ) -> LMStudioModelReadiness:
+        return LMStudioModelReadiness(
+            ready=ready,
+            requested_model=requested_model,
+            resolved_model=resolved_model,
+            reason_code=reason_code,
+        )
+
+    try:
+        response = httpx.get(
+            f"{_lmstudio_native_base_url(settings.lmstudio_base_url)}/api/v1/models",
+            headers={"Authorization": f"Bearer {settings.lmstudio_api_key}"},
+            timeout=min(timeout_seconds, settings.lmstudio_timeout_seconds),
+        )
+    except httpx.HTTPError:
+        return result(False, "provider_unreachable")
+    if response.status_code >= 400:
+        return result(False, "provider_unreachable")
+    try:
+        payload = response.json()
+    except ValueError:
+        return result(False, "invalid_response")
+    if not isinstance(payload, dict):
+        return result(False, "invalid_response")
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return result(False, "invalid_response")
+    model_entry = next(
+        (item for item in models if isinstance(item, dict) and item.get("key") == resolved_model),
+        None,
+    )
+    if model_entry is None:
+        return result(False, "model_not_found")
+    loaded_instances = model_entry.get("loaded_instances")
+    if not isinstance(loaded_instances, list):
+        return result(False, "invalid_response")
+    if not loaded_instances:
+        return result(False, "model_not_loaded")
+    return result(True, "ready")
 
 
 def _final_answer_text(value: str) -> str:

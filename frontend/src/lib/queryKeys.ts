@@ -30,6 +30,8 @@ export const queryKeys = {
   evaluations: {
     all: ["evaluations"] as const,
     metricCatalog: ["evaluations", "metric-catalog"] as const,
+    generationReadiness: (generationProvider: string, generationModel: string) =>
+      ["evaluations", "generation-readiness", generationProvider, generationModel] as const,
     list: (params: { page: number; page_size: number }) => ["evaluations", "list", params] as const,
     detail: (evaluationRunId: number) => ["evaluations", "detail", evaluationRunId] as const,
     humanCalibrations: (evaluationRunId: number) =>
@@ -40,6 +42,8 @@ export const queryKeys = {
       ["evaluations", "datasets", params] as const,
     activeDatasets: ["evaluations", "datasets", "active"] as const,
     dataset: (evaluationDatasetId: number) => ["evaluations", "dataset", evaluationDatasetId] as const,
+    corpusReadiness: (evaluationDatasetId: number) =>
+      ["evaluations", "dataset", evaluationDatasetId, "corpus-readiness"] as const,
     cases: (evaluationDatasetId: number, params: { page: number; page_size: number }) =>
       ["evaluations", "dataset", evaluationDatasetId, "cases", params] as const
   },

@@ -53,6 +53,9 @@ export function groupMetricsByCategory<T>(
   const catalogCategories = new Map(
     (catalog?.metrics ?? []).map((metric) => [metric.metric_name, metric.category])
   );
+  const catalogPriorities = new Map(
+    (catalog?.metrics ?? []).map((metric) => [metric.metric_name, metric.display_priority])
+  );
   const grouped = new Map<DisplayMetricCategory, T[]>();
 
   for (const item of items) {
@@ -73,9 +76,14 @@ export function groupMetricsByCategory<T>(
       {
         category,
         label: metricCategoryLabel(category),
-        items: [...categoryItems].sort((left, right) =>
-          compareMetricNames(metricName(left), metricName(right))
-        )
+        items: [...categoryItems].sort((left, right) => {
+          const leftName = metricName(left);
+          const rightName = metricName(right);
+          const priorityDelta =
+            (catalogPriorities.get(leftName) ?? Number.MAX_SAFE_INTEGER) -
+            (catalogPriorities.get(rightName) ?? Number.MAX_SAFE_INTEGER);
+          return priorityDelta || compareMetricNames(leftName, rightName);
+        })
       }
     ];
   });

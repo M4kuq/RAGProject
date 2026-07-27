@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -29,11 +29,13 @@ from app.rag.citations import (
 from app.rag.confidence import ConfidenceInputs, calculate_confidence
 from app.rag.context_budget import estimate_tokens
 from app.rag.generation import (
+    RAG_GENERATION_INSTRUCTIONS,
     AnswerGenerationError,
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
     GenerationResult,
+    TokenUsage,
     create_answer_generator,
 )
 from app.rag.pricing import estimate_cost_usd
@@ -49,6 +51,7 @@ from app.rag.trace import LatencyTracker
 from app.schemas.rag import (
     RagAskCitation,
     RagAskConfidence,
+    RagSearchFilters,
     RagSearchItem,
     RagSearchRequest,
     RetrievalScoreSummary,
@@ -106,6 +109,18 @@ class RagEvaluationResult:
     retrieved_items: list[RetrievedEvaluationItem]
     context_sources_for_safety: list[str]
     error_code: str | None = None
+    error_detail_code: str | None = None
+    answer_outcome: (
+        Literal[
+            "answered",
+            "abstained",
+            "no_context",
+            "citation_error",
+            "generation_error",
+            "retrieval_error",
+        ]
+        | None
+    ) = None
     generation_provider: str | None = None
     generation_model: str | None = None
     input_tokens: int | None = None
@@ -172,6 +187,39 @@ def _generation_selected_settings(
     return settings.model_copy(update=updates) if updates else settings
 
 
+def _needs_citation_retry(content: str) -> bool:
+    parsed = parse_generation_output(content)
+    return not parsed.markers and not _is_insufficient_evidence_answer(parsed.answer_text)
+
+
+def _combined_token_usage(
+    initial: TokenUsage | None,
+    retry: TokenUsage | None,
+) -> TokenUsage | None:
+    if initial is None and retry is None:
+        return None
+    return TokenUsage(
+        input_tokens=_combined_optional_int(
+            initial.input_tokens if initial is not None else None,
+            retry.input_tokens if retry is not None else None,
+        ),
+        output_tokens=_combined_optional_int(
+            initial.output_tokens if initial is not None else None,
+            retry.output_tokens if retry is not None else None,
+        ),
+        total_tokens=_combined_optional_int(
+            initial.total_tokens if initial is not None else None,
+            retry.total_tokens if retry is not None else None,
+        ),
+    )
+
+
+def _combined_optional_int(first: int | None, second: int | None) -> int | None:
+    if first is None and second is None:
+        return None
+    return (first or 0) + (second or 0)
+
+
 class _UnavailableEvaluationAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         del request
@@ -189,6 +237,27 @@ class EvaluationRagQuestionService:
     ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
         started_at = time.perf_counter()
         generation = self.service.answer_generator.generate(request)
+        if _needs_citation_retry(generation.content):
+            retry_request = replace(
+                request,
+                system_instructions=(
+                    f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
+                    "Retry instruction: the previous answer omitted a usable citation marker. "
+                    "Return a complete final answer again using only the retrieved context. "
+                    "Every factual sentence must include at least one citation marker shown "
+                    "in the request. Do not invent marker ids and do not add analysis."
+                ),
+                temperature=0.0,
+            )
+            try:
+                retry_generation = self.service.answer_generator.generate(retry_request)
+            except AnswerGenerationError:
+                pass
+            else:
+                generation = GenerationResult(
+                    content=retry_generation.content,
+                    usage=_combined_token_usage(generation.usage, retry_generation.usage),
+                )
         latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
         return generation, self._generation_metadata(generation, latency_ms=latency_ms)
 
@@ -239,6 +308,9 @@ class EvaluationRagQuestionService:
         rerank_top_n: int | None = None,
         evaluation_run_id: int | None = None,
         cache_attempt_id: str | None = None,
+        generate_answer: bool = False,
+        logical_document_ids: Sequence[int] | None = None,
+        corpus_fingerprint: str | None = None,
     ) -> RagEvaluationResult:
         raw_strategy = getattr(target, "retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)
         strategy_type = (
@@ -257,18 +329,23 @@ class EvaluationRagQuestionService:
             cache_mode=cache_mode,
             evaluation_run_id=evaluation_run_id,
             cache_attempt_id=cache_attempt_id,
+            corpus_fingerprint=corpus_fingerprint,
         ):
-            if strategy_type in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES:
-                return self.evaluate_strategy(
+            if not generate_answer and strategy_type in RETRIEVAL_ONLY_EVALUATION_TARGET_STRATEGIES:
+                return _call_with_optional_logical_document_ids(
+                    self.evaluate_strategy,
                     db,
+                    logical_document_ids=logical_document_ids,
                     question=question,
                     request_id=request_id,
                     strategy_type=strategy_type,
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                 )
-            return self.answer_question_with_strategy(
+            return _call_with_optional_logical_document_ids(
+                self.answer_question_with_strategy,
                 db,
+                logical_document_ids=logical_document_ids,
                 question=question,
                 request_id=request_id,
                 strategy_type=strategy_type,
@@ -282,23 +359,44 @@ class EvaluationRagQuestionService:
         *,
         retrieval_run_id: int,
         answer_text: str,
-        retrieval_score_summary: RetrievalScoreSummary | None = None,
+        retrieval_score_summary: RetrievalScoreSummary,
+        retrieved_items: Sequence[RetrievedEvaluationItem],
+        context_sources: Sequence[str],
+        generation_metadata: EvaluationGenerationMetadata,
         latency_tracker: LatencyTracker | None = None,
-        rollback: bool = True,
     ) -> RagEvaluationResult | None:
         if not _is_insufficient_evidence_answer(answer_text):
             return None
-        self.service._mark_failed_safely(
+        run = self.service._require_run(db, retrieval_run_id)
+        self.service.repository.mark_succeeded(
             db,
-            retrieval_run_id=retrieval_run_id,
-            error_code="no_context_found",
-            latency_tracker=latency_tracker,
-            rollback=rollback,
+            run=run,
+            retrieval_score_summary=retrieval_score_summary.model_dump(mode="json"),
+            rerank_score_top1=_optional_decimal_score(retrieval_score_summary.top1_rerank_score),
+            finished_at=datetime.now(UTC),
+            latency_breakdown_json=latency_tracker.snapshot()
+            if latency_tracker is not None
+            else None,
         )
-        return _failed_evaluation_result(
-            retrieval_run_id,
-            "no_context_found",
+        db.commit()
+        db.refresh(run)
+        return RagEvaluationResult(
+            retrieval_run_id=retrieval_run_id,
+            status="succeeded",
+            answer_text=answer_text,
+            citations=[],
+            confidence=None,
             retrieval_score_summary=retrieval_score_summary,
+            retrieved_items=list(retrieved_items),
+            context_sources_for_safety=list(context_sources),
+            answer_outcome="abstained",
+            generation_provider=generation_metadata.provider,
+            generation_model=generation_metadata.model,
+            input_tokens=generation_metadata.input_tokens,
+            output_tokens=generation_metadata.output_tokens,
+            total_tokens=generation_metadata.total_tokens,
+            estimated_cost_usd=generation_metadata.estimated_cost_usd,
+            generation_latency_ms=generation_metadata.latency_ms,
         )
 
     def evaluate_question(
@@ -340,7 +438,7 @@ class EvaluationRagQuestionService:
                 query=question,
                 top_k=effective_top_k,
                 rerank_top_n=effective_rerank_top_n,
-                filters=RetrievalFilters(),
+                filters=_evaluation_retrieval_filters(None),
                 retrieval_run_id=run_id,
             )
             if not result.selected_candidates:
@@ -377,6 +475,9 @@ class EvaluationRagQuestionService:
                 retrieval_run_id=run_id,
                 answer_text=parsed_generation.answer_text,
                 retrieval_score_summary=result.summary,
+                retrieved_items=[],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
             ):
                 return no_context_result
             _validate_generation_output_safety(
@@ -428,6 +529,7 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=result.summary,
                 retrieved_items=[],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -436,13 +538,17 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
                 error_code="citation_build_failed",
             )
-            return _failed_evaluation_result(run_id, "citation_build_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "citation_build_failed",
+                error_detail_code=exc.detail_code,
+            )
         except (EmbeddingAdapterError, RetrievalError):
             self.service._mark_failed_safely(
                 db,
@@ -481,34 +587,43 @@ class EvaluationRagQuestionService:
         strategy_type: RetrievalStrategy,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         if strategy_type == RetrievalStrategy.GRAPH:
-            return self._answer_question_with_graph(
+            return _call_with_optional_logical_document_ids(
+                self._answer_question_with_graph,
                 db,
+                logical_document_ids=logical_document_ids,
                 question=question,
                 request_id=request_id,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
             )
         if strategy_type == RetrievalStrategy.LLM_TOOL_ORCHESTRATOR:
-            return self._answer_question_with_llm_tool_orchestrator(
+            return _call_with_optional_logical_document_ids(
+                self._answer_question_with_llm_tool_orchestrator,
                 db,
+                logical_document_ids=logical_document_ids,
                 question=question,
                 request_id=request_id,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
             )
         if strategy_type == RetrievalStrategy.LANGCHAIN_AGENTIC:
-            return self._answer_question_with_langchain_agentic(
+            return _call_with_optional_logical_document_ids(
+                self._answer_question_with_langchain_agentic,
                 db,
+                logical_document_ids=logical_document_ids,
                 question=question,
                 request_id=request_id,
                 top_k=top_k,
                 rerank_top_n=rerank_top_n,
             )
         if strategy_type == RetrievalStrategy.LANGGRAPH_AGENTIC:
-            return self._answer_question_with_langgraph_agentic(
+            return _call_with_optional_logical_document_ids(
+                self._answer_question_with_langgraph_agentic,
                 db,
+                logical_document_ids=logical_document_ids,
                 question=question,
                 request_id=request_id,
                 top_k=top_k,
@@ -527,6 +642,7 @@ class EvaluationRagQuestionService:
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     strategy=RagSearchRequestStrategy(strategy_type.value),
+                    filters=_evaluation_search_filters(logical_document_ids),
                 ),
                 request_id=request_id,
             )
@@ -578,6 +694,9 @@ class EvaluationRagQuestionService:
                 retrieval_run_id=response.retrieval_run_id,
                 answer_text=parsed_generation.answer_text,
                 retrieval_score_summary=response.retrieval_score_summary,
+                retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
             ):
                 return no_context_result
             _validate_generation_output_safety(
@@ -632,6 +751,7 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=response.retrieval_score_summary,
                 retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -640,7 +760,7 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             _mark_latest_failed_safely(
                 self.service,
                 db,
@@ -650,6 +770,7 @@ class EvaluationRagQuestionService:
             return _failed_evaluation_result(
                 _latest_retrieval_run_id(db, request_id=request_id),
                 "citation_build_failed",
+                error_detail_code=exc.detail_code,
             )
         except AnswerGenerationError:
             _mark_latest_failed_safely(
@@ -676,6 +797,7 @@ class EvaluationRagQuestionService:
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         try:
             response = self.graph_service.search(
@@ -685,6 +807,7 @@ class EvaluationRagQuestionService:
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     strategy=RagSearchRequestStrategy.GRAPH,
+                    filters=_evaluation_search_filters(logical_document_ids),
                 ),
                 request_id=request_id,
             )
@@ -742,6 +865,9 @@ class EvaluationRagQuestionService:
                 retrieval_run_id=response.retrieval_run_id,
                 answer_text=parsed_generation.answer_text,
                 retrieval_score_summary=response.retrieval_score_summary,
+                retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
             ):
                 return no_context_result
             _validate_generation_output_safety(
@@ -796,6 +922,7 @@ class EvaluationRagQuestionService:
                 retrieval_score_summary=response.retrieval_score_summary,
                 retrieved_items=[_retrieved_item_from_search_item(item) for item in response.items],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -804,7 +931,7 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             _mark_latest_failed_safely(
                 self.service,
                 db,
@@ -814,6 +941,7 @@ class EvaluationRagQuestionService:
             return _failed_evaluation_result(
                 _latest_retrieval_run_id(db, request_id=request_id),
                 "citation_build_failed",
+                error_detail_code=exc.detail_code,
             )
         except AnswerGenerationError:
             _mark_latest_failed_safely(
@@ -840,13 +968,14 @@ class EvaluationRagQuestionService:
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         if not self.service.settings.llm_orchestrator_enabled:
             return _failed_evaluation_result(None, "strategy_not_enabled")
 
         effective_top_k = self.service._effective_ask_top_k(top_k)
         effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
-        filters = RetrievalFilters()
+        filters = _evaluation_retrieval_filters(logical_document_ids)
         query_hash = _query_hash(question)
         query_plan_build = self.service.query_plan_builder.build(
             question,
@@ -958,19 +1087,24 @@ class EvaluationRagQuestionService:
                 parsed_generation.answer_text,
                 context_items=context_items,
             )
-            if _is_insufficient_evidence_answer(parsed_generation.answer_text):
-                self.service._mark_failed_safely(
-                    db,
-                    retrieval_run_id=run_id,
-                    error_code="no_context_found",
-                    latency_tracker=latency_tracker,
-                    rollback=False,
-                )
-                return _failed_evaluation_result(
-                    run_id,
-                    "no_context_found",
-                    retrieval_score_summary=final_summary,
-                )
+            if abstained_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=final_summary,
+                retrieved_items=[
+                    _retrieved_item_from_context_ref(
+                        ref,
+                        rank_order=rank_order,
+                        snippet_max_chars=self.service.settings.search_snippet_max_chars,
+                    )
+                    for rank_order, ref in enumerate(selected_context_refs, start=1)
+                ],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
+                latency_tracker=latency_tracker,
+            ):
+                return abstained_result
             cited_sources = validate_generation_citations(
                 parsed_generation,
                 source_map=prompt_citation_sources,
@@ -1024,6 +1158,7 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -1032,7 +1167,7 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1040,7 +1175,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "citation_build_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "citation_build_failed",
+                error_detail_code=exc.detail_code,
+            )
         except AnswerGenerationError:
             self.service._mark_failed_safely(
                 db,
@@ -1078,6 +1217,7 @@ class EvaluationRagQuestionService:
         strategy_type: RetrievalStrategy,
         top_k: int | None = None,
         rerank_top_n: int | None = None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         try:
             search_service: RagService | GraphRagService = (
@@ -1092,6 +1232,7 @@ class EvaluationRagQuestionService:
                     top_k=top_k,
                     rerank_top_n=rerank_top_n,
                     strategy=RagSearchRequestStrategy(strategy_type.value),
+                    filters=_evaluation_search_filters(logical_document_ids),
                 ),
                 request_id=request_id,
             )
@@ -1125,13 +1266,14 @@ class EvaluationRagQuestionService:
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         if not self.service.settings.langchain_agentic_enabled:
             return _failed_evaluation_result(None, "strategy_not_enabled")
 
         effective_top_k = self.service._effective_ask_top_k(top_k)
         effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
-        filters = RetrievalFilters()
+        filters = _evaluation_retrieval_filters(logical_document_ids)
         query_hash = _query_hash(question)
         query_plan_build = self.service.query_plan_builder.build(
             question,
@@ -1243,19 +1385,24 @@ class EvaluationRagQuestionService:
                 parsed_generation.answer_text,
                 context_items=context_items,
             )
-            if _is_insufficient_evidence_answer(parsed_generation.answer_text):
-                self.service._mark_failed_safely(
-                    db,
-                    retrieval_run_id=run_id,
-                    error_code="no_context_found",
-                    latency_tracker=latency_tracker,
-                    rollback=False,
-                )
-                return _failed_evaluation_result(
-                    run_id,
-                    "no_context_found",
-                    retrieval_score_summary=final_summary,
-                )
+            if abstained_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=final_summary,
+                retrieved_items=[
+                    _retrieved_item_from_context_ref(
+                        ref,
+                        rank_order=rank_order,
+                        snippet_max_chars=self.service.settings.search_snippet_max_chars,
+                    )
+                    for rank_order, ref in enumerate(selected_context_refs, start=1)
+                ],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
+                latency_tracker=latency_tracker,
+            ):
+                return abstained_result
             cited_sources = validate_generation_citations(
                 parsed_generation,
                 source_map=prompt_citation_sources,
@@ -1309,6 +1456,7 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -1317,7 +1465,7 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1325,7 +1473,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "citation_build_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "citation_build_failed",
+                error_detail_code=exc.detail_code,
+            )
         except AnswerGenerationError:
             self.service._mark_failed_safely(
                 db,
@@ -1370,13 +1522,14 @@ class EvaluationRagQuestionService:
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
+        logical_document_ids: Sequence[int] | None = None,
     ) -> RagEvaluationResult:
         if not self.service.settings.langgraph_agentic_enabled:
             return _failed_evaluation_result(None, "strategy_not_enabled")
 
         effective_top_k = self.service._effective_ask_top_k(top_k)
         effective_rerank_top_n = self.service._effective_ask_rerank_top_n(rerank_top_n)
-        filters = RetrievalFilters()
+        filters = _evaluation_retrieval_filters(logical_document_ids)
         query_hash = _query_hash(question)
         query_plan_build = self.service.query_plan_builder.build(
             question,
@@ -1488,19 +1641,24 @@ class EvaluationRagQuestionService:
                 parsed_generation.answer_text,
                 context_items=context_items,
             )
-            if _is_insufficient_evidence_answer(parsed_generation.answer_text):
-                self.service._mark_failed_safely(
-                    db,
-                    retrieval_run_id=run_id,
-                    error_code="no_context_found",
-                    latency_tracker=latency_tracker,
-                    rollback=False,
-                )
-                return _failed_evaluation_result(
-                    run_id,
-                    "no_context_found",
-                    retrieval_score_summary=final_summary,
-                )
+            if abstained_result := self._no_context_result_if_insufficient_answer(
+                db,
+                retrieval_run_id=run_id,
+                answer_text=parsed_generation.answer_text,
+                retrieval_score_summary=final_summary,
+                retrieved_items=[
+                    _retrieved_item_from_context_ref(
+                        ref,
+                        rank_order=rank_order,
+                        snippet_max_chars=self.service.settings.search_snippet_max_chars,
+                    )
+                    for rank_order, ref in enumerate(selected_context_refs, start=1)
+                ],
+                context_sources=[item.text for item in context_items],
+                generation_metadata=generation_metadata,
+                latency_tracker=latency_tracker,
+            ):
+                return abstained_result
             cited_sources = validate_generation_citations(
                 parsed_generation,
                 source_map=prompt_citation_sources,
@@ -1554,6 +1712,7 @@ class EvaluationRagQuestionService:
                     for rank_order, ref in enumerate(selected_context_refs, start=1)
                 ],
                 context_sources_for_safety=[item.text for item in context_items],
+                answer_outcome="answered",
                 generation_provider=generation_metadata.provider,
                 generation_model=generation_metadata.model,
                 input_tokens=generation_metadata.input_tokens,
@@ -1562,7 +1721,7 @@ class EvaluationRagQuestionService:
                 estimated_cost_usd=generation_metadata.estimated_cost_usd,
                 generation_latency_ms=generation_metadata.latency_ms,
             )
-        except CitationBuildError:
+        except CitationBuildError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1570,7 +1729,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "citation_build_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "citation_build_failed",
+                error_detail_code=exc.detail_code,
+            )
         except AnswerGenerationError:
             self.service._mark_failed_safely(
                 db,
@@ -1738,6 +1901,7 @@ def _evaluation_target_settings(
     cache_mode: str,
     evaluation_run_id: int | None,
     cache_attempt_id: str | None,
+    corpus_fingerprint: str | None,
 ):
     settings = service.settings
     overrides: dict[str, object] = {}
@@ -1755,16 +1919,52 @@ def _evaluation_target_settings(
             overrides["retrieval_cache_enabled"] = True
             if evaluation_run_id is not None:
                 namespace = settings.retrieval_cache_namespace
-                suffix = f"{evaluation_run_id}.{cache_attempt_id or 'single'}"
+                corpus_suffix = f".{corpus_fingerprint[:12]}" if corpus_fingerprint else ""
+                suffix = f"{evaluation_run_id}.{cache_attempt_id or 'single'}{corpus_suffix}"
                 overrides["retrieval_cache_namespace"] = _evaluation_cache_namespace(
                     namespace,
                     suffix,
                 )
+        elif corpus_fingerprint:
+            overrides["retrieval_cache_namespace"] = _evaluation_cache_namespace(
+                settings.retrieval_cache_namespace,
+                f"corpus.{corpus_fingerprint[:12]}",
+            )
         if overrides:
             service.settings = settings.model_copy(update=overrides)
         yield
     finally:
         service.settings = settings
+
+
+def _call_with_optional_logical_document_ids(
+    handler: Callable[..., RagEvaluationResult],
+    db: Session,
+    *,
+    logical_document_ids: Sequence[int] | None,
+    **kwargs: object,
+) -> RagEvaluationResult:
+    if logical_document_ids is not None:
+        kwargs["logical_document_ids"] = logical_document_ids
+    return handler(db, **kwargs)
+
+
+def _evaluation_retrieval_filters(
+    logical_document_ids: Sequence[int] | None,
+) -> RetrievalFilters:
+    return RetrievalFilters(
+        logical_document_ids=tuple(
+            dict.fromkeys(int(value) for value in (logical_document_ids or ()) if value > 0)
+        )
+    )
+
+
+def _evaluation_search_filters(
+    logical_document_ids: Sequence[int] | None,
+) -> RagSearchFilters | None:
+    filters = _evaluation_retrieval_filters(logical_document_ids)
+    ids = list(filters.logical_document_ids)
+    return RagSearchFilters(logical_document_ids=ids) if ids else None
 
 
 def _evaluation_cache_namespace(namespace: str, suffix: str) -> str:
@@ -1916,11 +2116,29 @@ def _dot_product(left: Sequence[float], right: Sequence[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True))
 
 
+def _failure_answer_outcome(
+    error_code: str,
+) -> Literal[
+    "no_context",
+    "citation_error",
+    "generation_error",
+    "retrieval_error",
+]:
+    if error_code == "no_context_found":
+        return "no_context"
+    if error_code == "citation_build_failed":
+        return "citation_error"
+    if error_code == "generation_failed":
+        return "generation_error"
+    return "retrieval_error"
+
+
 def _failed_evaluation_result(
     retrieval_run_id: int | None,
     error_code: str,
     *,
     retrieval_score_summary: RetrievalScoreSummary | None = None,
+    error_detail_code: str | None = None,
 ) -> RagEvaluationResult:
     return RagEvaluationResult(
         retrieval_run_id=retrieval_run_id,
@@ -1932,4 +2150,6 @@ def _failed_evaluation_result(
         retrieved_items=[],
         context_sources_for_safety=[],
         error_code=error_code,
+        error_detail_code=error_detail_code,
+        answer_outcome=_failure_answer_outcome(error_code),
     )
