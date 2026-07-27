@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 40486)
-Total output lines: 3868
-
 from __future__ import annotations
 
 import hashlib
@@ -1436,7 +1433,953 @@ def test_rag_ask_llm_tool_orchestrator_uses_bounded_tools_and_saves_safe_trace(
     response = client.post(
         "/api/v1/rag/ask",
         json={
-            "chat_session_id": chat_session_id…10486 tokens truncated…tegy_decision_json)
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-agentic-msg-1",
+            "message": message,
+            "strategy": "llm_tool_orchestrator",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "llm_tool_orchestrator"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "llm_tool_orchestrator"
+        assert run.query_plan_json["query_mode"] == "llm_tool_calling_retrieval"
+        assert "analysis" in run.query_plan_json
+        assert "planner" in run.query_plan_json
+        assert "intent" in run.query_plan_json
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "llm_tool_orchestrator"
+        assert run.strategy_decision_json["tool_call_count"] == 2
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["fallback_used"] is False
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert run.latency_breakdown_json is not None
+        assert "llm_orchestrator_ms" in run.latency_breakdown_json
+        assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "llm_tool_orchestrator"
+        assert run.context_budget_json["strategy"]["selected_strategy"] == "llm_tool_orchestrator"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
+        assert run.tool_result_compression_json is not None
+        assert (
+            run.tool_result_compression_json["schema_version"]
+            == "phase2.tool_result_compression.v1"
+        )
+        assert run.tool_result_compression_json["summary"]["search_tool_call_count"] == 1
+        assert run.tool_result_compression_json["summary"]["output_item_count"] >= 1
+        assert run.tool_result_compression_json["item_refs"][0]["retrieval_run_item_id"] is not None
+        compression_dump = json.dumps(run.tool_result_compression_json, sort_keys=True)
+        assert '"snippet":' not in compression_dump
+        assert "full active chunk text" not in compression_dump
+        settings_snapshot = run.retrieval_settings_json
+        assert settings_snapshot is not None
+        assert settings_snapshot["max_tool_calls"] == 8
+        assert settings_snapshot["max_search_calls"] == 8
+        assert settings_snapshot["timeout_seconds"] == 600.0
+        assert settings_snapshot["tool_result_compression_enabled"] is True
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        assert all(item.score_breakdown_json is not None for item in items)
+        assert items[0].score_breakdown_json is not None
+        assert items[0].score_breakdown_json["retrieval_source"] == "llm_tool_orchestrator"
+        dumped = str(
+            {
+                "query_plan": run.query_plan_json,
+                "decision": run.strategy_decision_json,
+                "settings": run.retrieval_settings_json,
+                "summary": run.retrieval_score_summary,
+                "tool_result_compression": run.tool_result_compression_json,
+                "items": [item.score_breakdown_json for item in items],
+            }
+        )
+        assert message not in dumped
+        assert "full active chunk text" not in dumped
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+        assert "normalized_query_preview" not in dumped
+        assert "rewritten_query_preview" not in dumped
+
+
+def test_rag_ask_langchain_agentic_uses_langchain_tools_and_saves_safe_trace(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="langchain agentic ask")
+    message = "Compare alpha secondary retrieval evidence"
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "langchain-agentic-msg-1",
+            "message": message,
+            "strategy": "langchain_agentic",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["retrieval_summary"]["strategy_type"] == "langchain_agentic"
+    assert data["retrieval_summary"]["selected_strategy"] == "langchain_agentic"
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "langchain_agentic"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "langchain_agentic"
+        assert run.query_plan_json["query_mode"] == "langchain_agentic_retrieval"
+        assert "analysis" in run.query_plan_json
+        assert "planner" in run.query_plan_json
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "langchain_agentic"
+        assert run.strategy_decision_json["execution_strategy"] == "langchain_agentic"
+        assert run.strategy_decision_json["orchestrator_provider"] == "langchain"
+        assert run.strategy_decision_json["tool_call_count"] == 2
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["fallback_used"] is False
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert "langchain_runnable_planner" in run.strategy_decision_json["reason_codes"]
+        assert "langchain_structured_tools" in run.strategy_decision_json["reason_codes"]
+        assert run.latency_breakdown_json is not None
+        assert "langchain_agentic_ms" in run.latency_breakdown_json
+        assert "langchain_planning_ms" in run.latency_breakdown_json
+        assert "langchain_tool_execution_ms" in run.latency_breakdown_json
+        assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "langchain_agentic"
+        assert run.context_budget_json["strategy"]["selected_strategy"] == "langchain_agentic"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
+        assert run.tool_result_compression_json is not None
+        assert (
+            run.tool_result_compression_json["schema_version"]
+            == "phase2.tool_result_compression.v1"
+        )
+        assert run.tool_result_compression_json["summary"]["search_tool_call_count"] == 1
+        assert run.tool_result_compression_json["summary"]["output_item_count"] >= 1
+        settings_snapshot = run.retrieval_settings_json
+        assert settings_snapshot is not None
+        assert settings_snapshot["orchestrator_provider"] == "langchain"
+        assert settings_snapshot["langchain_agentic_enabled"] is True
+        assert settings_snapshot["max_tool_calls"] == 8
+        assert settings_snapshot["max_search_calls"] == 8
+        assert settings_snapshot["timeout_seconds"] == 600.0
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        assert items[0].score_breakdown_json is not None
+        assert items[0].score_breakdown_json["retrieval_source"] == "langchain_agentic"
+        dumped = str(
+            {
+                "query_plan": run.query_plan_json,
+                "decision": run.strategy_decision_json,
+                "settings": run.retrieval_settings_json,
+                "summary": run.retrieval_score_summary,
+                "tool_result_compression": run.tool_result_compression_json,
+                "items": [item.score_breakdown_json for item in items],
+            }
+        )
+        assert message not in dumped
+        assert "full active chunk text" not in dumped
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+        assert "normalized_query_preview" not in dumped
+        assert "rewritten_query_preview" not in dumped
+
+
+def test_rag_ask_langchain_agentic_insufficient_answer_with_context_returns_citations(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings()
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedInsufficientEvidenceAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="langchain insufficient")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "langchain-insufficient-msg-1",
+            "message": "Compare alpha secondary retrieval evidence",
+            "strategy": "langchain_agentic",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["assistant_message"]["content"] == INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
+    assert data["citations"][0]["document_chunk_id"] in {100, 101}
+    assert data["confidence"]["confidence_label"] == "Low"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.confidence_label == "Low"
+        assert db.query(Citation).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 1
+
+
+def test_rag_ask_langgraph_agentic_uses_state_graph_and_saves_safe_trace(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="langgraph agentic ask")
+    message = "Compare alpha secondary retrieval evidence"
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "langgraph-agentic-msg-1",
+            "message": message,
+            "strategy": "langgraph_agentic",
+            "top_k": 2,
+            "rerank_top_n": 1,
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    assert data["retrieval_summary"]["strategy_type"] == "langgraph_agentic"
+    assert data["retrieval_summary"]["selected_strategy"] == "langgraph_agentic"
+    assert "content_text" not in str(response.json())
+    assert len(vector_client.query_vectors) == 1
+
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.strategy_type == "langgraph_agentic"
+        assert run.query_plan_json is not None
+        assert run.query_plan_json["strategy_type"] == "langgraph_agentic"
+        assert run.query_plan_json["query_mode"] == "langgraph_agentic_retrieval"
+        assert "analysis" in run.query_plan_json
+        assert "planner" in run.query_plan_json
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["selected_strategy"] == "langgraph_agentic"
+        assert run.strategy_decision_json["execution_strategy"] == "langgraph_agentic"
+        assert run.strategy_decision_json["orchestrator_provider"] == "langgraph"
+        assert run.strategy_decision_json["tool_call_count"] == 2
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["retrieval_call_count"] == 1
+        assert run.strategy_decision_json["fallback_used"] is False
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert run.strategy_decision_json["graph_node_count"] >= 4
+        assert run.strategy_decision_json["graph_transition_count"] >= 2
+        assert "langgraph_state_graph" in run.strategy_decision_json["reason_codes"]
+        assert "langgraph_plan_execute_nodes" in run.strategy_decision_json["reason_codes"]
+        assert run.latency_breakdown_json is not None
+        assert "langgraph_agentic_ms" in run.latency_breakdown_json
+        assert "langgraph_planning_ms" in run.latency_breakdown_json
+        assert "langgraph_tool_execution_ms" in run.latency_breakdown_json
+        assert "generation_ms" in run.latency_breakdown_json
+        assert run.context_budget_json is not None
+        assert run.context_budget_json["strategy"]["strategy_type"] == "langgraph_agentic"
+        assert run.context_budget_json["strategy"]["selected_strategy"] == "langgraph_agentic"
+        assert run.context_budget_json["items"]["selected_count"] == 1
+        assert run.context_compression_json is not None
+        assert run.context_compression_json["output"]["evidence_item_count"] == 1
+        assert run.context_compression_json["evidence_item_refs"][0]["retrieval_source"] == "hybrid"
+        assert run.tool_result_compression_json is not None
+        assert (
+            run.tool_result_compression_json["schema_version"]
+            == "phase2.tool_result_compression.v1"
+        )
+        assert run.tool_result_compression_json["summary"]["search_tool_call_count"] == 1
+        assert run.tool_result_compression_json["summary"]["output_item_count"] >= 1
+        settings_snapshot = run.retrieval_settings_json
+        assert settings_snapshot is not None
+        assert settings_snapshot["orchestrator_provider"] == "langgraph"
+        assert settings_snapshot["langgraph_agentic_enabled"] is True
+        assert settings_snapshot["max_tool_calls"] == 8
+        assert settings_snapshot["max_search_calls"] == 8
+        assert settings_snapshot["timeout_seconds"] == 600.0
+        items = db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).all()
+        assert items
+        assert all(item.retrieval_source == "hybrid" for item in items)
+        assert items[0].score_breakdown_json is not None
+        assert items[0].score_breakdown_json["retrieval_source"] == "langgraph_agentic"
+        dumped = str(
+            {
+                "query_plan": run.query_plan_json,
+                "decision": run.strategy_decision_json,
+                "settings": run.retrieval_settings_json,
+                "summary": run.retrieval_score_summary,
+                "tool_result_compression": run.tool_result_compression_json,
+                "items": [item.score_breakdown_json for item in items],
+            }
+        )
+        assert message not in dumped
+        assert "full active chunk text" not in dumped
+        assert "raw_prompt" not in dumped
+        assert "raw_chunk" not in dumped
+        assert "content_text" not in dumped
+        assert "normalized_query_preview" not in dumped
+        assert "rewritten_query_preview" not in dumped
+
+
+def test_langchain_agentic_planner_tries_alternate_tools_after_empty_searches() -> None:
+    query = "alpha beta gamma delta epsilon zeta retrieval evidence"
+    available_tools = ("dense_search", "sparse_search", "hybrid_search", "finalize_answer")
+    first_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=4,
+            remaining_search_calls=4,
+            available_tools=available_tools,
+            tool_results=[],
+        )
+    )
+
+    assert first_call == [LangChainToolCall(tool_name="hybrid_search", arguments={"query": query})]
+
+    second_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=3,
+            remaining_search_calls=3,
+            available_tools=available_tools,
+            tool_results=[
+                LangChainToolResult(
+                    tool_call_id="lc_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                )
+            ],
+        )
+    )
+
+    assert second_call == [LangChainToolCall(tool_name="sparse_search", arguments={"query": query})]
+
+    third_call = _plan_next_calls(
+        LangChainPlanningState(
+            user_query=query,
+            max_query_chars=200,
+            remaining_tool_calls=2,
+            remaining_search_calls=2,
+            available_tools=available_tools,
+            tool_results=[
+                LangChainToolResult(
+                    tool_call_id="lc_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+                LangChainToolResult(
+                    tool_call_id="lc_2",
+                    tool_name="sparse_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+            ],
+        )
+    )
+
+    assert third_call == [LangChainToolCall(tool_name="dense_search", arguments={"query": query})]
+
+
+def test_langgraph_agentic_planner_tries_alternate_tools_after_empty_searches() -> None:
+    query = "alpha beta gamma delta epsilon zeta retrieval evidence"
+    available_tools = ("dense_search", "sparse_search", "hybrid_search", "finalize_answer")
+    base_state: LangGraphAgenticState = {
+        "user_query": query,
+        "max_query_chars": 200,
+        "max_tool_calls": 4,
+        "max_search_calls": 4,
+        "started_at": 0.0,
+        "timeout_seconds": 600.0,
+        "available_tools": available_tools,
+        "tool_results": [],
+        "attempts_by_tool_call_id": {},
+        "selected_tool_call_ids": [],
+        "seen_searches": set(),
+        "tool_call_count": 0,
+        "search_call_count": 0,
+        "timeout_exceeded": False,
+        "repeated_query_detected": False,
+        "finalize_called": False,
+        "stop_requested": False,
+        "reason_codes": [],
+    }
+
+    assert _plan_next_call(base_state) == LangGraphToolCall(
+        tool_name="hybrid_search",
+        arguments={"query": query},
+    )
+    assert _plan_next_call(
+        {
+            **base_state,
+            "tool_results": [
+                LangChainToolResult(
+                    tool_call_id="lg_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                )
+            ],
+        }
+    ) == LangGraphToolCall(tool_name="sparse_search", arguments={"query": query})
+    assert _plan_next_call(
+        {
+            **base_state,
+            "tool_results": [
+                LangChainToolResult(
+                    tool_call_id="lg_1",
+                    tool_name="hybrid_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+                LangChainToolResult(
+                    tool_call_id="lg_2",
+                    tool_name="sparse_search",
+                    status="succeeded",
+                    item_count=0,
+                    normalized_query=query,
+                ),
+            ],
+        }
+    ) == LangGraphToolCall(tool_name="dense_search", arguments={"query": query})
+
+
+def test_rag_ask_hybrid_disabled_returns_strategy_not_enabled(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        hybrid_enabled=False,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="hybrid disabled")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "hybrid-disabled-msg-1",
+            "message": "alpha policy",
+            "strategy": "hybrid",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "strategy_not_enabled"
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+
+
+def test_rag_ask_llm_tool_orchestrator_budget_exhausted_best_effort_finalizes_with_candidates(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        sparse_enabled=False,
+        hybrid_enabled=False,
+        llm_orchestrator_max_tool_calls=1,
+        llm_orchestrator_max_search_calls=1,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm budget")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-budget-msg-1",
+            "message": "alpha policy budget",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "[1]" in data["assistant_message"]["content"]
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user", "assistant"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.strategy_type == "llm_tool_orchestrator"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["finalize_called"] is False
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert (
+            "best_effort_finalize_after_budget_or_timeout"
+            in run.strategy_decision_json["reason_codes"]
+        )
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() > 0
+        )
+
+
+def test_rag_ask_llm_tool_orchestrator_budget_exhausted_without_candidates_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.candidates = []
+    settings = _lmstudio_test_settings(
+        sparse_enabled=False,
+        hybrid_enabled=False,
+        llm_orchestrator_max_tool_calls=1,
+        llm_orchestrator_max_search_calls=1,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm empty budget")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-empty-budget-msg-1",
+            "message": "alpha policy budget empty",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_type == "llm_tool_orchestrator"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
+        assert run.strategy_decision_json["no_context"] is True
+
+
+def test_rag_ask_llm_tool_orchestrator_oversized_tool_output_rejected_safely(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        tool_result_compression_max_snippet_chars=100,
+        tool_result_compression_max_tokens_per_tool=1,
+        tool_result_compression_max_total_tool_result_tokens=1,
+        llm_orchestrator_max_tool_calls=1,
+        llm_orchestrator_max_search_calls=1,
+    )
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_SingleDensePlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm oversized")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-oversized-msg-1",
+            "message": "alpha oversized",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        compression_trace = run.tool_result_compression_json
+        assert compression_trace is not None
+        assert compression_trace["summary"]["oversized_rejected_count"] == 1
+        assert compression_trace["drop_reasons"]["oversized_rejected"] >= 1
+        strategy_decision = run.strategy_decision_json
+        assert strategy_decision is not None
+        assert strategy_decision["tool_results"][0]["error_code"] == ("oversized_tool_output")
+        dumped = json.dumps(compression_trace, sort_keys=True)
+        assert '"snippet":' not in dumped
+        assert "full active chunk text" not in dumped
+
+
+def test_rag_ask_llm_tool_orchestrator_retrieval_failure_propagates(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    vector_client.fail = True
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm retrieval failure")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-retrieval-failure-msg-1",
+            "message": "alpha policy failure",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "retrieval_failed"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "retrieval_failed"
+
+
+def test_rag_ask_llm_tool_orchestrator_disabled_hybrid_tool_is_not_executed(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        sparse_enabled=False,
+        hybrid_enabled=False,
+        llm_orchestrator_max_tool_calls=2,
+        llm_orchestrator_max_search_calls=2,
+    )
+    planner = _HybridOnlyPlanner()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=planner,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="disabled hybrid tool")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-disabled-hybrid-tool-msg-1",
+            "message": "alpha policy",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    assert planner.requests
+    assert "dense_search" in planner.requests[0].available_tools
+    assert "finalize_answer" in planner.requests[0].available_tools
+    assert "sparse_search" not in planner.requests[0].available_tools
+    assert "hybrid_search" not in planner.requests[0].available_tools
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["search_call_count"] == 0
+        assert run.strategy_decision_json["budget_exhausted"] is True
+        assert run.strategy_decision_json["tool_results"][0]["error_code"] == "strategy_not_enabled"
+
+
+def test_rag_ask_llm_tool_orchestrator_empty_finalize_selection_returns_no_context(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_EmptyFinalizeAfterSearchPlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="empty finalize")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-empty-finalize-msg-1",
+            "message": "alpha empty finalize",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    assert len(vector_client.query_vectors) == 1
+    with session_factory() as db:
+        messages = db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).all()
+        assert [message.role for message in messages] == ["user"]
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.status == "failed"
+        assert run.error_code == "no_context_found"
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["finalize_called"] is True
+        assert run.strategy_decision_json["no_context"] is True
+        assert "finalize_answer_empty_selection" in run.strategy_decision_json["reason_codes"]
+        assert (
+            db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count() == 0
+        )
+
+
+def test_lmstudio_tool_planner_preserves_executable_query_and_normalizes_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"tool_calls":[{"tool":"dense_search","arguments":'
+                                '{"query":"https://example.com/callback support@example.com"}}]}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr("app.rag.llm_orchestrator.httpx.post", fake_post)
+    planner = create_llm_tool_call_planner(
+        Settings(
+            app_env="test",
+            generation_provider="lmstudio",
+            generation_model_name="lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M",
+            lmstudio_api_key="lm-studio",
+            lmstudio_base_url="http://host.docker.internal:1234/v1",
+        )
+    )
+
+    assert isinstance(planner, OpenAICompatibleJSONToolPlanner)
+    calls = planner.plan(
+        LLMToolPlanningRequest(
+            user_query="Find https://example.com/callback and support@example.com",
+            top_k=2,
+            max_query_chars=500,
+            remaining_timeout_seconds=5,
+            remaining_tool_calls=2,
+            remaining_search_calls=1,
+            available_tools=("dense_search", "finalize_answer"),
+            tool_results=[],
+        )
+    )
+
+    user_payload = captured["json"]["messages"][1]["content"]
+    system_payload = captured["json"]["messages"][0]["content"]
+    assert captured["json"]["model"] == "qwen3.5-9b"
+    assert captured["json"]["max_tokens"] == 256
+    assert "Do not write analysis" in system_payload
+    assert "https://example.com/callback" in user_payload
+    assert "support@example.com" in user_payload
+    assert "redacted" not in user_payload
+    assert calls == [
+        LLMToolCall(
+            tool_name="dense_search",
+            arguments={"query": "https://example.com/callback support@example.com"},
+        )
+    ]
+
+
+def test_rag_ask_llm_tool_orchestrator_timeout_stops_before_retrieval(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        llm_orchestrator_timeout_seconds=1,
+    )
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_SingleDensePlanner(),
+        clock=_SequenceClock([0.0, 0.0, 2.0]),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm timeout")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-timeout-msg-1",
+            "message": "alpha timeout",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_context_found"
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["timeout_exceeded"] is True
+        assert run.strategy_decision_json["search_call_count"] == 0
+
+
+def test_rag_ask_llm_tool_orchestrator_repeated_query_best_effort_finalizes_with_candidates(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings()
+    orchestrator = LLMToolCallingRetrievalOrchestrator(
+        settings,
+        planner=_RepeatingDensePlanner(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+        llm_tool_orchestrator=orchestrator,
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="llm repeat")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "llm-repeat-msg-1",
+            "message": "alpha repeat",
+            "strategy": "llm_tool_orchestrator",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["assistant_message"]["role"] == "assistant"
+    with session_factory() as db:
+        run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
+        assert run.strategy_decision_json is not None
+        assert run.strategy_decision_json["repeated_query_detected"] is True
+        assert run.strategy_decision_json["search_call_count"] == 1
+        assert run.strategy_decision_json["finalize_called"] is False
+        assert run.strategy_decision_json["best_effort_finalize_used"] is True
+        assert run.strategy_decision_json["no_context"] is False
+        assert (
+            "best_effort_finalize_after_repeated_query"
+            in run.strategy_decision_json["reason_codes"]
+        )
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 2
+        assert db.query(RetrievalRunItem).filter_by(retrieval_run_id=run.retrieval_run_id).count()
+        dumped = str(run.strategy_decision_json)
         assert "alpha repeat" not in dumped
         assert "full active chunk text" not in dumped
 
