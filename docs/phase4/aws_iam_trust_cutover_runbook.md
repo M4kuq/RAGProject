@@ -167,6 +167,7 @@ if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
 
 $MainRepoRoot = (Resolve-Path -LiteralPath $MainRepoRoot).Path
 $BootstrapDir = (Resolve-Path -LiteralPath $BootstrapDir).Path
+$RootDir = (Resolve-Path -LiteralPath (Join-Path $MainRepoRoot "deploy/aws-ecs")).Path
 $RootTfvars = (Resolve-Path -LiteralPath $RootTfvars).Path
 if ($BootstrapTfvars) {
   $BootstrapTfvars = (Resolve-Path -LiteralPath $BootstrapTfvars).Path
@@ -190,6 +191,34 @@ if ($IsWindowsPlatform) {
   throw "chmod is required to protect cutover artifacts on Unix."
 }
 
+function Invoke-NativeCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$Command,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments
+  )
+  $NativeErrorPreferenceWasSet = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+  $OriginalNativeErrorPreference = if ($NativeErrorPreferenceWasSet) {
+    $PSNativeCommandUseErrorActionPreference
+  } else {
+    $null
+  }
+  try {
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+    $Output = @(& $Command @Arguments)
+    $ExitCode = $LASTEXITCODE
+  } finally {
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $OriginalNativeErrorPreference
+    }
+  }
+  return [pscustomobject]@{
+    ExitCode = $ExitCode
+    Output = $Output
+  }
+}
+
 function Protect-CutoverPath {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -201,12 +230,16 @@ function Protect-CutoverPath {
     } else {
       "${CurrentWindowsIdentity}:F"
     }
-    & icacls.exe $Path /inheritance:r /grant:r $AclGrant | Out-Null
+    $ProtectResult = Invoke-NativeCommand `
+      -Command "icacls.exe" `
+      -Arguments @($Path, "/inheritance:r", "/grant:r", $AclGrant)
   } else {
     $Mode = if ($Kind -ceq "Directory") { "700" } else { "600" }
-    & chmod $Mode -- $Path
+    $ProtectResult = Invoke-NativeCommand `
+      -Command "chmod" `
+      -Arguments @($Mode, "--", $Path)
   }
-  if ($LASTEXITCODE -ne 0) {
+  if ($ProtectResult.ExitCode -ne 0) {
     throw "Could not restrict cutover artifact access: $Kind"
   }
 }
@@ -224,19 +257,101 @@ $CutoverDir = Join-Path ([IO.Path]::GetTempPath()) (
 New-Item -ItemType Directory -Path $CutoverDir -ErrorAction Stop | Out-Null
 Protect-CutoverPath $CutoverDir "Directory"
 
+function New-CutoverArtifactId {
+  "{0}-{1}" -f
+    (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"),
+    [guid]::NewGuid().ToString("N")
+}
+
+function Assert-CutoverArtifactPathsUnused {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Paths
+  )
+  foreach ($Path in $Paths) {
+    if (Test-Path -LiteralPath $Path) {
+      throw "Refusing to overwrite a cutover artifact: $(Split-Path -Leaf $Path)"
+    }
+  }
+}
+
+function Write-ProtectedCutoverTextOnce {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+  )
+  $Bytes = [Text.UTF8Encoding]::new($false).GetBytes($Content)
+  $Stream = [IO.File]::Open(
+    $Path,
+    [IO.FileMode]::CreateNew,
+    [IO.FileAccess]::Write,
+    [IO.FileShare]::None
+  )
+  try {
+    $Stream.Write($Bytes, 0, $Bytes.Length)
+  } finally {
+    $Stream.Dispose()
+  }
+  Protect-CutoverPath $Path "File"
+}
+
+function Copy-ProtectedCutoverFileOnce {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourcePath,
+    [Parameter(Mandatory = $true)][string]$DestinationPath
+  )
+  $SourceStream = [IO.File]::OpenRead($SourcePath)
+  try {
+    $DestinationStream = [IO.File]::Open(
+      $DestinationPath,
+      [IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None
+    )
+    try {
+      $SourceStream.CopyTo($DestinationStream)
+    } finally {
+      $DestinationStream.Dispose()
+    }
+  } finally {
+    $SourceStream.Dispose()
+  }
+  Protect-CutoverPath $DestinationPath "File"
+}
+
+$BootstrapTerraformDataDir = Join-Path $CutoverDir "terraform-data-bootstrap"
+$RootTerraformDataDir = Join-Path $CutoverDir "terraform-data-root"
+foreach ($TerraformDataDir in @($BootstrapTerraformDataDir, $RootTerraformDataDir)) {
+  New-Item -ItemType Directory -Path $TerraformDataDir -ErrorAction Stop | Out-Null
+  Protect-CutoverPath $TerraformDataDir "Directory"
+}
+
 function Invoke-ProtectedCli {
   param(
     [Parameter(Mandatory = $true)][ValidateSet("aws", "gh")][string]$Command,
     [Parameter(Mandatory = $true)][ValidatePattern("^[a-z0-9-]+$")][string]$Label,
     [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments
   )
-  $StdoutPath = Join-Path $CutoverDir "$Label.stdout.log"
-  $StderrPath = Join-Path $CutoverDir "$Label.stderr.log"
-  if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
-    $PSNativeCommandUseErrorActionPreference = $false
+  $InvocationId = New-CutoverArtifactId
+  $StdoutPath = Join-Path $CutoverDir "$Label-$InvocationId.stdout.log"
+  $StderrPath = Join-Path $CutoverDir "$Label-$InvocationId.stderr.log"
+  Assert-CutoverArtifactPathsUnused @($StdoutPath, $StderrPath)
+  $NativeErrorPreferenceWasSet = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+  $OriginalNativeErrorPreference = if ($NativeErrorPreferenceWasSet) {
+    $PSNativeCommandUseErrorActionPreference
+  } else {
+    $null
   }
-  & $Command @Arguments 1> $StdoutPath 2> $StderrPath
-  $ExitCode = $LASTEXITCODE
+  try {
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+    & $Command @Arguments 1> $StdoutPath 2> $StderrPath
+    $ExitCode = $LASTEXITCODE
+  } finally {
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $OriginalNativeErrorPreference
+    }
+  }
   Protect-CutoverFileIfPresent $StdoutPath
   Protect-CutoverFileIfPresent $StderrPath
   $Stdout = if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
@@ -257,18 +372,20 @@ function Assert-NoUntrackedTerraformConfiguration {
     [Parameter(Mandatory = $true)][string]$TerraformDirectory,
     [Parameter(Mandatory = $true)][string]$Label
   )
-  $UnignoredPaths = @(
-    git -C $TerraformDirectory ls-files --others --exclude-standard -- .
-  )
-  if ($LASTEXITCODE -ne 0) {
+  $UnignoredResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("-C", $TerraformDirectory, "ls-files", "--others", "--exclude-standard", "--", ".")
+  if ($UnignoredResult.ExitCode -ne 0) {
     throw "Could not inspect untracked files: $Label"
   }
-  $IgnoredPaths = @(
-    git -C $TerraformDirectory ls-files --others --ignored --exclude-standard -- .
-  )
-  if ($LASTEXITCODE -ne 0) {
+  $UnignoredPaths = @($UnignoredResult.Output)
+  $IgnoredResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("-C", $TerraformDirectory, "ls-files", "--others", "--ignored", "--exclude-standard", "--", ".")
+  if ($IgnoredResult.ExitCode -ne 0) {
     throw "Could not inspect ignored files: $Label"
   }
+  $IgnoredPaths = @($IgnoredResult.Output)
   $TerraformConfigNamePattern = (
     "(?i)^(?:override\.tf(?:\.json)?|.+_override\.tf(?:\.json)?|.+\.tf(?:\.json)?)$"
   )
@@ -286,48 +403,89 @@ function Assert-NoUntrackedTerraformConfiguration {
 }
 
 Set-Location -LiteralPath $MainRepoRoot
-if ((git branch --show-current).Trim() -cne "main") {
+$MainBranchResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("branch", "--show-current")
+if (
+  $MainBranchResult.ExitCode -ne 0 -or
+  (@($MainBranchResult.Output) | Out-String).Trim() -cne "main"
+) {
   throw "MainRepoRoot must be on main."
 }
-git fetch origin --prune
-if ($LASTEXITCODE -ne 0) {
+$MainFetchResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("fetch", "origin", "--prune")
+if ($MainFetchResult.ExitCode -ne 0) {
   throw "Could not refresh origin refs."
 }
-$MainSha = (git rev-parse origin/main).Trim()
-if ($LASTEXITCODE -ne 0 -or $MainSha -notmatch "^[0-9a-f]{40,64}$") {
+$MainShaResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("rev-parse", "origin/main")
+$MainSha = (@($MainShaResult.Output) | Out-String).Trim()
+if ($MainShaResult.ExitCode -ne 0 -or $MainSha -notmatch "^[0-9a-f]{40,64}$") {
   throw "Could not record the origin/main commit."
 }
-git merge-base --is-ancestor 5f16ba5 HEAD
-if ($LASTEXITCODE -ne 0) {
+$RequiredCommitResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("merge-base", "--is-ancestor", "5f16ba5", "HEAD")
+if ($RequiredCommitResult.ExitCode -ne 0) {
   throw "PR #126 commit is not an ancestor of HEAD."
 }
-if ((git rev-parse HEAD).Trim() -cne $MainSha) {
+$MainHeadResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("rev-parse", "HEAD")
+if (
+  $MainHeadResult.ExitCode -ne 0 -or
+  (@($MainHeadResult.Output) | Out-String).Trim() -cne $MainSha
+) {
   throw "HEAD must equal the already-fetched origin/main."
 }
-if (@(git status --porcelain --untracked-files=no).Count -ne 0) {
+$MainStatusResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("status", "--porcelain", "--untracked-files=no")
+if ($MainStatusResult.ExitCode -ne 0 -or @($MainStatusResult.Output).Count -ne 0) {
   throw "MainRepoRoot has tracked changes."
 }
 Assert-NoUntrackedTerraformConfiguration `
-  (Join-Path $MainRepoRoot "deploy/aws-ecs") `
+  $RootDir `
   "Main root stack"
 
 function Assert-MainShaUnchanged {
   param([Parameter(Mandatory = $true)][string]$Checkpoint)
   Set-Location -LiteralPath $MainRepoRoot
-  git fetch origin --prune
-  if ($LASTEXITCODE -ne 0) {
+  $CheckpointFetchResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("fetch", "origin", "--prune")
+  if ($CheckpointFetchResult.ExitCode -ne 0) {
     throw "Could not refresh origin refs at checkpoint: $Checkpoint"
   }
-  $ObservedMainSha = (git rev-parse origin/main).Trim()
-  $ObservedHeadSha = (git rev-parse HEAD).Trim()
-  if ($ObservedMainSha -cne $MainSha -or $ObservedHeadSha -cne $MainSha) {
+  $ObservedMainResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("rev-parse", "origin/main")
+  $ObservedHeadResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("rev-parse", "HEAD")
+  $ObservedMainSha = (@($ObservedMainResult.Output) | Out-String).Trim()
+  $ObservedHeadSha = (@($ObservedHeadResult.Output) | Out-String).Trim()
+  if (
+    $ObservedMainResult.ExitCode -ne 0 -or
+    $ObservedHeadResult.ExitCode -ne 0 -or
+    $ObservedMainSha -cne $MainSha -or
+    $ObservedHeadSha -cne $MainSha
+  ) {
     throw "The recorded main commit changed at checkpoint: $Checkpoint. Stop before the next update or roll back completed updates."
   }
-  if (@(git status --porcelain --untracked-files=no).Count -ne 0) {
+  $CheckpointStatusResult = Invoke-NativeCommand `
+    -Command "git" `
+    -Arguments @("status", "--porcelain", "--untracked-files=no")
+  if (
+    $CheckpointStatusResult.ExitCode -ne 0 -or
+    @($CheckpointStatusResult.Output).Count -ne 0
+  ) {
     throw "MainRepoRoot gained tracked changes at checkpoint: $Checkpoint"
   }
   Assert-NoUntrackedTerraformConfiguration `
-    (Join-Path $MainRepoRoot "deploy/aws-ecs") `
+    $RootDir `
     "Main root stack at checkpoint: $Checkpoint"
 }
 
@@ -348,23 +506,58 @@ $BootstrapState = Join-Path $BootstrapDir "terraform.tfstate"
 if (-not (Test-Path -LiteralPath $BootstrapState -PathType Leaf)) {
   throw "Authoritative bootstrap local state was not found. Do not apply from empty state."
 }
-$BootstrapRepoRoot = (git -C $BootstrapDir rev-parse --show-toplevel).Trim()
-git -C $BootstrapRepoRoot diff --quiet HEAD -- deploy/aws-ecs/bootstrap
-if ($LASTEXITCODE -ne 0) {
+$BootstrapRepoRootResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapDir, "rev-parse", "--show-toplevel")
+$BootstrapRepoRoot = (@($BootstrapRepoRootResult.Output) | Out-String).Trim()
+if (
+  $BootstrapRepoRootResult.ExitCode -ne 0 -or
+  [string]::IsNullOrWhiteSpace($BootstrapRepoRoot)
+) {
+  throw "Could not resolve the authoritative bootstrap repository."
+}
+$BootstrapFetchResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "fetch", "origin", "--prune")
+if ($BootstrapFetchResult.ExitCode -ne 0) {
+  throw "Could not refresh bootstrap origin refs."
+}
+$BootstrapMainResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "rev-parse", "origin/main")
+$BootstrapMainSha = (@($BootstrapMainResult.Output) | Out-String).Trim()
+if (
+  $BootstrapMainResult.ExitCode -ne 0 -or
+  $BootstrapMainSha -cne $MainSha
+) {
+  throw "Bootstrap origin/main does not match the recorded main commit."
+}
+$BootstrapWorkingDiffResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "diff", "--quiet", "HEAD", "--", "deploy/aws-ecs/bootstrap")
+if ($BootstrapWorkingDiffResult.ExitCode -ne 0) {
   throw "Bootstrap configuration has uncommitted changes."
 }
-git -C $BootstrapRepoRoot diff --cached --quiet HEAD -- deploy/aws-ecs/bootstrap
-if ($LASTEXITCODE -ne 0) {
+$BootstrapCachedDiffResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "diff", "--cached", "--quiet", "HEAD", "--", "deploy/aws-ecs/bootstrap")
+if ($BootstrapCachedDiffResult.ExitCode -ne 0) {
   throw "Bootstrap configuration has staged changes."
 }
 Assert-NoUntrackedTerraformConfiguration $BootstrapDir "BootstrapDir"
-git -C $BootstrapRepoRoot diff --quiet origin/main -- deploy/aws-ecs/bootstrap ":!deploy/aws-ecs/bootstrap/variables.tf"
-if ($LASTEXITCODE -ne 0) {
-  throw "Bootstrap configuration differs from origin/main outside variables.tf."
+$BootstrapBaselineDiffResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "diff", "--quiet", $MainSha, "--", "deploy/aws-ecs/bootstrap", ":!deploy/aws-ecs/bootstrap/variables.tf")
+if ($BootstrapBaselineDiffResult.ExitCode -ne 0) {
+  throw "Bootstrap configuration differs from the recorded main commit outside variables.tf."
 }
-$VariablesDiff = @(
-  git -C $BootstrapRepoRoot diff --unified=0 origin/main -- deploy/aws-ecs/bootstrap/variables.tf
-)
+$VariablesDiffResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @("-C", $BootstrapRepoRoot, "diff", "--unified=0", $MainSha, "--", "deploy/aws-ecs/bootstrap/variables.tf")
+if ($VariablesDiffResult.ExitCode -ne 0) {
+  throw "Could not compare bootstrap variables.tf with the recorded main commit."
+}
+$VariablesDiff = @($VariablesDiffResult.Output)
 $VariableChangeLines = @(
   $VariablesDiff |
     Where-Object { $_ -match "^[+-]" -and $_ -notmatch "^[+-]{3}" }
@@ -380,7 +573,7 @@ if (
   $VariableChangeLines.Count -ne 0 -and
   ($VariableChangeLines.Count -ne 2 -or $UnexpectedVariableChangeLines.Count -ne 0)
 ) {
-  throw "Bootstrap variables.tf differs from origin/main in an unexpected way."
+  throw "Bootstrap variables.tf differs from the recorded main commit in an unexpected way."
 }
 
 if ([string]::IsNullOrWhiteSpace($env:AWS_DEMO_ALLOWED_ACCOUNT_IDS)) {
@@ -449,6 +642,7 @@ try {
   throw
 }
 
+$LastTerraformExitCode = $null
 function Invoke-Terraform {
   param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -458,28 +652,77 @@ function Invoke-Terraform {
   if ([string]$env:AWS_PROFILE -cne $AwsProfile) {
     throw "AWS_PROFILE changed after preflight; refusing to run Terraform."
   }
-  & terraform @TerraformArguments
+  $ChdirArguments = @($TerraformArguments | Where-Object { $_ -like "-chdir=*" })
+  if ($ChdirArguments.Count -ne 1) {
+    throw "Every Terraform invocation must have exactly one -chdir argument."
+  }
+  $TerraformDirectory = (
+    Resolve-Path -LiteralPath $ChdirArguments[0].Substring("-chdir=".Length)
+  ).Path
+  $PathComparison = if ($IsWindowsPlatform) {
+    [StringComparison]::OrdinalIgnoreCase
+  } else {
+    [StringComparison]::Ordinal
+  }
+  $TerraformDataDir = if (
+    [string]::Equals($TerraformDirectory, $BootstrapDir, $PathComparison)
+  ) {
+    $BootstrapTerraformDataDir
+  } elseif ([string]::Equals($TerraformDirectory, $RootDir, $PathComparison)) {
+    $RootTerraformDataDir
+  } else {
+    throw "Terraform directory is outside the bootstrap/root allowlist."
+  }
+  $OriginalTerraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
+  $OriginalTerraformDataDir = if ($OriginalTerraformDataDirWasSet) {
+    [string]$env:TF_DATA_DIR
+  } else {
+    $null
+  }
+  $NativeErrorPreferenceWasSet = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+  $OriginalNativeErrorPreference = if ($NativeErrorPreferenceWasSet) {
+    $PSNativeCommandUseErrorActionPreference
+  } else {
+    $null
+  }
+  $script:LastTerraformExitCode = $null
+  try {
+    $env:TF_DATA_DIR = $TerraformDataDir
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+    & terraform @TerraformArguments
+    $script:LastTerraformExitCode = $LASTEXITCODE
+  } finally {
+    if ($NativeErrorPreferenceWasSet) {
+      $PSNativeCommandUseErrorActionPreference = $OriginalNativeErrorPreference
+    }
+    if ($OriginalTerraformDataDirWasSet) {
+      $env:TF_DATA_DIR = $OriginalTerraformDataDir
+    } else {
+      Remove-Item Env:TF_DATA_DIR -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 Write-Host "Selected profile and Terraform environment caller allowlist: OK"
 
 $BootstrapStateBackup = Join-Path $CutoverDir "bootstrap.terraform.tfstate.before"
-Copy-Item -LiteralPath $BootstrapState -Destination $BootstrapStateBackup -ErrorAction Stop
-Protect-CutoverPath $BootstrapStateBackup "File"
+Copy-ProtectedCutoverFileOnce $BootstrapState $BootstrapStateBackup
 
 $BootstrapVarArgs = @()
 if ($BootstrapTfvars) {
   $BootstrapVarArgs += "-var-file=$BootstrapTfvars"
 }
 Invoke-Terraform "-chdir=$BootstrapDir" init -input=false
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Bootstrap terraform init failed. No apply was attempted."
 }
 
 $BackendJson = (
   Invoke-Terraform "-chdir=$BootstrapDir" output -json backend_config | Out-String
 )
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Could not read backend_config from authoritative bootstrap state."
 }
 $Backend = ConvertFrom-Json -InputObject $BackendJson
@@ -494,13 +737,13 @@ foreach ($Name in @("bucket", "key", "region", "dynamodb_table")) {
   }
 }
 
-Invoke-Terraform "-chdir=$(Join-Path $MainRepoRoot 'deploy/aws-ecs')" init -input=false -reconfigure `
+Invoke-Terraform "-chdir=$RootDir" init -input=false -reconfigure `
   "-backend-config=bucket=$($Backend.bucket)" `
   "-backend-config=key=$($Backend.key)" `
   "-backend-config=region=$($Backend.region)" `
   "-backend-config=dynamodb_table=$($Backend.dynamodb_table)" `
   "-backend-config=encrypt=true"
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Root backend init failed. Confirm bootstrap outputs; do not edit backend.tf with guessed values."
 }
 
@@ -513,7 +756,7 @@ function Get-RoleNameFromOutput {
     Invoke-Terraform "-chdir=$TerraformDirectory" output -raw $OutputName
   ).Trim()
   if (
-    $LASTEXITCODE -ne 0 -or
+    $LastTerraformExitCode -ne 0 -or
     $RoleArn -notmatch "^arn:[a-z0-9-]+:iam::([0-9]{12}):role/(?:[^/]+/)*([^/]+)$"
   ) {
     throw "Could not validate the role ARN from Terraform output: $OutputName"
@@ -528,7 +771,6 @@ function Get-RoleNameFromOutput {
   return $RoleName
 }
 
-$RootDir = Join-Path $MainRepoRoot "deploy/aws-ecs"
 $PlanRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_plan_role_arn"
 $LifecycleRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_lifecycle_role_arn"
 $DeployRoleName = Get-RoleNameFromOutput $RootDir "github_deploy_role_arn"
@@ -777,18 +1019,16 @@ function Write-RoleTrustPolicyForBranch {
     $Policy `
     $TargetBranch `
     "generated direct trust policy"
-  [IO.File]::WriteAllText(
-    $DestinationPath,
-    ($Policy | ConvertTo-Json -Depth 20 -Compress),
-    [Text.UTF8Encoding]::new($false)
-  )
-  Protect-CutoverPath $DestinationPath "File"
+  Write-ProtectedCutoverTextOnce `
+    $DestinationPath `
+    ($Policy | ConvertTo-Json -Depth 20 -Compress)
 }
 
 function Backup-RoleTrustAndGetBranch {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][string]$RoleName
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [switch]$InitialStateBackup
   )
   $RoleResult = Invoke-ProtectedCli `
     -Command "aws" `
@@ -846,30 +1086,37 @@ function Backup-RoleTrustAndGetBranch {
   if ($Branch -notin @($OldBranch, $NewBranch)) {
     throw "Unexpected branch in OIDC trust: $Label"
   }
-  $BackupPath = Join-Path $CutoverDir "$Label.before.json"
-  [IO.File]::WriteAllText(
-    $BackupPath,
-    ($Policy | ConvertTo-Json -Depth 20 -Compress),
-    [Text.UTF8Encoding]::new($false)
-  )
-  Protect-CutoverPath $BackupPath "File"
+  $BackupName = if ($InitialStateBackup) {
+    "$Label.before.json"
+  } else {
+    "$Label-$(New-CutoverArtifactId).observed.json"
+  }
+  $BackupPath = Join-Path $CutoverDir $BackupName
+  Write-ProtectedCutoverTextOnce `
+    $BackupPath `
+    ($Policy | ConvertTo-Json -Depth 20 -Compress)
   return $Branch
 }
 
 $BeforeBranches = [ordered]@{
-  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan" $PlanRoleName
-  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle" $LifecycleRoleName
-  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy" $DeployRoleName
-  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke" $SmokeRoleName
+  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan" $PlanRoleName -InitialStateBackup
+  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle" $LifecycleRoleName -InitialStateBackup
+  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy" $DeployRoleName -InitialStateBackup
+  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke" $SmokeRoleName -InitialStateBackup
 }
 $BeforeBranches.GetEnumerator() | ForEach-Object {
   Write-Host ("{0}: {1}" -f $_.Key, $_.Value)
 }
 
 function Get-DeployBranchVariable {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel
+  )
   $VariablesResult = Invoke-ProtectedCli `
     -Command "gh" `
-    -Label "gh-variable-list" `
+    -Label $ArtifactLabel `
     -Arguments @("variable", "list", "--json", "name,value")
   if ($VariablesResult.ExitCode -ne 0) {
     throw "gh variable list failed. Review protected diagnostic file: $($VariablesResult.StderrPath)"
@@ -887,11 +1134,26 @@ function Get-DeployBranchVariable {
   return $Value
 }
 
-$CurrentDeployBranch = Get-DeployBranchVariable
+$CurrentDeployBranch = Get-DeployBranchVariable "gh-variable-list-initial"
 Write-Host "DEPLOY_BRANCH: $CurrentDeployBranch"
 if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
   throw "DEPLOY_BRANCH has an unexpected value."
 }
+$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
+$InitialStateDocument = [ordered]@{
+  schema_version = 1
+  main_sha = $MainSha
+  aws_profile = [ordered]@{
+    was_set = $OriginalAwsProfileWasSet
+    value = $OriginalAwsProfile
+  }
+  deploy_branch = $CurrentDeployBranch
+  role_branches = $BeforeBranches
+}
+Write-ProtectedCutoverTextOnce `
+  $InitialStatePath `
+  ($InitialStateDocument | ConvertTo-Json -Depth 10 -Compress)
+Remove-Variable InitialStateDocument
 
 $CutoverWorkflows = @(
   [pscustomobject]@{ File = "aws-demo.yml"; Name = "AWS Demo Lifecycle" }
@@ -984,11 +1246,14 @@ Assert-NoBlockingCutoverRuns
 - 4 roleはrole名ではなく論理labelとbranchだけが表示される。
 - D0の想定どおりなら4 labelが`deploy/AWS_ECS`、`DEPLOY_BRANCH`も`deploy/AWS_ECS`になる。
 - 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
-- 開始時の`origin/main` SHAが`$MainSha`に保持され、以後のcheckpointではSHA自体を表示せず一致だけを検証する。
+- 開始時の`origin/main` SHAが`$MainSha`に保持され、bootstrap側でもfetch後の`origin/main`が同じcommitであることを確認する。以後のcheckpointではSHA自体を表示せず一致だけを検証する。
 - `$env:AWS_PROFILE`はこのPowerShell processと子processだけに設定される。明示profile、同じprocess環境のcredential chain、後続plan JSON内のprovider caller accountを同じallowlistと明示profile accountに照合する。
 - bootstrap / root stateのrole ARN accountは、role名を利用する前に明示profile accountと一致する。
 - main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
-- `$CutoverDir`に4 trust backup、bootstrap state backup、AWS CLI / `gh`のstdout・stderr診断logが作られる。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
+- `$BootstrapDir`がlinked worktreeならbootstrap側fetchは共有refを安全に再確認し、別cloneならそのclone自身の`origin/main`を更新する。どちらもfetch後のcommitが開始時の`$MainSha`と一致しなければconfiguration diffへ進まない。
+- `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、`AWS_PROFILE`、4 role branch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
+- `TF_DATA_DIR`はTerraform command実行中だけbootstrap/root別の保護済みdirectoryを指し、command終了時に直前の値へ戻る。root backend metadataはrepository配下の`.terraform`へ作られない。
+- initial-state、開始時4 roleの`*.before.json`、bootstrap state backupは固定名のwrite-onceであり、既存pathへの上書きを拒否する。CLI log、開始後のrole snapshot、saved plan / logは呼び出しごとのartifact IDを持つため、再試行でも既存artifactを上書きしない。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
 - Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
 - 旧branch / `main`の双方について、5 workflowに実行中・待機中runがない。
 
@@ -1001,7 +1266,73 @@ Assert-NoBlockingCutoverRuns
 - active runがある場合は完了または人間が判断したキャンセルを待つ。このrunbookは自動キャンセルやrerunを行わない。
 - active run gate後は、手順6のsmoke dispatchまで対象workflowを新たに起動しない。gateは手順1でだけ実行するため、手順6でdispatchするsmoke自身を誤検出しない。
 - 手順1で停止し、以後TerraformまたはAWS recoveryを実行しない場合は`Restore-OriginalAwsProfile`を呼び、開始時の`AWS_PROFILE`へ戻す。rollbackが必要な場合は復旧完了まで設定を維持し、rollback末尾で戻す。
-- AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作り、元の開始状態と取り違えてはならない。元の`$CutoverDir`を再指定し、変数とfunction定義だけを読み込み直してロールバックを優先する。元のbackup pathを特定できなければ追加更新を停止する。
+- AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作ってはならない。元の`$CutoverDir`を再指定し、operator入力とfunction定義だけを読み込み直した後、共有CLI logではなくwrite-onceの`cutover-initial-state.json`から開始状態を復元してロールバックを優先する。元のartifact pathを特定できなければ追加更新を停止する。
+
+session喪失時は、`$OldBranch`、`$NewBranch`、`$AwsProfile`、repository path入力と手順1のfunction定義を読み込み直してから、次だけを実行する。値は表示しない。
+
+```powershell
+$CutoverDir = "<ORIGINAL_CUTOVER_DIR>"
+$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
+if (-not (Test-Path -LiteralPath $InitialStatePath -PathType Leaf)) {
+  throw "Original write-once initial state was not found."
+}
+try {
+  $InitialState = Get-Content -LiteralPath $InitialStatePath -Raw | ConvertFrom-Json
+  $RecoveredBeforeBranches = [ordered]@{
+    terraform_plan = [string]$InitialState.role_branches.terraform_plan
+    terraform_lifecycle = [string]$InitialState.role_branches.terraform_lifecycle
+    github_deploy = [string]$InitialState.role_branches.github_deploy
+    oidc_smoke = [string]$InitialState.role_branches.oidc_smoke
+  }
+} catch {
+  throw "Could not parse the protected initial state; values were suppressed."
+}
+if (
+  [int]$InitialState.schema_version -ne 1 -or
+  [string]$InitialState.main_sha -notmatch "^[0-9a-f]{40,64}$" -or
+  [string]$InitialState.deploy_branch -notin @($OldBranch, $NewBranch) -or
+  @($RecoveredBeforeBranches.Values | Where-Object {
+    [string]$_ -notin @($OldBranch, $NewBranch)
+  }).Count -ne 0 -or
+  $InitialState.aws_profile.was_set -isnot [bool] -or
+  (
+    -not [bool]$InitialState.aws_profile.was_set -and
+    $null -ne $InitialState.aws_profile.value
+  )
+) {
+  throw "Protected initial state has an unexpected shape; values were suppressed."
+}
+$RequiredInitialArtifacts = @(
+  "bootstrap.terraform.tfstate.before",
+  "terraform-plan.before.json",
+  "terraform-lifecycle.before.json",
+  "github-deploy.before.json",
+  "oidc-smoke.before.json"
+)
+foreach ($ArtifactName in $RequiredInitialArtifacts) {
+  if (-not (Test-Path -LiteralPath (Join-Path $CutoverDir $ArtifactName) -PathType Leaf)) {
+    throw "A required write-once rollback artifact is missing: $ArtifactName"
+  }
+}
+$MainSha = [string]$InitialState.main_sha
+$CurrentDeployBranch = [string]$InitialState.deploy_branch
+$BeforeBranches = $RecoveredBeforeBranches
+$OriginalAwsProfileWasSet = [bool]$InitialState.aws_profile.was_set
+$OriginalAwsProfile = if ($OriginalAwsProfileWasSet) {
+  [string]$InitialState.aws_profile.value
+} else {
+  $null
+}
+$BootstrapTerraformDataDir = Join-Path $CutoverDir "terraform-data-bootstrap"
+$RootTerraformDataDir = Join-Path $CutoverDir "terraform-data-root"
+foreach ($TerraformDataDir in @($BootstrapTerraformDataDir, $RootTerraformDataDir)) {
+  if (-not (Test-Path -LiteralPath $TerraformDataDir -PathType Container)) {
+    throw "A protected Terraform data directory is missing."
+  }
+}
+$env:AWS_PROFILE = $AwsProfile
+Remove-Variable InitialState, RecoveredBeforeBranches
+```
 
 ### 手順2: bootstrap plan / lifecycle roleを更新
 
@@ -1148,16 +1479,18 @@ function Assert-TerraformPlanCallerAccount {
   Write-Host "Terraform provider caller account allowlist: OK ($Label)"
 }
 
-$BootstrapPlan = Join-Path $CutoverDir "bootstrap-main.tfplan"
-$BootstrapPlanLog = Join-Path $CutoverDir "bootstrap-main.plan.log"
+$BootstrapPlanArtifactId = New-CutoverArtifactId
+$BootstrapPlan = Join-Path $CutoverDir "bootstrap-main-$BootstrapPlanArtifactId.tfplan"
+$BootstrapPlanLog = Join-Path $CutoverDir "bootstrap-main-$BootstrapPlanArtifactId.plan.log"
 
+Assert-CutoverArtifactPathsUnused @($BootstrapPlan, $BootstrapPlanLog)
 Invoke-Terraform "-chdir=$BootstrapDir" plan -input=false `
   @BootstrapVarArgs `
   "-var=github_deploy_branch=$NewBranch" `
   "-target=aws_iam_role.terraform_plan" `
   "-target=aws_iam_role.terraform_lifecycle" `
   "-out=$BootstrapPlan" *> $BootstrapPlanLog
-$BootstrapPlanExit = $LASTEXITCODE
+$BootstrapPlanExit = $LastTerraformExitCode
 Protect-CutoverFileIfPresent $BootstrapPlan
 Protect-CutoverFileIfPresent $BootstrapPlanLog
 if ($BootstrapPlanExit -ne 0) {
@@ -1167,7 +1500,7 @@ if ($BootstrapPlanExit -ne 0) {
 $BootstrapPlanJson = (
   Invoke-Terraform "-chdir=$BootstrapDir" show -json $BootstrapPlan | Out-String
 )
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Could not inspect bootstrap saved plan."
 }
 Assert-TerraformPlanCallerAccount $BootstrapPlanJson "bootstrap cutover"
@@ -1188,9 +1521,12 @@ Write-Host "Privately inspect $BootstrapPlanLog and confirm only assume_role_pol
 
 if ($BootstrapChanges.Count -gt 0) {
   Assert-MainShaUnchanged "before bootstrap IAM update"
-  $BootstrapApplyLog = Join-Path $CutoverDir "bootstrap-main.apply.log"
+  $BootstrapApplyLog = Join-Path `
+    $CutoverDir `
+    "bootstrap-main-$BootstrapPlanArtifactId.apply.log"
+  Assert-CutoverArtifactPathsUnused @($BootstrapApplyLog)
   Invoke-Terraform "-chdir=$BootstrapDir" apply -input=false $BootstrapPlan *> $BootstrapApplyLog
-  $BootstrapApplyExit = $LASTEXITCODE
+  $BootstrapApplyExit = $LastTerraformExitCode
   Protect-CutoverFileIfPresent $BootstrapApplyLog
   if ($BootstrapApplyExit -ne 0) {
     throw "Bootstrap saved plan apply failed. Use the rollback section before retrying."
@@ -1222,15 +1558,17 @@ Write-Host "Bootstrap plan/lifecycle trust: main"
 **cwd:** 任意。rootは`$RootDir`とremote backendを使う。
 
 ```powershell
-$RootPlan = Join-Path $CutoverDir "root-deploy-main.tfplan"
-$RootPlanLog = Join-Path $CutoverDir "root-deploy-main.plan.log"
+$RootPlanArtifactId = New-CutoverArtifactId
+$RootPlan = Join-Path $CutoverDir "root-deploy-main-$RootPlanArtifactId.tfplan"
+$RootPlanLog = Join-Path $CutoverDir "root-deploy-main-$RootPlanArtifactId.plan.log"
 
+Assert-CutoverArtifactPathsUnused @($RootPlan, $RootPlanLog)
 Invoke-Terraform "-chdir=$RootDir" plan -input=false `
   "-var-file=$RootTfvars" `
   "-var=github_deploy_branch=$NewBranch" `
   "-target=module.iam.aws_iam_role.github_deploy" `
   "-out=$RootPlan" *> $RootPlanLog
-$RootPlanExit = $LASTEXITCODE
+$RootPlanExit = $LastTerraformExitCode
 Protect-CutoverFileIfPresent $RootPlan
 Protect-CutoverFileIfPresent $RootPlanLog
 if ($RootPlanExit -ne 0) {
@@ -1240,7 +1578,7 @@ if ($RootPlanExit -ne 0) {
 $RootPlanJson = (
   Invoke-Terraform "-chdir=$RootDir" show -json $RootPlan | Out-String
 )
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Could not inspect root saved plan."
 }
 Assert-TerraformPlanCallerAccount $RootPlanJson "root cutover"
@@ -1260,9 +1598,12 @@ Write-Host "Privately inspect $RootPlanLog and confirm only assume_role_policy c
 
 if ($RootChanges.Count -gt 0) {
   Assert-MainShaUnchanged "before root IAM update"
-  $RootApplyLog = Join-Path $CutoverDir "root-deploy-main.apply.log"
+  $RootApplyLog = Join-Path `
+    $CutoverDir `
+    "root-deploy-main-$RootPlanArtifactId.apply.log"
+  Assert-CutoverArtifactPathsUnused @($RootApplyLog)
   Invoke-Terraform "-chdir=$RootDir" apply -input=false $RootPlan *> $RootApplyLog
-  $RootApplyExit = $LASTEXITCODE
+  $RootApplyExit = $LastTerraformExitCode
   Protect-CutoverFileIfPresent $RootApplyLog
   if ($RootApplyExit -ne 0) {
     throw "Root saved plan apply failed. Use the rollback section before retrying."
@@ -1392,7 +1733,7 @@ $DeployBranchUpdateResult = Invoke-ProtectedCli `
 if ($DeployBranchUpdateResult.ExitCode -ne 0) {
   throw "DEPLOY_BRANCH update failed. IAM trusts are already main; do not run workflows until this is fixed. Review protected diagnostic file: $($DeployBranchUpdateResult.StderrPath)"
 }
-$DeployBranchAfter = Get-DeployBranchVariable
+$DeployBranchAfter = Get-DeployBranchVariable "gh-variable-list-after-update"
 if ($DeployBranchAfter -cne $NewBranch) {
   throw "DEPLOY_BRANCH verification failed."
 }
@@ -1516,42 +1857,54 @@ $FinalBranches = [ordered]@{
 if (@($FinalBranches.Values | Where-Object { $_ -cne $NewBranch }).Count -ne 0) {
   throw "At least one role does not trust main."
 }
-if ((Get-DeployBranchVariable) -cne $NewBranch) {
+if ((Get-DeployBranchVariable "gh-variable-list-final") -cne $NewBranch) {
   throw "DEPLOY_BRANCH is not main."
 }
 
 Set-Location -LiteralPath $MainRepoRoot
 Assert-MainShaUnchanged "before final operational inspection"
-$OperationalOldBranchMatches = @(
-  git grep -n "deploy/AWS_ECS" -- `
-    ".github/workflows/*.yml" `
-    "deploy/aws-ecs/*.tf" `
-    ":(glob)deploy/aws-ecs/**/*.tf" `
+$OperationalOldBranchResult = Invoke-NativeCommand `
+  -Command "git" `
+  -Arguments @(
+    "grep", "-n", "deploy/AWS_ECS", "--",
+    ".github/workflows/*.yml",
+    "deploy/aws-ecs/*.tf",
+    ":(glob)deploy/aws-ecs/**/*.tf",
     ":(glob)deploy/aws-ecs/scripts/*.ps1"
-)
+  )
+if ($OperationalOldBranchResult.ExitCode -notin @(0, 1)) {
+  throw "Could not inspect operational files for old-branch dependencies."
+}
+$OperationalOldBranchMatches = @($OperationalOldBranchResult.Output)
 if ($OperationalOldBranchMatches.Count -ne 0) {
   $OperationalOldBranchMatches
   throw "An operational old-branch dependency remains."
 }
 Write-Host "Operational old-branch references: none"
 
-$BootstrapPostPlan = Join-Path $CutoverDir "bootstrap-post-cutover.tfplan"
-$BootstrapPostLog = Join-Path $CutoverDir "bootstrap-post-cutover.plan.log"
+$BootstrapPostArtifactId = New-CutoverArtifactId
+$BootstrapPostPlan = Join-Path `
+  $CutoverDir `
+  "bootstrap-post-cutover-$BootstrapPostArtifactId.tfplan"
+$BootstrapPostLog = Join-Path `
+  $CutoverDir `
+  "bootstrap-post-cutover-$BootstrapPostArtifactId.plan.log"
+Assert-CutoverArtifactPathsUnused @($BootstrapPostPlan, $BootstrapPostLog)
 Invoke-Terraform "-chdir=$BootstrapDir" plan -input=false `
   @BootstrapVarArgs `
   "-var=github_deploy_branch=$NewBranch" `
   "-out=$BootstrapPostPlan" `
   -detailed-exitcode *> $BootstrapPostLog
-$BootstrapPostExit = $LASTEXITCODE
+$BootstrapPostExit = $LastTerraformExitCode
 Protect-CutoverFileIfPresent $BootstrapPostPlan
 Protect-CutoverFileIfPresent $BootstrapPostLog
-if ($BootstrapPostExit -eq 1) {
+if ($BootstrapPostExit -notin @(0, 2)) {
   throw "Bootstrap post-cutover full plan failed."
 }
 $BootstrapPostPlanJson = (
   Invoke-Terraform "-chdir=$BootstrapDir" show -json $BootstrapPostPlan | Out-String
 )
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Could not inspect bootstrap post-cutover full plan."
 }
 Assert-TerraformPlanCallerAccount $BootstrapPostPlanJson "bootstrap post-cutover full plan"
@@ -1568,23 +1921,29 @@ Assert-TrustOnlyPlanChanges `
   $AllowedBootstrapAddresses `
   $NewBranch
 
-$RootPostPlan = Join-Path $CutoverDir "root-post-cutover.tfplan"
-$RootPostLog = Join-Path $CutoverDir "root-post-cutover.plan.log"
+$RootPostArtifactId = New-CutoverArtifactId
+$RootPostPlan = Join-Path `
+  $CutoverDir `
+  "root-post-cutover-$RootPostArtifactId.tfplan"
+$RootPostLog = Join-Path `
+  $CutoverDir `
+  "root-post-cutover-$RootPostArtifactId.plan.log"
+Assert-CutoverArtifactPathsUnused @($RootPostPlan, $RootPostLog)
 Invoke-Terraform "-chdir=$RootDir" plan -input=false `
   "-var-file=$RootTfvars" `
   "-var=github_deploy_branch=$NewBranch" `
   "-out=$RootPostPlan" `
   -detailed-exitcode *> $RootPostLog
-$RootPostExit = $LASTEXITCODE
+$RootPostExit = $LastTerraformExitCode
 Protect-CutoverFileIfPresent $RootPostPlan
 Protect-CutoverFileIfPresent $RootPostLog
-if ($RootPostExit -eq 1) {
+if ($RootPostExit -notin @(0, 2)) {
   throw "Root post-cutover full plan failed."
 }
 $RootPostPlanJson = (
   Invoke-Terraform "-chdir=$RootDir" show -json $RootPostPlan | Out-String
 )
-if ($LASTEXITCODE -ne 0) {
+if ($LastTerraformExitCode -ne 0) {
   throw "Could not inspect root post-cutover full plan."
 }
 Assert-TerraformPlanCallerAccount $RootPostPlanJson "root post-cutover full plan"
@@ -1613,21 +1972,23 @@ Write-Host (
 
 - 4 roleのbranchがすべて`main`、`DEPLOY_BRANCH`も`main`になる。
 - operational fileに旧branch参照がない。歴史説明を持つdocs内の旧branch名は対象外である。
+- `git grep`の「該当なし」exit code `1`は成功として継続し、`0`は検出結果をfail closedする。その他のexit codeは検査失敗として停止する。
 - 通常planの`-detailed-exitcode`は、差分なしなら`0`、差分ありなら`2`である。
+- native error promotionは終了コードを捕捉するnative commandの実行中だけ無効になり、直後に元の設定へ戻る。したがってplanの`2`はdriftとして検査される一方、想定外exit codeは握り潰されない。
 - Terraform管理のtrust roleに差分がある場合は、targeted saved planと同じsubject-only完全比較を通る。
 
 **失敗時**
 
 - full planが`2`でも、この手順ではapplyしない。local logを安全な場所でreviewし、targetingで見落としたtrust関連差分ならD1a内で修正、無関係なdriftなら別issueへ分離する。
 - trust roleの差分がsubject-only完全比較に失敗した場合は、providerや追加conditionなどの値を表示せず停止する。
-- full planが`1`ならbackend、tfvars、権限を確認する。trustとsmokeの個別検証が成功済みでも、D1a完了チェックには失敗として記録する。
+- full planが`1`または`0` / `2`以外ならbackend、tfvars、権限を確認する。trustとsmokeの個別検証が成功済みでも、D1a完了チェックには失敗として記録する。
 - 一時ファイルはrollback判断が完了するまで削除しない。
 
 ### 手順8: 一時artifactを安全に削除
 
 **cwd:** 任意。手順7とsmokeが成功し、rollbackしないと人間が判断した後だけ実行する。
 
-`$CutoverDir`にはstate backup、saved plan、plan log、実trust policy、AWS CLI / `gh`のstdout・stderr診断logが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
+`$CutoverDir`にはinitial state、state backup、bootstrap/rootのTerraform data directoryとbackend metadata、saved plan、plan log、実trust policy、AWS CLI / `gh`のstdout・stderr診断logが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
 
 ```powershell
 try {
@@ -1654,8 +2015,9 @@ Write-Host "AWS_PROFILE: restored to the process start state"
 **期待される結果**
 
 - 検証済みの一時directoryだけが削除される。
-- repository内のfile、Terraform remote state、AWS resourceは削除されない。
+- repository内のfile、Terraform remote state、AWS resourceは削除されず、repository配下にbackend metadataを残さない。
 - process-scoped `AWS_PROFILE`はrunbook開始時の値へ戻り、開始時に未設定なら削除される。
+- `TF_DATA_DIR`は各Terraform command直後に元の状態へ戻っており、cleanupでは保護済みdata directoryだけが他artifactとともに削除される。
 
 **失敗時**
 
@@ -1680,6 +2042,9 @@ rollbackの基準は旧branchではなく、手順1で記録した開始時状�
 ```powershell
 function Restore-RoleTrust {
   param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel,
     [Parameter(Mandatory = $true)][string]$RoleName,
     [Parameter(Mandatory = $true)][string]$BackupPath,
     [Parameter(Mandatory = $true)][string]$ExpectedBranch
@@ -1689,7 +2054,7 @@ function Restore-RoleTrust {
   }
   $CurrentRoleResult = Invoke-ProtectedCli `
     -Command "aws" `
-    -Label "aws-restore-get-role" `
+    -Label "aws-$ArtifactLabel-restore-get-role" `
     -Arguments @(
       "iam", "get-role",
       "--profile", $AwsProfile,
@@ -1716,7 +2081,7 @@ function Restore-RoleTrust {
     "direct trust restore"
   $TrustRestoreResult = Invoke-ProtectedCli `
     -Command "aws" `
-    -Label "aws-restore-update-role" `
+    -Label "aws-$ArtifactLabel-restore-update-role" `
     -Arguments @(
       "iam", "update-assume-role-policy",
       "--profile", $AwsProfile,
@@ -1745,7 +2110,11 @@ if (-not $DeployBranchRollbackOk) {
 }
 
 $SmokeBeforePath = Join-Path $CutoverDir "oidc-smoke.before.json"
-Restore-RoleTrust $SmokeRoleName $SmokeBeforePath $BeforeBranches.oidc_smoke
+Restore-RoleTrust `
+  "oidc-smoke-rollback" `
+  $SmokeRoleName `
+  $SmokeBeforePath `
+  $BeforeBranches.oidc_smoke
 if (
   (Backup-RoleTrustAndGetBranch "oidc-smoke-rollback-check" $SmokeRoleName) -cne
   $BeforeBranches.oidc_smoke
@@ -1760,19 +2129,27 @@ function Restore-TerraformRoleToRecordedBranch {
     [Parameter(Mandatory = $true)][string]$ResourceAddress,
     [Parameter(Mandatory = $true)][string]$RoleName,
     [Parameter(Mandatory = $true)][string]$ExpectedBranch,
-    [Parameter(Mandatory = $true)][string]$ArtifactLabel
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel
   )
   if ($ExpectedBranch -notin @($BeforeBranches.Values)) {
     throw "Rollback branch is not one of the recorded role start values: $ArtifactLabel"
   }
-  $RollbackPlan = Join-Path $CutoverDir "$ArtifactLabel.before.tfplan"
-  $RollbackPlanLog = Join-Path $CutoverDir "$ArtifactLabel.before.plan.log"
+  $RollbackArtifactId = New-CutoverArtifactId
+  $RollbackPlan = Join-Path `
+    $CutoverDir `
+    "$ArtifactLabel-$RollbackArtifactId.before.tfplan"
+  $RollbackPlanLog = Join-Path `
+    $CutoverDir `
+    "$ArtifactLabel-$RollbackArtifactId.before.plan.log"
+  Assert-CutoverArtifactPathsUnused @($RollbackPlan, $RollbackPlanLog)
   Invoke-Terraform "-chdir=$TerraformDirectory" plan -input=false `
     @TerraformVarArguments `
     "-var=github_deploy_branch=$ExpectedBranch" `
     "-target=$ResourceAddress" `
     "-out=$RollbackPlan" *> $RollbackPlanLog
-  $RollbackPlanExit = $LASTEXITCODE
+  $RollbackPlanExit = $LastTerraformExitCode
   Protect-CutoverFileIfPresent $RollbackPlan
   Protect-CutoverFileIfPresent $RollbackPlanLog
   if ($RollbackPlanExit -ne 0) {
@@ -1781,7 +2158,7 @@ function Restore-TerraformRoleToRecordedBranch {
   $RollbackPlanJson = (
     Invoke-Terraform "-chdir=$TerraformDirectory" show -json $RollbackPlan | Out-String
   )
-  if ($LASTEXITCODE -ne 0) {
+  if ($LastTerraformExitCode -ne 0) {
     throw "Could not inspect recorded-state rollback plan: $ArtifactLabel"
   }
   Assert-TerraformPlanCallerAccount $RollbackPlanJson "$ArtifactLabel rollback"
@@ -1797,9 +2174,12 @@ function Restore-TerraformRoleToRecordedBranch {
     @($ResourceAddress) `
     $ExpectedBranch
   if ($RollbackChanges.Count -gt 0) {
-    $RollbackApplyLog = Join-Path $CutoverDir "$ArtifactLabel.before.apply.log"
+    $RollbackApplyLog = Join-Path `
+      $CutoverDir `
+      "$ArtifactLabel-$RollbackArtifactId.before.apply.log"
+    Assert-CutoverArtifactPathsUnused @($RollbackApplyLog)
     Invoke-Terraform "-chdir=$TerraformDirectory" apply -input=false $RollbackPlan *> $RollbackApplyLog
-    $RollbackApplyExit = $LASTEXITCODE
+    $RollbackApplyExit = $LastTerraformExitCode
     Protect-CutoverFileIfPresent $RollbackApplyLog
     if ($RollbackApplyExit -ne 0) {
       throw "Recorded-state rollback apply failed: $ArtifactLabel"
@@ -1902,6 +2282,7 @@ $DirectRecoveryRoles = @(
 foreach ($RecoveryRole in $DirectRecoveryRoles) {
   $BackupPath = Join-Path $CutoverDir "$($RecoveryRole.Label).before.json"
   Restore-RoleTrust `
+    "$($RecoveryRole.Label)-direct-recovery" `
     $RecoveryRole.RoleName `
     $BackupPath `
     $RecoveryRole.ExpectedBranch
@@ -1926,10 +2307,13 @@ backupにはprovider識別子が含まれるため、terminalへ出力せず`fil
 ## 7. 完了チェックリスト
 
 - [ ] PR #126 commitが実行用`main`の祖先である
+- [ ] bootstrap repositoryをfetchし、その`origin/main`が開始時の`$MainSha`と一致する
 - [ ] 旧branch / `main`の5 workflowに`in_progress` / `queued` / `waiting` / `requested` / `pending` runがない
 - [ ] 権威あるbootstrap local stateとroot remote stateを特定した
 - [ ] bootstrap / root stateのrole ARN accountが明示profile accountと一致する
 - [ ] 直近applyと同一のbootstrap/root入力を使用した
+- [ ] initial-state、4 role backup、bootstrap state backupが保護済み領域にwrite-onceで保存された
+- [ ] bootstrap/rootの`TF_DATA_DIR`が保護済みの別directoryを使い、各command後に元の設定へ戻る
 - [ ] Terraform plan roleのsubjectが`refs/heads/main`だけである
 - [ ] Terraform lifecycle roleのsubjectが`refs/heads/main`だけである
 - [ ] root GitHub deploy roleのsubjectが`refs/heads/main`だけである
@@ -1941,6 +2325,7 @@ backupにはprovider識別子が含まれるため、terminalへ出力せず`fil
 - [ ] `main`から開始時の`$MainSha`で実行した`AWS OIDC Smoke`がsuccessである
 - [ ] operational `.yml` / `.tf` / `.ps1`に旧branch依存がない
 - [ ] bootstrap/rootのpost-cutover full planが成功し、exit codeと未適用driftを記録した
+- [ ] `git grep`のexit `1`とfull planのexit `2`が期待値として処理され、native error promotionは各command後に復元された
 - [ ] saved plan内のTerraform provider caller accountが明示profile accountと一致し、allowlist内である
 - [ ] account ID、ARN、state、plan、trust backup、secret、tokenをissue / PR / chatへ貼っていない
 - [ ] AWS CLI / `gh`のstdout・stderrは保護済み`$CutoverDir`だけに保存し、terminalへ表示していない
