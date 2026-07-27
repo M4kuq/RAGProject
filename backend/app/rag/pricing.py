@@ -23,6 +23,7 @@ DEFAULT_PRICING: Mapping[str, Mapping[str, float]] = {
     "ollama:llama3.1": {"input_per_1m": 0.0, "output_per_1m": 0.0},
     "lmstudio:qwen3.5-4b": {"input_per_1m": 0.0, "output_per_1m": 0.0},
     "lmstudio:qwen3.5-9b": {"input_per_1m": 0.0, "output_per_1m": 0.0},
+    "nvidia:*": {"input_per_1m": 0.0, "output_per_1m": 0.0},
     "openai:gpt-5.5": {"input_per_1m": 1.25, "output_per_1m": 10.0},
     "openai:gpt-5.4": {"input_per_1m": 1.25, "output_per_1m": 10.0},
     "anthropic:claude-sonnet-4-*": {"input_per_1m": 3.0, "output_per_1m": 15.0},

@@ -404,6 +404,7 @@ metrics and reason codes. See
 ## Demo / Test Docs
 
 - [5min demo](docs/demo/5min_demo.md)
+- [local NVIDIA Build API generation](docs/demo/nvidia_build_api.md)
 - [UI demo](docs/demo/ui_demo.md)
 - [CLI demo](docs/demo/cli_demo.md)
 - [MCP demo](docs/demo/mcp_demo.md)

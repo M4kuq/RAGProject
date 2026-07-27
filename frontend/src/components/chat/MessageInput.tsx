@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent } from "react";
 import type { RagStrategy } from "../../features/chat/chatTypes";
 
 export function MessageInput({
+  externalDataWarning,
   disabled,
   disabledReason,
   isSending,
@@ -15,6 +16,7 @@ export function MessageInput({
   strategyOptions,
   value
 }: {
+  externalDataWarning: string | null;
   disabled: boolean;
   disabledReason: string | null;
   isSending: boolean;
@@ -61,6 +63,11 @@ export function MessageInput({
           ) : (
             <p className="notice">Enter to send, Shift+Enter for a new line.</p>
           )}
+          {externalDataWarning ? (
+            <p className="notice external-data-warning" role="status">
+              {externalDataWarning}
+            </p>
+          ) : null}
           {selectedStrategyDescription ? (
             <p className="strategy-description">{selectedStrategyDescription}</p>
           ) : null}

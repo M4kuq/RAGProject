@@ -18,6 +18,7 @@ import {
   useEvaluationMetricCatalog,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
+import { buildEvaluationGenerationProviders } from "../../../features/evaluations/generationProviders";
 import type {
   EvaluationCacheMode,
   EvaluationGenerationProvider,
@@ -26,17 +27,16 @@ import type {
   EvaluationRunnableStrategy
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
+import {
+  isNvidiaApiEnabled,
+  NVIDIA_EXTERNAL_DATA_WARNING,
+  nvidiaModelIds,
+  NVIDIA_RECOMMENDED_MODEL_ID
+} from "../../../lib/modelCatalog";
 
 const PAGE_SIZE = 20;
 const DEFAULT_GENERATION_PROVIDER: EvaluationGenerationProvider = "lmstudio";
 const DEFAULT_GENERATION_MODEL = "qwen3.5-9b";
-const GENERATION_PROVIDERS: EvaluationGenerationProvider[] = [
-  "lmstudio",
-  "ollama",
-  "openai",
-  "anthropic",
-  "gemini"
-];
 const END_TO_END_ONLY_STRATEGIES: EvaluationRunnableStrategy[] = [
   "llm_tool_orchestrator",
   "langchain_agentic",
@@ -45,6 +45,9 @@ const END_TO_END_ONLY_STRATEGIES: EvaluationRunnableStrategy[] = [
 
 export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const nvidiaApiEnabled = isNvidiaApiEnabled();
+  const nvidiaModels = nvidiaModelIds();
+  const generationProviders = buildEvaluationGenerationProviders(nvidiaApiEnabled);
   const [datasetName, setDatasetName] = useState("phase1_smoke");
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
@@ -107,6 +110,18 @@ export function EvaluationListPage() {
     const next = new URLSearchParams(searchParams);
     next.set("page", String(page));
     setSearchParams(next);
+  }
+
+  function changeGenerationProvider(provider: EvaluationGenerationProvider) {
+    setGenerationProvider(provider);
+    if (
+      provider === "nvidia" &&
+      (!generationModel.trim() ||
+        generationModel === DEFAULT_GENERATION_MODEL ||
+        generationModel === "meta/llama-3.3-70b-instruct")
+    ) {
+      setGenerationModel(NVIDIA_RECOMMENDED_MODEL_ID);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -189,6 +204,9 @@ export function EvaluationListPage() {
         <InlineAlert tone="info">
           評価コーパスの準備とpreflightが完了するまでrunは開始できません。dataset詳細で進捗を確認できます。
         </InlineAlert>
+      ) : null}
+      {generationProvider === "nvidia" ? (
+        <InlineAlert>{NVIDIA_EXTERNAL_DATA_WARNING}</InlineAlert>
       ) : null}
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
@@ -316,10 +334,10 @@ export function EvaluationListPage() {
             disabled={!generatesAnswers}
             value={generationProvider}
             onChange={(event) =>
-              setGenerationProvider(event.target.value as EvaluationGenerationProvider)
+              changeGenerationProvider(event.target.value as EvaluationGenerationProvider)
             }
           >
-            {GENERATION_PROVIDERS.map((provider) => (
+            {generationProviders.map((provider) => (
               <option key={provider} value={provider}>
                 {provider}
               </option>
@@ -338,11 +356,19 @@ export function EvaluationListPage() {
           <input
             aria-label="生成 model"
             disabled={!generatesAnswers}
+            list={generationProvider === "nvidia" ? "nvidia-generation-models" : undefined}
             maxLength={128}
             placeholder="例: qwen3.5-9b"
             value={generationModel}
             onChange={(event) => setGenerationModel(event.target.value)}
           />
+          {nvidiaApiEnabled ? (
+            <datalist id="nvidia-generation-models">
+              {nvidiaModels.map((modelId) => (
+                <option key={modelId} value={modelId} />
+              ))}
+            </datalist>
+          ) : null}
         </label>
         <label>
           ケース上限
@@ -578,3 +604,4 @@ function nextCacheModes(
   }
   return current.filter((item) => item !== mode);
 }
+

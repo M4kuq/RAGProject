@@ -290,17 +290,21 @@ class OpenAICompatibleChatAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int = 8192,
+        native_lmstudio_api: bool = True,
     ) -> None:
         self.api_key = api_key
-        self.base_url = _lmstudio_native_base_url(base_url)
+        self.base_url = (
+            _lmstudio_native_base_url(base_url) if native_lmstudio_api else base_url.rstrip("/")
+        )
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.native_lmstudio_api = native_lmstudio_api
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
-        if request.response_format is None:
+        if self.native_lmstudio_api and request.response_format is None:
             endpoint = f"{self.base_url}/api/v1/chat"
             request_payload: dict[str, object] = {
                 "model": self.model_name,
@@ -312,7 +316,10 @@ class OpenAICompatibleChatAnswerGenerator:
                 "store": False,
             }
         else:
-            endpoint = f"{self.base_url}/v1/chat/completions"
+            chat_completions_base_url = (
+                f"{self.base_url}/v1" if self.native_lmstudio_api else self.base_url
+            )
+            endpoint = f"{chat_completions_base_url}/chat/completions"
             request_payload = {
                 "model": self.model_name,
                 "messages": [
@@ -320,11 +327,17 @@ class OpenAICompatibleChatAnswerGenerator:
                     {"role": "user", "content": _openai_input(request)},
                 ],
                 "max_tokens": _max_output_tokens(
-                    min(self.max_output_tokens, max(128, request.max_output_chars // 4))
+                    self.max_output_tokens
+                    if not self.native_lmstudio_api
+                    else min(self.max_output_tokens, max(128, request.max_output_chars // 4))
                 ),
                 "temperature": request.temperature if request.temperature is not None else 0.2,
                 "stream": False,
-                "response_format": request.response_format,
+                **(
+                    {"response_format": request.response_format}
+                    if request.response_format is not None
+                    else {}
+                ),
             }
         try:
             response = httpx.post(
@@ -577,6 +590,21 @@ def create_answer_generator(
             model_name=_lmstudio_native_model_name(generation_model_name),
             timeout_seconds=timeout_seconds or settings.lmstudio_timeout_seconds,
             max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+        )
+    if generation_provider == "nvidia":
+        if (
+            settings.app_env.lower() not in {"local", "test"}
+            or not settings.nvidia_api_key
+            or not settings.nvidia_base_url
+        ):
+            raise AnswerGenerationError()
+        return OpenAICompatibleChatAnswerGenerator(
+            api_key=settings.nvidia_api_key,
+            base_url=settings.nvidia_base_url,
+            model_name=generation_model_name,
+            timeout_seconds=timeout_seconds or settings.nvidia_timeout_seconds,
+            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+            native_lmstudio_api=False,
         )
     if generation_provider == "openai" and settings.openai_api_key:
         return OpenAIResponsesAnswerGenerator(

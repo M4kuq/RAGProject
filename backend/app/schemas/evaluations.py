@@ -55,7 +55,7 @@ _FORBIDDEN_KEY_PARTS = (
     "token",
 )
 KNOWN_GENERATION_PROVIDERS = frozenset(
-    {"ollama", "lmstudio", "openai", "anthropic", "gemini", "bedrock"}
+    {"ollama", "lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
 )
 
 

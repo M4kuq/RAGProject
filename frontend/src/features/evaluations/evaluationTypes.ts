@@ -35,7 +35,8 @@ export type EvaluationGenerationProvider =
   | "lmstudio"
   | "openai"
   | "anthropic"
-  | "gemini";
+  | "gemini"
+  | "nvidia";
 
 export type EvaluationMetricCategory =
   | "retrieval"
@@ -629,3 +630,4 @@ export type PagedEvaluationCases = {
   items: EvaluationCase[];
   pagination?: PaginationMeta;
 };
+
