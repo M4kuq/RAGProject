@@ -74,7 +74,14 @@ bootstrapの`backend_config` outputは`deploy/aws-ecs/bootstrap/outputs.tf:11-19
 
 bootstrap変数にはすべてdefaultがある。ただし、過去のapplyでtfvarsを使った場合は同じtfvarsを再利用し、`github_deploy_branch`だけをCLIで`main`へ上書きする。特に`project`、`environment`、`github_oidc_repo`、`github_oidc_provider_arn`を過去と変えてはならない。
 
-root stackにはdefaultのない変数とsensitiveな入力がある。新しい値をD1aで組み立てず、直近の正常なroot applyで使用した同一のtfvarsまたは同等の安全な環境注入を再利用する。branchだけをCLIで`main`へ上書きする。
+root stackにはdefaultのない変数とsensitiveな入力がある。新しい値をD1aで組み立てず、次のどちらか一方で直近の正常なroot applyと同じ入力を再利用する。branchだけをCLIで`main`へ上書きする。
+
+| root入力方式 | 前提条件 | runbookでの扱い |
+|---|---|---|
+| tfvars | `$RootTfvars`へ既存fileの絶対pathを設定する。直近apply後に内容を変更していないこと。 | 存在するときだけ全root plan / rollback planへ`-var-file`を追加する。file SHA-256と同じprocessの全`TF_VAR_*`名・値のfingerprintを記録し、root Terraform commandごとに不変を確認する。 |
+| 環境変数 | `$RootTfvars`を空文字にし、直近applyで使った完全な`TF_VAR_*`集合を同じPowerShell processへ設定する。少なくともrootでdefaultのない7変数（手順1の`$RootRequiredEnvironmentVariables`）が空でないこと。 | `-var-file`を渡さない。必須7変数、repository / branchのshape、全`TF_VAR_*`名・値のfingerprintをpreflightし、root Terraform commandごとに不変を確認する。 |
+
+`.github/workflows/aws-demo.yml`の環境変数方式は、必須7変数に加えて`TF_VAR_region`、`TF_VAR_project`、`TF_VAR_environment`、`TF_VAR_github_deploy_branch`などを設定する。この追加分も含め、直近applyで使った完全な集合を再現する。tfvars方式でもambientな`TF_VAR_*`はTerraform入力になり得るためfingerprint対象に含める。preflight後に値の変更、追加、削除があれば、plan / saved-plan apply / post-plan / rollbackのいずれも`Invoke-Terraform`内で停止する。環境変数の実値はinitial-stateへ保存せず、変数名とSHA-256 fingerprintだけを保護済み領域へ記録する。
 
 利用できるoutputsは次のとおりである。
 
@@ -102,7 +109,8 @@ bootstrap lifecycle roleのpolicyにはroot runtime roleのtrust更新権限が�
 次はrepositoryの静的調査だけでは確定できない。いずれかを満たせない場合はapplyせず停止する。
 
 - 権威あるbootstrap local stateを保持するディレクトリの実path
-- bootstrapとrootで過去に使用したtfvarsの実pathと同一性
+- bootstrapで過去に使用したtfvarsの実pathと同一性
+- rootで直近applyに使用した入力一式。tfvars方式なら同じfile、環境変数方式なら同じ完全な`TF_VAR_*`集合を同じPowerShell processへ設定する
 - local実行主体が上記権限を持つこと
 - GitHub secretが現在の4 roleを指していること
 - AWS上の各trustが本当に旧branchだけを許可しているか、または既に一部切り替わっているか
@@ -143,13 +151,15 @@ D1aで実行確認するworkflowはpermissionlessな`AWS OIDC Smoke`だけとす
 
 **cwd:** 最初は任意。`$MainRepoRoot`と`$BootstrapDir`を絶対pathで設定した後、command自身がcwdを切り替える。
 
+rootの直近applyがtfvars方式なら`$RootTfvars`を設定し、環境変数方式なら空文字のまま必要な`TF_VAR_*`をこのPowerShell processへ設定してから実行する。両方を新しく混ぜて直近applyと異なる入力を作らない。
+
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $MainRepoRoot = "<ABSOLUTE_PATH_TO_CLEAN_MAIN_WORKTREE>"
 $BootstrapDir = "<ABSOLUTE_PATH_TO_AUTHORITATIVE_BOOTSTRAP_DIR>"
-$RootTfvars = "<ABSOLUTE_PATH_TO_EXISTING_ROOT_TFVARS>"
+$RootTfvars = "" # 直近root applyで使った場合だけ絶対path。TF_VAR_*方式なら空文字
 $BootstrapTfvars = "" # 過去に使った場合だけ絶対path。未使用なら空文字
 $AwsProfile = "<AWS_PROFILE>"
 $Repository = "<OWNER>/<REPO>"
@@ -157,9 +167,12 @@ $SmokeRoleName = "ragproject-demo-github-oidc-smoke"
 $OldBranch = "deploy/AWS_ECS"
 $NewBranch = "main"
 
-$RequiredText = @($MainRepoRoot, $BootstrapDir, $RootTfvars, $AwsProfile, $Repository)
+$RequiredText = @($MainRepoRoot, $BootstrapDir, $AwsProfile, $Repository)
 if (@($RequiredText | Where-Object { $_ -match "^<.*>$" -or [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
   throw "Replace every required placeholder before continuing."
+}
+if ($RootTfvars -match "^<.*>$" -or $BootstrapTfvars -match "^<.*>$") {
+  throw "Replace or clear every optional tfvars placeholder before continuing."
 }
 if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
   throw "Repository must use OWNER/REPO format."
@@ -168,7 +181,9 @@ if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
 $MainRepoRoot = (Resolve-Path -LiteralPath $MainRepoRoot).Path
 $BootstrapDir = (Resolve-Path -LiteralPath $BootstrapDir).Path
 $RootDir = (Resolve-Path -LiteralPath (Join-Path $MainRepoRoot "deploy/aws-ecs")).Path
-$RootTfvars = (Resolve-Path -LiteralPath $RootTfvars).Path
+if ($RootTfvars) {
+  $RootTfvars = (Resolve-Path -LiteralPath $RootTfvars).Path
+}
 if ($BootstrapTfvars) {
   $BootstrapTfvars = (Resolve-Path -LiteralPath $BootstrapTfvars).Path
 }
@@ -178,6 +193,196 @@ foreach ($CommandName in @("git", "terraform", "aws", "gh")) {
     throw "Required command is unavailable: $CommandName"
   }
 }
+
+$RootRequiredEnvironmentVariables = @(
+  "TF_VAR_github_oidc_repo",
+  "TF_VAR_database_url_secret_arn",
+  "TF_VAR_session_secret_arn",
+  "TF_VAR_demo_admin_password_secret_arn",
+  "TF_VAR_basic_auth_username",
+  "TF_VAR_basic_auth_header_sha256",
+  "TF_VAR_origin_verify_header_value"
+)
+
+function Get-RootTerraformEnvironmentVariableNames {
+  @(
+    Get-ChildItem Env: |
+      Where-Object { $_.Name -like "TF_VAR_*" } |
+      ForEach-Object { [string]$_.Name } |
+      Sort-Object -Unique
+  )
+}
+
+function Get-RootTerraformEnvironmentFingerprint {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [string[]]$VariableNames
+  )
+  $EnvironmentDocument = @(
+    foreach ($VariableName in $VariableNames) {
+      $VariableValue = [Environment]::GetEnvironmentVariable(
+        $VariableName,
+        [EnvironmentVariableTarget]::Process
+      )
+      if ($null -eq $VariableValue) {
+        throw "A recorded root TF_VAR environment variable is no longer set."
+      }
+      [ordered]@{
+        name = $VariableName
+        value = $VariableValue
+      }
+    }
+  )
+  $EnvironmentJson = ConvertTo-Json `
+    -InputObject $EnvironmentDocument `
+    -Depth 3 `
+    -Compress
+  $HashAlgorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    $HashBytes = $HashAlgorithm.ComputeHash(
+      [Text.UTF8Encoding]::new($false).GetBytes($EnvironmentJson)
+    )
+  } finally {
+    $HashAlgorithm.Dispose()
+    Remove-Variable EnvironmentDocument, EnvironmentJson
+  }
+  return ([BitConverter]::ToString($HashBytes) -replace "-", "").ToLowerInvariant()
+}
+
+$RootEnvironmentVariableNames = @(Get-RootTerraformEnvironmentVariableNames)
+if (-not $RootTfvars) {
+  $MissingRootEnvironmentVariables = @(
+    $RootRequiredEnvironmentVariables |
+      Where-Object {
+        [string]::IsNullOrWhiteSpace(
+          [Environment]::GetEnvironmentVariable(
+            $_,
+            [EnvironmentVariableTarget]::Process
+          )
+        )
+      }
+  )
+  if ($MissingRootEnvironmentVariables.Count -ne 0) {
+    throw "Root tfvars is absent and required TF_VAR environment variables are missing: $($MissingRootEnvironmentVariables -join ', ')."
+  }
+  if ([string]$env:TF_VAR_github_oidc_repo -cne $Repository) {
+    throw "TF_VAR_github_oidc_repo must match Repository."
+  }
+  if (
+    -not [string]::IsNullOrWhiteSpace([string]$env:TF_VAR_github_deploy_branch) -and
+    [string]$env:TF_VAR_github_deploy_branch -notin @($OldBranch, $NewBranch)
+  ) {
+    throw "TF_VAR_github_deploy_branch must be the recorded old or new branch."
+  }
+}
+$RootInputRequiredEnvironmentVariables = @(
+  if (-not $RootTfvars) {
+    $RootRequiredEnvironmentVariables
+  }
+)
+$RootVarArguments = @(
+  if ($RootTfvars) {
+    "-var-file=$RootTfvars"
+  }
+)
+$RootInputContext = [ordered]@{
+  mode = if ($RootTfvars) { "tfvars" } else { "environment" }
+  tfvars_path = if ($RootTfvars) { $RootTfvars } else { $null }
+  tfvars_sha256 = if ($RootTfvars) {
+    (Get-FileHash -LiteralPath $RootTfvars -Algorithm SHA256).Hash.ToLowerInvariant()
+  } else {
+    $null
+  }
+  required_environment_variables = @($RootInputRequiredEnvironmentVariables)
+  environment_variable_names = @($RootEnvironmentVariableNames)
+  environment_sha256 = Get-RootTerraformEnvironmentFingerprint `
+    $RootEnvironmentVariableNames
+  var_arguments = @($RootVarArguments)
+}
+Remove-Variable `
+  RootEnvironmentVariableNames,
+  RootInputRequiredEnvironmentVariables,
+  RootVarArguments
+
+function Assert-RootTerraformInputUnchanged {
+  $InputMode = [string]$RootInputContext.mode
+  $ExpectedEnvironmentVariableNames = @(
+    $RootInputContext.environment_variable_names |
+      ForEach-Object { [string]$_ }
+  )
+  $CurrentEnvironmentVariableNames = @(
+    Get-RootTerraformEnvironmentVariableNames
+  )
+  if (
+    (ConvertTo-Json -InputObject $ExpectedEnvironmentVariableNames -Compress) -cne
+    (ConvertTo-Json -InputObject $CurrentEnvironmentVariableNames -Compress)
+  ) {
+    throw "The root TF_VAR environment variable name set changed after preflight."
+  }
+  $CurrentEnvironmentFingerprint = Get-RootTerraformEnvironmentFingerprint `
+    $CurrentEnvironmentVariableNames
+  if (
+    $CurrentEnvironmentFingerprint -cne
+    [string]$RootInputContext.environment_sha256
+  ) {
+    throw "A root TF_VAR environment variable value changed after preflight."
+  }
+  if ($InputMode -ceq "environment") {
+    $MissingRequiredVariables = @(
+      @($RootInputContext.required_environment_variables) |
+        Where-Object {
+          [string]::IsNullOrWhiteSpace(
+            [Environment]::GetEnvironmentVariable(
+              [string]$_,
+              [EnvironmentVariableTarget]::Process
+            )
+          )
+        }
+    )
+    if ($MissingRequiredVariables.Count -ne 0) {
+      throw "Required root TF_VAR environment variables are missing after preflight."
+    }
+    if ([string]$env:TF_VAR_github_oidc_repo -cne $Repository) {
+      throw "TF_VAR_github_oidc_repo changed or does not match Repository."
+    }
+    if (
+      -not [string]::IsNullOrWhiteSpace(
+        [string]$env:TF_VAR_github_deploy_branch
+      ) -and
+      [string]$env:TF_VAR_github_deploy_branch -notin @($OldBranch, $NewBranch)
+    ) {
+      throw "TF_VAR_github_deploy_branch has an unexpected value."
+    }
+    if (
+      $null -ne $RootInputContext.tfvars_path -or
+      $null -ne $RootInputContext.tfvars_sha256 -or
+      @($RootInputContext.var_arguments).Count -ne 0
+    ) {
+      throw "The recorded root environment input context is invalid."
+    }
+  } elseif ($InputMode -ceq "tfvars") {
+    $TfvarsPath = [string]$RootInputContext.tfvars_path
+    if (-not (Test-Path -LiteralPath $TfvarsPath -PathType Leaf)) {
+      throw "The recorded root tfvars file is unavailable."
+    }
+    $CurrentTfvarsHash = (
+      Get-FileHash -LiteralPath $TfvarsPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    if ($CurrentTfvarsHash -cne [string]$RootInputContext.tfvars_sha256) {
+      throw "The root tfvars file changed after preflight."
+    }
+    if (
+      @($RootInputContext.var_arguments).Count -ne 1 -or
+      [string]$RootInputContext.var_arguments[0] -cne "-var-file=$TfvarsPath"
+    ) {
+      throw "The recorded root tfvars argument is invalid."
+    }
+  } else {
+    throw "The recorded root input mode is invalid."
+  }
+}
+Assert-RootTerraformInputUnchanged
 
 $IsWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
   [Runtime.InteropServices.OSPlatform]::Windows
@@ -206,7 +411,7 @@ function Invoke-NativeCommand {
     if ($NativeErrorPreferenceWasSet) {
       $PSNativeCommandUseErrorActionPreference = $false
     }
-    $Output = @(& $Command @Arguments)
+    $Output = @(& $Command @Arguments 2>&1)
     $ExitCode = $LASTEXITCODE
   } finally {
     if ($NativeErrorPreferenceWasSet) {
@@ -676,6 +881,8 @@ try {
 }
 
 $LastTerraformExitCode = $null
+$LastTerraformStdoutPath = $null
+$LastTerraformStderrPath = $null
 function Invoke-Terraform {
   param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -706,6 +913,24 @@ function Invoke-Terraform {
   } else {
     throw "Terraform directory is outside the bootstrap/root allowlist."
   }
+  if ([string]::Equals($TerraformDirectory, $RootDir, $PathComparison)) {
+    Assert-RootTerraformInputUnchanged
+  }
+  $TerraformVerb = @(
+    $TerraformArguments |
+      Where-Object { $_ -notlike "-chdir=*" }
+  ) | Select-Object -First 1
+  if ([string]$TerraformVerb -notmatch "^[a-z][a-z0-9-]*$") {
+    throw "Could not derive a safe Terraform command label."
+  }
+  $InvocationId = New-CutoverArtifactId
+  $StdoutPath = Join-Path `
+    $CutoverDir `
+    "terraform-$TerraformVerb-$InvocationId.stdout.log"
+  $StderrPath = Join-Path `
+    $CutoverDir `
+    "terraform-$TerraformVerb-$InvocationId.stderr.log"
+  Assert-CutoverArtifactPathsUnused @($StdoutPath, $StderrPath)
   $OriginalTerraformDataDirWasSet = Test-Path Env:TF_DATA_DIR
   $OriginalTerraformDataDir = if ($OriginalTerraformDataDirWasSet) {
     [string]$env:TF_DATA_DIR
@@ -719,12 +944,14 @@ function Invoke-Terraform {
     $null
   }
   $script:LastTerraformExitCode = $null
+  $script:LastTerraformStdoutPath = $StdoutPath
+  $script:LastTerraformStderrPath = $StderrPath
   try {
     $env:TF_DATA_DIR = $TerraformDataDir
     if ($NativeErrorPreferenceWasSet) {
       $PSNativeCommandUseErrorActionPreference = $false
     }
-    & terraform @TerraformArguments
+    & terraform @TerraformArguments 1> $StdoutPath 2> $StderrPath
     $script:LastTerraformExitCode = $LASTEXITCODE
   } finally {
     if ($NativeErrorPreferenceWasSet) {
@@ -735,6 +962,11 @@ function Invoke-Terraform {
     } else {
       Remove-Item Env:TF_DATA_DIR -ErrorAction SilentlyContinue
     }
+  }
+  Protect-CutoverFileIfPresent $StdoutPath
+  Protect-CutoverFileIfPresent $StderrPath
+  if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
+    Get-Content -LiteralPath $StdoutPath -Raw
   }
 }
 
@@ -747,9 +979,9 @@ $BootstrapVarArgs = @()
 if ($BootstrapTfvars) {
   $BootstrapVarArgs += "-var-file=$BootstrapTfvars"
 }
-Invoke-Terraform "-chdir=$BootstrapDir" init -input=false
+$null = Invoke-Terraform "-chdir=$BootstrapDir" init -input=false
 if ($LastTerraformExitCode -ne 0) {
-  throw "Bootstrap terraform init failed. No apply was attempted."
+  throw "Bootstrap terraform init failed. No apply was attempted. Review protected diagnostic file: $LastTerraformStderrPath"
 }
 
 $BackendJson = (
@@ -770,14 +1002,14 @@ foreach ($Name in @("bucket", "key", "region", "dynamodb_table")) {
   }
 }
 
-Invoke-Terraform "-chdir=$RootDir" init -input=false -reconfigure `
+$null = Invoke-Terraform "-chdir=$RootDir" init -input=false -reconfigure `
   "-backend-config=bucket=$($Backend.bucket)" `
   "-backend-config=key=$($Backend.key)" `
   "-backend-config=region=$($Backend.region)" `
   "-backend-config=dynamodb_table=$($Backend.dynamodb_table)" `
   "-backend-config=encrypt=true"
 if ($LastTerraformExitCode -ne 0) {
-  throw "Root backend init failed. Confirm bootstrap outputs; do not edit backend.tf with guessed values."
+  throw "Root backend init failed. Confirm bootstrap outputs; do not edit backend.tf with guessed values. Review protected diagnostic file: $LastTerraformStderrPath"
 }
 
 function Get-RoleNameFromOutput {
@@ -1399,7 +1631,7 @@ function Assert-RollbackContext {
     "Repository",
     "RootDir",
     "RootTerraformDataDir",
-    "RootTfvars",
+    "RootInputContext",
     "SmokeRoleName"
   )
   $RollbackContext = @{}
@@ -1448,7 +1680,6 @@ function Assert-RollbackContext {
     "Repository",
     "RootDir",
     "RootTerraformDataDir",
-    "RootTfvars",
     "SmokeRoleName"
   )
   if (
@@ -1520,17 +1751,43 @@ function Assert-RollbackContext {
       throw "Rollback context refers to a missing required directory."
     }
   }
-  if (-not (
-    Test-Path `
-      -LiteralPath ([string]$RollbackContext["RootTfvars"]) `
-      -PathType Leaf
-  )) {
-    throw "Rollback context refers to a missing root tfvars file."
+  $RollbackRootInput = $RollbackContext["RootInputContext"]
+  $RollbackRootInputMode = [string]$RollbackRootInput.mode
+  if (
+    $RollbackRootInputMode -notin @("tfvars", "environment") -or
+    [string]$RollbackRootInput.environment_sha256 -notmatch "^[0-9a-f]{64}$" -or
+    @($RollbackRootInput.environment_variable_names |
+      Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }
+    ).Count -ne 0
+  ) {
+    throw "Rollback root input context is invalid; values were suppressed."
   }
+  if ($RollbackRootInputMode -ceq "tfvars") {
+    if (
+      [string]$RollbackRootInput.tfvars_sha256 -notmatch "^[0-9a-f]{64}$" -or
+      -not (
+        Test-Path `
+          -LiteralPath ([string]$RollbackRootInput.tfvars_path) `
+          -PathType Leaf
+      ) -or
+      @($RollbackRootInput.var_arguments).Count -ne 1
+    ) {
+      throw "Rollback context refers to an invalid root tfvars input."
+    }
+  } elseif (
+    $null -ne $RollbackRootInput.tfvars_path -or
+    $null -ne $RollbackRootInput.tfvars_sha256 -or
+    @($RollbackRootInput.var_arguments).Count -ne 0 -or
+    @($RollbackRootInput.required_environment_variables).Count -eq 0
+  ) {
+    throw "Rollback context refers to an invalid root environment input."
+  }
+  Assert-RootTerraformInputUnchanged
 
   $RequiredRollbackFunctions = @(
     "Assert-CutoverArtifactPathsUnused",
     "Assert-LiveRoleTrustMatchesRecordedPolicy",
+    "Assert-RootTerraformInputUnchanged",
     "Assert-TerraformPlanCallerAccount",
     "Assert-TrustOnlyPlanChanges",
     "Assert-TrustPolicySubjectOnlyChange",
@@ -1540,6 +1797,8 @@ function Assert-RollbackContext {
     "Get-JsonDifferencePaths",
     "Get-OidcConditionValues",
     "Get-RequiredOidcSubjectProperty",
+    "Get-RootTerraformEnvironmentFingerprint",
+    "Get-RootTerraformEnvironmentVariableNames",
     "Get-TerraformPlanResources",
     "Invoke-NativeCommand",
     "Invoke-ProtectedCli",
@@ -1615,7 +1874,7 @@ if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
 }
 $InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
 $InitialStateDocument = [ordered]@{
-  schema_version = 2
+  schema_version = 3
   main_sha = $MainSha
   repository = $Repository
   branches = [ordered]@{
@@ -1628,6 +1887,7 @@ $InitialStateDocument = [ordered]@{
     root_tfvars = $RootTfvars
     bootstrap_tfvars = $BootstrapTfvars
   }
+  root_input = $RootInputContext
   selected_aws_context = [ordered]@{
     profile = $AwsProfile
     account = $ProfileCallerAccount
@@ -1748,7 +2008,8 @@ Assert-NoBlockingCutoverRuns
 - main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
 - `$BootstrapDir`がlinked worktreeならbootstrap側fetchは共有refを安全に再確認し、別cloneならそのclone自身の`origin/main`を更新する。どちらもfetch後のcommitが開始時の`$MainSha`と一致しなければconfiguration diffへ進まない。
 - bootstrap configurationの比較は開始時の`$MainSha`を変更前、`$BootstrapDir`のworktreeを変更後とする。権威ある旧`deploy/AWS_ECS` worktree / cloneでは`variables.tf`の`- main` / `+ deploy/AWS_ECS`だけを許可する。`$BootstrapDir`が`main`と同じ内容なら差分なしとなり、これは正常系として継続する。それ以外の差分は停止する。
-- `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、repository / path / branch入力、選択profileと検証済みaccount、開始時`AWS_PROFILE`、4 role名とbranch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
+- `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、Terraform / AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、repository / path / branch入力、root入力方式とfingerprint、選択profileと検証済みaccount、開始時`AWS_PROFILE`、4 role名とbranch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
+- root tfvars方式ではすべてのroot plan / rollback planだけに同じ`-var-file`が追加され、環境変数方式では`-var-file`なしでdefaultのない7個の`TF_VAR_*`と直近applyの完全な環境変数集合が検証される。saved plan applyはplan内に確定済みの変数値を使う。いずれも入力fileまたはprocess環境が変われば次のroot Terraform command前に停止する。
 - `TF_DATA_DIR`はTerraform command実行中だけbootstrap/root別の保護済みdirectoryを指し、command終了時に直前の値へ戻る。root backend metadataはrepository配下の`.terraform`へ作られない。
 - initial-state、開始時4 roleの`*.before.json`、bootstrap state backupは固定名のwrite-onceであり、既存pathへの上書きを拒否する。CLI log、開始後のrole snapshot、saved plan / logは呼び出しごとのartifact IDを持つため、再試行でも既存artifactを上書きしない。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
 - Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
@@ -1760,12 +2021,13 @@ Assert-NoBlockingCutoverRuns
 - bootstrap stateがない場合、新しい空stateからapplyしてはいけない。権威あるlocal stateまたは安全なbackupを特定する。
 - trustが旧branch / `main`以外、複数subject、別repository、複数statementならscope外である。policyを自動整形せず、RAG-18を停止して別レビューへ送る。
 - root backend initが失敗した場合、placeholderを実値へ直接置換してcommitしない。bootstrap outputとlocal権限を確認する。
+- root tfvarsが空で必要な`TF_VAR_*`が不足する場合、またはpreflight後にtfvars / `TF_VAR_*`が変わった場合は、値を推測せず直近applyの入力を同じprocessへ復元して手順1からやり直す。
 - active runがある場合は完了または人間が判断したキャンセルを待つ。このrunbookは自動キャンセルやrerunを行わない。
 - active run gate後は、手順6のsmoke dispatchまで対象workflowを新たに起動しない。gateは手順1でだけ実行するため、手順6でdispatchするsmoke自身を誤検出しない。
 - 手順1で停止し、以後TerraformまたはAWS recoveryを実行しない場合は`Restore-OriginalAwsProfile`を呼び、開始時の`AWS_PROFILE`へ戻す。rollbackが必要な場合は復旧完了まで設定を維持し、rollback末尾で戻す。
 - AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作ってはならない。元の`$CutoverDir`を再指定し、`Set-StrictMode`、error preference、手順1のfunction定義だけを読み込み直した後、共有CLI logではなくwrite-onceの`cutover-initial-state.json`から開始状態を復元してロールバックを優先する。元のartifact pathを特定できなければ追加更新を停止する。
 
-rollback snippetが外部contextとして参照する変数は、`$AllowedAccounts`、`$AwsProfile`、`$BeforeBranches`、`$BootstrapDir`、`$BootstrapTerraformDataDir`、`$BootstrapVarArgs`、`$CurrentDeployBranch`、`$CutoverDir`、`$DeployRoleName`、`$IsWindowsPlatform`、`$LifecycleRoleName`、`$MainRepoRoot`、`$NewBranch`、`$OidcAudienceKey`、`$OidcSubjectKey`、`$OldBranch`、`$OriginalAwsProfile`、`$OriginalAwsProfileWasSet`、`$PlanRoleName`、`$ProfileCallerAccount`、`$Repository`、`$RootDir`、`$RootTerraformDataDir`、`$RootTfvars`、`$SmokeRoleName`である。Windowsでは`$CurrentWindowsIdentity`も必要である。本経路と復旧経路は同じ`Assert-RollbackContext`でこの一覧、値のshape、protected directory、検証済みaccount context、共有functionを確認する。
+rollback snippetが外部contextとして参照する変数は、`$AllowedAccounts`、`$AwsProfile`、`$BeforeBranches`、`$BootstrapDir`、`$BootstrapTerraformDataDir`、`$BootstrapVarArgs`、`$CurrentDeployBranch`、`$CutoverDir`、`$DeployRoleName`、`$IsWindowsPlatform`、`$LifecycleRoleName`、`$MainRepoRoot`、`$NewBranch`、`$OidcAudienceKey`、`$OidcSubjectKey`、`$OldBranch`、`$OriginalAwsProfile`、`$OriginalAwsProfileWasSet`、`$PlanRoleName`、`$ProfileCallerAccount`、`$Repository`、`$RootDir`、`$RootTerraformDataDir`、`$RootInputContext`、`$SmokeRoleName`の25個である。Windowsでは`$CurrentWindowsIdentity`も必要である。本経路と復旧経路は同じ`Assert-RollbackContext`で25/25の存在、値のshape、root入力fingerprint、protected directory、検証済みaccount context、共有functionを確認する。
 
 session喪失時は、手順1のfunction定義を読み込み直してから次だけを実行する。選択profile、検証済みaccount、role名、repository / path / branch入力はinitial-stateから復元し、`Set-ValidatedAwsProfileContext`でSTS / allowlist検証を再実行する。値は表示しない。
 
@@ -1794,15 +2056,42 @@ try {
   throw "Could not parse the protected initial state; values were suppressed."
 }
 $RoleNamePattern = "^[A-Za-z0-9+=,.@_-]{1,64}$"
+$RecoveredRootInput = $InitialState.root_input
+$RecoveredRootInputMode = [string]$RecoveredRootInput.mode
+$RecoveredRootInputShapeInvalid = (
+  $RecoveredRootInputMode -notin @("tfvars", "environment") -or
+  [string]$RecoveredRootInput.environment_sha256 -notmatch "^[0-9a-f]{64}$" -or
+  @($RecoveredRootInput.environment_variable_names |
+    Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }
+  ).Count -ne 0 -or
+  (
+    $RecoveredRootInputMode -ceq "tfvars" -and (
+      [string]::IsNullOrWhiteSpace([string]$InitialState.paths.root_tfvars) -or
+      [string]$RecoveredRootInput.tfvars_path -cne
+        [string]$InitialState.paths.root_tfvars -or
+      [string]$RecoveredRootInput.tfvars_sha256 -notmatch "^[0-9a-f]{64}$" -or
+      @($RecoveredRootInput.var_arguments).Count -ne 1
+    )
+  ) -or
+  (
+    $RecoveredRootInputMode -ceq "environment" -and (
+      -not [string]::IsNullOrWhiteSpace([string]$InitialState.paths.root_tfvars) -or
+      $null -ne $RecoveredRootInput.tfvars_path -or
+      $null -ne $RecoveredRootInput.tfvars_sha256 -or
+      @($RecoveredRootInput.var_arguments).Count -ne 0 -or
+      @($RecoveredRootInput.required_environment_variables).Count -eq 0
+    )
+  )
+)
 if (
-  [int]$InitialState.schema_version -ne 2 -or
+  [int]$InitialState.schema_version -ne 3 -or
   [string]$InitialState.main_sha -notmatch "^[0-9a-f]{40,64}$" -or
   [string]$InitialState.repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" -or
   [string]$InitialState.branches.old -cne "deploy/AWS_ECS" -or
   [string]$InitialState.branches.new -cne "main" -or
   [string]::IsNullOrWhiteSpace([string]$InitialState.paths.main_repo_root) -or
   [string]::IsNullOrWhiteSpace([string]$InitialState.paths.bootstrap_dir) -or
-  [string]::IsNullOrWhiteSpace([string]$InitialState.paths.root_tfvars) -or
+  $RecoveredRootInputShapeInvalid -or
   [string]::IsNullOrWhiteSpace([string]$InitialState.selected_aws_context.profile) -or
   [string]$InitialState.selected_aws_context.account -notmatch "^[0-9]{12}$" -or
   [string]$InitialState.deploy_branch -notin @(
@@ -1851,9 +2140,17 @@ $BootstrapDir = (
 $RootDir = (
   Resolve-Path -LiteralPath (Join-Path $MainRepoRoot "deploy/aws-ecs")
 ).Path
-$RootTfvars = (
-  Resolve-Path -LiteralPath ([string]$InitialState.paths.root_tfvars)
-).Path
+$RootTfvars = [string]$InitialState.paths.root_tfvars
+if ($RootTfvars) {
+  $RootTfvars = (Resolve-Path -LiteralPath $RootTfvars).Path
+}
+$RootInputContext = $RecoveredRootInput
+if (
+  [string]$RootInputContext.mode -ceq "tfvars" -and
+  [string]$RootInputContext.tfvars_path -cne $RootTfvars
+) {
+  throw "Resolved root tfvars does not match the protected input context."
+}
 $BootstrapTfvars = [string]$InitialState.paths.bootstrap_tfvars
 if ($BootstrapTfvars) {
   $BootstrapTfvars = (Resolve-Path -LiteralPath $BootstrapTfvars).Path
@@ -1862,6 +2159,7 @@ $BootstrapVarArgs = @()
 if ($BootstrapTfvars) {
   $BootstrapVarArgs += "-var-file=$BootstrapTfvars"
 }
+Assert-RootTerraformInputUnchanged
 $CurrentDeployBranch = [string]$InitialState.deploy_branch
 $BeforeBranches = $RecoveredBeforeBranches
 $PlanRoleName = [string]$RecoveredRoleNames.terraform_plan
@@ -1913,6 +2211,9 @@ Remove-Variable `
   InitialState,
   RecoveredBeforeBranches,
   RecoveredRoleNames,
+  RecoveredRootInput,
+  RecoveredRootInputMode,
+  RecoveredRootInputShapeInvalid,
   RecordedCallerAccount,
   AwsAccountContext
 ```
@@ -2010,12 +2311,16 @@ $RootPlan = Join-Path $CutoverDir "root-deploy-main-$RootPlanArtifactId.tfplan"
 $RootPlanLog = Join-Path $CutoverDir "root-deploy-main-$RootPlanArtifactId.plan.log"
 
 Assert-CutoverArtifactPathsUnused @($RootPlan, $RootPlanLog)
-Invoke-Terraform "-chdir=$RootDir" plan -input=false `
-  "-var-file=$RootTfvars" `
-  "-var=github_deploy_branch=$NewBranch" `
-  "-target=module.iam.aws_iam_role.github_deploy" `
-  "-out=$RootPlan" *> $RootPlanLog
+$RootPlanArguments = @("-chdir=$RootDir", "plan", "-input=false")
+$RootPlanArguments += @($RootInputContext.var_arguments)
+$RootPlanArguments += @(
+  "-var=github_deploy_branch=$NewBranch",
+  "-target=module.iam.aws_iam_role.github_deploy",
+  "-out=$RootPlan"
+)
+Invoke-Terraform @RootPlanArguments *> $RootPlanLog
 $RootPlanExit = $LastTerraformExitCode
+Remove-Variable RootPlanArguments
 Protect-CutoverFileIfPresent $RootPlan
 Protect-CutoverFileIfPresent $RootPlanLog
 if ($RootPlanExit -ne 0) {
@@ -2071,7 +2376,7 @@ Write-Host "Root deploy trust: main"
 
 **失敗時**
 
-- plan失敗または想定外差分ではapplyしない。直近正常applyと同一のroot tfvars、remote backend、local権限を確認する。
+- plan失敗または想定外差分ではapplyしない。直近正常applyと同一のroot tfvarsまたは`TF_VAR_*`集合、remote backend、local権限を確認する。
 - apply失敗後はrole trustを再確認する。`main`でなければ同じplanを再利用せず、新しいplanを作る。
 - root stack全体の差分をこの手順でapplyしない。無関係なdriftは別issueへ分離する。
 
@@ -2221,7 +2526,53 @@ Write-Host "DEPLOY_BRANCH: main"
 ```powershell
 Set-Location -LiteralPath $MainRepoRoot
 Assert-MainShaUnchanged "before OIDC smoke dispatch"
-$DispatchTime = (Get-Date).ToUniversalTime()
+
+function Get-OidcSmokeRuns {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel
+  )
+  $RunListResult = Invoke-ProtectedCli `
+    -Command "gh" `
+    -Label $ArtifactLabel `
+    -Arguments @(
+      "run", "list",
+      "--workflow", "aws-oidc-smoke.yml",
+      "--branch", "main",
+      "--event", "workflow_dispatch",
+      "--limit", "100",
+      "--json", "databaseId,headBranch,headSha,status,conclusion"
+    )
+  if ($RunListResult.ExitCode -ne 0) {
+    throw "Could not list OIDC smoke runs. Review protected diagnostic file: $($RunListResult.StderrPath)"
+  }
+  $ParsedRuns = ConvertFrom-Json -InputObject $RunListResult.Stdout
+  $Runs = @(
+    if ($null -ne $ParsedRuns) {
+      $ParsedRuns
+    }
+  )
+  if (@($Runs | Where-Object {
+    [string]$_.databaseId -notmatch "^[0-9]+$" -or
+    [string]$_.headBranch -cne "main" -or
+    [string]$_.headSha -notmatch "^[0-9a-f]{40,64}$"
+  }).Count -ne 0) {
+    throw "OIDC smoke run query returned an unexpected result shape; values were suppressed."
+  }
+  return $Runs
+}
+
+$SmokeRunsBeforeDispatch = @(
+  Get-OidcSmokeRuns "gh-smoke-run-list-before-dispatch"
+)
+$SmokeRunIdsBeforeDispatch = @(
+  $SmokeRunsBeforeDispatch |
+    ForEach-Object { [string]$_.databaseId } |
+    Sort-Object -Unique
+)
+Remove-Variable SmokeRunsBeforeDispatch
+
 $SmokeDispatchResult = Invoke-ProtectedCli `
   -Command "gh" `
   -Label "gh-smoke-dispatch" `
@@ -2231,32 +2582,43 @@ if ($SmokeDispatchResult.ExitCode -ne 0) {
 }
 
 $SmokeRun = $null
+$SingletonRunId = $null
+$SingletonObservationCount = 0
 for ($Attempt = 0; $Attempt -lt 12 -and $null -eq $SmokeRun; $Attempt++) {
   Start-Sleep -Seconds 5
-  $SmokeRunsResult = Invoke-ProtectedCli `
-    -Command "gh" `
-    -Label "gh-smoke-run-list-$Attempt" `
-    -Arguments @(
-      "run", "list",
-      "--workflow", "aws-oidc-smoke.yml",
-      "--branch", "main",
-      "--event", "workflow_dispatch",
-      "--limit", "10",
-      "--json", "databaseId,createdAt,headBranch,headSha,status,conclusion"
-    )
-  if ($SmokeRunsResult.ExitCode -ne 0) {
-    throw "Could not list OIDC smoke runs. Review protected diagnostic file: $($SmokeRunsResult.StderrPath)"
-  }
-  $RunsJson = $SmokeRunsResult.Stdout
-  $SmokeRun = @(
-    (ConvertFrom-Json -InputObject $RunsJson) |
+  $CurrentSmokeRuns = @(
+    Get-OidcSmokeRuns "gh-smoke-run-list-after-dispatch-$Attempt"
+  )
+  $NewSmokeRuns = @(
+    $CurrentSmokeRuns |
       Where-Object {
-        $_.headBranch -ceq "main" -and
-        $_.headSha -ceq $MainSha -and
-        ([datetime]$_.createdAt).ToUniversalTime() -ge $DispatchTime.AddSeconds(-5)
-      } |
-      Sort-Object createdAt -Descending
-  ) | Select-Object -First 1
+        [string]$_.databaseId -notin $SmokeRunIdsBeforeDispatch
+      }
+  )
+  if ($NewSmokeRuns.Count -gt 1) {
+    throw "Multiple OIDC smoke run IDs appeared after dispatch; concurrent dispatch is ambiguous."
+  }
+  if ($NewSmokeRuns.Count -eq 0) {
+    $SingletonRunId = $null
+    $SingletonObservationCount = 0
+    continue
+  }
+  $CandidateSmokeRun = $NewSmokeRuns[0]
+  if (
+    [string]$CandidateSmokeRun.headBranch -cne "main" -or
+    [string]$CandidateSmokeRun.headSha -cne $MainSha
+  ) {
+    throw "The new OIDC smoke run does not match main at the recorded commit."
+  }
+  if ([string]$CandidateSmokeRun.databaseId -ceq $SingletonRunId) {
+    $SingletonObservationCount++
+  } else {
+    $SingletonRunId = [string]$CandidateSmokeRun.databaseId
+    $SingletonObservationCount = 1
+  }
+  if ($SingletonObservationCount -ge 2) {
+    $SmokeRun = $CandidateSmokeRun
+  }
 }
 if ($null -eq $SmokeRun) {
   throw "Dispatched OIDC smoke run was not found."
@@ -2294,9 +2656,13 @@ if (
 Write-Host "main OIDC smoke: success"
 ```
 
+dispatch前後で同じserver-side queryを実行し、前に存在しなかったrun IDだけを候補にする。候補0件は5秒待って最大12回まで再試行し、複数件なら並行dispatchと区別できないため停止する。単一候補も2回連続で同じIDとして観測してから採用し、`headBranch == main`と`headSha == $MainSha`をwatch前後で検証する。operator端末の日時は識別に使わないため、時計がGitHub serverより進んでいても遅れていても判定へ影響しない。
+
 **期待される結果**
 
 - runの`headBranch`が`main`、`headSha`が開始時の`$MainSha`、`status`が`completed`、`conclusion`が`success`になる。
+- dispatch前から存在する同一SHAのcompleted runはID集合に含まれているため、今回の結果として採用しない。
+- dispatch後に別operatorのrunも現れた場合は、複数の新規IDとしてfail closedする。
 - `Configure permissionless OIDC credentials`を通過し、permissionless verifierが成功する。
 
 **失敗時**
@@ -2310,6 +2676,8 @@ Write-Host "main OIDC smoke: success"
 ### 手順7: 旧branch依存の消滅とtarget後の全体planを確認
 
 **cwd:** `$MainRepoRoot`
+
+手順2 / 3のcutover前targeted planは、旧branchから`main`へ変えるtrust差分が0件または対象role数まで存在することを許容する。一方、applyとlive trust検証が終わったこのpost-cutover確認では、bootstrap / rootのtrust差分は必ず0件でなければならない。full planにsubject-onlyのtrust差分が1件でも残る場合は、別更新でlive roleが戻された可能性があるため完了扱いにしない。
 
 ```powershell
 $FinalBranches = [ordered]@{
@@ -2384,6 +2752,9 @@ Assert-TrustOnlyPlanChanges `
   $BootstrapPostTrustChanges `
   $AllowedBootstrapAddresses `
   $NewBranch
+if ($BootstrapPostTrustChanges.Count -ne 0) {
+  throw "Bootstrap trust drift remains after cutover. Re-verify and repair live trust, then rerun the complete final verification."
+}
 
 $RootPostArtifactId = New-CutoverArtifactId
 $RootPostPlan = Join-Path `
@@ -2393,12 +2764,16 @@ $RootPostLog = Join-Path `
   $CutoverDir `
   "root-post-cutover-$RootPostArtifactId.plan.log"
 Assert-CutoverArtifactPathsUnused @($RootPostPlan, $RootPostLog)
-Invoke-Terraform "-chdir=$RootDir" plan -input=false `
-  "-var-file=$RootTfvars" `
-  "-var=github_deploy_branch=$NewBranch" `
-  "-out=$RootPostPlan" `
-  -detailed-exitcode *> $RootPostLog
+$RootPostPlanArguments = @("-chdir=$RootDir", "plan", "-input=false")
+$RootPostPlanArguments += @($RootInputContext.var_arguments)
+$RootPostPlanArguments += @(
+  "-var=github_deploy_branch=$NewBranch",
+  "-out=$RootPostPlan",
+  "-detailed-exitcode"
+)
+Invoke-Terraform @RootPostPlanArguments *> $RootPostLog
 $RootPostExit = $LastTerraformExitCode
+Remove-Variable RootPostPlanArguments
 Protect-CutoverFileIfPresent $RootPostPlan
 Protect-CutoverFileIfPresent $RootPostLog
 if ($RootPostExit -notin @(0, 2)) {
@@ -2423,6 +2798,9 @@ Assert-TrustOnlyPlanChanges `
   $RootPostTrustChanges `
   @("module.iam.aws_iam_role.github_deploy") `
   $NewBranch
+if ($RootPostTrustChanges.Count -ne 0) {
+  throw "Root trust drift remains after cutover. Re-verify and repair live trust, then rerun the complete final verification."
+}
 Assert-MainShaUnchanged "after final operational inspection"
 Write-Host "Post-cutover full plan exit codes: bootstrap=$BootstrapPostExit root=$RootPostExit"
 Write-Host (
@@ -2439,20 +2817,21 @@ Write-Host (
 - `git grep`の「該当なし」exit code `1`は成功として継続し、`0`は検出結果をfail closedする。その他のexit codeは検査失敗として停止する。
 - 通常planの`-detailed-exitcode`は、差分なしなら`0`、差分ありなら`2`である。
 - native error promotionは終了コードを捕捉するnative commandの実行中だけ無効になり、直後に元の設定へ戻る。したがってplanの`2`はdriftとして検査される一方、想定外exit codeは握り潰されない。
-- Terraform管理のtrust roleに差分がある場合は、targeted saved planと同じsubject-only完全比較を通る。
+- bootstrap / rootのTerraform管理trust roleは、post-cutover full planで差分0件になる。差分の形がsubject-onlyであっても、post-cutoverでは非ゼロを許可しない。
 
 **失敗時**
 
 - full planが`2`でも、この手順ではapplyしない。local logを安全な場所でreviewし、targetingで見落としたtrust関連差分ならD1a内で修正、無関係なdriftなら別issueへ分離する。
+- bootstrapまたはrootのtrust差分が1件でもあれば、live trustを再確認して安全なtargeted saved plan手順で修復し、手順7冒頭の4 role live検証から両full planまでをすべてやり直す。差分0件を確認するまで手順8へ進まない。
 - trust roleの差分がsubject-only完全比較に失敗した場合は、providerや追加conditionなどの値を表示せず停止する。
 - full planが`1`または`0` / `2`以外ならbackend、tfvars、権限を確認する。trustとsmokeの個別検証が成功済みでも、D1a完了チェックには失敗として記録する。
 - 一時ファイルはrollback判断が完了するまで削除しない。
 
 ### 手順8: 一時artifactを安全に削除
 
-**cwd:** 任意。手順7とsmokeが成功し、rollbackしないと人間が判断した後だけ実行する。
+**cwd:** 任意。smokeが成功し、手順7でbootstrap / root双方のpost-cutover trust差分0件を確認し、rollbackしないと人間が判断した後だけ実行する。trust差分が残る場合はartifactを削除しない。
 
-`$CutoverDir`にはinitial state、state backup、bootstrap/rootのTerraform data directoryとbackend metadata、saved plan、plan log、実trust policy、AWS CLI / `gh`のstdout・stderr診断logが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
+`$CutoverDir`にはinitial state、state backup、bootstrap/rootのTerraform data directoryとbackend metadata、saved plan、plan log、実trust policy、Terraform / AWS CLI / `gh`のstdout・stderr診断logが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
 
 ```powershell
 try {
@@ -2610,7 +2989,7 @@ function Restore-TerraformRoleToRecordedBranch {
 
 Restore-TerraformRoleToRecordedBranch `
   -TerraformDirectory $RootDir `
-  -TerraformVarArguments @("-var-file=$RootTfvars") `
+  -TerraformVarArguments @($RootInputContext.var_arguments) `
   -ResourceAddress "module.iam.aws_iam_role.github_deploy" `
   -RoleName $DeployRoleName `
   -ExpectedBranch $BeforeBranches.github_deploy `
@@ -2744,11 +3123,11 @@ backupにはprovider識別子が含まれるため、terminalへ出力せず`fil
 - [ ] cutover中の全checkpointで`origin/main`が開始時の`$MainSha`から動いていない
 - [ ] `main`から開始時の`$MainSha`で実行した`AWS OIDC Smoke`がsuccessである
 - [ ] operational `.yml` / `.tf` / `.ps1`に旧branch依存がない
-- [ ] bootstrap/rootのpost-cutover full planが成功し、exit codeと未適用driftを記録した
+- [ ] bootstrap/rootのpost-cutover full planが成功し、双方のtrust差分が0件である
 - [ ] `git grep`のexit `1`とfull planのexit `2`が期待値として処理され、native error promotionは各command後に復元された
 - [ ] saved plan内のTerraform provider caller accountが明示profile accountと一致し、allowlist内である
 - [ ] account ID、ARN、state、plan、trust backup、secret、tokenをissue / PR / chatへ貼っていない
-- [ ] AWS CLI / `gh`のstdout・stderrは保護済み`$CutoverDir`だけに保存し、terminalへ表示していない
+- [ ] Terraform / AWS CLI / `gh`のstdout・stderrは保護済み`$CutoverDir`だけに保存し、terminalへ表示していない
 - [ ] rollback判断が終わるまで`$CutoverDir`を保全した
 - [ ] rollback不要の判断後、手順8で一時artifactを削除した
 - [ ] process-scoped `AWS_PROFILE`をrunbook開始時の値へ戻した
