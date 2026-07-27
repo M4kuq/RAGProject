@@ -294,9 +294,7 @@ class OpenAICompatibleChatAnswerGenerator:
     ) -> None:
         self.api_key = api_key
         self.base_url = (
-            _lmstudio_native_base_url(base_url)
-            if native_lmstudio_api
-            else base_url.rstrip("/")
+            _lmstudio_native_base_url(base_url) if native_lmstudio_api else base_url.rstrip("/")
         )
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
@@ -1334,4 +1332,3 @@ def _normalize_generated_text(value: str) -> str:
 def _safe_label(value: str) -> str:
     normalized = " ".join(value.replace("\x00", " ").split())
     return normalized.replace("[", "(").replace("]", ")")[:255]
-

@@ -1015,4 +1015,3 @@ def _assert_safe_json(value: Any) -> None:
         return
     if isinstance(value, str):
         _safe_text(value, max_length=2000)
-
