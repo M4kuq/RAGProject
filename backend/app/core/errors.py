@@ -57,6 +57,14 @@ ERROR_MESSAGES: dict[str, str] = {
     "temporary_session_expired": "Temporary session has expired.",
     "temporary_session_not_archivable": "Temporary session cannot be archived.",
     "no_context_found": "No context found.",
+    "evaluation_corpus_not_ready": "Evaluation corpus is not ready.",
+    "evaluation_generation_not_ready": "Evaluation generation model is not ready.",
+    "dataset_version_conflict": "Dataset version content does not match.",
+    "citation_marker_missing": "Citation marker is missing.",
+    "citation_index_out_of_range": "Citation index is out of range.",
+    "citation_source_unmapped": "Citation source is not mapped.",
+    "citation_source_missing": "Citation source is missing.",
+    "citation_parse_invalid": "Citation output could not be parsed.",
     "internal_error": "Internal server error.",
     "internal_server_error": "Internal server error.",
 }
@@ -123,6 +131,16 @@ class ValidationFailed(AppError):
 class ConflictError(AppError):
     def __init__(self, code: str = "conflict", details: object | None = None) -> None:
         super().__init__(code, 409, details=details)
+
+
+class EvaluationCorpusNotReady(ConflictError):
+    def __init__(self, details: object | None = None) -> None:
+        super().__init__("evaluation_corpus_not_ready", details=details)
+
+
+class EvaluationGenerationNotReady(ConflictError):
+    def __init__(self, details: object | None = None) -> None:
+        super().__init__("evaluation_generation_not_ready", details=details)
 
 
 class RequestInProgress(ConflictError):

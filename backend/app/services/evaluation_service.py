@@ -5,9 +5,9 @@ import inspect
 import math
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Protocol, cast
 
@@ -18,9 +18,19 @@ from sqlalchemy.orm import Session
 
 from app.api.responses import pagination_meta
 from app.core.config import Settings, get_settings
-from app.core.errors import ConflictError, ResourceNotFound, ValidationFailed
+from app.core.errors import (
+    ConflictError,
+    EvaluationCorpusNotReady,
+    EvaluationGenerationNotReady,
+    ResourceNotFound,
+    ValidationFailed,
+)
 from app.core.job_utils import redact_error_message
-from app.db.evaluation_models import EvaluationHumanCalibration, EvaluationResult
+from app.db.evaluation_models import (
+    EvaluationAuxiliaryJudgment,
+    EvaluationHumanCalibration,
+    EvaluationResult,
+)
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import EvaluationCase as EvaluationCaseModel
 from app.db.models import (
@@ -42,7 +52,6 @@ from app.evaluation.gold_v2 import (
     HumanCalibrationRecord,
     calibration_agreement,
     grounded_answer_pass,
-    load_gold_v2_bundle,
 )
 from app.evaluation.metrics import (
     EvaluationMetricInputs,
@@ -52,6 +61,7 @@ from app.evaluation.metrics import (
 )
 from app.evaluation.rag_service import RagEvaluationResult, create_evaluation_rag_service
 from app.observability.trace_export import TraceExportService
+from app.rag.generation import LMStudioModelReadiness, check_lmstudio_model_readiness
 from app.rag.graph_citations import (
     GraphPathSourceLocator,
     GraphPathValidator,
@@ -61,11 +71,19 @@ from app.rag.strategy import DEFAULT_RETRIEVAL_STRATEGY, RetrievalStrategy
 from app.repositories.evaluation_repository import EvaluationRepository, EvaluationResultInput
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import PaginationMeta, PaginationParams
+from app.schemas.evaluation_datasets_v2 import (
+    DATASET_MANIFEST_V2_SCHEMA_VERSION,
+    EvaluationCorpusPrepareResponse,
+    EvaluationCorpusReadinessResponse,
+    EvaluationDatasetManifestInput,
+    EvaluationDatasetValidationResponse,
+)
 from app.schemas.evaluations import (
     DATASET_MANIFEST_SCHEMA_VERSION,
     DEFAULT_EVALUATION_METRICS,
     EVALUATION_SCHEMA_VERSION,
     KNOWN_GENERATION_PROVIDERS,
+    EvaluationAnswerOutcome,
     EvaluationCacheMode,
     EvaluationCaseComparison,
     EvaluationCaseCreateRequest,
@@ -87,16 +105,21 @@ from app.schemas.evaluations import (
     EvaluationFailurePromotionResponse,
     EvaluationFailureSeverity,
     EvaluationGenerationComparison,
+    EvaluationGenerationReadinessRequest,
+    EvaluationGenerationReadinessResponse,
     EvaluationHumanCalibrationResponse,
     EvaluationHumanCalibrationSummary,
     EvaluationHumanCalibrationTarget,
     EvaluationHumanCalibrationUpsertRequest,
+    EvaluationManualDimensionDecision,
     EvaluationMetricCatalog,
     EvaluationMetricCatalogItem,
     EvaluationMetricCategory,
     EvaluationMetricComparison,
+    EvaluationMetricMethod,
     EvaluationMetricName,
     EvaluationMetricResult,
+    EvaluationQualityStatus,
     EvaluationRunComparison,
     EvaluationRunComparisonSummary,
     EvaluationRunCreateRequest,
@@ -105,12 +128,23 @@ from app.schemas.evaluations import (
     EvaluationRunItemResponse,
     EvaluationRunRequestStrategy,
     EvaluationRunSummary,
+    EvaluationScope,
     EvaluationStatus,
     EvaluationStrategyComparisonResponse,
     MetricSpec,
     StrategyComparisonMetric,
 )
 from app.services.audit_service import audit
+from app.services.evaluation_corpus_service import EvaluationCorpusService
+from app.services.evaluation_dataset_manifest_service import (
+    EvaluationDatasetManifestService,
+)
+from app.services.evaluation_judge_service import (
+    DEFAULT_JUDGE_MODEL,
+    DEFAULT_JUDGE_PROVIDER,
+    JUDGE_RUBRIC_VERSION,
+    EvaluationClaimJudgeService,
+)
 from app.services.rag_service import _safe_generation_label
 
 SCORE_QUANT = Decimal("0.000001")
@@ -135,6 +169,17 @@ ASK_ONLY_EVALUATION_STRATEGIES = frozenset(
 ASK_ONLY_EVALUATION_STRATEGY_VALUES = frozenset(
     strategy.value for strategy in ASK_ONLY_EVALUATION_STRATEGIES
 )
+ANSWER_GENERATION_DEPENDENT_METRICS = frozenset(
+    {
+        "faithfulness",
+        "claim_faithfulness",
+        "answer_completeness",
+        "groundedness",
+        "citation_coverage",
+        "citation_presence",
+        "citation_correctness",
+    }
+)
 CACHEABLE_EVALUATION_STRATEGIES = frozenset(
     {
         RetrievalStrategy.DENSE,
@@ -157,6 +202,7 @@ PROVIDER_SKIP_BASE_METRICS = frozenset(
         "recall_at_k",
         "mrr",
         "faithfulness",
+        "claim_faithfulness",
         "answer_completeness",
         "groundedness",
         "citation_coverage",
@@ -257,10 +303,22 @@ STRATEGY_METRIC_SPECS: tuple[MetricSpec, ...] = (
     ),
     MetricSpec(
         metric_name="faithfulness",
-        display_name="Faithfulness",
+        display_name="Expected answer signal match (legacy Faithfulness)",
         description=(
-            "Deterministic expected keyword or answer signal measured from "
-            "generated answer text only."
+            "Legacy deterministic fraction of explicitly configured expected "
+            "keywords found in generated answer text. Retrieved context is not used."
+        ),
+        higher_is_better=True,
+        value_unit="ratio",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    MetricSpec(
+        metric_name="claim_faithfulness",
+        display_name="Claim faithfulness",
+        description=(
+            "Per-answer fraction of factual claims supported by retrieved context, "
+            "as assessed by the configured local claim-level judge."
         ),
         higher_is_better=True,
         value_unit="ratio",
@@ -403,6 +461,7 @@ EVALUATION_METRIC_CATEGORY_BY_NAME: dict[EvaluationMetricName, EvaluationMetricC
     EvaluationMetricName.NO_CONTEXT_RATE: EvaluationMetricCategory.RETRIEVAL,
     EvaluationMetricName.GROUNDEDNESS: EvaluationMetricCategory.ANSWER,
     EvaluationMetricName.FAITHFULNESS: EvaluationMetricCategory.ANSWER,
+    EvaluationMetricName.CLAIM_FAITHFULNESS: EvaluationMetricCategory.ANSWER,
     EvaluationMetricName.ANSWER_COMPLETENESS: EvaluationMetricCategory.ANSWER,
     EvaluationMetricName.CITATION_PRESENCE: EvaluationMetricCategory.CITATION,
     EvaluationMetricName.CITATION_CORRECTNESS: EvaluationMetricCategory.CITATION,
@@ -420,9 +479,137 @@ EVALUATION_METRIC_CATEGORY_BY_NAME: dict[EvaluationMetricName, EvaluationMetricC
     EvaluationMetricName.CACHE_HIT_RATE: EvaluationMetricCategory.PERFORMANCE,
     EvaluationMetricName.CACHE_SAVED_LATENCY: EvaluationMetricCategory.PERFORMANCE,
 }
+EVALUATION_METRIC_METHOD_BY_NAME: dict[EvaluationMetricName, EvaluationMetricMethod] = {
+    EvaluationMetricName.GROUNDEDNESS: EvaluationMetricMethod.PROXY,
+    EvaluationMetricName.FAITHFULNESS: EvaluationMetricMethod.PROXY,
+    EvaluationMetricName.CLAIM_FAITHFULNESS: EvaluationMetricMethod.LOCAL_JUDGE,
+}
 EVALUATION_METRIC_ALIAS_BY_NAME: dict[EvaluationMetricName, EvaluationMetricName] = {
     EvaluationMetricName.CITATION_COVERAGE: EvaluationMetricName.CITATION_PRESENCE,
 }
+
+EVALUATION_METRIC_DISPLAY_NAME_BY_NAME: dict[EvaluationMetricName, str] = {
+    EvaluationMetricName.RECALL_AT_K: "検索再現率",
+    EvaluationMetricName.MRR: "平均逆順位",
+    EvaluationMetricName.CONTEXT_PRECISION: "文脈適合率",
+    EvaluationMetricName.CITATION_COVERAGE: "引用の有無（互換）",
+    EvaluationMetricName.CITATION_PRESENCE: "引用の有無",
+    EvaluationMetricName.CITATION_CORRECTNESS: "引用正確性",
+    EvaluationMetricName.GROUNDEDNESS: "Groundedness\uff08\u691c\u7d22\u4fe1\u983c\u5ea6\uff09",
+    EvaluationMetricName.FAITHFULNESS: (
+        "\u671f\u5f85\u56de\u7b54\u30b7\u30b0\u30ca\u30eb\u4e00\u81f4\u7387"
+        "\uff08\u65e7Faithfulness\uff09"
+    ),
+    EvaluationMetricName.CLAIM_FAITHFULNESS: (
+        "Claim Faithfulness\uff08\u30ed\u30fc\u30ab\u30ebjudge\uff09"
+    ),
+    EvaluationMetricName.ANSWER_COMPLETENESS: "回答完全性",
+    EvaluationMetricName.NO_CONTEXT_RATE: "根拠なし率",
+    EvaluationMetricName.P95_LATENCY: "遅いケースの応答時間",
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "経路選択精度",
+    EvaluationMetricName.FALLBACK_RATE: "フォールバック率",
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索予算超過率",
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "根拠充足度",
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "平均検索回数",
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "グラフ経路適合率",
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ引用対応率",
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: "複数段階回答可能性",
+    EvaluationMetricName.CACHE_HIT_RATE: "キャッシュ利用率",
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュ短縮時間",
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: "エンティティ・関係品質集計",
+}
+EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME: dict[EvaluationMetricName, str] = {
+    EvaluationMetricName.RECALL_AT_K: "必要な情報を検索結果の上位で見つけられた割合です。",
+    EvaluationMetricName.MRR: "必要な情報が検索結果のどのくらい上位に出たかを示します。",
+    EvaluationMetricName.CONTEXT_PRECISION: (
+        "取得した情報に回答へ関係する内容がどれだけ含まれるかを示します。"
+    ),
+    EvaluationMetricName.CITATION_COVERAGE: "以前の結果と比較するための互換指標です。",
+    EvaluationMetricName.CITATION_PRESENCE: "引用が必要な回答に引用が付いている割合です。",
+    EvaluationMetricName.CITATION_CORRECTNESS: "引用先が期待する根拠と一致している割合です。",
+    EvaluationMetricName.GROUNDEDNESS: "回答が取得した根拠に支えられている度合いです。",
+    EvaluationMetricName.FAITHFULNESS: (
+        "\u65e7\u30c7\u30fc\u30bf\u30bb\u30c3\u30c8\u5411\u3051\u306b\u3001\u56de\u7b54\u3078\u660e\u793a\u7684\u306a"
+        "\u671f\u5f85\u30ad\u30fc\u30ef\u30fc\u30c9\u304c\u542b\u307e\u308c\u305f\u5272\u5408\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002"
+        "\u30ad\u30fc\u30ef\u30fc\u30c9\u672a\u8a2d\u5b9a\u6642\u306fN/A\u3067\u3059\u3002"
+    ),
+    EvaluationMetricName.CLAIM_FAITHFULNESS: (
+        "\u751f\u6210\u56de\u7b54\u3092\u691c\u8a3c\u53ef\u80fd\u306a\u4e8b\u5b9f\u306e\u307e\u3068\u307e\u308a\u306b\u5206\u3051\u3001"
+        "\u691c\u7d22\u3067\u5f97\u305f\u6839\u62e0\u306b\u88cf\u4ed8\u3051\u3089\u308c\u305f\u4e3b\u5f35\u306e\u5272\u5408\u3067\u3059\u3002"
+        "\u30ed\u30fc\u30ab\u30ebLLM\u306b\u3088\u308b\u81ea\u52d5\u5224\u5b9a\u306e\u305f\u3081\u66ab\u5b9a\u5024\u3067\u3059\u3002"
+    ),
+    EvaluationMetricName.ANSWER_COMPLETENESS: "回答に必要な内容がそろっている割合です。",
+    EvaluationMetricName.NO_CONTEXT_RATE: "回答に使える情報を取得できなかったケースの割合です。",
+    EvaluationMetricName.P95_LATENCY: "ほとんどの評価がこの時間以内に完了する目安です。",
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY: "質問に合った検索方法を選べた割合です。",
+    EvaluationMetricName.FALLBACK_RATE: "通常経路で不足し、代替検索を使ったケースの割合です。",
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE: "検索回数の上限まで使い切ったケースの割合です。",
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG: "取得した情報が回答に十分だったかの平均です。",
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG: "1ケースで検索を呼び出した平均回数です。",
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE: "取得したグラフ経路が期待する関係に合う度合いです。",
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE: "グラフ経路を引用可能な根拠へ戻せた割合です。",
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY: (
+        "複数の関係をたどる質問に必要な経路を取得できた割合です。"
+    ),
+    EvaluationMetricName.CACHE_HIT_RATE: "過去の検索結果を再利用できた割合です。",
+    EvaluationMetricName.CACHE_SAVED_LATENCY: "キャッシュで短縮できた推定時間です。",
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY: (
+        "グラフのエンティティ・関係・経路を安全な集計値で確認します。"
+    ),
+}
+EVALUATION_METRIC_PRIMARY_SCOPES_BY_NAME: dict[
+    EvaluationMetricName, tuple[EvaluationScope, ...]
+] = {
+    EvaluationMetricName.RECALL_AT_K: ("retrieval",),
+    EvaluationMetricName.MRR: ("retrieval",),
+    EvaluationMetricName.CONTEXT_PRECISION: ("retrieval",),
+    EvaluationMetricName.CLAIM_FAITHFULNESS: ("answer", "end_to_end"),
+    EvaluationMetricName.ANSWER_COMPLETENESS: ("answer", "end_to_end"),
+    EvaluationMetricName.CITATION_CORRECTNESS: ("answer", "end_to_end"),
+}
+EVALUATION_METRIC_DIAGNOSTIC_NAMES = frozenset(
+    {
+        EvaluationMetricName.FAITHFULNESS,
+        EvaluationMetricName.CITATION_COVERAGE,
+        EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY,
+    }
+)
+EVALUATION_METRIC_DISPLAY_ORDER: tuple[EvaluationMetricName, ...] = (
+    EvaluationMetricName.RECALL_AT_K,
+    EvaluationMetricName.MRR,
+    EvaluationMetricName.CONTEXT_PRECISION,
+    EvaluationMetricName.NO_CONTEXT_RATE,
+    EvaluationMetricName.CLAIM_FAITHFULNESS,
+    EvaluationMetricName.ANSWER_COMPLETENESS,
+    EvaluationMetricName.GROUNDEDNESS,
+    EvaluationMetricName.FAITHFULNESS,
+    EvaluationMetricName.CITATION_CORRECTNESS,
+    EvaluationMetricName.CITATION_PRESENCE,
+    EvaluationMetricName.CITATION_COVERAGE,
+    EvaluationMetricName.STRATEGY_SELECTION_ACCURACY,
+    EvaluationMetricName.SUFFICIENCY_SCORE_AVG,
+    EvaluationMetricName.FALLBACK_RATE,
+    EvaluationMetricName.BUDGET_EXHAUSTED_RATE,
+    EvaluationMetricName.RETRIEVAL_CALL_COUNT_AVG,
+    EvaluationMetricName.GRAPH_PATH_RELEVANCE,
+    EvaluationMetricName.GRAPH_CITATION_COVERAGE,
+    EvaluationMetricName.MULTI_HOP_ANSWERABILITY,
+    EvaluationMetricName.ENTITY_RELATION_QUALITY_SUMMARY,
+    EvaluationMetricName.P95_LATENCY,
+    EvaluationMetricName.CACHE_HIT_RATE,
+    EvaluationMetricName.CACHE_SAVED_LATENCY,
+)
+
+
+def _metric_applicable_scopes(
+    metric_name: EvaluationMetricName,
+    category: EvaluationMetricCategory,
+) -> tuple[EvaluationScope, ...]:
+    if metric_name == EvaluationMetricName.P95_LATENCY:
+        return ("retrieval", "answer", "end_to_end")
+    if category in {EvaluationMetricCategory.ANSWER, EvaluationMetricCategory.CITATION}:
+        return ("answer", "end_to_end")
+    return ("retrieval", "end_to_end")
 
 
 def _build_evaluation_metric_catalog() -> EvaluationMetricCatalog:
@@ -433,16 +620,47 @@ def _build_evaluation_metric_catalog() -> EvaluationMetricCatalog:
     if set(EVALUATION_METRIC_CATEGORY_BY_NAME) != expected_names:
         raise RuntimeError("evaluation metric categories must cover every metric")
 
+    display_priority_by_name = {
+        metric_name: index for index, metric_name in enumerate(EVALUATION_METRIC_DISPLAY_ORDER)
+    }
+    if set(EVALUATION_METRIC_DISPLAY_NAME_BY_NAME) != expected_names:
+        raise RuntimeError("evaluation metric display names must cover every metric")
+    if set(EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME) != expected_names:
+        raise RuntimeError("evaluation metric summaries must cover every metric")
+    if set(display_priority_by_name) != expected_names:
+        raise RuntimeError("evaluation metric display order must cover every metric")
     return EvaluationMetricCatalog(
         metrics=[
             EvaluationMetricCatalogItem(
                 metric_name=spec.metric_name,
                 category=EVALUATION_METRIC_CATEGORY_BY_NAME[spec.metric_name],
-                display_name=spec.display_name,
+                display_name=EVALUATION_METRIC_DISPLAY_NAME_BY_NAME[spec.metric_name],
                 description=spec.description,
+                plain_language_summary=EVALUATION_METRIC_PLAIN_LANGUAGE_SUMMARY_BY_NAME[
+                    spec.metric_name
+                ],
                 higher_is_better=spec.higher_is_better,
                 value_unit=spec.value_unit,
                 alias_of=EVALUATION_METRIC_ALIAS_BY_NAME.get(spec.metric_name),
+                importance=(
+                    "primary"
+                    if spec.metric_name in EVALUATION_METRIC_PRIMARY_SCOPES_BY_NAME
+                    else "diagnostic"
+                    if spec.metric_name in EVALUATION_METRIC_DIAGNOSTIC_NAMES
+                    else "secondary"
+                ),
+                applicable_scopes=list(
+                    _metric_applicable_scopes(
+                        spec.metric_name, EVALUATION_METRIC_CATEGORY_BY_NAME[spec.metric_name]
+                    )
+                ),
+                primary_scopes=list(
+                    EVALUATION_METRIC_PRIMARY_SCOPES_BY_NAME.get(spec.metric_name, ())
+                ),
+                display_priority=display_priority_by_name[spec.metric_name],
+                method=EVALUATION_METRIC_METHOD_BY_NAME.get(
+                    spec.metric_name, EvaluationMetricMethod.DETERMINISTIC
+                ),
             )
             for spec in STRATEGY_METRIC_SPECS
         ]
@@ -459,6 +677,14 @@ class LoadedEvaluationCase:
     case_key: str
     metadata_json: dict[str, object] | None = None
     tags: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class ManualCalibrationCaseContract:
+    case_id: str
+    answerable: bool
+    required_citation: bool
+    tags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -552,12 +778,20 @@ class EvaluationService:
         rag_service_factory: Callable[..., EvaluationRagService] = create_evaluation_rag_service,
         settings: Settings | None = None,
         trace_export_service: TraceExportService | None = None,
+        claim_judge_factory: Callable[[Settings], EvaluationClaimJudgeService] | None = None,
+        generation_readiness_checker: (
+            Callable[[Settings, str], LMStudioModelReadiness] | None
+        ) = None,
     ) -> None:
         self.repository = repository or EvaluationRepository()
         self.job_repository = job_repository or JobRepository()
         self.rag_service_factory = rag_service_factory
         self.settings = settings or get_settings()
         self.trace_export_service = trace_export_service or TraceExportService(self.settings)
+        self.claim_judge_factory = claim_judge_factory or EvaluationClaimJudgeService
+        self.generation_readiness_checker = (
+            generation_readiness_checker or check_lmstudio_model_readiness
+        )
 
     @staticmethod
     def get_metric_catalog() -> EvaluationMetricCatalog:
@@ -571,6 +805,8 @@ class EvaluationService:
         user: User,
     ) -> EvaluationRunCreateResponse:
         dataset_name = payload.dataset_name
+        corpus_fingerprint: str | None = None
+        logical_document_ids: list[int] = []
         if payload.evaluation_dataset_id is not None:
             dataset = self.repository.get_dataset(
                 db,
@@ -588,13 +824,59 @@ class EvaluationService:
             if active_case_count < 1:
                 raise ValidationFailed({"evaluation_dataset_id": "dataset has no active cases"})
             dataset_name = dataset.dataset_name
+            corpus_fingerprint = getattr(dataset, "corpus_fingerprint", None)
+            if getattr(dataset, "corpus_mode", "shared_legacy") == "isolated":
+                readiness = self.get_corpus_readiness(
+                    db,
+                    evaluation_dataset_id=dataset.evaluation_dataset_id,
+                )
+                if not readiness.ready:
+                    raise EvaluationCorpusNotReady(details=readiness.model_dump(mode="json"))
+                logical_document_ids = [
+                    source.logical_document_id
+                    for source in readiness.sources
+                    if source.logical_document_id is not None
+                ]
 
         strategy_targets = _selected_strategy_targets(payload)
         strategies = [target.comparison_label for target in strategy_targets]
         metrics = [metric.value for metric in payload.metrics]
+        evaluation_scope = payload.evaluation_scope or _evaluation_scope_from_targets(
+            strategy_targets
+        )
+        if (
+            evaluation_scope == "end_to_end"
+            and payload.generation_provider == "lmstudio"
+            and payload.generation_model is not None
+        ):
+            generation_readiness = self.get_generation_readiness(
+                payload=EvaluationGenerationReadinessRequest(
+                    generation_provider=payload.generation_provider,
+                    generation_model=payload.generation_model,
+                )
+            )
+            if not generation_readiness.ready:
+                raise EvaluationGenerationNotReady(
+                    details=generation_readiness.model_dump(mode="json")
+                )
         strategy_type = strategy_targets[0].storage_strategy_type
         cache_modes = [mode.value for mode in _selected_cache_modes(payload.cache_modes)]
         trigger_type = payload.trigger_type.value
+        retrieval_settings = _retrieval_settings_snapshot(
+            strategy_type=strategy_type,
+            strategies=strategies,
+            metrics=metrics,
+            cache_modes=cache_modes,
+            evaluation_scope=evaluation_scope,
+            strategy_targets=strategy_targets,
+            case_limit=payload.case_limit,
+            top_k=payload.top_k,
+            rerank_top_n=payload.rerank_top_n,
+        )
+        if corpus_fingerprint is not None:
+            retrieval_settings["corpus_fingerprint"] = corpus_fingerprint
+        if logical_document_ids:
+            retrieval_settings["logical_document_ids"] = logical_document_ids
         run = self.repository.create_run(
             db,
             created_by=user.user_id,
@@ -604,21 +886,14 @@ class EvaluationService:
             strategy_type=strategy_type,
             strategies=strategies,
             metrics=metrics,
+            evaluation_scope=evaluation_scope,
             top_k=payload.top_k,
             rerank_top_n=payload.rerank_top_n,
             generation_provider=payload.generation_provider,
             generation_model=payload.generation_model,
             trigger_type=trigger_type,
-            retrieval_settings_json=_retrieval_settings_snapshot(
-                strategy_type=strategy_type,
-                strategies=strategies,
-                metrics=metrics,
-                cache_modes=cache_modes,
-                strategy_targets=strategy_targets,
-                case_limit=payload.case_limit,
-                top_k=payload.top_k,
-                rerank_top_n=payload.rerank_top_n,
-            ),
+            corpus_fingerprint=corpus_fingerprint,
+            retrieval_settings_json=retrieval_settings,
         )
         job = self.job_repository.create_job(
             db,
@@ -629,11 +904,14 @@ class EvaluationService:
                 "evaluation_run_id": run.evaluation_run_id,
                 "dataset_name": dataset_name,
                 "evaluation_dataset_id": payload.evaluation_dataset_id,
+                "corpus_fingerprint": corpus_fingerprint,
+                "logical_document_ids": logical_document_ids,
                 "case_limit": payload.case_limit,
                 "strategy_type": strategy_type,
                 "strategies": strategies,
                 "metrics": metrics,
                 "cache_modes": cache_modes,
+                "evaluation_scope": evaluation_scope,
                 "strategy_targets": [_target_metadata_json(target) for target in strategy_targets],
                 "top_k": payload.top_k,
                 "rerank_top_n": payload.rerank_top_n,
@@ -652,6 +930,32 @@ class EvaluationService:
             job_id=job.job_id,
             status="queued",
             strategies=strategies,
+            evaluation_scope=evaluation_scope,
+        )
+
+    def get_generation_readiness(
+        self,
+        *,
+        payload: EvaluationGenerationReadinessRequest,
+    ) -> EvaluationGenerationReadinessResponse:
+        if payload.generation_provider != "lmstudio":
+            return EvaluationGenerationReadinessResponse(
+                generation_provider=payload.generation_provider,
+                requested_model=payload.generation_model,
+                resolved_model=payload.generation_model,
+                ready=True,
+                reason_code="provider_not_checked",
+            )
+        readiness = self.generation_readiness_checker(
+            self.settings,
+            payload.generation_model,
+        )
+        return EvaluationGenerationReadinessResponse(
+            generation_provider="lmstudio",
+            requested_model=readiness.requested_model,
+            resolved_model=readiness.resolved_model,
+            ready=readiness.ready,
+            reason_code=readiness.reason_code,
         )
 
     def create_dataset(
@@ -661,7 +965,11 @@ class EvaluationService:
         payload: EvaluationDatasetCreateRequest,
         user: User,
     ) -> EvaluationDatasetResponse:
-        if self.repository.get_dataset_by_name(db, dataset_name=payload.dataset_name):
+        if self.repository.get_dataset_by_name_and_version(
+            db,
+            dataset_name=payload.dataset_name,
+            version=payload.version,
+        ):
             raise ConflictError()
         try:
             dataset = self.repository.create_dataset(
@@ -720,17 +1028,50 @@ class EvaluationService:
         if dataset is None:
             raise ResourceNotFound()
         fields_set = payload.model_fields_set
-        self.repository.update_dataset(
-            db,
-            dataset=dataset,
-            description=payload.description,
-            version=payload.version,
-            metadata_json=payload.metadata_json,
-            updated_at=datetime.now(UTC),
-            description_provided="description" in fields_set,
-            metadata_json_provided="metadata_json" in fields_set,
-        )
-        db.commit()
+        immutable_changes = {
+            "description": payload.description != dataset.description,
+            "version": payload.version is not None and payload.version != dataset.version,
+            "metadata_json": payload.metadata_json != dataset.metadata_json,
+        }
+        changed_fields = {
+            field_name
+            for field_name, changed in immutable_changes.items()
+            if field_name in fields_set and changed
+        }
+        if dataset.content_fingerprint is not None and changed_fields:
+            raise ConflictError(
+                "dataset_version_conflict",
+                details={
+                    "evaluation_dataset_id": dataset.evaluation_dataset_id,
+                    "immutable_fields": sorted(changed_fields),
+                },
+            )
+        if (
+            "version" in changed_fields
+            and payload.version is not None
+            and self.repository.get_dataset_by_name_and_version(
+                db,
+                dataset_name=dataset.dataset_name,
+                version=payload.version,
+            )
+            is not None
+        ):
+            raise ConflictError()
+        try:
+            self.repository.update_dataset(
+                db,
+                dataset=dataset,
+                description=payload.description,
+                version=payload.version,
+                metadata_json=payload.metadata_json,
+                updated_at=datetime.now(UTC),
+                description_provided="description" in fields_set,
+                metadata_json_provided="metadata_json" in fields_set,
+            )
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ConflictError() from exc
         db.refresh(dataset)
         return self._dataset_response(db, dataset)
 
@@ -868,7 +1209,7 @@ class EvaluationService:
         db.refresh(case)
         return self._case_response(case)
 
-    def import_dataset_manifest(
+    def _legacy_import_dataset_manifest(
         self,
         db: Session,
         *,
@@ -952,12 +1293,66 @@ class EvaluationService:
         return EvaluationDatasetImportResponse(
             evaluation_dataset_id=dataset.evaluation_dataset_id,
             dataset_name=dataset.dataset_name,
+            version=dataset.version,
+            content_fingerprint=(
+                dataset.content_fingerprint
+                or hashlib.sha256(f"{dataset.dataset_name}:{dataset.version}".encode()).hexdigest()
+            ),
+            corpus_fingerprint=dataset.corpus_fingerprint,
             case_count=self.repository.count_cases(
                 db,
                 evaluation_dataset_id=dataset.evaluation_dataset_id,
             ),
             imported_case_count=imported_case_count,
-            result_code=cast(Literal["created", "updated"], result_code),
+            result_code="created" if result_code == "created" else "unchanged",
+        )
+
+    def validate_dataset_manifest(
+        self,
+        *,
+        manifest: EvaluationDatasetManifestInput,
+    ) -> EvaluationDatasetValidationResponse:
+        return EvaluationDatasetManifestService(self.repository).validate(
+            manifest=manifest,
+        )
+
+    def import_dataset_manifest(
+        self,
+        db: Session,
+        *,
+        manifest: EvaluationDatasetManifestInput,
+        user: User,
+    ) -> EvaluationDatasetImportResponse:
+        return EvaluationDatasetManifestService(self.repository).import_manifest(
+            db,
+            manifest=manifest,
+            user=user,
+        )
+
+    def prepare_dataset_corpus(
+        self,
+        db: Session,
+        *,
+        evaluation_dataset_id: int,
+        user: User,
+        request_id: str | None,
+    ) -> EvaluationCorpusPrepareResponse:
+        return EvaluationCorpusService(self.repository).prepare(
+            db,
+            evaluation_dataset_id=evaluation_dataset_id,
+            user=user,
+            request_id=request_id,
+        )
+
+    def get_corpus_readiness(
+        self,
+        db: Session,
+        *,
+        evaluation_dataset_id: int,
+    ) -> EvaluationCorpusReadinessResponse:
+        return EvaluationCorpusService(self.repository).readiness(
+            db,
+            evaluation_dataset_id=evaluation_dataset_id,
         )
 
     def export_dataset_manifest(
@@ -1048,28 +1443,83 @@ class EvaluationService:
         *,
         evaluation_run_id: int,
     ) -> EvaluationHumanCalibrationSummary:
-        run = self._require_human_calibration_run(
+        run = self._require_manual_calibration_run(
             db,
             evaluation_run_id=evaluation_run_id,
         )
-        dataset, _, _ = load_gold_v2_bundle()
-        cases_by_id = {case.case_id: case for case in dataset.cases}
-        targets = [
-            EvaluationHumanCalibrationTarget(
-                evaluation_run_item_id=item.evaluation_run_item_id,
-                case_id=case.case_id,
-                strategy_type=cast(RetrievalStrategy, item.strategy_type),
-                status=cast(EvaluationStatus, item.status),
-                answerable=case.answerable,
-                required_citation=case.required_citation,
-                prompt_injection="prompt_injection" in case.tags,
-            )
-            for item in self.repository.list_items(
+        now = datetime.now(UTC)
+        if self.repository.purge_expired_review_payloads(db, now=now):
+            db.commit()
+        items = self.repository.list_items(
+            db,
+            evaluation_run_id=run.evaluation_run_id,
+        )
+        source_cases = self._promotion_source_cases(db, run)
+        judgments = {
+            row.evaluation_run_item_id: row
+            for row in self.repository.list_auxiliary_judgments(
                 db,
                 evaluation_run_id=run.evaluation_run_id,
             )
-            if item.case_key is not None and (case := cases_by_id.get(item.case_key)) is not None
-        ]
+        }
+        review_payloads = self.repository.list_review_payloads(
+            db,
+            evaluation_run_id=run.evaluation_run_id,
+        )
+        targets: list[EvaluationHumanCalibrationTarget] = []
+        for item in items:
+            source = source_cases.get(item.evaluation_run_item_id)
+            if source is None:
+                continue
+            contract = _manual_calibration_case_contract(source)
+            judgment = judgments.get(item.evaluation_run_item_id)
+            review_payload = review_payloads.get(item.evaluation_run_item_id)
+            decision = _auxiliary_decision_from_judgment(judgment, case_id=contract.case_id)
+            targets.append(
+                EvaluationHumanCalibrationTarget(
+                    evaluation_run_item_id=item.evaluation_run_item_id,
+                    case_id=contract.case_id,
+                    strategy_type=cast(RetrievalStrategy, item.strategy_type),
+                    status=cast(EvaluationStatus, item.status),
+                    answerable=contract.answerable,
+                    required_citation=contract.required_citation,
+                    prompt_injection="prompt_injection" in contract.tags,
+                    judge_status=cast(
+                        Literal["succeeded", "failed", "missing"],
+                        judgment.status if judgment is not None else "missing",
+                    ),
+                    judge_failure_code=(judgment.failure_code if judgment is not None else None),
+                    auxiliary_decision=decision,
+                    claim_faithfulness=(
+                        _decimal_float(judgment.claim_faithfulness)
+                        if judgment is not None
+                        else None
+                    ),
+                    generated_answer=(
+                        review_payload.answer_text
+                        if review_payload is not None and review_payload.purged_at is None
+                        else None
+                    ),
+                    citation_excerpts=(
+                        list(review_payload.citations_json or [])
+                        if review_payload is not None and review_payload.purged_at is None
+                        else []
+                    ),
+                    required_facts=(
+                        list(review_payload.required_facts_json or [])
+                        if review_payload is not None and review_payload.purged_at is None
+                        else []
+                    ),
+                    review_payload_available=(
+                        review_payload is not None
+                        and review_payload.purged_at is None
+                        and review_payload.answer_text is not None
+                    ),
+                    review_payload_expires_at=(
+                        review_payload.expires_at if review_payload is not None else None
+                    ),
+                )
+            )
         records = [
             self._human_calibration_response(row)
             for row in self.repository.list_human_calibrations(
@@ -1097,7 +1547,7 @@ class EvaluationService:
         user: User,
         request_id: str | None,
     ) -> EvaluationHumanCalibrationResponse:
-        self._require_human_calibration_run(
+        run = self._require_manual_calibration_run(
             db,
             evaluation_run_id=evaluation_run_id,
         )
@@ -1109,43 +1559,90 @@ class EvaluationService:
         )
         if item is None:
             raise ResourceNotFound()
-        dataset, _, _ = load_gold_v2_bundle()
-        gold_case = next(
-            (case for case in dataset.cases if case.case_id == item.case_key),
-            None,
-        )
-        if gold_case is None:
+        source_case = self._promotion_source_cases(db, run).get(item.evaluation_run_item_id)
+        if source_case is None:
             raise ValidationFailed(
-                {"evaluation_run_item_id": "item is not an eligible Gold Dataset v2 case"}
+                {"evaluation_run_item_id": "item is not eligible for manual calibration"}
             )
+        contract = _manual_calibration_case_contract(source_case)
 
-        decision = payload.auxiliary_decision
+        judgment = self.repository.get_auxiliary_judgment(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+        )
+        decision = _auxiliary_decision_from_judgment(judgment, case_id=contract.case_id)
+        if decision is None:
+            raise ValidationFailed(
+                {"evaluation_run_item_id": ("a successful automatic judge result is required")}
+            )
         try:
-            auxiliary_pass = grounded_answer_pass(gold_case, decision)
+            auxiliary_pass = grounded_answer_pass(contract, decision)
+            human_pass = payload.human_pass
+            if payload.human_dimensions is not None:
+                human_decision = AuxiliaryJudgeDecision(
+                    case_id=contract.case_id,
+                    rubric_version=decision.rubric_version,
+                    required_facts_supported=(payload.human_dimensions.required_facts_supported),
+                    citation_support=payload.human_dimensions.citation_support,
+                    forbidden_claims_absent=(payload.human_dimensions.forbidden_claims_absent),
+                    abstention_correct=payload.human_dimensions.abstention_correct,
+                    prompt_injection_resisted=(payload.human_dimensions.prompt_injection_resisted),
+                    confidence=1.0,
+                    reason_codes=payload.human_reason_codes,
+                )
+                calculated_human_pass = grounded_answer_pass(contract, human_decision)
+                if calculated_human_pass != human_pass:
+                    raise ValueError("manual dimensions do not match human_pass")
             human_record = HumanCalibrationRecord(
-                case_id=gold_case.case_id,
+                case_id=contract.case_id,
                 rubric_version=decision.rubric_version,
                 auxiliary_pass=auxiliary_pass,
-                human_pass=payload.human_pass,
+                human_pass=human_pass,
                 disagreement_category=payload.disagreement_category,
                 reason_codes=payload.human_reason_codes,
             )
         except (ValueError, PydanticValidationError) as exc:
             raise ValidationFailed(
-                {"human_calibration": "verdicts do not match the Gold Dataset v2 contract"}
+                {"manual_calibration": "verdicts do not match the calibration contract"}
             ) from exc
 
         now = datetime.now(UTC)
+        self.repository.purge_expired_review_payloads(db, now=now)
         row = self.repository.upsert_human_calibration(
             db,
             evaluation_run_item_id=item.evaluation_run_item_id,
-            case_id=gold_case.case_id,
+            case_id=contract.case_id,
             rubric_version=decision.rubric_version,
             required_facts_supported=decision.required_facts_supported.value,
             citation_support=decision.citation_support.value,
             forbidden_claims_absent=decision.forbidden_claims_absent.value,
             abstention_correct=decision.abstention_correct.value,
             prompt_injection_resisted=decision.prompt_injection_resisted.value,
+            human_required_facts_supported=(
+                payload.human_dimensions.required_facts_supported.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_citation_support=(
+                payload.human_dimensions.citation_support.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_forbidden_claims_absent=(
+                payload.human_dimensions.forbidden_claims_absent.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_abstention_correct=(
+                payload.human_dimensions.abstention_correct.value
+                if payload.human_dimensions is not None
+                else None
+            ),
+            human_prompt_injection_resisted=(
+                payload.human_dimensions.prompt_injection_resisted.value
+                if payload.human_dimensions is not None
+                else None
+            ),
             auxiliary_confidence=Decimal(str(decision.confidence)).quantize(Decimal("0.0001")),
             auxiliary_reason_codes=[code.value for code in decision.reason_codes],
             auxiliary_pass=human_record.auxiliary_pass,
@@ -1169,7 +1666,7 @@ class EvaluationService:
             metadata={
                 "evaluation_run_id": evaluation_run_id,
                 "evaluation_run_item_id": evaluation_run_item_id,
-                "case_id": gold_case.case_id,
+                "case_id": contract.case_id,
                 "auxiliary_pass": human_record.auxiliary_pass,
                 "human_pass": human_record.human_pass,
                 "disagreement_category": row.disagreement_category,
@@ -1179,7 +1676,7 @@ class EvaluationService:
         db.refresh(row)
         return self._human_calibration_response(row)
 
-    def _require_human_calibration_run(
+    def _require_manual_calibration_run(
         self,
         db: Session,
         *,
@@ -1188,10 +1685,6 @@ class EvaluationService:
         run = self.repository.get_run(db, evaluation_run_id=evaluation_run_id)
         if run is None:
             raise ResourceNotFound()
-        if _config(run)["dataset_name"] != "gold_answer_quality_v2":
-            raise ValidationFailed(
-                {"evaluation_run_id": "human calibration requires Gold Dataset v2"}
-            )
         return run
 
     @staticmethod
@@ -1221,6 +1714,7 @@ class EvaluationService:
             evaluation_human_calibration_id=row.evaluation_human_calibration_id,
             evaluation_run_item_id=row.evaluation_run_item_id,
             auxiliary_decision=decision,
+            human_dimensions=_manual_dimensions_from_row(row),
             human_calibration=human_record,
             reviewed_by=row.reviewed_by,
             created_at=row.created_at,
@@ -1474,6 +1968,7 @@ class EvaluationService:
 
         config = _config(run)
         now = datetime.now(UTC)
+        self.repository.purge_expired_review_payloads(db, now=now)
         cache_attempt_id = _evaluation_cache_attempt_id(evaluation_run_id, now)
         self.repository.mark_run_running(db, run=run, started_at=now)
         self.repository.delete_items_and_results(db, evaluation_run_id=evaluation_run_id)
@@ -1505,8 +2000,17 @@ class EvaluationService:
             )
             strategy_targets = _strategy_targets_from_config(config)
             requested_metrics = set(cast(list[str], config["metrics"]))
+            evaluation_scope = cast(EvaluationScope, config["evaluation_scope"])
+            claim_judge = (
+                self.claim_judge_factory(self.settings)
+                if evaluation_scope == "end_to_end"
+                and cast(str | None, config["corpus_fingerprint"]) is not None
+                else None
+            )
             top_k = cast(int | None, config["top_k"])
             rerank_top_n = cast(int | None, config["rerank_top_n"])
+            logical_document_ids = cast(list[int], config["logical_document_ids"])
+            corpus_fingerprint = cast(str | None, config["corpus_fingerprint"])
             latency_baselines: dict[tuple[str, str], int] = {}
             for loaded_case in cases:
                 for target in strategy_targets:
@@ -1529,6 +2033,7 @@ class EvaluationService:
                             case_metadata_json=loaded_case.metadata_json,
                             target=target,
                             requested_metrics=requested_metrics,
+                            evaluation_scope=evaluation_scope,
                             request_id=_case_request_id(
                                 request_id,
                                 case_key=loaded_case.case_key,
@@ -1536,6 +2041,8 @@ class EvaluationService:
                             ),
                             top_k=top_k,
                             rerank_top_n=rerank_top_n,
+                            logical_document_ids=logical_document_ids,
+                            corpus_fingerprint=corpus_fingerprint,
                             evaluation_run_id=evaluation_run_id,
                             cache_attempt_id=_evaluation_cache_target_id(
                                 cache_attempt_id,
@@ -1569,6 +2076,7 @@ class EvaluationService:
                         item=item,
                         case_result=case_result,
                         target=target,
+                        claim_judge=claim_judge,
                     )
                     db.commit()
         except Exception:
@@ -1657,9 +2165,12 @@ class EvaluationService:
         case_metadata_json: dict[str, object] | None,
         target: EvaluationStrategyTarget,
         requested_metrics: set[str],
+        evaluation_scope: EvaluationScope,
         request_id: str | None,
         top_k: int | None,
         rerank_top_n: int | None,
+        logical_document_ids: Sequence[int],
+        corpus_fingerprint: str | None,
         evaluation_run_id: int,
         cache_attempt_id: str,
         baseline_latency_ms: int | None,
@@ -1667,43 +2178,68 @@ class EvaluationService:
         started = time.perf_counter()
         target_runner = getattr(rag_service, "evaluate_strategy_target", None)
         strategy_runner = getattr(rag_service, "evaluate_strategy", None)
-        if callable(target_runner) and _requires_strategy_target_runner(target):
-            rag_result = target_runner(
+        generate_answer = evaluation_scope == "end_to_end"
+        common_kwargs: dict[str, object] = {
+            "question": case.question,
+            "request_id": request_id,
+            "strategy_type": target.retrieval_strategy,
+            "top_k": top_k,
+            "rerank_top_n": rerank_top_n,
+        }
+        if callable(target_runner) and (
+            _requires_strategy_target_runner(target) or generate_answer
+        ):
+            target_kwargs: dict[str, object] = {
+                "question": case.question,
+                "request_id": request_id,
+                "target": target,
+                "top_k": top_k,
+                "rerank_top_n": rerank_top_n,
+                "evaluation_run_id": evaluation_run_id,
+                "cache_attempt_id": cache_attempt_id,
+            }
+            if _callable_accepts_parameter(target_runner, "generate_answer"):
+                target_kwargs["generate_answer"] = generate_answer
+            rag_result = _call_evaluation_runner(
+                cast(Callable[..., RagEvaluationResult], target_runner),
                 db,
-                question=case.question,
-                request_id=request_id,
-                target=target,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
-                evaluation_run_id=evaluation_run_id,
-                cache_attempt_id=cache_attempt_id,
+                kwargs=target_kwargs,
+                logical_document_ids=logical_document_ids,
+                corpus_fingerprint=corpus_fingerprint,
+            )
+        elif generate_answer:
+            answer_runner = getattr(rag_service, "answer_question_with_strategy", None)
+            selected_runner = (
+                cast(Callable[..., RagEvaluationResult], answer_runner)
+                if callable(answer_runner)
+                else rag_service.evaluate_question
+            )
+            rag_result = _call_evaluation_runner(
+                selected_runner,
+                db,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
             )
         elif target.retrieval_strategy in ASK_ONLY_EVALUATION_STRATEGIES:
-            rag_result = rag_service.evaluate_question(
+            rag_result = _call_evaluation_runner(
+                rag_service.evaluate_question,
                 db,
-                question=case.question,
-                request_id=request_id,
-                strategy_type=target.retrieval_strategy,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
             )
         elif callable(strategy_runner):
-            rag_result = strategy_runner(
+            rag_result = _call_evaluation_runner(
+                cast(Callable[..., RagEvaluationResult], strategy_runner),
                 db,
-                question=case.question,
-                request_id=request_id,
-                strategy_type=target.retrieval_strategy,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
             )
         else:
-            rag_result = rag_service.evaluate_question(
+            rag_result = _call_evaluation_runner(
+                rag_service.evaluate_question,
                 db,
-                question=case.question,
-                request_id=request_id,
-                strategy_type=target.retrieval_strategy,
-                top_k=top_k,
-                rerank_top_n=rerank_top_n,
+                kwargs=common_kwargs,
+                logical_document_ids=logical_document_ids,
             )
         latency_ms = int((time.perf_counter() - started) * 1000)
         metrics = _replace_metrics(
@@ -1768,6 +2304,7 @@ class EvaluationService:
             "latency_ms": latency_ms,
             "status": status,
             "target": target,
+            "requested_metrics": requested_metrics,
         }
 
     def _store_case_result(
@@ -1777,6 +2314,7 @@ class EvaluationService:
         item: EvaluationRunItem,
         case_result: dict[str, object],
         target: EvaluationStrategyTarget,
+        claim_judge: EvaluationClaimJudgeService | None,
     ) -> None:
         rag_result = case_result["rag_result"]
         case = case_result["case"]
@@ -1793,6 +2331,23 @@ class EvaluationService:
         if not isinstance(latency_ms, int):
             raise RuntimeError("invalid_evaluation_case_result")
         status = str(case_result["status"])
+        answer_outcome = _resolved_answer_outcome(rag_result)
+        requested_metrics = case_result.get("requested_metrics")
+        if not isinstance(requested_metrics, set):
+            raise RuntimeError("invalid_evaluation_case_result")
+        judge_metric = self._store_claim_judgment(
+            db,
+            item=item,
+            case=case,
+            rag_result=rag_result,
+            answer_outcome=answer_outcome,
+            claim_judge=claim_judge,
+        )
+        if (
+            judge_metric is not None
+            and EvaluationMetricName.CLAIM_FAITHFULNESS.value in requested_metrics
+        ):
+            metrics = _replace_metrics(metrics, [judge_metric])
         generation_provider = (
             _safe_optional_generation_label(
                 rag_result.generation_provider,
@@ -1829,11 +2384,17 @@ class EvaluationService:
         metric_by_name = {
             metric.metric_name: metric for metric in metrics if isinstance(metric, MetricValue)
         }
-        metric_summary_json = _metric_summary_json(metrics, case=case, target=result_target)
+        metric_summary_json = _metric_summary_json(
+            metrics,
+            case=case,
+            target=result_target,
+            answer_generated=answer_outcome == EvaluationAnswerOutcome.ANSWERED.value,
+        )
         self.repository.finish_item(
             db,
             item=item,
             status=status,
+            answer_outcome=answer_outcome,
             retrieval_run_id=rag_result.retrieval_run_id,
             faithfulness_score=_metric_decimal(metric_by_name.get("faithfulness")),
             groundedness_score=_metric_decimal(metric_by_name.get("groundedness")),
@@ -1849,6 +2410,7 @@ class EvaluationService:
             latency_breakdown_json=_latency_breakdown_json(latency_ms),
             metric_summary_json=metric_summary_json,
             error_code=rag_result.error_code if status == "failed" else None,
+            error_detail_code=(rag_result.error_detail_code if status == "failed" else None),
             error_message=None,
         )
         self.repository.save_results(
@@ -1859,6 +2421,151 @@ class EvaluationService:
                 for metric in metrics
                 if isinstance(metric, MetricValue)
             ],
+        )
+
+    def _store_claim_judgment(
+        self,
+        db: Session,
+        *,
+        item: EvaluationRunItem,
+        case: EvaluationCase,
+        rag_result: RagEvaluationResult,
+        answer_outcome: str | None,
+        claim_judge: EvaluationClaimJudgeService | None,
+    ) -> MetricValue | None:
+        metadata = case.metadata_json if isinstance(case.metadata_json, dict) else {}
+        if (
+            claim_judge is None
+            or metadata.get("manifest_schema_version") != DATASET_MANIFEST_V2_SCHEMA_VERSION
+            or answer_outcome
+            not in {
+                EvaluationAnswerOutcome.ANSWERED.value,
+                EvaluationAnswerOutcome.ABSTAINED.value,
+            }
+        ):
+            return None
+
+        required_facts = _safe_dict_list(metadata.get("required_facts"))
+        forbidden_claims = _string_list(metadata.get("forbidden_claims"))
+        context = [
+            value
+            for value in rag_result.context_sources_for_safety
+            if isinstance(value, str) and value.strip()
+        ]
+        citations = [
+            {
+                "citation_id": citation.citation_id,
+                "local_citation_id": citation.local_citation_id,
+                "source_label": citation.source_label,
+                "snippet": citation.snippet,
+            }
+            for citation in rag_result.citations
+        ]
+        answer_hash = hashlib.sha256(rag_result.answer_text.encode("utf-8")).hexdigest()
+        context_hash = hashlib.sha256("\\x00".join(context).encode("utf-8")).hexdigest()
+        now = datetime.now(UTC)
+        expires_at = now + timedelta(days=30)
+        metric_score: float | None = None
+        metric_label = "not_applicable"
+        reason_code = "judge_failed"
+        try:
+            judged = claim_judge.judge(
+                case_id=case.case_id,
+                answerable=metadata.get("answerable") is True,
+                required_citation=case.required_citation,
+                tags=list(case.tags),
+                answer_outcome=cast(
+                    Literal["answered", "abstained"],
+                    answer_outcome,
+                ),
+                answer_text=rag_result.answer_text,
+                citations=citations,
+                context=context,
+                required_facts=required_facts,
+                forbidden_claims=forbidden_claims,
+            )
+            decision = judged.decision
+            self.repository.upsert_auxiliary_judgment(
+                db,
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                values={
+                    "status": "succeeded",
+                    "rubric_version": decision.rubric_version,
+                    "judge_provider": claim_judge.provider,
+                    "judge_model": claim_judge.model,
+                    "required_facts_supported": decision.required_facts_supported.value,
+                    "citation_support": decision.citation_support.value,
+                    "forbidden_claims_absent": decision.forbidden_claims_absent.value,
+                    "abstention_correct": decision.abstention_correct.value,
+                    "prompt_injection_resisted": (decision.prompt_injection_resisted.value),
+                    "confidence": Decimal(str(decision.confidence)).quantize(Decimal("0.0001")),
+                    "reason_codes_json": [code.value for code in decision.reason_codes],
+                    "auxiliary_pass": judged.auxiliary_pass,
+                    "claim_faithfulness": _decimal_score(judged.claim_faithfulness),
+                    "failure_code": None,
+                    "answer_hash": judged.answer_hash,
+                    "context_hash": judged.context_hash,
+                },
+                updated_at=now,
+            )
+            metric_score = judged.claim_faithfulness
+            metric_label = (
+                _metric_label(metric_score) if metric_score is not None else "not_applicable"
+            )
+            reason_code = (
+                "claim_faithfulness_available"
+                if metric_score is not None
+                else "claim_faithfulness_not_applicable"
+            )
+        except Exception:
+            self.repository.upsert_auxiliary_judgment(
+                db,
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                values={
+                    "status": "failed",
+                    "rubric_version": JUDGE_RUBRIC_VERSION,
+                    "judge_provider": DEFAULT_JUDGE_PROVIDER,
+                    "judge_model": DEFAULT_JUDGE_MODEL,
+                    "required_facts_supported": None,
+                    "citation_support": None,
+                    "forbidden_claims_absent": None,
+                    "abstention_correct": None,
+                    "prompt_injection_resisted": None,
+                    "confidence": None,
+                    "reason_codes_json": [],
+                    "auxiliary_pass": None,
+                    "claim_faithfulness": None,
+                    "failure_code": "judge_failed",
+                    "answer_hash": answer_hash,
+                    "context_hash": context_hash,
+                },
+                updated_at=now,
+            )
+
+        self.repository.upsert_review_payload(
+            db,
+            evaluation_run_item_id=item.evaluation_run_item_id,
+            values={
+                "answer_text": rag_result.answer_text,
+                "context_json": context,
+                "citations_json": citations,
+                "required_facts_json": required_facts,
+                "answer_hash": answer_hash,
+                "context_hash": context_hash,
+                "expires_at": expires_at,
+            },
+            updated_at=now,
+        )
+        return MetricValue(
+            metric_name=EvaluationMetricName.CLAIM_FAITHFULNESS.value,
+            metric_score=metric_score,
+            metric_label=metric_label,
+            details={
+                "schema_version": EVALUATION_SCHEMA_VERSION,
+                "method": "local_judge",
+                "reason_code": reason_code,
+                "judge_coverage": 1.0 if metric_score is not None else 0.0,
+            },
         )
 
     def _store_case_failure(
@@ -1881,6 +2588,7 @@ class EvaluationService:
             db,
             item=item,
             status="failed",
+            answer_outcome=EvaluationAnswerOutcome.RETRIEVAL_ERROR.value,
             retrieval_run_id=None,
             faithfulness_score=_metric_decimal(_find_metric(metrics, "faithfulness")),
             groundedness_score=_metric_decimal(_find_metric(metrics, "groundedness")),
@@ -1894,8 +2602,14 @@ class EvaluationService:
             estimated_cost_usd=None,
             generation_latency_ms=None,
             latency_breakdown_json=_latency_breakdown_json(None),
-            metric_summary_json=_metric_summary_json(metrics, case=case, target=target),
+            metric_summary_json=_metric_summary_json(
+                metrics,
+                case=case,
+                target=target,
+                answer_generated=False,
+            ),
             error_code="internal_error",
+            error_detail_code=None,
             error_message=redact_error_message("Evaluation case failed."),
         )
         self.repository.save_results(
@@ -1923,7 +2637,7 @@ class EvaluationService:
         results_by_item: dict[int, list[EvaluationResult]],
     ) -> EvaluationRunSummary:
         config = _config(run)
-        metric_summary = _metric_summary(results_by_item)
+        metric_summary = _metric_summary(items, results_by_item)
         strategy_comparison = _strategy_comparison(items, results_by_item)
         generation_summary = _generation_summary(items)
         job = self.repository.find_job_for_run(db, evaluation_run_id=run.evaluation_run_id)
@@ -1931,6 +2645,49 @@ class EvaluationService:
             self._planned_item_count(db, run) if run.status in {"queued", "running"} else 0
         )
         case_count = max(len(items), planned_item_count)
+        answered_count = sum(
+            1 for item in items if item.answer_outcome == EvaluationAnswerOutcome.ANSWERED.value
+        )
+        abstained_count = sum(
+            1 for item in items if item.answer_outcome == EvaluationAnswerOutcome.ABSTAINED.value
+        )
+        pipeline_failed_count = sum(
+            1
+            for item in items
+            if item.answer_outcome
+            in {
+                EvaluationAnswerOutcome.NO_CONTEXT.value,
+                EvaluationAnswerOutcome.CITATION_ERROR.value,
+                EvaluationAnswerOutcome.GENERATION_ERROR.value,
+                EvaluationAnswerOutcome.RETRIEVAL_ERROR.value,
+            }
+        )
+        applicable_count = answered_count + abstained_count
+        judgments = self.repository.list_auxiliary_judgments(
+            db, evaluation_run_id=run.evaluation_run_id
+        )
+        succeeded_judgments = [judgment for judgment in judgments if judgment.status == "succeeded"]
+        calibrations = self.repository.list_human_calibrations(
+            db, evaluation_run_id=run.evaluation_run_id
+        )
+        judged_count = len(succeeded_judgments)
+        reviewed_count = len(calibrations)
+        provisional_rate = _boolean_rate(
+            judgment.auxiliary_pass for judgment in succeeded_judgments
+        )
+        calibrated_rate = (
+            _boolean_rate(calibration.human_pass for calibration in calibrations)
+            if applicable_count > 0 and reviewed_count == applicable_count
+            else None
+        )
+        quality_status = _evaluation_quality_status(
+            run_status=run.status,
+            evaluation_scope=cast(EvaluationScope, config["evaluation_scope"]),
+            applicable_count=applicable_count,
+            judged_count=judged_count,
+            reviewed_count=reviewed_count,
+            calibrated_rate=calibrated_rate,
+        )
         return EvaluationRunSummary(
             evaluation_run_id=run.evaluation_run_id,
             job_id=job.job_id if job is not None else None,
@@ -1939,11 +2696,24 @@ class EvaluationService:
             strategy_type=cast(RetrievalStrategy, run.strategy_type),
             strategies=_strategy_values(config),
             metric_names=cast(list[str], config["metrics"]),
+            evaluation_scope=cast(EvaluationScope, config["evaluation_scope"]),
             trigger_type=run.trigger_type,
             status=cast(EvaluationStatus, run.status),
             case_count=case_count,
             succeeded_count=sum(1 for item in items if item.status == "succeeded"),
             failed_count=sum(1 for item in items if item.status == "failed"),
+            answered_count=answered_count,
+            abstained_count=abstained_count,
+            pipeline_failed_count=pipeline_failed_count,
+            judged_count=judged_count,
+            reviewed_count=reviewed_count,
+            answer_coverage=_coverage(answered_count + abstained_count, case_count),
+            judge_coverage=_coverage(judged_count, applicable_count),
+            review_coverage=_coverage(reviewed_count, applicable_count),
+            grounded_answer_pass_rate_provisional=provisional_rate,
+            grounded_answer_pass_rate_calibrated=calibrated_rate,
+            quality_status=quality_status,
+            corpus_fingerprint=run.corpus_fingerprint,
             metric_summary=metric_summary,
             strategy_comparison=strategy_comparison,
             strategy_metrics_summary_json=run.strategy_metrics_summary_json,
@@ -1969,7 +2739,9 @@ class EvaluationService:
         item: EvaluationRunItem,
         results: list[EvaluationResult],
     ) -> EvaluationRunItemResponse:
-        metric_results = [_metric_response(result) for result in results]
+        metric_by_name = {result.metric_name: result for result in results}
+        answer_generated = _item_answer_generated(item, metric_by_name)
+        metric_results = [_metric_response(result, answer_generated) for result in results]
         context_precision = next(
             (
                 result.metric_score
@@ -1997,9 +2769,14 @@ class EvaluationService:
             retrieval_run_id=item.retrieval_run_id,
             strategy_type=cast(RetrievalStrategy, item.strategy_type),
             status=cast(EvaluationStatus, item.status),
-            faithfulness_score=_decimal_float(item.faithfulness_score),
-            groundedness_score=_decimal_float(item.groundedness_score),
-            citation_coverage=_decimal_float(item.citation_coverage),
+            answer_outcome=cast(EvaluationAnswerOutcome | None, item.answer_outcome),
+            faithfulness_score=_decimal_float(item.faithfulness_score)
+            if answer_generated
+            else None,
+            groundedness_score=_decimal_float(item.groundedness_score)
+            if answer_generated
+            else None,
+            citation_coverage=_decimal_float(item.citation_coverage) if answer_generated else None,
             context_precision=_decimal_float(context_precision),
             latency_ms=item.latency_ms,
             generation_provider=_safe_optional_generation_label(
@@ -2016,8 +2793,11 @@ class EvaluationService:
             estimated_cost_usd=_decimal_float(item.estimated_cost_usd),
             generation_latency_ms=item.generation_latency_ms,
             latency_breakdown_json=item.latency_breakdown_json,
-            metric_summary_json=item.metric_summary_json,
+            metric_summary_json=_item_metric_summary_json(
+                item.metric_summary_json, answer_generated=answer_generated
+            ),
             error_code=item.error_code,
+            error_detail_code=item.error_detail_code,
             error_message=redact_error_message(item.error_message) if item.error_message else None,
             case_id=case_id,
             case_key=item.case_key,
@@ -2360,7 +3140,8 @@ class EvaluationService:
         for item in items:
             source_case = source_cases.get(item.evaluation_run_item_id)
             results = results_by_item.get(item.evaluation_run_item_id, [])
-            metric_by_name = {result.metric_name: result for result in results}
+            stored_metric_by_name = {result.metric_name: result for result in results}
+            metric_by_name = _applicable_metric_results(item, stored_metric_by_name)
             if _is_graph_provider_skip_item(item, metric_by_name):
                 continue
             metric_snapshot = _metric_snapshot(metric_by_name)
@@ -2545,6 +3326,24 @@ class EvaluationService:
             version=dataset.version,
             source_type=dataset.source_type,
             status=dataset.status,
+            manifest_schema_version=getattr(
+                dataset,
+                "manifest_schema_version",
+                DATASET_MANIFEST_SCHEMA_VERSION,
+            ),
+            content_fingerprint=getattr(dataset, "content_fingerprint", None),
+            corpus_fingerprint=getattr(dataset, "corpus_fingerprint", None),
+            corpus_mode=getattr(dataset, "corpus_mode", "shared_legacy"),
+            corpus_status=getattr(
+                dataset,
+                "corpus_status",
+                "shared_legacy",
+            ),
+            corpus_failure_code=getattr(
+                dataset,
+                "corpus_failure_code",
+                None,
+            ),
             metadata_json=dataset.metadata_json,
             case_count=self.repository.count_cases(
                 db,
@@ -2590,6 +3389,7 @@ class EvaluationService:
 
 def _config(run: EvaluationRun) -> dict[str, object]:
     config = run.metrics_config or {}
+    retrieval_settings = run.retrieval_settings_json or {}
     dataset_name = config.get("dataset_name")
     evaluation_dataset_id = config.get("evaluation_dataset_id")
     case_limit = config.get("case_limit")
@@ -2597,12 +3397,31 @@ def _config(run: EvaluationRun) -> dict[str, object]:
     raw_strategies = config.get("strategies")
     raw_metrics = config.get("metrics")
     raw_cache_modes = config.get("cache_modes")
+    raw_evaluation_scope = config.get("evaluation_scope")
     raw_strategy_targets = config.get("strategy_targets")
     top_k = config.get("top_k")
     rerank_top_n = config.get("rerank_top_n")
     generation_provider = _requested_generation_provider(config.get("generation_provider"))
     generation_model = _requested_generation_model(config.get("generation_model"))
     trigger_type = config.get("trigger_type") or run.trigger_type
+    raw_logical_document_ids = retrieval_settings.get("logical_document_ids")
+    logical_document_ids = (
+        list(
+            dict.fromkeys(
+                value
+                for value in raw_logical_document_ids
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0
+            )
+        )
+        if isinstance(raw_logical_document_ids, list)
+        else []
+    )
+    raw_corpus_fingerprint = retrieval_settings.get("corpus_fingerprint")
+    corpus_fingerprint = (
+        raw_corpus_fingerprint
+        if isinstance(raw_corpus_fingerprint, str) and raw_corpus_fingerprint
+        else run.corpus_fingerprint
+    )
     strategies = (
         [str(strategy) for strategy in raw_strategies if isinstance(strategy, str)]
         if isinstance(raw_strategies, list)
@@ -2625,6 +3444,11 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         if isinstance(raw_strategy_targets, list)
         else []
     )
+    evaluation_scope: EvaluationScope = (
+        cast(EvaluationScope, raw_evaluation_scope)
+        if raw_evaluation_scope in {"retrieval", "answer", "end_to_end"}
+        else _evaluation_scope_from_strategy_labels(strategies)
+    )
     return {
         "dataset_name": dataset_name if isinstance(dataset_name, str) else "phase1_smoke",
         "evaluation_dataset_id": (
@@ -2635,12 +3459,15 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "strategies": strategies,
         "metrics": metrics,
         "cache_modes": cache_modes,
+        "evaluation_scope": evaluation_scope,
         "strategy_targets": strategy_targets,
         "top_k": top_k if isinstance(top_k, int) else None,
         "rerank_top_n": rerank_top_n if isinstance(rerank_top_n, int) else None,
         "generation_provider": generation_provider,
         "generation_model": generation_model,
         "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
+        "logical_document_ids": logical_document_ids,
+        "corpus_fingerprint": corpus_fingerprint,
     }
 
 
@@ -2663,6 +3490,34 @@ def _requested_generation_provider(value: object) -> str | None:
     if provider is None or provider not in KNOWN_GENERATION_PROVIDERS:
         return None
     return provider
+
+
+def _callable_accepts_parameter(
+    callback: Callable[..., object],
+    parameter_name: str,
+) -> bool:
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return parameter_name in parameters
+
+
+def _call_evaluation_runner(
+    callback: Callable[..., RagEvaluationResult],
+    db: Session,
+    *,
+    kwargs: dict[str, object],
+    logical_document_ids: Sequence[int],
+    corpus_fingerprint: str | None = None,
+) -> RagEvaluationResult:
+    if logical_document_ids and _callable_accepts_parameter(callback, "logical_document_ids"):
+        kwargs["logical_document_ids"] = list(logical_document_ids)
+    if corpus_fingerprint and _callable_accepts_parameter(callback, "corpus_fingerprint"):
+        kwargs["corpus_fingerprint"] = corpus_fingerprint
+    return callback(db, **kwargs)
 
 
 def _requested_generation_model(value: object) -> str | None:
@@ -2744,6 +3599,55 @@ def _decimal_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
 
 
+def _coverage(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 6)
+
+
+def _boolean_rate(values: Iterable[bool | None]) -> float | None:
+    applicable = [value for value in values if isinstance(value, bool)]
+    if not applicable:
+        return None
+    return round(sum(1 for value in applicable if value) / len(applicable), 6)
+
+
+def _evaluation_quality_status(
+    *,
+    run_status: str,
+    evaluation_scope: EvaluationScope,
+    applicable_count: int,
+    judged_count: int,
+    reviewed_count: int,
+    calibrated_rate: float | None,
+) -> EvaluationQualityStatus:
+    if evaluation_scope != "end_to_end":
+        return EvaluationQualityStatus.NOT_APPLICABLE
+    if run_status in {"queued", "running"}:
+        return EvaluationQualityStatus.PENDING
+    if applicable_count <= 0 or judged_count < applicable_count:
+        return EvaluationQualityStatus.PARTIAL
+    if reviewed_count < applicable_count:
+        return EvaluationQualityStatus.CALIBRATION_REQUIRED
+    return (
+        EvaluationQualityStatus.PASSED if calibrated_rate == 1.0 else EvaluationQualityStatus.FAILED
+    )
+
+
+def _resolved_answer_outcome(rag_result: RagEvaluationResult) -> str | None:
+    if rag_result.answer_outcome is not None:
+        return rag_result.answer_outcome
+    if rag_result.status == "succeeded":
+        return EvaluationAnswerOutcome.ANSWERED.value if rag_result.answer_text.strip() else None
+    if rag_result.error_code == "no_context_found":
+        return EvaluationAnswerOutcome.NO_CONTEXT.value
+    if rag_result.error_code == "citation_build_failed":
+        return EvaluationAnswerOutcome.CITATION_ERROR.value
+    if rag_result.error_code == "generation_failed":
+        return EvaluationAnswerOutcome.GENERATION_ERROR.value
+    return EvaluationAnswerOutcome.RETRIEVAL_ERROR.value
+
+
 def _non_negative_int_or_none(value: int | None) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
@@ -2806,7 +3710,27 @@ def _distinct_generation_labels(values: Iterable[str | None], *, max_length: int
     return sorted(labels)
 
 
-def _metric_response(result: EvaluationResult) -> EvaluationMetricResult:
+def _metric_response(
+    result: EvaluationResult,
+    answer_generated: bool,
+) -> EvaluationMetricResult:
+    if result.metric_name in ANSWER_GENERATION_DEPENDENT_METRICS and not answer_generated:
+        details = dict(result.details_json or {})
+        details.update(
+            {
+                "not_applicable": True,
+                "reason_code": "answer_not_generated",
+            }
+        )
+        return EvaluationMetricResult(
+            metric_name=result.metric_name,
+            metric_score=None,
+            metric_value=None,
+            metric_label="not_applicable",
+            details=details,
+            metric_detail_json=details,
+            strategy_type=cast(RetrievalStrategy, result.strategy_type),
+        )
     return EvaluationMetricResult(
         metric_name=result.metric_name,
         metric_score=_decimal_float(result.metric_score),
@@ -2816,6 +3740,25 @@ def _metric_response(result: EvaluationResult) -> EvaluationMetricResult:
         metric_detail_json=result.metric_detail_json,
         strategy_type=cast(RetrievalStrategy, result.strategy_type),
     )
+
+
+def _item_metric_summary_json(
+    payload: dict[str, object] | None,
+    *,
+    answer_generated: bool,
+) -> dict[str, object] | None:
+    if payload is None or answer_generated:
+        return payload
+    normalized = dict(payload)
+    raw_metrics = normalized.get("metrics")
+    if isinstance(raw_metrics, dict):
+        normalized["metrics"] = {
+            name: value
+            for name, value in raw_metrics.items()
+            if name not in ANSWER_GENERATION_DEPENDENT_METRICS
+        }
+    normalized["answer_metrics_not_applicable_reason"] = "answer_not_generated"
+    return normalized
 
 
 def _find_metric(metrics: list[MetricValue], name: str) -> MetricValue | None:
@@ -3397,6 +4340,22 @@ def _not_applicable_cache_metrics(
             details=details,
         ),
     ]
+
+
+def _evaluation_scope_from_targets(
+    targets: list[EvaluationStrategyTarget],
+) -> EvaluationScope:
+    if any(target.retrieval_strategy in ASK_ONLY_EVALUATION_STRATEGIES for target in targets):
+        return "end_to_end"
+    return "retrieval"
+
+
+def _evaluation_scope_from_strategy_labels(strategies: list[str]) -> EvaluationScope:
+    if any(
+        _base_comparison_label(label) in ASK_ONLY_EVALUATION_STRATEGY_VALUES for label in strategies
+    ):
+        return "end_to_end"
+    return "retrieval"
 
 
 def _selected_strategy_targets(
@@ -4001,11 +4960,20 @@ def _safe_case_identifier(value: object) -> str | None:
     return text
 
 
-def _metric_summary(results_by_item: dict[int, list[EvaluationResult]]) -> dict[str, float]:
+def _metric_summary(
+    items: list[EvaluationRunItem],
+    results_by_item: dict[int, list[EvaluationResult]],
+) -> dict[str, float]:
+    items_by_id = {item.evaluation_run_item_id: item for item in items}
     values: dict[str, list[float]] = {}
-    for results in results_by_item.values():
+    for item_id, results in results_by_item.items():
+        item = items_by_id.get(item_id)
+        metric_by_name = {result.metric_name: result for result in results}
+        answer_generated = item is not None and _item_answer_generated(item, metric_by_name)
         for result in results:
             if result.metric_name == "case_metadata":
+                continue
+            if result.metric_name in ANSWER_GENERATION_DEPENDENT_METRICS and not answer_generated:
                 continue
             value = _result_numeric_value(result)
             if value is None:
@@ -4042,10 +5010,15 @@ def _strategy_comparison(
         comparison_label = _item_comparison_label(item_for_result)
         if item_for_result.status == "failed":
             continue
+        metric_by_name = {result.metric_name: result for result in results}
+        answer_generated = _item_answer_generated(item_for_result, metric_by_name)
         for result in results:
             if result.metric_name == "case_metadata":
                 continue
             key = (comparison_label, result.metric_name)
+            if result.metric_name in ANSWER_GENERATION_DEPENDENT_METRICS and not answer_generated:
+                not_applicable[key] = not_applicable.get(key, 0) + 1
+                continue
             value = _result_numeric_value(result)
             if value is None:
                 not_applicable[key] = not_applicable.get(key, 0) + 1
@@ -4117,6 +5090,32 @@ def _case_metadata_details(metric_by_name: dict[str, EvaluationResult]) -> dict[
     if case_metadata is None or not isinstance(case_metadata.metric_detail_json, dict):
         return {}
     return case_metadata.metric_detail_json
+
+
+def _item_answer_generated(
+    item: EvaluationRunItem,
+    metric_by_name: dict[str, EvaluationResult],
+) -> bool:
+    summary_value = (item.metric_summary_json or {}).get("answer_generated")
+    if isinstance(summary_value, bool):
+        return summary_value
+    metadata_value = _case_metadata_details(metric_by_name).get("answer_generated")
+    if isinstance(metadata_value, bool):
+        return metadata_value
+    return item.strategy_type in ASK_ONLY_EVALUATION_STRATEGY_VALUES
+
+
+def _applicable_metric_results(
+    item: EvaluationRunItem,
+    metric_by_name: dict[str, EvaluationResult],
+) -> dict[str, EvaluationResult]:
+    if _item_answer_generated(item, metric_by_name):
+        return metric_by_name
+    return {
+        name: result
+        for name, result in metric_by_name.items()
+        if name not in ANSWER_GENERATION_DEPENDENT_METRICS
+    }
 
 
 def _is_graph_provider_skip_item(
@@ -4529,9 +5528,11 @@ def _metric_summary_json(
     *,
     case: EvaluationCase,
     target: EvaluationStrategyTarget,
+    answer_generated: bool,
 ) -> dict[str, object]:
     return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
+        "answer_generated": answer_generated,
         "case_snapshot": _case_snapshot_from_case(case),
         "evaluation_target": _target_metadata_json(target),
         "metrics": {
@@ -4574,6 +5575,7 @@ def _retrieval_settings_snapshot(
     strategies: list[str],
     metrics: list[str],
     cache_modes: list[str],
+    evaluation_scope: EvaluationScope,
     strategy_targets: list[EvaluationStrategyTarget],
     case_limit: int | None,
     top_k: int | None,
@@ -4585,6 +5587,7 @@ def _retrieval_settings_snapshot(
         "strategies": strategies,
         "metrics": metrics,
         "cache_modes": cache_modes,
+        "evaluation_scope": evaluation_scope,
         "strategy_targets": [_target_metadata_json(target) for target in strategy_targets],
         "case_limit": case_limit,
         "top_k": top_k,
@@ -4861,6 +5864,71 @@ def _loaded_case_from_model(case: EvaluationCaseModel) -> LoadedEvaluationCase:
     )
 
 
+def _auxiliary_decision_from_judgment(
+    judgment: EvaluationAuxiliaryJudgment | None,
+    *,
+    case_id: str,
+) -> AuxiliaryJudgeDecision | None:
+    if judgment is None or judgment.status != "succeeded":
+        return None
+    try:
+        return AuxiliaryJudgeDecision(
+            case_id=case_id,
+            rubric_version=cast(
+                Literal["phase3.grounded_answer_judge.v1"],
+                judgment.rubric_version,
+            ),
+            required_facts_supported=judgment.required_facts_supported,
+            citation_support=judgment.citation_support,
+            forbidden_claims_absent=judgment.forbidden_claims_absent,
+            abstention_correct=judgment.abstention_correct,
+            prompt_injection_resisted=judgment.prompt_injection_resisted,
+            confidence=float(judgment.confidence) if judgment.confidence is not None else 0.0,
+            reason_codes=judgment.reason_codes_json,
+        )
+    except (ValueError, PydanticValidationError):
+        return None
+
+
+def _manual_dimensions_from_row(
+    row: EvaluationHumanCalibration,
+) -> EvaluationManualDimensionDecision | None:
+    values = (
+        row.human_required_facts_supported,
+        row.human_citation_support,
+        row.human_forbidden_claims_absent,
+        row.human_abstention_correct,
+        row.human_prompt_injection_resisted,
+    )
+    if any(value is None for value in values):
+        return None
+    return EvaluationManualDimensionDecision(
+        required_facts_supported=cast(str, values[0]),
+        citation_support=cast(str, values[1]),
+        forbidden_claims_absent=cast(str, values[2]),
+        abstention_correct=cast(str, values[3]),
+        prompt_injection_resisted=cast(str, values[4]),
+    )
+
+
+def _manual_calibration_case_contract(
+    source: PromotionSourceCase,
+) -> ManualCalibrationCaseContract:
+    metadata = source.metadata_json if isinstance(source.metadata_json, dict) else {}
+    answerable_value = metadata.get("answerable")
+    answerable = (
+        answerable_value
+        if isinstance(answerable_value, bool)
+        else "unanswerable" not in source.tags
+    )
+    return ManualCalibrationCaseContract(
+        case_id=source.case_key,
+        answerable=answerable,
+        required_citation=source.required_citation,
+        tags=tuple(source.tags),
+    )
+
+
 def _assert_case_expected_signal(
     case: EvaluationCaseModel,
     values: dict[str, object],
@@ -4870,6 +5938,16 @@ def _assert_case_expected_signal(
     if _string_list(expected_keywords) or (isinstance(expected_answer, str) and expected_answer):
         return
     raise ValidationFailed({"expected_signal": "expected_keywords or expected_answer is required"})
+
+
+def _safe_dict_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item_value for key, item_value in item.items()}
+        for item in value
+        if isinstance(item, dict)
+    ]
 
 
 def _string_list(value: object) -> list[str]:

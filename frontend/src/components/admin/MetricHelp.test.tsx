@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
+import type { EvaluationMetricCatalogItem } from "../../features/evaluations/evaluationTypes";
 import { MetricHelp, orderedMetricEntries } from "./MetricHelp";
 
 describe("MetricHelp", () => {
@@ -32,6 +33,30 @@ describe("MetricHelp", () => {
     expect(screen.getByRole("button", { name: `${metricName} の説明` })).toHaveTextContent("?");
     expect(screen.getByText(metricName)).toBeInTheDocument();
     expect(screen.getByText(description)).toBeInTheDocument();
+  });
+
+  test("uses the metric catalog explanation instead of the generic fallback", () => {
+    const definition = {
+      metric_name: "claim_faithfulness",
+      category: "answer",
+      display_name: "Claim Faithfulness（ローカルjudge）",
+      description: "Technical description",
+      plain_language_summary: "検索で得た根拠に裏付けられた主張の割合です。",
+      higher_is_better: true,
+      value_unit: "ratio",
+      alias_of: null,
+      importance: "primary",
+      applicable_scopes: ["answer", "end_to_end"],
+      primary_scopes: ["answer", "end_to_end"],
+      display_priority: 4,
+      method: "local_judge"
+    } satisfies EvaluationMetricCatalogItem;
+
+    render(<MetricHelp definition={definition} metricName="claim_faithfulness" />);
+
+    expect(screen.getByText(definition.plain_language_summary)).toBeInTheDocument();
+    expect(screen.getByText("高いほど良好です。")).toHaveClass("metric-help-direction");
+    expect(screen.queryByText("この評価 run に記録された metric です。")).not.toBeInTheDocument();
   });
 
   test("orders metrics by display priority before falling back to name order", () => {

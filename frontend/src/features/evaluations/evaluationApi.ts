@@ -2,9 +2,15 @@ import { apiFetch } from "../../lib/apiClient";
 import type { ApiResponse } from "../../types/api";
 import type {
   EvaluationCase,
+  EvaluationCorpusPrepareResult,
+  EvaluationCorpusReadiness,
   EvaluationDataset,
   EvaluationDatasetCreateRequest,
+  EvaluationDatasetImportResult,
   EvaluationDatasetManifest,
+  EvaluationDatasetValidation,
+  EvaluationGenerationReadiness,
+  EvaluationGenerationProvider,
   EvaluationFailurePromotionRequest,
   EvaluationFailurePromotionResponse,
   EvaluationHumanCalibrationRecord,
@@ -35,6 +41,19 @@ function toQuery(params: Record<string, string | number | undefined>): string {
 export async function getEvaluationMetricCatalog(): Promise<EvaluationMetricCatalog> {
   const response = await apiFetch<ApiResponse<EvaluationMetricCatalog>>(
     "/api/v1/evaluations/metric-catalog"
+  );
+  return response.data;
+}
+
+export async function getEvaluationGenerationReadiness(
+  generationProvider: EvaluationGenerationProvider,
+  generationModel: string
+): Promise<EvaluationGenerationReadiness> {
+  const response = await apiFetch<ApiResponse<EvaluationGenerationReadiness>>(
+    `/api/v1/evaluations/generation/readiness${toQuery({
+      generation_provider: generationProvider,
+      generation_model: generationModel
+    })}`
   );
   return response.data;
 }
@@ -163,14 +182,47 @@ export async function exportEvaluationDataset(
   return response.data;
 }
 
+export async function validateEvaluationDataset(
+  manifest: EvaluationDatasetManifest
+): Promise<EvaluationDatasetValidation> {
+  const response = await apiFetch<ApiResponse<EvaluationDatasetValidation>>(
+    "/api/v1/evaluations/datasets/validate",
+    {
+      method: "POST",
+      body: JSON.stringify(manifest)
+    }
+  );
+  return response.data;
+}
+
 export async function importEvaluationDataset(
   manifest: EvaluationDatasetManifest
-): Promise<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }> {
-  const response = await apiFetch<
-    ApiResponse<{ evaluation_dataset_id: number; dataset_name: string; case_count: number }>
-  >("/api/v1/evaluations/datasets/import", {
-    method: "POST",
-    body: JSON.stringify(manifest)
-  });
+): Promise<EvaluationDatasetImportResult> {
+  const response = await apiFetch<ApiResponse<EvaluationDatasetImportResult>>(
+    "/api/v1/evaluations/datasets/import",
+    {
+      method: "POST",
+      body: JSON.stringify(manifest)
+    }
+  );
+  return response.data;
+}
+
+export async function prepareEvaluationDatasetCorpus(
+  evaluationDatasetId: number
+): Promise<EvaluationCorpusPrepareResult> {
+  const response = await apiFetch<ApiResponse<EvaluationCorpusPrepareResult>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/corpus/prepare`,
+    { method: "POST" }
+  );
+  return response.data;
+}
+
+export async function getEvaluationDatasetCorpusReadiness(
+  evaluationDatasetId: number
+): Promise<EvaluationCorpusReadiness> {
+  const response = await apiFetch<ApiResponse<EvaluationCorpusReadiness>>(
+    `/api/v1/evaluations/datasets/${evaluationDatasetId}/corpus/readiness`
+  );
   return response.data;
 }

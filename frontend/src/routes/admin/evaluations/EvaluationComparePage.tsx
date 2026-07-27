@@ -1,5 +1,10 @@
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  formatMetricDelta,
+  formatMetricValue,
+  metricDefinitionMap
+} from "../../../components/admin/EvaluationMetricOverview";
+import {
   HelpTooltip,
   MetricHelp,
   orderedMetricEntries
@@ -27,6 +32,7 @@ export function EvaluationComparePage() {
   const comparison = useEvaluationRunComparison(baseRunId, candidateRunId);
   const metricCatalog = useEvaluationMetricCatalog();
   const hasValidParams = baseRunId !== null && candidateRunId !== null;
+  const metricDefinitions = metricDefinitionMap(metricCatalog.data);
 
   return (
     <main className="admin-main">
@@ -79,54 +85,76 @@ export function EvaluationComparePage() {
           </section>
 
           <section className="admin-section">
-            <h2>metric 差分</h2>
+            <h2>指標の差分</h2>
             <table className="admin-table" aria-label="metric 差分">
               <thead>
                 <tr>
-                  <th>metric</th>
-                  <th>base</th>
-                  <th>candidate</th>
-                  <th>Δ</th>
-                  <th>判定</th>
-                  <th>向き</th>
+                  <th>指標</th>
+                  <th>前回</th>
+                  <th>今回</th>
+                  <th>差分</th>
+                  <th>変化</th>
+                  <th>目安</th>
                 </tr>
               </thead>
-              <tbody>
-                {groupMetricsByCategory(
-                  comparison.data.metrics,
-                  metricCatalog.data,
-                  (metric) => metric.metric_name
-                )
-                  .flatMap((group) => group.items.map((metric) => ({ group, metric })))
-                  .map(({ group, metric }) => (
-                  <tr
-                    className={`comparison-direction-${metric.direction}`}
-                    key={metric.metric_name}
-                  >
-                    <td>
-                      <span className="metric-category-badge">{group.label}</span>
-                      <span className="metric-name-cell">
-                        {metric.metric_name}
-                        <MetricHelp metricName={metric.metric_name} />
-                      </span>
-                    </td>
-                    <td>{formatScore(metric.base_score)}</td>
-                    <td>{formatScore(metric.candidate_score)}</td>
-                    <td>{formatDelta(metric.delta)}</td>
-                    <td>
-                      <span className="comparison-direction-badge">
-                        {directionLabel(metric.direction)}
-                      </span>
-                    </td>
-                    <td>{metric.lower_is_better ? "低いほど良い" : "高いほど良い"}</td>
+              {groupMetricsByCategory(
+                comparison.data.metrics,
+                metricCatalog.data,
+                (metric) => metric.metric_name
+              ).map((group) => (
+                <tbody key={group.category}>
+                  <tr className="metric-comparison-category-row">
+                    <th colSpan={6} scope="rowgroup">
+                      {group.label} <span>{group.items.length} 指標</span>
+                    </th>
                   </tr>
-                ))}
-                {comparison.data.metrics.length === 0 ? (
+                  {group.items.map((metric) => {
+                    const definition = metricDefinitions.get(metric.metric_name);
+                    const isPrimary =
+                      definition?.primary_scopes?.includes(
+                        comparison.data.candidate_run.evaluation_scope
+                      ) ?? false;
+                    return (
+                      <tr
+                        className={`comparison-direction-${metric.direction}`}
+                        key={metric.metric_name}
+                      >
+                        <td>
+                          <span className="metric-display-name">
+                            {definition?.display_name ?? metric.metric_name}
+                            {isPrimary ? (
+                              <span aria-label="まず見る指標" className="metric-primary-star">
+                                ★
+                              </span>
+                            ) : null}
+                            <MetricHelp
+                              definition={definition}
+                              metricName={metric.metric_name}
+                            />
+                          </span>
+                          <code className="metric-raw-name">{metric.metric_name}</code>
+                        </td>
+                        <td>{formatMetricValue(metric.base_score, definition)}</td>
+                        <td>{formatMetricValue(metric.candidate_score, definition)}</td>
+                        <td>{formatMetricDelta(metric.delta, definition)}</td>
+                        <td>
+                          <span className="comparison-direction-badge">
+                            {deltaArrow(metric.delta)} {directionLabel(metric.direction)}
+                          </span>
+                        </td>
+                        <td>{metric.lower_is_better ? "低いほど良い" : "高いほど良い"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              ))}
+              {comparison.data.metrics.length === 0 ? (
+                <tbody>
                   <tr>
                     <td colSpan={6}>比較できる metric がありません。</td>
                   </tr>
-                ) : null}
-              </tbody>
+                </tbody>
+              ) : null}
             </table>
           </section>
 
@@ -364,9 +392,6 @@ function transitionPriority(transition: EvaluationCaseTransition) {
   return { regressed: 0, removed: 1, added: 2, improved: 3, unchanged: 4 }[transition];
 }
 
-function formatScore(value: number | null) {
-  return value === null ? "-" : value.toFixed(3);
-}
 
 function formatDelta(value: number | null) {
   if (value === null) {
@@ -430,6 +455,13 @@ function formatMetricDeltas(deltas: Record<string, number | null>) {
     return "-";
   }
   return entries.map(([name, value]) => `${name}=${formatDelta(value)}`).join(", ");
+}
+
+function deltaArrow(value: number | null) {
+  if (value === null || value === 0) {
+    return "";
+  }
+  return value > 0 ? "↑" : "↓";
 }
 
 function directionLabel(direction: EvaluationComparisonDirection) {
