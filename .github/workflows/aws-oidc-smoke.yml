@@ -15,7 +15,7 @@ jobs:
     name: permissionless STS identity check
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ github.ref == 'refs/heads/deploy/AWS_ECS' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
       id-token: write
@@ -39,7 +39,7 @@ jobs:
       - name: Checkout exact branch
         uses: actions/checkout@v5
         with:
-          ref: deploy/AWS_ECS
+          ref: main
           persist-credentials: false
 
       - name: Configure permissionless OIDC credentials

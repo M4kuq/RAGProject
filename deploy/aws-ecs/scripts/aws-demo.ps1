@@ -10,7 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:ExpectedBranch = "deploy/AWS_ECS"
+$script:ExpectedBranch = "main"
 $script:ExpectedRegion = "ap-northeast-1"
 $script:DestroyPhrase = "DESTROY-RUNTIME"
 $script:TerraformDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))

@@ -33,12 +33,12 @@ Assert-OidcTestParses $smokePath
 . $smokePath
 
 $providerArn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
-$policy = New-OidcBootstrapTrustPolicy $providerArn "M4kuq/RAGProject" "deploy/AWS_ECS"
+$policy = New-OidcBootstrapTrustPolicy $providerArn "M4kuq/RAGProject" "main"
 Assert-OidcTestTrue (
-  Test-OidcBootstrapTrustPolicy $policy $providerArn "M4kuq/RAGProject" "deploy/AWS_ECS"
+  Test-OidcBootstrapTrustPolicy $policy $providerArn "M4kuq/RAGProject" "main"
 ) "generated trust policy must match the exact repository and branch"
 Assert-OidcTestTrue (-not (
-  Test-OidcBootstrapTrustPolicy $policy $providerArn "M4kuq/RAGProject" "main"
+  Test-OidcBootstrapTrustPolicy $policy $providerArn "M4kuq/RAGProject" "feature/not-main"
 )) "generated trust policy must reject another branch"
 
 Assert-OidcBootstrapConfirmation "CREATE-GITHUB-OIDC-SMOKE"
@@ -86,6 +86,7 @@ Remove-Item Function:\aws
 $bootstrapContent = Get-Content -LiteralPath $bootstrapPath -Raw
 $smokeContent = Get-Content -LiteralPath $smokePath -Raw
 Assert-OidcTestTrue ($bootstrapContent -match 'ValidateSet\("plan", "apply"\)') "bootstrap must default to a reviewable plan/apply split"
+Assert-OidcTestTrue ($bootstrapContent -match '\[string\]\$Branch\s*=\s*"main"') "bootstrap trust must default to main"
 Assert-OidcTestTrue ($bootstrapContent -match 'CREATE-GITHUB-OIDC-SMOKE') "bootstrap apply must require the exact confirmation"
 Assert-OidcTestTrue ($bootstrapContent -notmatch 'attach-role-policy|put-role-policy') "smoke role must not receive permission policies"
 Assert-OidcTestTrue ($bootstrapContent -notmatch 'aws\s+configure|--debug|export-credentials') "bootstrap must not export or debug credentials"
@@ -96,7 +97,7 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
 $workflowPath = Join-Path $repoRoot ".github/workflows/aws-oidc-smoke.yml"
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 Assert-OidcTestTrue ($workflow -match 'workflow_dispatch:') "OIDC smoke must be manually dispatched"
-Assert-OidcTestTrue ($workflow -match "github\.ref == 'refs/heads/deploy/AWS_ECS'") "OIDC smoke must be restricted to deploy/AWS_ECS"
+Assert-OidcTestTrue ($workflow -match "github\.ref == 'refs/heads/main'") "OIDC smoke must be restricted to main"
 Assert-OidcTestTrue ($workflow -match 'id-token:\s*write') "OIDC smoke must request the ID token permission"
 Assert-OidcTestTrue ($workflow -match 'AWS_OIDC_SMOKE_ROLE_ARN') "OIDC smoke must use its permissionless role variable"
 Assert-OidcTestTrue ($workflow -match 'allowed-account-ids:') "OIDC smoke must restrict the expected account"

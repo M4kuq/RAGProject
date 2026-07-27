@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: aws-demo-runtime-deploy-AWS_ECS
+  group: aws-demo-runtime-main
   cancel-in-progress: false
 
 env:
@@ -34,8 +34,8 @@ jobs:
       - name: Check deploy branch
         working-directory: .
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
-            echo "This workflow is limited to refs/heads/deploy/AWS_ECS."
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "This workflow is limited to refs/heads/main."
             exit 1
           fi
 
@@ -63,14 +63,14 @@ jobs:
       - name: Checkout trusted deploy branch
         uses: actions/checkout@v6
         with:
-          ref: deploy/AWS_ECS
+          ref: main
           fetch-depth: 0
 
       - name: Verify planned commit belongs to deploy branch
         working-directory: .
         shell: bash
         run: |
-          if ! git merge-base --is-ancestor "$SOURCE_SHA" "origin/deploy/AWS_ECS"; then
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "origin/main"; then
             echo "source_sha must be the deploy branch head or one of its ancestors."
             exit 1
           fi

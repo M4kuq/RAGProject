@@ -48,7 +48,7 @@ variable "github_oidc_repo" {
 variable "github_deploy_branch" {
   description = "GitHub branch allowed to assume the Terraform plan role."
   type        = string
-  default     = "deploy/AWS_ECS"
+  default     = "main"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9._/-]+$", var.github_deploy_branch))
