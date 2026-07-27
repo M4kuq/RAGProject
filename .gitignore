@@ -35,3 +35,11 @@ Thumbs.db
 
 k8s/local/secret.local.yaml
 k8s/local/*.secret.yaml
+
+# Claude/Codex orchestration working files.
+# Prompts and agent transcripts can contain AWS account ids, ARNs, and other
+# identifiers surfaced by read-only inspection commands. Keep them local.
+docs/prompts/
+docs/phase3/CLAUDE_FUTURE_EXTENSIONS.md
+docs/phase4/CLAUDE_AWS_PRODUCTION.md
+CLAUDE.md

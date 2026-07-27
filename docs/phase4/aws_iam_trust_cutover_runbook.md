@@ -174,6 +174,39 @@ foreach ($CommandName in @("git", "terraform", "aws", "gh")) {
   }
 }
 
+function Assert-NoUntrackedTerraformConfiguration {
+  param(
+    [Parameter(Mandatory = $true)][string]$TerraformDirectory,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $UnignoredPaths = @(
+    git -C $TerraformDirectory ls-files --others --exclude-standard -- .
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect untracked files: $Label"
+  }
+  $IgnoredPaths = @(
+    git -C $TerraformDirectory ls-files --others --ignored --exclude-standard -- .
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect ignored files: $Label"
+  }
+  $TerraformConfigNamePattern = (
+    "(?i)^(?:override\.tf(?:\.json)?|.+_override\.tf(?:\.json)?|.+\.tf(?:\.json)?)$"
+  )
+  $UntrackedTerraformConfiguration = @(
+    @($UnignoredPaths + $IgnoredPaths) |
+      Sort-Object -Unique |
+      Where-Object {
+        $_ -notmatch "(^|/)\.terraform(/|$)" -and
+        (Split-Path -Leaf $_) -match $TerraformConfigNamePattern
+      }
+  )
+  if ($UntrackedTerraformConfiguration.Count -ne 0) {
+    throw "Untracked Terraform configuration exists (including override files): $Label"
+  }
+}
+
 Set-Location -LiteralPath $MainRepoRoot
 if ((git branch --show-current).Trim() -cne "main") {
   throw "MainRepoRoot must be on main."
@@ -192,6 +225,9 @@ if ((git rev-parse HEAD).Trim() -cne (git rev-parse origin/main).Trim()) {
 if (@(git status --porcelain --untracked-files=no).Count -ne 0) {
   throw "MainRepoRoot has tracked changes."
 }
+Assert-NoUntrackedTerraformConfiguration `
+  (Join-Path $MainRepoRoot "deploy/aws-ecs") `
+  "Main root stack"
 $GhRepositoryJson = (gh repo view --json nameWithOwner | Out-String)
 if ($LASTEXITCODE -ne 0) {
   throw "Could not resolve the GitHub repository."
@@ -214,6 +250,7 @@ git -C $BootstrapRepoRoot diff --cached --quiet HEAD -- deploy/aws-ecs/bootstrap
 if ($LASTEXITCODE -ne 0) {
   throw "Bootstrap configuration has staged changes."
 }
+Assert-NoUntrackedTerraformConfiguration $BootstrapDir "BootstrapDir"
 git -C $BootstrapRepoRoot diff --quiet origin/main -- deploy/aws-ecs/bootstrap ":!deploy/aws-ecs/bootstrap/variables.tf"
 if ($LASTEXITCODE -ne 0) {
   throw "Bootstrap configuration differs from origin/main outside variables.tf."
@@ -259,12 +296,54 @@ if ($AllowedAccounts -notcontains $CallerAccount) {
 Remove-Variable CallerAccount, AllowedAccounts
 Write-Host "Local caller account allowlist: OK"
 
+$IsWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+  [Runtime.InteropServices.OSPlatform]::Windows
+)
+if ($IsWindowsPlatform) {
+  if (-not (Get-Command "icacls.exe" -ErrorAction SilentlyContinue)) {
+    throw "icacls.exe is required to protect cutover artifacts on Windows."
+  }
+  $CurrentWindowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+} elseif (-not (Get-Command "chmod" -ErrorAction SilentlyContinue)) {
+  throw "chmod is required to protect cutover artifacts on Unix."
+}
+
+function Protect-CutoverPath {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][ValidateSet("Directory", "File")][string]$Kind
+  )
+  if ($IsWindowsPlatform) {
+    $AclGrant = if ($Kind -ceq "Directory") {
+      "${CurrentWindowsIdentity}:(OI)(CI)F"
+    } else {
+      "${CurrentWindowsIdentity}:F"
+    }
+    & icacls.exe $Path /inheritance:r /grant:r $AclGrant | Out-Null
+  } else {
+    $Mode = if ($Kind -ceq "Directory") { "700" } else { "600" }
+    & chmod $Mode -- $Path
+  }
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not restrict cutover artifact access: $Kind"
+  }
+}
+
+function Protect-CutoverFileIfPresent {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    Protect-CutoverPath $Path "File"
+  }
+}
+
 $CutoverDir = Join-Path ([IO.Path]::GetTempPath()) (
   "ragproject-trust-cutover-{0}" -f (Get-Date -Format "yyyyMMdd-HHmmss")
 )
 New-Item -ItemType Directory -Path $CutoverDir -ErrorAction Stop | Out-Null
+Protect-CutoverPath $CutoverDir "Directory"
 $BootstrapStateBackup = Join-Path $CutoverDir "bootstrap.terraform.tfstate.before"
 Copy-Item -LiteralPath $BootstrapState -Destination $BootstrapStateBackup -ErrorAction Stop
+Protect-CutoverPath $BootstrapStateBackup "File"
 
 $BootstrapVarArgs = @()
 if ($BootstrapTfvars) {
@@ -283,7 +362,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 $Backend = ConvertFrom-Json -InputObject $BackendJson
 foreach ($Name in @("bucket", "key", "region", "dynamodb_table")) {
-  if ([string]::IsNullOrWhiteSpace([string]$Backend.$Name) -or [string]$Backend.$Name -match "REPLACE") {
+  $BackendProperty = $Backend.PSObject.Properties[$Name]
+  if (
+    $null -eq $BackendProperty -or
+    [string]::IsNullOrWhiteSpace([string]$BackendProperty.Value) -or
+    [string]$BackendProperty.Value -match "REPLACE"
+  ) {
     throw "backend_config contains a missing or placeholder value: $Name"
   }
 }
@@ -319,6 +403,105 @@ $PlanRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_plan_role_arn"
 $LifecycleRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_lifecycle_role_arn"
 $DeployRoleName = Get-RoleNameFromOutput $RootDir "github_deploy_role_arn"
 
+$OidcAudienceKey = "token.actions.githubusercontent.com:aud"
+$OidcSubjectKey = "token.actions.githubusercontent.com:sub"
+
+function Get-OidcConditionValues {
+  param(
+    [AllowNull()][object]$Condition,
+    [Parameter(Mandatory = $true)][string]$Operator,
+    [Parameter(Mandatory = $true)][string]$ConditionKey
+  )
+  if ($null -eq $Condition) {
+    return
+  }
+  $OperatorProperty = $Condition.PSObject.Properties[$Operator]
+  if ($null -eq $OperatorProperty -or $null -eq $OperatorProperty.Value) {
+    return
+  }
+  $ConditionProperty = $OperatorProperty.Value.PSObject.Properties[$ConditionKey]
+  if ($null -ne $ConditionProperty) {
+    $ConditionProperty.Value
+  }
+}
+
+function Get-RequiredOidcSubjectProperty {
+  param(
+    [AllowNull()][object]$Condition,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $SubjectProperties = @(
+    foreach ($Operator in @("StringEquals", "StringLike")) {
+      if ($null -eq $Condition) {
+        continue
+      }
+      $OperatorProperty = $Condition.PSObject.Properties[$Operator]
+      if ($null -eq $OperatorProperty -or $null -eq $OperatorProperty.Value) {
+        continue
+      }
+      $SubjectProperty = $OperatorProperty.Value.PSObject.Properties[$OidcSubjectKey]
+      if ($null -ne $SubjectProperty) {
+        $SubjectProperty
+      }
+    }
+  )
+  if ($SubjectProperties.Count -ne 1) {
+    throw "Expected exactly one StringEquals/StringLike OIDC subject: $Label"
+  }
+  return $SubjectProperties[0]
+}
+
+function Write-RoleTrustPolicyForBranch {
+  param(
+    [Parameter(Mandatory = $true)][string]$BackupPath,
+    [Parameter(Mandatory = $true)][string]$DestinationPath,
+    [Parameter(Mandatory = $true)][string]$TargetBranch,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  if ($TargetBranch -notin @($OldBranch, $NewBranch)) {
+    throw "Refusing to generate a trust policy for an unexpected branch: $Label"
+  }
+  $Policy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
+  $Statements = @($Policy.Statement)
+  if ($Statements.Count -ne 1) {
+    throw "Unexpected trust statement count while generating policy: $Label"
+  }
+  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
+  if ($null -eq $ConditionProperty) {
+    throw "Trust policy has no Condition while generating policy: $Label"
+  }
+  $Condition = $ConditionProperty.Value
+  $Audience = @(
+    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
+  )
+  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
+  $SubjectValues = @($SubjectProperty.Value)
+  $ExpectedSubjects = @(
+    "repo:${Repository}:ref:refs/heads/${OldBranch}",
+    "repo:${Repository}:ref:refs/heads/${NewBranch}"
+  )
+  if (
+    $Audience.Count -ne 1 -or
+    [string]$Audience[0] -cne "sts.amazonaws.com" -or
+    $SubjectValues.Count -ne 1 -or
+    [string]$SubjectValues[0] -notin $ExpectedSubjects
+  ) {
+    throw "Unexpected OIDC trust shape while generating policy: $Label"
+  }
+  $ExpectedTargetSubject = "repo:${Repository}:ref:refs/heads/${TargetBranch}"
+  if ($SubjectProperty.Value -is [array]) {
+    $SubjectProperty.Value = @($ExpectedTargetSubject)
+  } else {
+    $SubjectProperty.Value = $ExpectedTargetSubject
+  }
+  [IO.File]::WriteAllText(
+    $DestinationPath,
+    ($Policy | ConvertTo-Json -Depth 20 -Compress),
+    [Text.UTF8Encoding]::new($false)
+  )
+  Protect-CutoverPath $DestinationPath "File"
+}
+
 function Backup-RoleTrustAndGetBranch {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
@@ -348,19 +531,28 @@ function Backup-RoleTrustAndGetBranch {
   ) {
     throw "Unexpected OIDC trust principal or action: $Label"
   }
-  $Audience = $Statements[0].Condition.StringEquals.'token.actions.githubusercontent.com:aud'
-  $Subject = $Statements[0].Condition.StringEquals.'token.actions.githubusercontent.com:sub'
-  if ($null -eq $Subject) {
-    $Subject = $Statements[0].Condition.StringLike.'token.actions.githubusercontent.com:sub'
+  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
+  if ($null -eq $ConditionProperty) {
+    throw "OIDC trust has no Condition: $Label"
   }
-  if (@($Audience).Count -ne 1 -or [string]$Audience -cne "sts.amazonaws.com" -or @($Subject).Count -ne 1) {
+  $Condition = $ConditionProperty.Value
+  $Audience = @(
+    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
+  )
+  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
+  $Subject = @($SubjectProperty.Value)
+  if (
+    $Audience.Count -ne 1 -or
+    [string]$Audience[0] -cne "sts.amazonaws.com" -or
+    $Subject.Count -ne 1
+  ) {
     throw "Unexpected OIDC trust shape: $Label"
   }
   $ExpectedPrefix = "repo:${Repository}:ref:refs/heads/"
-  if (-not ([string]$Subject).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)) {
+  if (-not ([string]$Subject[0]).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)) {
     throw "Unexpected repository in OIDC trust: $Label"
   }
-  $Branch = ([string]$Subject).Substring($ExpectedPrefix.Length)
+  $Branch = ([string]$Subject[0]).Substring($ExpectedPrefix.Length)
   if ($Branch -notin @($OldBranch, $NewBranch)) {
     throw "Unexpected branch in OIDC trust: $Label"
   }
@@ -370,6 +562,7 @@ function Backup-RoleTrustAndGetBranch {
     ($Policy | ConvertTo-Json -Depth 20 -Compress),
     [Text.UTF8Encoding]::new($false)
   )
+  Protect-CutoverPath $BackupPath "File"
   return $Branch
 }
 
@@ -413,7 +606,9 @@ if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
 - 4 roleはrole名ではなく論理labelとbranchだけが表示される。
 - D0の想定どおりなら4 labelが`deploy/AWS_ECS`、`DEPLOY_BRANCH`も`deploy/AWS_ECS`になる。
 - 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
+- main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
 - `$CutoverDir`に4 trust backup、bootstrap state backupが作られる。pathを作業記録へ残すが、中身は表示しない。
+- Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
 
 **失敗時**
 
@@ -450,10 +645,16 @@ function Assert-TrustOnlyPlanChanges {
     )
     $ChangedAttributes = @(
       foreach ($AttributeName in $AttributeNames) {
-        $BeforeValue = $ResourceChange.change.before.$AttributeName |
-          ConvertTo-Json -Depth 30 -Compress
-        $AfterValue = $ResourceChange.change.after.$AttributeName |
-          ConvertTo-Json -Depth 30 -Compress
+        $BeforeProperty = $ResourceChange.change.before.PSObject.Properties[$AttributeName]
+        $AfterProperty = $ResourceChange.change.after.PSObject.Properties[$AttributeName]
+        $BeforeValue = [ordered]@{
+          Exists = $null -ne $BeforeProperty
+          Value = if ($null -eq $BeforeProperty) { $null } else { $BeforeProperty.Value }
+        } | ConvertTo-Json -Depth 30 -Compress
+        $AfterValue = [ordered]@{
+          Exists = $null -ne $AfterProperty
+          Value = if ($null -eq $AfterProperty) { $null } else { $AfterProperty.Value }
+        } | ConvertTo-Json -Depth 30 -Compress
         if ($BeforeValue -cne $AfterValue) {
           $AttributeName
         }
@@ -469,12 +670,16 @@ function Assert-TrustOnlyPlanChanges {
     if ($AfterStatements.Count -ne 1) {
       throw "Planned trust policy has an unexpected statement count."
     }
-    $AfterSubject = $AfterStatements[0].Condition.StringEquals.'token.actions.githubusercontent.com:sub'
-    if ($null -eq $AfterSubject) {
-      $AfterSubject = $AfterStatements[0].Condition.StringLike.'token.actions.githubusercontent.com:sub'
+    $AfterConditionProperty = $AfterStatements[0].PSObject.Properties["Condition"]
+    if ($null -eq $AfterConditionProperty) {
+      throw "Planned trust policy has no Condition."
     }
+    $AfterSubjectProperty = Get-RequiredOidcSubjectProperty `
+      $AfterConditionProperty.Value `
+      "planned trust policy"
+    $AfterSubject = @($AfterSubjectProperty.Value)
     $ExpectedSubject = "repo:${Repository}:ref:refs/heads/${ExpectedBranch}"
-    if (@($AfterSubject).Count -ne 1 -or [string]$AfterSubject -cne $ExpectedSubject) {
+    if ($AfterSubject.Count -ne 1 -or [string]$AfterSubject[0] -cne $ExpectedSubject) {
       throw "Planned trust subject is not the expected exact branch."
     }
   }
@@ -489,7 +694,10 @@ terraform "-chdir=$BootstrapDir" plan -input=false `
   "-target=aws_iam_role.terraform_plan" `
   "-target=aws_iam_role.terraform_lifecycle" `
   "-out=$BootstrapPlan" *> $BootstrapPlanLog
-if ($LASTEXITCODE -ne 0) {
+$BootstrapPlanExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $BootstrapPlan
+Protect-CutoverFileIfPresent $BootstrapPlanLog
+if ($BootstrapPlanExit -ne 0) {
   throw "Bootstrap targeted plan failed. Review the local log without sharing identifiers."
 }
 
@@ -517,7 +725,9 @@ Write-Host "Privately inspect $BootstrapPlanLog and confirm only assume_role_pol
 if ($BootstrapChanges.Count -gt 0) {
   $BootstrapApplyLog = Join-Path $CutoverDir "bootstrap-main.apply.log"
   terraform "-chdir=$BootstrapDir" apply -input=false $BootstrapPlan *> $BootstrapApplyLog
-  if ($LASTEXITCODE -ne 0) {
+  $BootstrapApplyExit = $LASTEXITCODE
+  Protect-CutoverFileIfPresent $BootstrapApplyLog
+  if ($BootstrapApplyExit -ne 0) {
     throw "Bootstrap saved plan apply failed. Use the rollback section before retrying."
   }
 }
@@ -555,7 +765,10 @@ terraform "-chdir=$RootDir" plan -input=false `
   "-var=github_deploy_branch=$NewBranch" `
   "-target=module.iam.aws_iam_role.github_deploy" `
   "-out=$RootPlan" *> $RootPlanLog
-if ($LASTEXITCODE -ne 0) {
+$RootPlanExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $RootPlan
+Protect-CutoverFileIfPresent $RootPlanLog
+if ($RootPlanExit -ne 0) {
   throw "Root targeted plan failed. Review the local log without sharing identifiers."
 }
 
@@ -582,7 +795,9 @@ Write-Host "Privately inspect $RootPlanLog and confirm only assume_role_policy c
 if ($RootChanges.Count -gt 0) {
   $RootApplyLog = Join-Path $CutoverDir "root-deploy-main.apply.log"
   terraform "-chdir=$RootDir" apply -input=false $RootPlan *> $RootApplyLog
-  if ($LASTEXITCODE -ne 0) {
+  $RootApplyExit = $LASTEXITCODE
+  Protect-CutoverFileIfPresent $RootApplyLog
+  if ($RootApplyExit -ne 0) {
     throw "Root saved plan apply failed. Use the rollback section before retrying."
   }
 }
@@ -619,25 +834,37 @@ $SmokeStatements = @($SmokePolicy.Statement)
 if ($SmokeStatements.Count -ne 1) {
   throw "Unexpected smoke trust statement count."
 }
-$SmokeEquals = $SmokeStatements[0].Condition.StringEquals
-$SmokeAudience = $SmokeEquals.'token.actions.githubusercontent.com:aud'
-$SmokeSubject = [string]$SmokeEquals.'token.actions.githubusercontent.com:sub'
+$SmokeConditionProperty = $SmokeStatements[0].PSObject.Properties["Condition"]
+if ($null -eq $SmokeConditionProperty) {
+  throw "Smoke trust has no Condition."
+}
+$SmokeCondition = $SmokeConditionProperty.Value
+$SmokeAudience = @(
+  Get-OidcConditionValues $SmokeCondition "StringEquals" $OidcAudienceKey
+)
+$SmokeSubjectProperty = Get-RequiredOidcSubjectProperty `
+  $SmokeCondition `
+  "oidc-smoke"
+$SmokeSubjectValues = @($SmokeSubjectProperty.Value)
 $ExpectedOldSubject = "repo:${Repository}:ref:refs/heads/${OldBranch}"
 $ExpectedNewSubject = "repo:${Repository}:ref:refs/heads/${NewBranch}"
-if ([string]$SmokeAudience -cne "sts.amazonaws.com") {
+if ($SmokeAudience.Count -ne 1 -or [string]$SmokeAudience[0] -cne "sts.amazonaws.com") {
   throw "Unexpected smoke trust audience."
 }
-if ($SmokeSubject -notin @($ExpectedOldSubject, $ExpectedNewSubject)) {
+if (
+  $SmokeSubjectValues.Count -ne 1 -or
+  [string]$SmokeSubjectValues[0] -notin @($ExpectedOldSubject, $ExpectedNewSubject)
+) {
   throw "Unexpected smoke trust subject."
 }
+$SmokeSubject = [string]$SmokeSubjectValues[0]
 
 if ($SmokeSubject -cne $ExpectedNewSubject) {
-  $SmokeEquals.'token.actions.githubusercontent.com:sub' = $ExpectedNewSubject
-  [IO.File]::WriteAllText(
-    $SmokeMainPolicy,
-    ($SmokePolicy | ConvertTo-Json -Depth 20 -Compress),
-    [Text.UTF8Encoding]::new($false)
-  )
+  Write-RoleTrustPolicyForBranch `
+    $SmokeBackup `
+    $SmokeMainPolicy `
+    $NewBranch `
+    "oidc-smoke"
   aws iam update-assume-role-policy `
     --profile $AwsProfile `
     --role-name $SmokeRoleName `
@@ -663,7 +890,7 @@ Write-Host "OIDC smoke trust: main"
 **失敗時**
 
 - policy shapeまたはsubjectが想定外なら更新しない。
-- update後の検証が`main`でなければ、後述の`Restore-RoleTrust`で`oidc-smoke.before.json`を戻す。
+- update後の検証が`main`でなければ、後述のロールバックでbackupから旧branch用policyを生成して戻す。
 - provider、audience、permission policy、role名を同時に変更しない。
 
 ### 手順5: `DEPLOY_BRANCH`を`main`へ変更
@@ -817,6 +1044,8 @@ terraform "-chdir=$BootstrapDir" plan -input=false `
   "-out=$BootstrapPostPlan" `
   -detailed-exitcode *> $BootstrapPostLog
 $BootstrapPostExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $BootstrapPostPlan
+Protect-CutoverFileIfPresent $BootstrapPostLog
 if ($BootstrapPostExit -eq 1) {
   throw "Bootstrap post-cutover full plan failed."
 }
@@ -829,6 +1058,8 @@ terraform "-chdir=$RootDir" plan -input=false `
   "-out=$RootPostPlan" `
   -detailed-exitcode *> $RootPostLog
 $RootPostExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $RootPostPlan
+Protect-CutoverFileIfPresent $RootPostLog
 if ($RootPostExit -eq 1) {
   throw "Root post-cutover full plan failed."
 }
@@ -887,9 +1118,9 @@ Write-Host "Cutover artifacts: removed"
 | 失敗時点 | 戻す対象 | 手順 |
 |---|---|---|
 | 手順1 | なし | AWS変更前。原因解消まで停止 |
-| 手順2の途中 | bootstrap plan / lifecycle role | 同じlocal stateから旧branchを明示したsaved planをapply。state利用不能ならbackup policyを直接復元 |
+| 手順2の途中 | bootstrap plan / lifecycle role | 同じlocal stateから旧branchを明示したsaved planをapply。state利用不能なら各backupから旧branch用policyを生成して直接復元 |
 | 手順3の途中 | root deploy role、その後bootstrap 2 role | root、bootstrapの順に旧branchへ戻す |
-| 手順4の途中 | smoke、root、bootstrap | smoke backupを戻し、root、bootstrapを旧branchへ戻す |
+| 手順4の途中 | smoke、root、bootstrap | smoke backupから旧branch用policyを生成し、root、bootstrapとともに旧branchへ戻す |
 | 手順5以後 | repository variable、smoke、root、bootstrap | `DEPLOY_BRANCH`を旧値へ戻してから、roleを逆順で戻す |
 | 手順6 smoke失敗 | 原因に応じて継続または全rollback | workflowは再実行せず、trust / secret対応 / allowlistを確認 |
 
@@ -920,7 +1151,13 @@ if (-not $DeployBranchRollbackOk) {
   Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue IAM recovery."
 }
 
-Restore-RoleTrust $SmokeRoleName (Join-Path $CutoverDir "oidc-smoke.before.json")
+$SmokeOldPolicy = Join-Path $CutoverDir "oidc-smoke.old.json"
+Write-RoleTrustPolicyForBranch `
+  (Join-Path $CutoverDir "oidc-smoke.before.json") `
+  $SmokeOldPolicy `
+  $OldBranch `
+  "oidc-smoke-rollback"
+Restore-RoleTrust $SmokeRoleName $SmokeOldPolicy
 if ((Backup-RoleTrustAndGetBranch "oidc-smoke-rollback-check" $SmokeRoleName) -cne $OldBranch) {
   throw "Smoke rollback verification failed."
 }
@@ -932,7 +1169,10 @@ terraform "-chdir=$RootDir" plan -input=false `
   "-var=github_deploy_branch=$OldBranch" `
   "-target=module.iam.aws_iam_role.github_deploy" `
   "-out=$RootRollbackPlan" *> $RootRollbackLog
-if ($LASTEXITCODE -ne 0) {
+$RootRollbackPlanExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $RootRollbackPlan
+Protect-CutoverFileIfPresent $RootRollbackLog
+if ($RootRollbackPlanExit -ne 0) {
   throw "Root rollback plan failed."
 }
 $RootRollbackJson = (
@@ -951,7 +1191,9 @@ Assert-TrustOnlyPlanChanges `
   $OldBranch
 $RootRollbackApplyLog = Join-Path $CutoverDir "root-deploy-old.apply.log"
 terraform "-chdir=$RootDir" apply -input=false $RootRollbackPlan *> $RootRollbackApplyLog
-if ($LASTEXITCODE -ne 0) {
+$RootRollbackApplyExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $RootRollbackApplyLog
+if ($RootRollbackApplyExit -ne 0) {
   throw "Root rollback apply failed."
 }
 if ((Backup-RoleTrustAndGetBranch "github-deploy-rollback-check" $DeployRoleName) -cne $OldBranch) {
@@ -966,7 +1208,10 @@ terraform "-chdir=$BootstrapDir" plan -input=false `
   "-target=aws_iam_role.terraform_plan" `
   "-target=aws_iam_role.terraform_lifecycle" `
   "-out=$BootstrapRollbackPlan" *> $BootstrapRollbackLog
-if ($LASTEXITCODE -ne 0) {
+$BootstrapRollbackPlanExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $BootstrapRollbackPlan
+Protect-CutoverFileIfPresent $BootstrapRollbackLog
+if ($BootstrapRollbackPlanExit -ne 0) {
   throw "Bootstrap rollback plan failed."
 }
 $BootstrapRollbackJson = (
@@ -985,7 +1230,9 @@ Assert-TrustOnlyPlanChanges `
   $OldBranch
 $BootstrapRollbackApplyLog = Join-Path $CutoverDir "bootstrap-old.apply.log"
 terraform "-chdir=$BootstrapDir" apply -input=false $BootstrapRollbackPlan *> $BootstrapRollbackApplyLog
-if ($LASTEXITCODE -ne 0) {
+$BootstrapRollbackApplyExit = $LASTEXITCODE
+Protect-CutoverFileIfPresent $BootstrapRollbackApplyLog
+if ($BootstrapRollbackApplyExit -ne 0) {
   throw "Bootstrap rollback apply failed."
 }
 if (
@@ -1007,18 +1254,30 @@ GitHub OIDC経路を復旧手段に使わない。local AWS認証はGitHub branc
 
 1. workflowを実行しない。`DEPLOY_BRANCH`を旧値へ戻せるなら先に戻す。
 2. preflightで作成した4 trust backupとbootstrap state backupが残っていることを確認する。中身は表示しない。
-3. smoke roleを`oidc-smoke.before.json`から旧branchへ戻す。
+3. `oidc-smoke.before.json`から旧branch subjectを持つ`oidc-smoke.old.json`を生成し、smoke roleへ適用する。
 4. root remote stateが利用可能なら、preferred rollbackのtargeted saved planでdeploy roleを旧branchへ戻す。
 5. bootstrap local stateが利用可能なら、preferred rollbackのtargeted saved planでplan / lifecycle roleを旧branchへ戻す。
-6. Terraform stateが利用不能、lockが解消できない、またはapplyが途中で止まる場合は、local IAM権限で該当する`*.before.json`を直接適用する。
+6. Terraform stateが利用不能、lockが解消できない、またはapplyが途中で止まる場合は、各`*.before.json`から旧branch用`*.old.json`を生成し、local IAM権限で適用する。
 
 緊急直接復旧は次のとおりである。
 
 ```powershell
-Restore-RoleTrust $SmokeRoleName (Join-Path $CutoverDir "oidc-smoke.before.json")
-Restore-RoleTrust $DeployRoleName (Join-Path $CutoverDir "github-deploy.before.json")
-Restore-RoleTrust $LifecycleRoleName (Join-Path $CutoverDir "terraform-lifecycle.before.json")
-Restore-RoleTrust $PlanRoleName (Join-Path $CutoverDir "terraform-plan.before.json")
+$DirectRecoveryRoles = @(
+  [pscustomobject]@{ Label = "oidc-smoke"; RoleName = $SmokeRoleName }
+  [pscustomobject]@{ Label = "github-deploy"; RoleName = $DeployRoleName }
+  [pscustomobject]@{ Label = "terraform-lifecycle"; RoleName = $LifecycleRoleName }
+  [pscustomobject]@{ Label = "terraform-plan"; RoleName = $PlanRoleName }
+)
+foreach ($RecoveryRole in $DirectRecoveryRoles) {
+  $BackupPath = Join-Path $CutoverDir "$($RecoveryRole.Label).before.json"
+  $OldPolicyPath = Join-Path $CutoverDir "$($RecoveryRole.Label).old.json"
+  Write-RoleTrustPolicyForBranch `
+    $BackupPath `
+    $OldPolicyPath `
+    $OldBranch `
+    "$($RecoveryRole.Label)-emergency-recovery"
+  Restore-RoleTrust $RecoveryRole.RoleName $OldPolicyPath
+}
 
 $RecoveredBranches = @(
   Backup-RoleTrustAndGetBranch "terraform-plan-recovered" $PlanRoleName
@@ -1032,7 +1291,7 @@ if (@($RecoveredBranches | Where-Object { $_ -cne $OldBranch }).Count -ne 0) {
 Write-Host "Emergency trust recovery: old branch restored"
 ```
 
-backupにはprovider識別子が含まれるため、terminalへ出力せず`file://`で渡す。backupが失われ、かつTerraform stateも利用不能なら、推測でpolicyを再作成しない。IAM管理者による別レビューとincident扱いに切り替える。
+backupと生成した旧branch用policyにはprovider識別子が含まれるため、terminalへ出力せず`file://`で渡す。backupが失われ、かつTerraform stateも利用不能なら、推測でpolicyを再作成しない。IAM管理者による別レビューとincident扱いに切り替える。
 
 ## 7. 完了チェックリスト
 
