@@ -938,8 +938,12 @@ def _provisional_end_to_end_winner(
             if value is not None:
                 collected.setdefault(metric_name, []).append(value)
     candidates: list[EndToEndResult] = []
-    for candidate_id, metrics in by_candidate.items():
-        required = {metric_name: _mean(values) for metric_name, values in metrics.items() if values}
+    for candidate_id, candidate_metrics in by_candidate.items():
+        required = {
+            metric_name: _mean(values)
+            for metric_name, values in candidate_metrics.items()
+            if values
+        }
         if not all(
             metric_name in required
             for metric_name in (

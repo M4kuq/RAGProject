@@ -58,19 +58,23 @@ def test_evaluation_backend_defaults_and_runtime_is_manual_only() -> None:
 
 
 def test_runtime_collection_is_stable_and_isolates_embedding_profiles() -> None:
-    common = {
-        "base_collection_name": "document_chunks",
-        "corpus_fingerprint": "a" * 64,
-        "embedding_model": "text-embedding-qwen3-embedding-4b",
-        "embedding_dimension": 2560,
-    }
-    first = runtime_evaluation_collection_name(**common)
-    assert first == runtime_evaluation_collection_name(**common)
+    def collection_name(
+        *,
+        corpus_fingerprint: str = "a" * 64,
+        embedding_dimension: int = 2560,
+    ) -> str:
+        return runtime_evaluation_collection_name(
+            base_collection_name="document_chunks",
+            corpus_fingerprint=corpus_fingerprint,
+            embedding_model="text-embedding-qwen3-embedding-4b",
+            embedding_dimension=embedding_dimension,
+        )
+
+    first = collection_name()
+    assert first == collection_name()
     assert first.startswith("document_chunks_eval_")
-    assert first != runtime_evaluation_collection_name(**(common | {"embedding_dimension": 1024}))
-    assert first != runtime_evaluation_collection_name(
-        **(common | {"corpus_fingerprint": "b" * 64})
-    )
+    assert first != collection_name(embedding_dimension=1024)
+    assert first != collection_name(corpus_fingerprint="b" * 64)
 
 
 def test_lmstudio_dimension_probe_uses_fixed_text_and_resolved_model(monkeypatch) -> None:

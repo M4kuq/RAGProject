@@ -88,7 +88,7 @@ class GenerationProfile(BaseModel):
     model: Literal["qwen/qwen3.5-9b"] = "qwen/qwen3.5-9b"
     planner_model: Literal["qwen/qwen3.5-9b"] = "qwen/qwen3.5-9b"
     judge_model: Literal["qwen/qwen3.5-9b"] = "qwen/qwen3.5-9b"
-    temperature: Literal[0.0] = 0.0
+    temperature: float = Field(default=0.0, ge=0.0, le=0.0)
 
 
 class ExperimentRetrievalProfile(BaseModel):
