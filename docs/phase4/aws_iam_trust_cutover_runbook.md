@@ -576,32 +576,6 @@ if (
   throw "Bootstrap variables.tf differs from the recorded main commit in an unexpected way."
 }
 
-if ([string]::IsNullOrWhiteSpace($env:AWS_DEMO_ALLOWED_ACCOUNT_IDS)) {
-  throw "AWS_DEMO_ALLOWED_ACCOUNT_IDS must already be present in the operator environment."
-}
-$ProfileCallerResult = Invoke-ProtectedCli `
-  -Command "aws" `
-  -Label "aws-profile-caller-identity" `
-  -Arguments @(
-    "sts", "get-caller-identity",
-    "--profile", $AwsProfile,
-    "--query", "Account",
-    "--output", "text",
-    "--no-cli-pager"
-  )
-$ProfileCallerAccount = $ProfileCallerResult.Stdout.Trim()
-if ($ProfileCallerResult.ExitCode -ne 0 -or $ProfileCallerAccount -notmatch "^[0-9]{12}$") {
-  throw "Could not validate the explicitly selected profile caller account. Review protected diagnostic file: $($ProfileCallerResult.StderrPath)"
-}
-$AllowedAccounts = @(
-  $env:AWS_DEMO_ALLOWED_ACCOUNT_IDS.Split(",") |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -match "^[0-9]{12}$" }
-)
-if ($AllowedAccounts -notcontains $ProfileCallerAccount) {
-  throw "The explicitly selected profile caller account is not allowlisted."
-}
-
 $OriginalAwsProfileWasSet = Test-Path Env:AWS_PROFILE
 $OriginalAwsProfile = if ($OriginalAwsProfileWasSet) {
   [string]$env:AWS_PROFILE
@@ -617,9 +591,54 @@ function Restore-OriginalAwsProfile {
   }
 }
 
-$env:AWS_PROFILE = $AwsProfile
-try {
-  $TerraformEnvironmentCallerResult = Invoke-ProtectedCli `
+function Set-ValidatedAwsProfileContext {
+  param(
+    [Parameter(Mandatory = $true)][string]$SelectedProfile,
+    [AllowNull()][AllowEmptyString()][string]$ExpectedAccount = $null
+  )
+  if ([string]::IsNullOrWhiteSpace($env:AWS_DEMO_ALLOWED_ACCOUNT_IDS)) {
+    throw "AWS_DEMO_ALLOWED_ACCOUNT_IDS must already be present in the operator environment."
+  }
+  $ValidatedAllowedAccounts = @(
+    $env:AWS_DEMO_ALLOWED_ACCOUNT_IDS.Split(",") |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -match "^[0-9]{12}$" }
+  )
+  if ($ValidatedAllowedAccounts.Count -eq 0) {
+    throw "AWS_DEMO_ALLOWED_ACCOUNT_IDS contains no valid account entries."
+  }
+  $SelectedCallerResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-profile-caller-identity" `
+    -Arguments @(
+      "sts", "get-caller-identity",
+      "--profile", $SelectedProfile,
+      "--query", "Account",
+      "--output", "text",
+      "--no-cli-pager"
+    )
+  $SelectedCallerAccount = $SelectedCallerResult.Stdout.Trim()
+  if (
+    $SelectedCallerResult.ExitCode -ne 0 -or
+    $SelectedCallerAccount -notmatch "^[0-9]{12}$"
+  ) {
+    throw "Could not validate the explicitly selected profile caller account. Review protected diagnostic file: $($SelectedCallerResult.StderrPath)"
+  }
+  if ($ValidatedAllowedAccounts -notcontains $SelectedCallerAccount) {
+    throw "The explicitly selected profile caller account is not allowlisted."
+  }
+  if (
+    -not [string]::IsNullOrEmpty($ExpectedAccount) -and
+    (
+      $ExpectedAccount -notmatch "^[0-9]{12}$" -or
+      $SelectedCallerAccount -cne $ExpectedAccount
+    )
+  ) {
+    throw "The selected profile caller account does not match the recorded cutover account."
+  }
+
+  $env:AWS_PROFILE = $SelectedProfile
+  $EnvironmentCallerResult = Invoke-ProtectedCli `
     -Command "aws" `
     -Label "aws-terraform-environment-caller-identity" `
     -Arguments @(
@@ -628,15 +647,27 @@ try {
       "--output", "text",
       "--no-cli-pager"
     )
-  $TerraformEnvironmentCallerAccount = $TerraformEnvironmentCallerResult.Stdout.Trim()
+  $EnvironmentCallerAccount = $EnvironmentCallerResult.Stdout.Trim()
   if (
-    $TerraformEnvironmentCallerResult.ExitCode -ne 0 -or
-    $TerraformEnvironmentCallerAccount -notmatch "^[0-9]{12}$" -or
-    $AllowedAccounts -notcontains $TerraformEnvironmentCallerAccount -or
-    $TerraformEnvironmentCallerAccount -cne $ProfileCallerAccount
+    $EnvironmentCallerResult.ExitCode -ne 0 -or
+    $EnvironmentCallerAccount -notmatch "^[0-9]{12}$" -or
+    $ValidatedAllowedAccounts -notcontains $EnvironmentCallerAccount -or
+    $EnvironmentCallerAccount -cne $SelectedCallerAccount
   ) {
-    throw "The Terraform process environment does not resolve to the allowlisted selected profile account. Review protected diagnostic file: $($TerraformEnvironmentCallerResult.StderrPath)"
+    throw "The process environment does not resolve to the allowlisted selected profile account. Review protected diagnostic file: $($EnvironmentCallerResult.StderrPath)"
   }
+  return [pscustomobject]@{
+    AllowedAccounts = $ValidatedAllowedAccounts
+    CallerAccount = $SelectedCallerAccount
+  }
+}
+
+try {
+  $AwsAccountContext = Set-ValidatedAwsProfileContext `
+    -SelectedProfile $AwsProfile
+  $AllowedAccounts = @($AwsAccountContext.AllowedAccounts)
+  $ProfileCallerAccount = [string]$AwsAccountContext.CallerAccount
+  Remove-Variable AwsAccountContext
 } catch {
   Restore-OriginalAwsProfile
   throw
@@ -964,385 +995,6 @@ function Assert-TrustPolicySubjectOnlyChange {
   }
 }
 
-function Write-RoleTrustPolicyForBranch {
-  param(
-    [Parameter(Mandatory = $true)][string]$BackupPath,
-    [Parameter(Mandatory = $true)][string]$DestinationPath,
-    [Parameter(Mandatory = $true)][string]$TargetBranch,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-  if ($TargetBranch -notin @($OldBranch, $NewBranch)) {
-    throw "Refusing to generate a trust policy for an unexpected branch: $Label"
-  }
-  try {
-    $BeforePolicy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
-    $Policy = ConvertFrom-Json -InputObject (
-      ConvertTo-Json -InputObject $BeforePolicy -Depth 30 -Compress
-    )
-  } catch {
-    throw "Could not parse the trust backup; policy content was suppressed."
-  }
-  $Statements = @($Policy.Statement)
-  if ($Statements.Count -ne 1) {
-    throw "Unexpected trust statement count while generating policy: $Label"
-  }
-  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
-  if ($null -eq $ConditionProperty) {
-    throw "Trust policy has no Condition while generating policy: $Label"
-  }
-  $Condition = $ConditionProperty.Value
-  $Audience = @(
-    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
-  )
-  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
-  $SubjectValues = @($SubjectProperty.Value)
-  $ExpectedSubjects = @(
-    "repo:${Repository}:ref:refs/heads/${OldBranch}",
-    "repo:${Repository}:ref:refs/heads/${NewBranch}"
-  )
-  if (
-    $Audience.Count -ne 1 -or
-    [string]$Audience[0] -cne "sts.amazonaws.com" -or
-    $SubjectValues.Count -ne 1 -or
-    [string]$SubjectValues[0] -notin $ExpectedSubjects
-  ) {
-    throw "Unexpected OIDC trust shape while generating policy: $Label"
-  }
-  $ExpectedTargetSubject = "repo:${Repository}:ref:refs/heads/${TargetBranch}"
-  if ($SubjectProperty.Value -is [array]) {
-    $SubjectProperty.Value = @($ExpectedTargetSubject)
-  } else {
-    $SubjectProperty.Value = $ExpectedTargetSubject
-  }
-  Assert-TrustPolicySubjectOnlyChange `
-    $BeforePolicy `
-    $Policy `
-    $TargetBranch `
-    "generated direct trust policy"
-  Write-ProtectedCutoverTextOnce `
-    $DestinationPath `
-    ($Policy | ConvertTo-Json -Depth 20 -Compress)
-}
-
-function Backup-RoleTrustAndGetBranch {
-  param(
-    [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][string]$RoleName,
-    [switch]$InitialStateBackup
-  )
-  $RoleResult = Invoke-ProtectedCli `
-    -Command "aws" `
-    -Label "aws-get-role-$Label" `
-    -Arguments @(
-      "iam", "get-role",
-      "--profile", $AwsProfile,
-      "--role-name", $RoleName,
-      "--output", "json",
-      "--no-cli-pager"
-    )
-  if ($RoleResult.ExitCode -ne 0) {
-    throw "Could not read role trust: $Label. Review protected diagnostic file: $($RoleResult.StderrPath)"
-  }
-  $RoleJson = $RoleResult.Stdout
-  $Role = ConvertFrom-Json -InputObject $RoleJson
-  $Policy = $Role.Role.AssumeRolePolicyDocument
-  $Statements = @($Policy.Statement)
-  if ($Statements.Count -ne 1) {
-    throw "Unexpected trust statement count: $Label"
-  }
-  $Actions = @($Statements[0].Action)
-  $Principals = @($Statements[0].Principal.Federated)
-  if (
-    [string]$Statements[0].Effect -cne "Allow" -or
-    $Actions.Count -ne 1 -or
-    [string]$Actions[0] -cne "sts:AssumeRoleWithWebIdentity" -or
-    $Principals.Count -ne 1 -or
-    [string]::IsNullOrWhiteSpace([string]$Principals[0])
-  ) {
-    throw "Unexpected OIDC trust principal or action: $Label"
-  }
-  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
-  if ($null -eq $ConditionProperty) {
-    throw "OIDC trust has no Condition: $Label"
-  }
-  $Condition = $ConditionProperty.Value
-  $Audience = @(
-    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
-  )
-  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
-  $Subject = @($SubjectProperty.Value)
-  if (
-    $Audience.Count -ne 1 -or
-    [string]$Audience[0] -cne "sts.amazonaws.com" -or
-    $Subject.Count -ne 1
-  ) {
-    throw "Unexpected OIDC trust shape: $Label"
-  }
-  $ExpectedPrefix = "repo:${Repository}:ref:refs/heads/"
-  if (-not ([string]$Subject[0]).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)) {
-    throw "Unexpected repository in OIDC trust: $Label"
-  }
-  $Branch = ([string]$Subject[0]).Substring($ExpectedPrefix.Length)
-  if ($Branch -notin @($OldBranch, $NewBranch)) {
-    throw "Unexpected branch in OIDC trust: $Label"
-  }
-  $BackupName = if ($InitialStateBackup) {
-    "$Label.before.json"
-  } else {
-    "$Label-$(New-CutoverArtifactId).observed.json"
-  }
-  $BackupPath = Join-Path $CutoverDir $BackupName
-  Write-ProtectedCutoverTextOnce `
-    $BackupPath `
-    ($Policy | ConvertTo-Json -Depth 20 -Compress)
-  return $Branch
-}
-
-$BeforeBranches = [ordered]@{
-  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan" $PlanRoleName -InitialStateBackup
-  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle" $LifecycleRoleName -InitialStateBackup
-  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy" $DeployRoleName -InitialStateBackup
-  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke" $SmokeRoleName -InitialStateBackup
-}
-$BeforeBranches.GetEnumerator() | ForEach-Object {
-  Write-Host ("{0}: {1}" -f $_.Key, $_.Value)
-}
-
-function Get-DeployBranchVariable {
-  param(
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern("^[a-z0-9-]+$")]
-    [string]$ArtifactLabel
-  )
-  $VariablesResult = Invoke-ProtectedCli `
-    -Command "gh" `
-    -Label $ArtifactLabel `
-    -Arguments @("variable", "list", "--json", "name,value")
-  if ($VariablesResult.ExitCode -ne 0) {
-    throw "gh variable list failed. Review protected diagnostic file: $($VariablesResult.StderrPath)"
-  }
-  $VariablesJson = $VariablesResult.Stdout
-  $Variables = ConvertFrom-Json -InputObject $VariablesJson
-  $Matches = @($Variables | Where-Object { [string]$_.name -ceq "DEPLOY_BRANCH" })
-  if ($Matches.Count -ne 1) {
-    throw "Expected exactly one DEPLOY_BRANCH repository variable."
-  }
-  $Value = [string]$Matches[0].value
-  if ($Value -notmatch "^[A-Za-z0-9._/-]+$") {
-    throw "DEPLOY_BRANCH is not a branch-shaped value; value was suppressed."
-  }
-  return $Value
-}
-
-$CurrentDeployBranch = Get-DeployBranchVariable "gh-variable-list-initial"
-Write-Host "DEPLOY_BRANCH: $CurrentDeployBranch"
-if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
-  throw "DEPLOY_BRANCH has an unexpected value."
-}
-$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
-$InitialStateDocument = [ordered]@{
-  schema_version = 1
-  main_sha = $MainSha
-  aws_profile = [ordered]@{
-    was_set = $OriginalAwsProfileWasSet
-    value = $OriginalAwsProfile
-  }
-  deploy_branch = $CurrentDeployBranch
-  role_branches = $BeforeBranches
-}
-Write-ProtectedCutoverTextOnce `
-  $InitialStatePath `
-  ($InitialStateDocument | ConvertTo-Json -Depth 10 -Compress)
-Remove-Variable InitialStateDocument
-
-$CutoverWorkflows = @(
-  [pscustomobject]@{ File = "aws-demo.yml"; Name = "AWS Demo Lifecycle" }
-  [pscustomobject]@{ File = "aws-deploy-app.yml"; Name = "AWS Deploy App" }
-  [pscustomobject]@{ File = "aws-deploy-frontend.yml"; Name = "AWS Deploy Frontend" }
-  [pscustomobject]@{ File = "aws-infra-plan.yml"; Name = "AWS Infra Plan" }
-  [pscustomobject]@{ File = "aws-oidc-smoke.yml"; Name = "AWS OIDC Smoke" }
-)
-$BlockingRunStatuses = @("in_progress", "queued", "waiting", "requested", "pending")
-
-function Assert-NoBlockingCutoverRuns {
-  $BlockingRuns = @(
-    foreach ($Workflow in $CutoverWorkflows) {
-      foreach ($Branch in @($OldBranch, $NewBranch)) {
-        foreach ($Status in $BlockingRunStatuses) {
-          $BranchLabel = $Branch.ToLowerInvariant() -replace "[^a-z0-9]+", "-"
-          $WorkflowLabel = $Workflow.File -replace "\.yml$", ""
-          $StatusLabel = $Status -replace "_", "-"
-          $RunListResult = Invoke-ProtectedCli `
-            -Command "gh" `
-            -Label "gh-preflight-$WorkflowLabel-$BranchLabel-$StatusLabel" `
-            -Arguments @(
-              "api",
-              "--method", "GET",
-              "--paginate",
-              "--slurp",
-              "repos/$Repository/actions/workflows/$($Workflow.File)/runs",
-              "-f", "branch=$Branch",
-              "-f", "status=$Status",
-              "-f", "per_page=100"
-            )
-          if ($RunListResult.ExitCode -ne 0) {
-            throw "Could not inspect active workflow runs. Review protected diagnostic file: $($RunListResult.StderrPath)"
-          }
-          $Pages = ConvertFrom-Json -InputObject $RunListResult.Stdout
-          foreach ($Page in $Pages) {
-            $WorkflowRunsProperty = $Page.PSObject.Properties["workflow_runs"]
-            if ($null -eq $WorkflowRunsProperty) {
-              throw "Workflow run query returned an unexpected result shape; values were suppressed."
-            }
-            $PageRuns = @(
-              if ($null -ne $WorkflowRunsProperty.Value) {
-                @($WorkflowRunsProperty.Value)
-              }
-            )
-            foreach ($Run in $PageRuns) {
-              if (
-                [string]$Run.id -notmatch "^[0-9]+$" -or
-                [string]$Run.name -cne $Workflow.Name -or
-                [string]$Run.head_branch -cne $Branch -or
-                [string]$Run.status -cne $Status
-              ) {
-                throw "Workflow run query returned an unexpected result shape; values were suppressed."
-              }
-              [pscustomobject]@{
-                RunId = [string]$Run.id
-                WorkflowName = [string]$Run.name
-                Branch = [string]$Run.head_branch
-                Status = [string]$Run.status
-              }
-            }
-          }
-        }
-      }
-    }
-  )
-  if ($BlockingRuns.Count -ne 0) {
-    $BlockingRuns |
-      Sort-Object RunId -Unique |
-      ForEach-Object {
-        Write-Host (
-          "run_id={0} workflow={1} branch={2} status={3}" -f
-          $_.RunId,
-          $_.WorkflowName,
-          $_.Branch,
-          $_.Status
-        )
-      }
-    throw "Active or waiting cutover-related runs exist. Wait for completion or let a human decide whether to cancel them; this runbook never cancels or reruns runs."
-  }
-  Write-Host "Active or waiting cutover-related runs on old/new branches: none"
-}
-
-Assert-NoBlockingCutoverRuns
-```
-
-**期待される結果**
-
-- account IDやARNは表示されず、allowlistが`OK`になる。
-- 4 roleはrole名ではなく論理labelとbranchだけが表示される。
-- D0の想定どおりなら4 labelが`deploy/AWS_ECS`、`DEPLOY_BRANCH`も`deploy/AWS_ECS`になる。
-- 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
-- 開始時の`origin/main` SHAが`$MainSha`に保持され、bootstrap側でもfetch後の`origin/main`が同じcommitであることを確認する。以後のcheckpointではSHA自体を表示せず一致だけを検証する。
-- `$env:AWS_PROFILE`はこのPowerShell processと子processだけに設定される。明示profile、同じprocess環境のcredential chain、後続plan JSON内のprovider caller accountを同じallowlistと明示profile accountに照合する。
-- bootstrap / root stateのrole ARN accountは、role名を利用する前に明示profile accountと一致する。
-- main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
-- `$BootstrapDir`がlinked worktreeならbootstrap側fetchは共有refを安全に再確認し、別cloneならそのclone自身の`origin/main`を更新する。どちらもfetch後のcommitが開始時の`$MainSha`と一致しなければconfiguration diffへ進まない。
-- `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、`AWS_PROFILE`、4 role branch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
-- `TF_DATA_DIR`はTerraform command実行中だけbootstrap/root別の保護済みdirectoryを指し、command終了時に直前の値へ戻る。root backend metadataはrepository配下の`.terraform`へ作られない。
-- initial-state、開始時4 roleの`*.before.json`、bootstrap state backupは固定名のwrite-onceであり、既存pathへの上書きを拒否する。CLI log、開始後のrole snapshot、saved plan / logは呼び出しごとのartifact IDを持つため、再試行でも既存artifactを上書きしない。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
-- Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
-- 旧branch / `main`の双方について、5 workflowに実行中・待機中runがない。
-
-**失敗時**
-
-- ここではAWS resource変更はない。原因を解消するまで進まない。
-- bootstrap stateがない場合、新しい空stateからapplyしてはいけない。権威あるlocal stateまたは安全なbackupを特定する。
-- trustが旧branch / `main`以外、複数subject、別repository、複数statementならscope外である。policyを自動整形せず、RAG-18を停止して別レビューへ送る。
-- root backend initが失敗した場合、placeholderを実値へ直接置換してcommitしない。bootstrap outputとlocal権限を確認する。
-- active runがある場合は完了または人間が判断したキャンセルを待つ。このrunbookは自動キャンセルやrerunを行わない。
-- active run gate後は、手順6のsmoke dispatchまで対象workflowを新たに起動しない。gateは手順1でだけ実行するため、手順6でdispatchするsmoke自身を誤検出しない。
-- 手順1で停止し、以後TerraformまたはAWS recoveryを実行しない場合は`Restore-OriginalAwsProfile`を呼び、開始時の`AWS_PROFILE`へ戻す。rollbackが必要な場合は復旧完了まで設定を維持し、rollback末尾で戻す。
-- AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作ってはならない。元の`$CutoverDir`を再指定し、operator入力とfunction定義だけを読み込み直した後、共有CLI logではなくwrite-onceの`cutover-initial-state.json`から開始状態を復元してロールバックを優先する。元のartifact pathを特定できなければ追加更新を停止する。
-
-session喪失時は、`$OldBranch`、`$NewBranch`、`$AwsProfile`、repository path入力と手順1のfunction定義を読み込み直してから、次だけを実行する。値は表示しない。
-
-```powershell
-$CutoverDir = "<ORIGINAL_CUTOVER_DIR>"
-$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
-if (-not (Test-Path -LiteralPath $InitialStatePath -PathType Leaf)) {
-  throw "Original write-once initial state was not found."
-}
-try {
-  $InitialState = Get-Content -LiteralPath $InitialStatePath -Raw | ConvertFrom-Json
-  $RecoveredBeforeBranches = [ordered]@{
-    terraform_plan = [string]$InitialState.role_branches.terraform_plan
-    terraform_lifecycle = [string]$InitialState.role_branches.terraform_lifecycle
-    github_deploy = [string]$InitialState.role_branches.github_deploy
-    oidc_smoke = [string]$InitialState.role_branches.oidc_smoke
-  }
-} catch {
-  throw "Could not parse the protected initial state; values were suppressed."
-}
-if (
-  [int]$InitialState.schema_version -ne 1 -or
-  [string]$InitialState.main_sha -notmatch "^[0-9a-f]{40,64}$" -or
-  [string]$InitialState.deploy_branch -notin @($OldBranch, $NewBranch) -or
-  @($RecoveredBeforeBranches.Values | Where-Object {
-    [string]$_ -notin @($OldBranch, $NewBranch)
-  }).Count -ne 0 -or
-  $InitialState.aws_profile.was_set -isnot [bool] -or
-  (
-    -not [bool]$InitialState.aws_profile.was_set -and
-    $null -ne $InitialState.aws_profile.value
-  )
-) {
-  throw "Protected initial state has an unexpected shape; values were suppressed."
-}
-$RequiredInitialArtifacts = @(
-  "bootstrap.terraform.tfstate.before",
-  "terraform-plan.before.json",
-  "terraform-lifecycle.before.json",
-  "github-deploy.before.json",
-  "oidc-smoke.before.json"
-)
-foreach ($ArtifactName in $RequiredInitialArtifacts) {
-  if (-not (Test-Path -LiteralPath (Join-Path $CutoverDir $ArtifactName) -PathType Leaf)) {
-    throw "A required write-once rollback artifact is missing: $ArtifactName"
-  }
-}
-$MainSha = [string]$InitialState.main_sha
-$CurrentDeployBranch = [string]$InitialState.deploy_branch
-$BeforeBranches = $RecoveredBeforeBranches
-$OriginalAwsProfileWasSet = [bool]$InitialState.aws_profile.was_set
-$OriginalAwsProfile = if ($OriginalAwsProfileWasSet) {
-  [string]$InitialState.aws_profile.value
-} else {
-  $null
-}
-$BootstrapTerraformDataDir = Join-Path $CutoverDir "terraform-data-bootstrap"
-$RootTerraformDataDir = Join-Path $CutoverDir "terraform-data-root"
-foreach ($TerraformDataDir in @($BootstrapTerraformDataDir, $RootTerraformDataDir)) {
-  if (-not (Test-Path -LiteralPath $TerraformDataDir -PathType Container)) {
-    throw "A protected Terraform data directory is missing."
-  }
-}
-$env:AWS_PROFILE = $AwsProfile
-Remove-Variable InitialState, RecoveredBeforeBranches
-```
-
-### 手順2: bootstrap plan / lifecycle roleを更新
-
-**cwd:** 任意。`terraform -chdir=$BootstrapDir`を使う。
-
-`-target`は通常運用向けではないが、このcutoverではbootstrap stackの他resourceを変更しないための例外的なblast-radius制限として使う。saved planの対象が2 roleのin-place updateだけであることを確認してから、そのplan fileをapplyする。
-
-`Assert-TrustOnlyPlanChanges`は、planの更新前policyをdeep copyし、OIDC subjectの値だけを1箇所置換した期待値を作る。更新後policyはJSON objectのキー順序と空白・改行だけを正規化して完全一致させる。scalarと1要素配列、配列順序は同一shapeのまま比較するため、`Effect`、`Action`、`Principal`（`Federated` providerを含む）、audience、subject以外の全condition、statement数、condition operatorの種類と構成は不変でなければならない。
-
-```powershell
 function Assert-TrustOnlyPlanChanges {
   param(
     [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Changes,
@@ -1479,6 +1131,798 @@ function Assert-TerraformPlanCallerAccount {
   Write-Host "Terraform provider caller account allowlist: OK ($Label)"
 }
 
+function Write-RoleTrustPolicyForBranch {
+  param(
+    [Parameter(Mandatory = $true)][string]$BackupPath,
+    [Parameter(Mandatory = $true)][string]$DestinationPath,
+    [Parameter(Mandatory = $true)][string]$TargetBranch,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  if ($TargetBranch -notin @($OldBranch, $NewBranch)) {
+    throw "Refusing to generate a trust policy for an unexpected branch: $Label"
+  }
+  try {
+    $BeforePolicy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
+    $Policy = ConvertFrom-Json -InputObject (
+      ConvertTo-Json -InputObject $BeforePolicy -Depth 30 -Compress
+    )
+  } catch {
+    throw "Could not parse the trust backup; policy content was suppressed."
+  }
+  $Statements = @($Policy.Statement)
+  if ($Statements.Count -ne 1) {
+    throw "Unexpected trust statement count while generating policy: $Label"
+  }
+  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
+  if ($null -eq $ConditionProperty) {
+    throw "Trust policy has no Condition while generating policy: $Label"
+  }
+  $Condition = $ConditionProperty.Value
+  $Audience = @(
+    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
+  )
+  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
+  $SubjectValues = @($SubjectProperty.Value)
+  $ExpectedSubjects = @(
+    "repo:${Repository}:ref:refs/heads/${OldBranch}",
+    "repo:${Repository}:ref:refs/heads/${NewBranch}"
+  )
+  if (
+    $Audience.Count -ne 1 -or
+    [string]$Audience[0] -cne "sts.amazonaws.com" -or
+    $SubjectValues.Count -ne 1 -or
+    [string]$SubjectValues[0] -notin $ExpectedSubjects
+  ) {
+    throw "Unexpected OIDC trust shape while generating policy: $Label"
+  }
+  $ExpectedTargetSubject = "repo:${Repository}:ref:refs/heads/${TargetBranch}"
+  if ($SubjectProperty.Value -is [array]) {
+    $SubjectProperty.Value = @($ExpectedTargetSubject)
+  } else {
+    $SubjectProperty.Value = $ExpectedTargetSubject
+  }
+  Assert-TrustPolicySubjectOnlyChange `
+    $BeforePolicy `
+    $Policy `
+    $TargetBranch `
+    "generated direct trust policy"
+  Write-ProtectedCutoverTextOnce `
+    $DestinationPath `
+    ($Policy | ConvertTo-Json -Depth 20 -Compress)
+}
+
+function Backup-RoleTrustAndGetBranch {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [switch]$InitialStateBackup
+  )
+  $RoleResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-get-role-$Label" `
+    -Arguments @(
+      "iam", "get-role",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--output", "json",
+      "--no-cli-pager"
+    )
+  if ($RoleResult.ExitCode -ne 0) {
+    throw "Could not read role trust: $Label. Review protected diagnostic file: $($RoleResult.StderrPath)"
+  }
+  $RoleJson = $RoleResult.Stdout
+  $Role = ConvertFrom-Json -InputObject $RoleJson
+  $Policy = $Role.Role.AssumeRolePolicyDocument
+  $Statements = @($Policy.Statement)
+  if ($Statements.Count -ne 1) {
+    throw "Unexpected trust statement count: $Label"
+  }
+  $Actions = @($Statements[0].Action)
+  $Principals = @($Statements[0].Principal.Federated)
+  if (
+    [string]$Statements[0].Effect -cne "Allow" -or
+    $Actions.Count -ne 1 -or
+    [string]$Actions[0] -cne "sts:AssumeRoleWithWebIdentity" -or
+    $Principals.Count -ne 1 -or
+    [string]::IsNullOrWhiteSpace([string]$Principals[0])
+  ) {
+    throw "Unexpected OIDC trust principal or action: $Label"
+  }
+  $ConditionProperty = $Statements[0].PSObject.Properties["Condition"]
+  if ($null -eq $ConditionProperty) {
+    throw "OIDC trust has no Condition: $Label"
+  }
+  $Condition = $ConditionProperty.Value
+  $Audience = @(
+    Get-OidcConditionValues $Condition "StringEquals" $OidcAudienceKey
+  )
+  $SubjectProperty = Get-RequiredOidcSubjectProperty $Condition $Label
+  $Subject = @($SubjectProperty.Value)
+  if (
+    $Audience.Count -ne 1 -or
+    [string]$Audience[0] -cne "sts.amazonaws.com" -or
+    $Subject.Count -ne 1
+  ) {
+    throw "Unexpected OIDC trust shape: $Label"
+  }
+  $ExpectedPrefix = "repo:${Repository}:ref:refs/heads/"
+  if (-not ([string]$Subject[0]).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)) {
+    throw "Unexpected repository in OIDC trust: $Label"
+  }
+  $Branch = ([string]$Subject[0]).Substring($ExpectedPrefix.Length)
+  if ($Branch -notin @($OldBranch, $NewBranch)) {
+    throw "Unexpected branch in OIDC trust: $Label"
+  }
+  $BackupName = if ($InitialStateBackup) {
+    "$Label.before.json"
+  } else {
+    "$Label-$(New-CutoverArtifactId).observed.json"
+  }
+  $BackupPath = Join-Path $CutoverDir $BackupName
+  Write-ProtectedCutoverTextOnce `
+    $BackupPath `
+    ($Policy | ConvertTo-Json -Depth 20 -Compress)
+  return $Branch
+}
+
+function Assert-LiveRoleTrustMatchesRecordedPolicy {
+  param(
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [Parameter(Mandatory = $true)][string]$RecordedPolicyPath,
+    [Parameter(Mandatory = $true)][string]$RecordedBranch,
+    [Parameter(Mandatory = $true)][string[]]$AllowedLiveBranches,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel
+  )
+  if (-not (Test-Path -LiteralPath $RecordedPolicyPath -PathType Leaf)) {
+    throw "The recorded trust policy was not found."
+  }
+  $CandidateBranches = @($AllowedLiveBranches | Sort-Object -Unique)
+  if (
+    $RecordedBranch -notin @($OldBranch, $NewBranch) -or
+    $CandidateBranches.Count -eq 0 -or
+    @($CandidateBranches | Where-Object {
+      [string]$_ -notin @($OldBranch, $NewBranch)
+    }).Count -ne 0
+  ) {
+    throw "The live trust comparison branch set is invalid."
+  }
+  $LiveRoleResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-$ArtifactLabel-live-trust" `
+    -Arguments @(
+      "iam", "get-role",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--output", "json",
+      "--no-cli-pager"
+    )
+  if ($LiveRoleResult.ExitCode -ne 0) {
+    throw "Could not read live trust immediately before replacement. Review protected diagnostic file: $($LiveRoleResult.StderrPath)"
+  }
+  try {
+    $RecordedPolicy = Get-Content -LiteralPath $RecordedPolicyPath -Raw |
+      ConvertFrom-Json
+    $LivePolicy = (
+      ConvertFrom-Json -InputObject $LiveRoleResult.Stdout
+    ).Role.AssumeRolePolicyDocument
+    Assert-TrustPolicySubjectOnlyChange `
+      $RecordedPolicy `
+      $RecordedPolicy `
+      $RecordedBranch `
+      "recorded live-trust baseline"
+  } catch {
+    throw "Could not validate the recorded/live trust policy; policy values were suppressed."
+  }
+
+  $MatchingBranches = @(
+    foreach ($CandidateBranch in $CandidateBranches) {
+      try {
+        Assert-TrustPolicySubjectOnlyChange `
+          $RecordedPolicy `
+          $LivePolicy `
+          $CandidateBranch `
+          "live trust immediately before replacement"
+        $CandidateBranch
+      } catch {
+        continue
+      }
+    }
+  )
+  if ($MatchingBranches.Count -ne 1) {
+    throw "Live trust changed after the recorded backup; stop for human review before replacement."
+  }
+  return [string]$MatchingBranches[0]
+}
+
+function Restore-RoleTrust {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel,
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [Parameter(Mandatory = $true)][string]$BackupPath,
+    [Parameter(Mandatory = $true)][string]$ExpectedBranch
+  )
+  if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
+    throw "Trust backup not found."
+  }
+  $LiveBranch = Assert-LiveRoleTrustMatchesRecordedPolicy `
+    -RoleName $RoleName `
+    -RecordedPolicyPath $BackupPath `
+    -RecordedBranch $ExpectedBranch `
+    -AllowedLiveBranches @($OldBranch, $NewBranch) `
+    -ArtifactLabel "$ArtifactLabel-restore-pre-update"
+  if ($LiveBranch -ceq $ExpectedBranch) {
+    return
+  }
+  $TrustRestoreResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-$ArtifactLabel-restore-update-role" `
+    -Arguments @(
+      "iam", "update-assume-role-policy",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--policy-document", "file://$BackupPath",
+      "--no-cli-pager"
+    )
+  if ($TrustRestoreResult.ExitCode -ne 0) {
+    throw "Trust restore failed. Review protected diagnostic file: $($TrustRestoreResult.StderrPath)"
+  }
+}
+
+function Assert-RollbackContext {
+  $RequiredRollbackVariables = @(
+    "AllowedAccounts",
+    "AwsProfile",
+    "BeforeBranches",
+    "BootstrapDir",
+    "BootstrapTerraformDataDir",
+    "BootstrapVarArgs",
+    "CurrentDeployBranch",
+    "CutoverDir",
+    "DeployRoleName",
+    "IsWindowsPlatform",
+    "LifecycleRoleName",
+    "MainRepoRoot",
+    "NewBranch",
+    "OidcAudienceKey",
+    "OidcSubjectKey",
+    "OldBranch",
+    "OriginalAwsProfile",
+    "OriginalAwsProfileWasSet",
+    "PlanRoleName",
+    "ProfileCallerAccount",
+    "Repository",
+    "RootDir",
+    "RootTerraformDataDir",
+    "RootTfvars",
+    "SmokeRoleName"
+  )
+  $RollbackContext = @{}
+  $MissingVariables = @(
+    foreach ($VariableName in $RequiredRollbackVariables) {
+      $Variable = Get-Variable `
+        -Name $VariableName `
+        -Scope 1 `
+        -ErrorAction SilentlyContinue
+      if ($null -eq $Variable) {
+        $VariableName
+      } else {
+        $RollbackContext[$VariableName] = $Variable.Value
+      }
+    }
+  )
+  if ($MissingVariables.Count -ne 0) {
+    throw "Rollback context is incomplete; missing variable names: $($MissingVariables -join ', ')."
+  }
+  if (
+    [bool]$RollbackContext["IsWindowsPlatform"] -and
+    $null -eq (
+      Get-Variable `
+        -Name "CurrentWindowsIdentity" `
+        -Scope 1 `
+        -ErrorAction SilentlyContinue
+    )
+  ) {
+    throw "Rollback context is incomplete; the Windows identity is unavailable."
+  }
+
+  $RequiredNonEmptyStrings = @(
+    "AwsProfile",
+    "BootstrapDir",
+    "BootstrapTerraformDataDir",
+    "CutoverDir",
+    "DeployRoleName",
+    "LifecycleRoleName",
+    "MainRepoRoot",
+    "NewBranch",
+    "OidcAudienceKey",
+    "OidcSubjectKey",
+    "OldBranch",
+    "PlanRoleName",
+    "ProfileCallerAccount",
+    "Repository",
+    "RootDir",
+    "RootTerraformDataDir",
+    "RootTfvars",
+    "SmokeRoleName"
+  )
+  if (
+    @($RequiredNonEmptyStrings | Where-Object {
+      [string]::IsNullOrWhiteSpace([string]$RollbackContext[$_])
+    }).Count -ne 0
+  ) {
+    throw "Rollback context contains an empty required value; values were suppressed."
+  }
+  $RoleNamePattern = "^[A-Za-z0-9+=,.@_-]{1,64}$"
+  if (
+    @("DeployRoleName", "LifecycleRoleName", "PlanRoleName", "SmokeRoleName" |
+      Where-Object { [string]$RollbackContext[$_] -notmatch $RoleNamePattern }
+    ).Count -ne 0
+  ) {
+    throw "Rollback context contains an invalid role identity; values were suppressed."
+  }
+  $BeforeBranchContext = $RollbackContext["BeforeBranches"]
+  $RequiredRoleBranchKeys = @(
+    "terraform_plan",
+    "terraform_lifecycle",
+    "github_deploy",
+    "oidc_smoke"
+  )
+  if (
+    @($RequiredRoleBranchKeys | Where-Object {
+      [string]$BeforeBranchContext[$_] -notin @(
+        [string]$RollbackContext["OldBranch"],
+        [string]$RollbackContext["NewBranch"]
+      )
+    }).Count -ne 0 -or
+    [string]$RollbackContext["CurrentDeployBranch"] -notin @(
+      [string]$RollbackContext["OldBranch"],
+      [string]$RollbackContext["NewBranch"]
+    )
+  ) {
+    throw "Rollback context contains an invalid recorded branch; values were suppressed."
+  }
+  $RollbackAllowedAccounts = @($RollbackContext["AllowedAccounts"])
+  if (
+    [string]$RollbackContext["ProfileCallerAccount"] -notmatch "^[0-9]{12}$" -or
+    $RollbackAllowedAccounts -notcontains [string]$RollbackContext["ProfileCallerAccount"] -or
+    [string]$env:AWS_PROFILE -cne [string]$RollbackContext["AwsProfile"]
+  ) {
+    throw "Rollback AWS account context is not the validated selected profile context."
+  }
+  if (
+    $RollbackContext["OriginalAwsProfileWasSet"] -isnot [bool] -or
+    (
+      -not [bool]$RollbackContext["OriginalAwsProfileWasSet"] -and
+      $null -ne $RollbackContext["OriginalAwsProfile"]
+    )
+  ) {
+    throw "Rollback original AWS_PROFILE state is invalid; values were suppressed."
+  }
+  foreach ($DirectoryVariable in @(
+    "BootstrapDir",
+    "BootstrapTerraformDataDir",
+    "CutoverDir",
+    "MainRepoRoot",
+    "RootDir",
+    "RootTerraformDataDir"
+  )) {
+    if (-not (
+      Test-Path `
+        -LiteralPath ([string]$RollbackContext[$DirectoryVariable]) `
+        -PathType Container
+    )) {
+      throw "Rollback context refers to a missing required directory."
+    }
+  }
+  if (-not (
+    Test-Path `
+      -LiteralPath ([string]$RollbackContext["RootTfvars"]) `
+      -PathType Leaf
+  )) {
+    throw "Rollback context refers to a missing root tfvars file."
+  }
+
+  $RequiredRollbackFunctions = @(
+    "Assert-CutoverArtifactPathsUnused",
+    "Assert-LiveRoleTrustMatchesRecordedPolicy",
+    "Assert-TerraformPlanCallerAccount",
+    "Assert-TrustOnlyPlanChanges",
+    "Assert-TrustPolicySubjectOnlyChange",
+    "Backup-RoleTrustAndGetBranch",
+    "ConvertTo-NormalizedJson",
+    "ConvertTo-NormalizedJsonValue",
+    "Get-JsonDifferencePaths",
+    "Get-OidcConditionValues",
+    "Get-RequiredOidcSubjectProperty",
+    "Get-TerraformPlanResources",
+    "Invoke-NativeCommand",
+    "Invoke-ProtectedCli",
+    "Invoke-Terraform",
+    "New-CutoverArtifactId",
+    "Protect-CutoverFileIfPresent",
+    "Protect-CutoverPath",
+    "Restore-OriginalAwsProfile",
+    "Restore-RoleTrust",
+    "Write-ProtectedCutoverTextOnce"
+  )
+  $MissingFunctions = @(
+    $RequiredRollbackFunctions |
+      Where-Object {
+        $null -eq (
+          Get-Command `
+            -Name $_ `
+            -CommandType Function `
+            -ErrorAction SilentlyContinue
+        )
+      }
+  )
+  if ($MissingFunctions.Count -ne 0) {
+    throw "Rollback context is incomplete; required shared functions are unavailable."
+  }
+  foreach ($CommandName in @("aws", "gh", "terraform")) {
+    if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+      throw "Rollback context is incomplete; a required command is unavailable."
+    }
+  }
+}
+
+$BeforeBranches = [ordered]@{
+  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan" $PlanRoleName -InitialStateBackup
+  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle" $LifecycleRoleName -InitialStateBackup
+  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy" $DeployRoleName -InitialStateBackup
+  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke" $SmokeRoleName -InitialStateBackup
+}
+$BeforeBranches.GetEnumerator() | ForEach-Object {
+  Write-Host ("{0}: {1}" -f $_.Key, $_.Value)
+}
+
+function Get-DeployBranchVariable {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-z0-9-]+$")]
+    [string]$ArtifactLabel
+  )
+  $VariablesResult = Invoke-ProtectedCli `
+    -Command "gh" `
+    -Label $ArtifactLabel `
+    -Arguments @("variable", "list", "--json", "name,value")
+  if ($VariablesResult.ExitCode -ne 0) {
+    throw "gh variable list failed. Review protected diagnostic file: $($VariablesResult.StderrPath)"
+  }
+  $VariablesJson = $VariablesResult.Stdout
+  $Variables = ConvertFrom-Json -InputObject $VariablesJson
+  $Matches = @($Variables | Where-Object { [string]$_.name -ceq "DEPLOY_BRANCH" })
+  if ($Matches.Count -ne 1) {
+    throw "Expected exactly one DEPLOY_BRANCH repository variable."
+  }
+  $Value = [string]$Matches[0].value
+  if ($Value -notmatch "^[A-Za-z0-9._/-]+$") {
+    throw "DEPLOY_BRANCH is not a branch-shaped value; value was suppressed."
+  }
+  return $Value
+}
+
+$CurrentDeployBranch = Get-DeployBranchVariable "gh-variable-list-initial"
+Write-Host "DEPLOY_BRANCH: $CurrentDeployBranch"
+if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
+  throw "DEPLOY_BRANCH has an unexpected value."
+}
+$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
+$InitialStateDocument = [ordered]@{
+  schema_version = 2
+  main_sha = $MainSha
+  repository = $Repository
+  branches = [ordered]@{
+    old = $OldBranch
+    new = $NewBranch
+  }
+  paths = [ordered]@{
+    main_repo_root = $MainRepoRoot
+    bootstrap_dir = $BootstrapDir
+    root_tfvars = $RootTfvars
+    bootstrap_tfvars = $BootstrapTfvars
+  }
+  selected_aws_context = [ordered]@{
+    profile = $AwsProfile
+    account = $ProfileCallerAccount
+  }
+  aws_profile = [ordered]@{
+    was_set = $OriginalAwsProfileWasSet
+    value = $OriginalAwsProfile
+  }
+  deploy_branch = $CurrentDeployBranch
+  role_names = [ordered]@{
+    terraform_plan = $PlanRoleName
+    terraform_lifecycle = $LifecycleRoleName
+    github_deploy = $DeployRoleName
+    oidc_smoke = $SmokeRoleName
+  }
+  role_branches = $BeforeBranches
+}
+Write-ProtectedCutoverTextOnce `
+  $InitialStatePath `
+  ($InitialStateDocument | ConvertTo-Json -Depth 10 -Compress)
+Remove-Variable InitialStateDocument
+Assert-RollbackContext
+
+$CutoverWorkflows = @(
+  [pscustomobject]@{ File = "aws-demo.yml"; Name = "AWS Demo Lifecycle" }
+  [pscustomobject]@{ File = "aws-deploy-app.yml"; Name = "AWS Deploy App" }
+  [pscustomobject]@{ File = "aws-deploy-frontend.yml"; Name = "AWS Deploy Frontend" }
+  [pscustomobject]@{ File = "aws-infra-plan.yml"; Name = "AWS Infra Plan" }
+  [pscustomobject]@{ File = "aws-oidc-smoke.yml"; Name = "AWS OIDC Smoke" }
+)
+$BlockingRunStatuses = @("in_progress", "queued", "waiting", "requested", "pending")
+
+function Assert-NoBlockingCutoverRuns {
+  $BlockingRuns = @(
+    foreach ($Workflow in $CutoverWorkflows) {
+      foreach ($Branch in @($OldBranch, $NewBranch)) {
+        foreach ($Status in $BlockingRunStatuses) {
+          $BranchLabel = $Branch.ToLowerInvariant() -replace "[^a-z0-9]+", "-"
+          $WorkflowLabel = $Workflow.File -replace "\.yml$", ""
+          $StatusLabel = $Status -replace "_", "-"
+          $RunListResult = Invoke-ProtectedCli `
+            -Command "gh" `
+            -Label "gh-preflight-$WorkflowLabel-$BranchLabel-$StatusLabel" `
+            -Arguments @(
+              "api",
+              "--method", "GET",
+              "--paginate",
+              "--slurp",
+              "repos/$Repository/actions/workflows/$($Workflow.File)/runs",
+              "-f", "branch=$Branch",
+              "-f", "status=$Status",
+              "-f", "per_page=100"
+            )
+          if ($RunListResult.ExitCode -ne 0) {
+            throw "Could not inspect active workflow runs. Review protected diagnostic file: $($RunListResult.StderrPath)"
+          }
+          $Pages = ConvertFrom-Json -InputObject $RunListResult.Stdout
+          foreach ($Page in $Pages) {
+            $WorkflowRunsProperty = $Page.PSObject.Properties["workflow_runs"]
+            if ($null -eq $WorkflowRunsProperty) {
+              throw "Workflow run query returned an unexpected result shape; values were suppressed."
+            }
+            $PageRuns = @(
+              if ($null -ne $WorkflowRunsProperty.Value) {
+                @($WorkflowRunsProperty.Value)
+              }
+            )
+            foreach ($Run in $PageRuns) {
+              if (
+                [string]$Run.id -notmatch "^[0-9]+$" -or
+                [string]$Run.name -cne $Workflow.Name -or
+                [string]$Run.head_branch -cne $Branch -or
+                [string]$Run.status -cne $Status
+              ) {
+                throw "Workflow run query returned an unexpected result shape; values were suppressed."
+              }
+              [pscustomobject]@{
+                RunId = [string]$Run.id
+                WorkflowName = [string]$Run.name
+                Branch = [string]$Run.head_branch
+                Status = [string]$Run.status
+              }
+            }
+          }
+        }
+      }
+    }
+  )
+  if ($BlockingRuns.Count -ne 0) {
+    $BlockingRuns |
+      Sort-Object RunId -Unique |
+      ForEach-Object {
+        Write-Host (
+          "run_id={0} workflow={1} branch={2} status={3}" -f
+          $_.RunId,
+          $_.WorkflowName,
+          $_.Branch,
+          $_.Status
+        )
+      }
+    throw "Active or waiting cutover-related runs exist. Wait for completion or let a human decide whether to cancel them; this runbook never cancels or reruns runs."
+  }
+  Write-Host "Active or waiting cutover-related runs on old/new branches: none"
+}
+
+Assert-NoBlockingCutoverRuns
+```
+
+**期待される結果**
+
+- account IDやARNは表示されず、allowlistが`OK`になる。
+- 4 roleはrole名ではなく論理labelとbranchだけが表示される。
+- D0の想定どおりなら4 labelが`deploy/AWS_ECS`、`DEPLOY_BRANCH`も`deploy/AWS_ECS`になる。
+- 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
+- 開始時の`origin/main` SHAが`$MainSha`に保持され、bootstrap側でもfetch後の`origin/main`が同じcommitであることを確認する。以後のcheckpointではSHA自体を表示せず一致だけを検証する。
+- `$env:AWS_PROFILE`はこのPowerShell processと子processだけに設定される。明示profile、同じprocess環境のcredential chain、後続plan JSON内のprovider caller accountを同じallowlistと明示profile accountに照合する。
+- bootstrap / root stateのrole ARN accountは、role名を利用する前に明示profile accountと一致する。
+- main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
+- `$BootstrapDir`がlinked worktreeならbootstrap側fetchは共有refを安全に再確認し、別cloneならそのclone自身の`origin/main`を更新する。どちらもfetch後のcommitが開始時の`$MainSha`と一致しなければconfiguration diffへ進まない。
+- `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、repository / path / branch入力、選択profileと検証済みaccount、開始時`AWS_PROFILE`、4 role名とbranch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
+- `TF_DATA_DIR`はTerraform command実行中だけbootstrap/root別の保護済みdirectoryを指し、command終了時に直前の値へ戻る。root backend metadataはrepository配下の`.terraform`へ作られない。
+- initial-state、開始時4 roleの`*.before.json`、bootstrap state backupは固定名のwrite-onceであり、既存pathへの上書きを拒否する。CLI log、開始後のrole snapshot、saved plan / logは呼び出しごとのartifact IDを持つため、再試行でも既存artifactを上書きしない。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
+- Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
+- 旧branch / `main`の双方について、5 workflowに実行中・待機中runがない。
+
+**失敗時**
+
+- ここではAWS resource変更はない。原因を解消するまで進まない。
+- bootstrap stateがない場合、新しい空stateからapplyしてはいけない。権威あるlocal stateまたは安全なbackupを特定する。
+- trustが旧branch / `main`以外、複数subject、別repository、複数statementならscope外である。policyを自動整形せず、RAG-18を停止して別レビューへ送る。
+- root backend initが失敗した場合、placeholderを実値へ直接置換してcommitしない。bootstrap outputとlocal権限を確認する。
+- active runがある場合は完了または人間が判断したキャンセルを待つ。このrunbookは自動キャンセルやrerunを行わない。
+- active run gate後は、手順6のsmoke dispatchまで対象workflowを新たに起動しない。gateは手順1でだけ実行するため、手順6でdispatchするsmoke自身を誤検出しない。
+- 手順1で停止し、以後TerraformまたはAWS recoveryを実行しない場合は`Restore-OriginalAwsProfile`を呼び、開始時の`AWS_PROFILE`へ戻す。rollbackが必要な場合は復旧完了まで設定を維持し、rollback末尾で戻す。
+- AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作ってはならない。元の`$CutoverDir`を再指定し、`Set-StrictMode`、error preference、手順1のfunction定義だけを読み込み直した後、共有CLI logではなくwrite-onceの`cutover-initial-state.json`から開始状態を復元してロールバックを優先する。元のartifact pathを特定できなければ追加更新を停止する。
+
+rollback snippetが外部contextとして参照する変数は、`$AllowedAccounts`、`$AwsProfile`、`$BeforeBranches`、`$BootstrapDir`、`$BootstrapTerraformDataDir`、`$BootstrapVarArgs`、`$CurrentDeployBranch`、`$CutoverDir`、`$DeployRoleName`、`$IsWindowsPlatform`、`$LifecycleRoleName`、`$MainRepoRoot`、`$NewBranch`、`$OidcAudienceKey`、`$OidcSubjectKey`、`$OldBranch`、`$OriginalAwsProfile`、`$OriginalAwsProfileWasSet`、`$PlanRoleName`、`$ProfileCallerAccount`、`$Repository`、`$RootDir`、`$RootTerraformDataDir`、`$RootTfvars`、`$SmokeRoleName`である。Windowsでは`$CurrentWindowsIdentity`も必要である。本経路と復旧経路は同じ`Assert-RollbackContext`でこの一覧、値のshape、protected directory、検証済みaccount context、共有functionを確認する。
+
+session喪失時は、手順1のfunction定義を読み込み直してから次だけを実行する。選択profile、検証済みaccount、role名、repository / path / branch入力はinitial-stateから復元し、`Set-ValidatedAwsProfileContext`でSTS / allowlist検証を再実行する。値は表示しない。
+
+```powershell
+$CutoverDir = "<ORIGINAL_CUTOVER_DIR>"
+$CutoverDir = (Resolve-Path -LiteralPath $CutoverDir).Path
+$InitialStatePath = Join-Path $CutoverDir "cutover-initial-state.json"
+if (-not (Test-Path -LiteralPath $InitialStatePath -PathType Leaf)) {
+  throw "Original write-once initial state was not found."
+}
+try {
+  $InitialState = Get-Content -LiteralPath $InitialStatePath -Raw | ConvertFrom-Json
+  $RecoveredBeforeBranches = [ordered]@{
+    terraform_plan = [string]$InitialState.role_branches.terraform_plan
+    terraform_lifecycle = [string]$InitialState.role_branches.terraform_lifecycle
+    github_deploy = [string]$InitialState.role_branches.github_deploy
+    oidc_smoke = [string]$InitialState.role_branches.oidc_smoke
+  }
+  $RecoveredRoleNames = [ordered]@{
+    terraform_plan = [string]$InitialState.role_names.terraform_plan
+    terraform_lifecycle = [string]$InitialState.role_names.terraform_lifecycle
+    github_deploy = [string]$InitialState.role_names.github_deploy
+    oidc_smoke = [string]$InitialState.role_names.oidc_smoke
+  }
+} catch {
+  throw "Could not parse the protected initial state; values were suppressed."
+}
+$RoleNamePattern = "^[A-Za-z0-9+=,.@_-]{1,64}$"
+if (
+  [int]$InitialState.schema_version -ne 2 -or
+  [string]$InitialState.main_sha -notmatch "^[0-9a-f]{40,64}$" -or
+  [string]$InitialState.repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" -or
+  [string]$InitialState.branches.old -cne "deploy/AWS_ECS" -or
+  [string]$InitialState.branches.new -cne "main" -or
+  [string]::IsNullOrWhiteSpace([string]$InitialState.paths.main_repo_root) -or
+  [string]::IsNullOrWhiteSpace([string]$InitialState.paths.bootstrap_dir) -or
+  [string]::IsNullOrWhiteSpace([string]$InitialState.paths.root_tfvars) -or
+  [string]::IsNullOrWhiteSpace([string]$InitialState.selected_aws_context.profile) -or
+  [string]$InitialState.selected_aws_context.account -notmatch "^[0-9]{12}$" -or
+  [string]$InitialState.deploy_branch -notin @(
+    [string]$InitialState.branches.old,
+    [string]$InitialState.branches.new
+  ) -or
+  @($RecoveredBeforeBranches.Values | Where-Object {
+    [string]$_ -notin @(
+      [string]$InitialState.branches.old,
+      [string]$InitialState.branches.new
+    )
+  }).Count -ne 0 -or
+  @($RecoveredRoleNames.Values | Where-Object {
+    [string]$_ -notmatch $RoleNamePattern
+  }).Count -ne 0 -or
+  $InitialState.aws_profile.was_set -isnot [bool] -or
+  (
+    -not [bool]$InitialState.aws_profile.was_set -and
+    $null -ne $InitialState.aws_profile.value
+  )
+) {
+  throw "Protected initial state has an unexpected shape; values were suppressed."
+}
+$RequiredInitialArtifacts = @(
+  "bootstrap.terraform.tfstate.before",
+  "terraform-plan.before.json",
+  "terraform-lifecycle.before.json",
+  "github-deploy.before.json",
+  "oidc-smoke.before.json"
+)
+foreach ($ArtifactName in $RequiredInitialArtifacts) {
+  if (-not (Test-Path -LiteralPath (Join-Path $CutoverDir $ArtifactName) -PathType Leaf)) {
+    throw "A required write-once rollback artifact is missing: $ArtifactName"
+  }
+}
+$MainSha = [string]$InitialState.main_sha
+$Repository = [string]$InitialState.repository
+$OldBranch = [string]$InitialState.branches.old
+$NewBranch = [string]$InitialState.branches.new
+$MainRepoRoot = (
+  Resolve-Path -LiteralPath ([string]$InitialState.paths.main_repo_root)
+).Path
+$BootstrapDir = (
+  Resolve-Path -LiteralPath ([string]$InitialState.paths.bootstrap_dir)
+).Path
+$RootDir = (
+  Resolve-Path -LiteralPath (Join-Path $MainRepoRoot "deploy/aws-ecs")
+).Path
+$RootTfvars = (
+  Resolve-Path -LiteralPath ([string]$InitialState.paths.root_tfvars)
+).Path
+$BootstrapTfvars = [string]$InitialState.paths.bootstrap_tfvars
+if ($BootstrapTfvars) {
+  $BootstrapTfvars = (Resolve-Path -LiteralPath $BootstrapTfvars).Path
+}
+$BootstrapVarArgs = @()
+if ($BootstrapTfvars) {
+  $BootstrapVarArgs += "-var-file=$BootstrapTfvars"
+}
+$CurrentDeployBranch = [string]$InitialState.deploy_branch
+$BeforeBranches = $RecoveredBeforeBranches
+$PlanRoleName = [string]$RecoveredRoleNames.terraform_plan
+$LifecycleRoleName = [string]$RecoveredRoleNames.terraform_lifecycle
+$DeployRoleName = [string]$RecoveredRoleNames.github_deploy
+$SmokeRoleName = [string]$RecoveredRoleNames.oidc_smoke
+$AwsProfile = [string]$InitialState.selected_aws_context.profile
+$RecordedCallerAccount = [string]$InitialState.selected_aws_context.account
+$OriginalAwsProfileWasSet = [bool]$InitialState.aws_profile.was_set
+$OriginalAwsProfile = if ($OriginalAwsProfileWasSet) {
+  [string]$InitialState.aws_profile.value
+} else {
+  $null
+}
+$IsWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+  [Runtime.InteropServices.OSPlatform]::Windows
+)
+if ($IsWindowsPlatform) {
+  if (-not (Get-Command "icacls.exe" -ErrorAction SilentlyContinue)) {
+    throw "icacls.exe is required to protect cutover artifacts on Windows."
+  }
+  $CurrentWindowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+} elseif (-not (Get-Command "chmod" -ErrorAction SilentlyContinue)) {
+  throw "chmod is required to protect cutover artifacts on Unix."
+}
+$OidcAudienceKey = "token.actions.githubusercontent.com:aud"
+$OidcSubjectKey = "token.actions.githubusercontent.com:sub"
+$BootstrapTerraformDataDir = Join-Path $CutoverDir "terraform-data-bootstrap"
+$RootTerraformDataDir = Join-Path $CutoverDir "terraform-data-root"
+foreach ($TerraformDataDir in @($BootstrapTerraformDataDir, $RootTerraformDataDir)) {
+  if (-not (Test-Path -LiteralPath $TerraformDataDir -PathType Container)) {
+    throw "A protected Terraform data directory is missing."
+  }
+}
+$LastTerraformExitCode = $null
+try {
+  $AwsAccountContext = Set-ValidatedAwsProfileContext `
+    -SelectedProfile $AwsProfile `
+    -ExpectedAccount $RecordedCallerAccount
+  $AllowedAccounts = @($AwsAccountContext.AllowedAccounts)
+  $ProfileCallerAccount = [string]$AwsAccountContext.CallerAccount
+} catch {
+  Restore-OriginalAwsProfile
+  throw
+}
+Assert-RollbackContext
+Set-Location -LiteralPath $MainRepoRoot
+Remove-Variable `
+  InitialState,
+  RecoveredBeforeBranches,
+  RecoveredRoleNames,
+  RecordedCallerAccount,
+  AwsAccountContext
+```
+
+### 手順2: bootstrap plan / lifecycle roleを更新
+
+**cwd:** 任意。`terraform -chdir=$BootstrapDir`を使う。
+
+`-target`は通常運用向けではないが、このcutoverではbootstrap stackの他resourceを変更しないための例外的なblast-radius制限として使う。saved planの対象が2 roleのin-place updateだけであることを確認してから、そのplan fileをapplyする。
+
+`Assert-TrustOnlyPlanChanges`は、planの更新前policyをdeep copyし、OIDC subjectの値だけを1箇所置換した期待値を作る。更新後policyはJSON objectのキー順序と空白・改行だけを正規化して完全一致させる。scalarと1要素配列、配列順序は同一shapeのまま比較するため、`Effect`、`Action`、`Principal`（`Federated` providerを含む）、audience、subject以外の全condition、statement数、condition operatorの種類と構成は不変でなければならない。
+
+```powershell
 $BootstrapPlanArtifactId = New-CutoverArtifactId
 $BootstrapPlan = Join-Path $CutoverDir "bootstrap-main-$BootstrapPlanArtifactId.tfplan"
 $BootstrapPlanLog = Join-Path $CutoverDir "bootstrap-main-$BootstrapPlanArtifactId.plan.log"
@@ -1676,6 +2120,19 @@ if ($SmokeSubject -cne $ExpectedNewSubject) {
     $SmokeMainPolicy `
     $NewBranch `
     "oidc-smoke"
+}
+
+$AllowedSmokeLiveBranches = @($BeforeBranches.oidc_smoke)
+if ([string]$BeforeBranches.oidc_smoke -ceq $OldBranch) {
+  $AllowedSmokeLiveBranches += $NewBranch
+}
+$SmokeLiveBranch = Assert-LiveRoleTrustMatchesRecordedPolicy `
+  -RoleName $SmokeRoleName `
+  -RecordedPolicyPath $SmokeBackup `
+  -RecordedBranch $BeforeBranches.oidc_smoke `
+  -AllowedLiveBranches $AllowedSmokeLiveBranches `
+  -ArtifactLabel "oidc-smoke-pre-update"
+if ($SmokeLiveBranch -cne $NewBranch) {
   $SmokeUpdateResult = Invoke-ProtectedCli `
     -Command "aws" `
     -Label "aws-update-oidc-smoke" `
@@ -1702,11 +2159,13 @@ Write-Host "OIDC smoke trust: main"
 
 - IAM updateは既存1 statementのsubjectだけを`refs/heads/main`へ変える。
 - 生成policyはbackupのsubjectだけを置換した期待値と完全一致し、provider、Action、audience、その他のconditionを保持する。
+- 置換直前のlive policyがbackupと完全一致する場合だけ更新する。backupが旧branchでliveが既に`main`なら、subjectだけの厳密な旧branch → `main`遷移と一致する場合に限って再試行済みと判定し、更新をskipする。
 - branch検証が`main`になる。この時点で`main`からpermissionless smoke roleのAssumeRoleが可能になる。
 
 **失敗時**
 
 - policy shapeまたはsubjectが想定外なら更新しない。
+- backup後にlive policyのcondition、provider、Action、statementその他が変わっていれば更新せず、人間の判断まで停止する。
 - update後の検証が`main`でなければ、後述のロールバックでbackupから記録済みの開始時policyへ戻す。
 - provider、audience、permission policy、role名を同時に変更しない。
 
@@ -2039,62 +2498,11 @@ Write-Host "AWS_PROFILE: restored to the process start state"
 | 手順5以後 | repository variable、smoke、root、bootstrap | `DEPLOY_BRANCH`を`$CurrentDeployBranch`へ戻してから、roleを逆順で各開始時branchへ戻す |
 | 手順6 smoke失敗 | 原因に応じて継続または全rollback | workflowは再実行せず、trust / secret対応 / allowlistを確認 |
 
-rollbackの基準は旧branchではなく、手順1で記録した開始時状態である。preferred rollbackはTerraform stateを使い、root / bootstrapの各roleをそれぞれの`$BeforeBranches`へ個別に戻す。開始時に`main`だったroleはrollback後も`main`のままであり、旧branchへ強制してはならない。backupを直接適用する経路も、現在policyのsubjectだけを記録済みbranchへ置換した期待値とbackup全体を比較し、一致しなければ適用前に停止する。
+rollbackの基準は旧branchではなく、手順1で記録した開始時状態である。preferred rollbackはTerraform stateを使い、root / bootstrapの各roleをそれぞれの`$BeforeBranches`へ個別に戻す。開始時に`main`だったroleはrollback後も`main`のままであり、旧branchへ強制してはならない。backupを直接適用する経路も、smoke更新と同じ`Assert-LiveRoleTrustMatchesRecordedPolicy`を置換直前に呼び、round 3の厳密比較で現在policyがbackupまたは旧branch / `main`のsubjectだけの遷移と一致しなければ適用前に停止する。既に記録済みbranchへ復元済みなら更新をskipする。
 
 ```powershell
-function Restore-RoleTrust {
-  param(
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern("^[a-z0-9-]+$")]
-    [string]$ArtifactLabel,
-    [Parameter(Mandatory = $true)][string]$RoleName,
-    [Parameter(Mandatory = $true)][string]$BackupPath,
-    [Parameter(Mandatory = $true)][string]$ExpectedBranch
-  )
-  if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
-    throw "Trust backup not found."
-  }
-  $CurrentRoleResult = Invoke-ProtectedCli `
-    -Command "aws" `
-    -Label "aws-$ArtifactLabel-restore-get-role" `
-    -Arguments @(
-      "iam", "get-role",
-      "--profile", $AwsProfile,
-      "--role-name", $RoleName,
-      "--output", "json",
-      "--no-cli-pager"
-    )
-  if ($CurrentRoleResult.ExitCode -ne 0) {
-    throw "Could not read the current trust before restore. Review protected diagnostic file: $($CurrentRoleResult.StderrPath)"
-  }
-  $CurrentRoleJson = $CurrentRoleResult.Stdout
-  try {
-    $CurrentPolicy = (
-      ConvertFrom-Json -InputObject $CurrentRoleJson
-    ).Role.AssumeRolePolicyDocument
-    $BackupPolicy = Get-Content -LiteralPath $BackupPath -Raw | ConvertFrom-Json
-  } catch {
-    throw "Could not parse a trust policy before restore; policy content was suppressed."
-  }
-  Assert-TrustPolicySubjectOnlyChange `
-    $CurrentPolicy `
-    $BackupPolicy `
-    $ExpectedBranch `
-    "direct trust restore"
-  $TrustRestoreResult = Invoke-ProtectedCli `
-    -Command "aws" `
-    -Label "aws-$ArtifactLabel-restore-update-role" `
-    -Arguments @(
-      "iam", "update-assume-role-policy",
-      "--profile", $AwsProfile,
-      "--role-name", $RoleName,
-      "--policy-document", "file://$BackupPath",
-      "--no-cli-pager"
-    )
-  if ($TrustRestoreResult.ExitCode -ne 0) {
-    throw "Trust restore failed. Review protected diagnostic file: $($TrustRestoreResult.StderrPath)"
-  }
-}
+Assert-RollbackContext
+Set-Location -LiteralPath $MainRepoRoot
 
 if ([string]$env:AWS_PROFILE -cne $AwsProfile) {
   throw "The validated AWS_PROFILE is not active. Restore the runbook session before rollback."
@@ -2104,7 +2512,9 @@ $DeployBranchRollbackResult = Invoke-ProtectedCli `
   -Command "gh" `
   -Label "gh-variable-rollback" `
   -Arguments @(
-    "variable", "set", "DEPLOY_BRANCH", "--body", $CurrentDeployBranch
+    "variable", "set", "DEPLOY_BRANCH",
+    "--body", $CurrentDeployBranch,
+    "--repo", $Repository
   )
 $DeployBranchRollbackOk = $DeployBranchRollbackResult.ExitCode -eq 0
 if (-not $DeployBranchRollbackOk) {
@@ -2244,6 +2654,9 @@ GitHub OIDC経路を復旧手段に使わない。local AWS認証はGitHub branc
 緊急直接復旧は次のとおりである。
 
 ```powershell
+Assert-RollbackContext
+Set-Location -LiteralPath $MainRepoRoot
+
 if ([string]$env:AWS_PROFILE -cne $AwsProfile) {
   throw "The validated AWS_PROFILE is not active. Restore the runbook session before direct recovery."
 }
@@ -2252,7 +2665,9 @@ $DirectDeployBranchRecoveryResult = Invoke-ProtectedCli `
   -Command "gh" `
   -Label "gh-variable-direct-recovery" `
   -Arguments @(
-    "variable", "set", "DEPLOY_BRANCH", "--body", $CurrentDeployBranch
+    "variable", "set", "DEPLOY_BRANCH",
+    "--body", $CurrentDeployBranch,
+    "--repo", $Repository
   )
 $DirectDeployBranchRecoveryOk = $DirectDeployBranchRecoveryResult.ExitCode -eq 0
 if (-not $DirectDeployBranchRecoveryOk) {
