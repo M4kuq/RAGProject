@@ -59,7 +59,7 @@ jobs:
   plan:
     name: terraform plan (manual)
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/deploy/AWS_ECS' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
       id-token: write

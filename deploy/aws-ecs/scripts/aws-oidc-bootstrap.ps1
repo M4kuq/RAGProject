@@ -6,7 +6,7 @@ param(
   [ValidatePattern("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
   [string]$Repository,
   [ValidatePattern("^[A-Za-z0-9._/-]+$")]
-  [string]$Branch = "deploy/AWS_ECS",
+  [string]$Branch = "main",
   [ValidatePattern("^[A-Za-z0-9_+=,.@-]+$")]
   [string]$RoleName = "ragproject-demo-github-oidc-smoke",
   [string]$Profile = "ragproject-aws",

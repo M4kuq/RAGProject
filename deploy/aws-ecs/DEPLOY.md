@@ -1,12 +1,15 @@
 # AWS ECS Fargate デプロイ手順
 
-このrunbookは `deploy/AWS_ECS` branchのAWS demo stackと、Bedrock/S3対応済みアプリを配備する手順です。新規アカウントとクレジット運用は [AWS_PAID_PLAN_CREDIT_SETUP.md](./AWS_PAID_PLAN_CREDIT_SETUP.md) を参照してください。CIはGitHub OIDCの短期認証だけを使い、アプリはECS task roleのdefault credential chainを使います。静的AWS access keyは使いません。
+このrunbookは `main` branchのAWS demo stackと、Bedrock/S3対応済みアプリを配備する手順です。Phase4以降のAWS作業は`main`をbaseとし、旧`deploy/AWS_ECS` branchは新規作業のbaseにしません。判断根拠とD1のカットオーバー手順は [AWS base branch decision](../../docs/phase4/aws_base_branch_decision.md) を参照してください。新規アカウントとクレジット運用は [AWS_PAID_PLAN_CREDIT_SETUP.md](./AWS_PAID_PLAN_CREDIT_SETUP.md) を参照してください。CIはGitHub OIDCの短期認証だけを使い、アプリはECS task roleのdefault credential chainを使います。静的AWS access keyは使いません。
+
+> [!WARNING]
+> D0 merge後からD1のOIDC trustと`DEPLOY_BRANCH`のカットオーバー完了までは、AWS lifecycleを実行しないでください。
 
 ## 1. 前提
 
 - AWS account は demo 用に分離することを推奨します。
 - Region は `ap-northeast-1` を使います。
-- GitHub Actions の deploy 対象 branch は Terraform 変数 `github_deploy_branch` で固定します。PR #88 の branch で動かす場合は `deploy/AWS_ECS` にします。
+- GitHub Actions の deploy 対象 branch は Terraform 変数 `github_deploy_branch` で `main` に固定します。
 - AWS Console で Bedrock model access を有効化します。
   - Amazon Nova Lite generation model: `bedrock_generation_model_id`
   - Titan Text Embeddings V2: `amazon.titan-embed-text-v2:0`
@@ -61,7 +64,7 @@ GitHub repository の `Settings > Secrets and variables > Actions` に設定し�
 |---|---|
 | `AWS_REGION` | `ap-northeast-1` |
 | `OIDC_REPO` | `OWNER/REPO`。Terraform 変数 `github_oidc_repo` と同じ値 |
-| `DEPLOY_BRANCH` | `deploy/AWS_ECS`。Terraform 変数 `github_deploy_branch` と同じ値 |
+| `DEPLOY_BRANCH` | D1で`main`へ変更する。現行値`deploy/AWS_ECS`はD0では変更しない |
 | `BASIC_AUTH_USERNAME` | Terraform 変数 `basic_auth_username` と同じ値 |
 
 ### Secrets
@@ -96,11 +99,11 @@ Terraform module `modules/iam` は GitHub deploy role の trust policy を次の
 repo:<OWNER>/<REPO>:ref:refs/heads/<github_deploy_branch>
 ```
 
-PR #88 の branch で手動 deploy workflow を動かす場合:
+`main`から手動 deploy workflow を動かす場合:
 
 ```hcl
 github_oidc_repo     = "OWNER/REPO"
-github_deploy_branch = "deploy/AWS_ECS"
+github_deploy_branch = "main"
 ```
 
 AWS account に `token.actions.githubusercontent.com` provider が既にある場合は、Terraform 変数で次のようにします。
@@ -132,7 +135,7 @@ runtime 用の広い権限を作る前に、GitHub OIDC の成立だけを確認
 
 既存 provider の audience または既存 role の trust が期待値と異なる場合、script は上書きせず停止します。新規 provider の thumbprint は AWS IAM に取得させます。作成後は role ARN を表示せずに Actions secret `AWS_OIDC_SMOKE_ROLE_ARN` へ設定し、同じ allowlist を `AWS_DEMO_ALLOWED_ACCOUNT_IDS` へ設定します。これらはAWS credentialではありませんが、repository variableではstep開始時の`env` / `with`表示に値が出るため、GitHubの自動maskを得る目的でsecretとして保存します。
 
-`AWS OIDC Smoke` workflow は default branch に存在してから手動実行し、ref には `deploy/AWS_ECS` を選択します。workflow は15分の短期認証を取得し、account ID を mask して専用 verifier で role session を照合します。これは `AWS_TERRAFORM_PLAN_ROLE_ARN` や `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` の代替ではありません。
+`AWS OIDC Smoke` workflow は default branch に存在してから手動実行し、ref には `main` を選択します。workflow は15分の短期認証を取得し、account ID を mask して専用 verifier で role session を照合します。これは `AWS_TERRAFORM_PLAN_ROLE_ARN` や `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` の代替ではありません。
 
 公式情報:
 
@@ -144,7 +147,7 @@ runtime 用の広い権限を作る前に、GitHub OIDC の成立だけを確認
 
 remote state backend は root stack 自身からは作れないため、先に `bootstrap/` を local backend で apply します。
 
-同じbootstrapは、`deploy/AWS_ECS`だけを信頼するread-only Terraform plan roleとTerraform lifecycle role、`DATABASE_URL`、`SESSION_SECRET`、`RAG_DEMO_ADMIN_PASSWORD`の値を持たないSecret containerも管理します。plan roleの書き込み権限はDynamoDB state lock操作だけで、runtime lifecycle権限やSecret値読取権限は持ちません。lifecycle roleはroot stackが使用するサービスの書き込み操作、固定したruntime IAM role/policy、remote state更新、DATABASE_URLとruntime deployment-configへの値書き込み、RDS管理master secretの値読取だけに限定します。
+同じbootstrapは、`main`だけを信頼するread-only Terraform plan roleとTerraform lifecycle role、`DATABASE_URL`、`SESSION_SECRET`、`RAG_DEMO_ADMIN_PASSWORD`の値を持たないSecret containerも管理します。plan roleの書き込み権限はDynamoDB state lock操作だけで、runtime lifecycle権限やSecret値読取権限は持ちません。lifecycle roleはroot stackが使用するサービスの書き込み操作、固定したruntime IAM role/policy、remote state更新、DATABASE_URLとruntime deployment-configへの値書き込み、RDS管理master secretの値読取だけに限定します。
 
 ```bash
 cd deploy/aws-ecs/bootstrap
@@ -186,7 +189,7 @@ CI workflow `AWS Infra Plan` は PR では `terraform fmt`、`init -backend=fals
 
 ## 7. 初回アプリデプロイ
 
-1. `AWS Deploy App` workflow を `deploy/AWS_ECS` branch から手動実行します。
+1. `AWS Deploy App` workflow を `main` branch から手動実行します。
 2. `image_tag` を空にすると workflow 実行コミット SHA が使われます。任意の tag を指定することもできます。
 3. workflow は API image と worker image を `backend/Dockerfile` の `backend` / `worker` target で build し、ECR に push します。
 4. workflow は Terraform が作った migration task definition family を base に、新しい API image tag の revision を登録します。
@@ -217,7 +220,7 @@ schema migrationとseed bootstrapは、API/workerのservice更新とscale-upよ�
 
 ## 9. フロント配信
 
-`AWS Deploy Frontend` workflow を `deploy/AWS_ECS` branch から手動実行します。
+`AWS Deploy Frontend` workflow を `main` branch から手動実行します。
 
 フロントエンドは S3 + CloudFront の静的配信です。ECS の frontend container は使いません。
 
@@ -307,7 +310,7 @@ Runtime operations use one entrypoint from the repository root:
 
 The script fails closed unless all of these conditions hold:
 
-- the checked-out branch is exactly `deploy/AWS_ECS`;
+- the checked-out branch is exactly `main`;
 - the worktree is clean;
 - the region is exactly `ap-northeast-1`;
 - the active 12-digit account is listed in comma-separated `AWS_DEMO_ALLOWED_ACCOUNT_IDS`;
@@ -318,10 +321,10 @@ The script fails closed unless all of these conditions hold:
 
 `down` is intentionally destructive and requires both confirmation switches. It empties every version and delete marker from the document/frontend buckets, applies an exact saved destroy plan, deregisters CI-created task definition revisions, clears the stale database URL, and checks Terraform state plus S3, ECR, the CloudFront distribution and VPC origin, ECS, and `Lifecycle=runtime` tags for remnants. Runtime ECR repositories use `force_delete = true`; bootstrap resources do not carry the runtime lifecycle tag. It never targets `deploy/aws-ecs/bootstrap`. The bootstrap state bucket, lock table, and separately managed lifecycle OIDC role remain so the runtime can be recreated.
 
-The `AWS Demo Lifecycle` workflow is `workflow_dispatch` only and is hard-bound to `refs/heads/deploy/AWS_ECS`. Configure `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` as a repository secret. That role is an account/bootstrap prerequisite outside the root runtime stack and its OIDC subject must be exactly:
+The `AWS Demo Lifecycle` workflow is `workflow_dispatch` only and is hard-bound to `refs/heads/main`. Configure `AWS_TERRAFORM_LIFECYCLE_ROLE_ARN` as a repository secret. That role is an account/bootstrap prerequisite outside the root runtime stack and its OIDC subject must be exactly:
 
 ```text
-repo:<OWNER>/<REPO>:ref:refs/heads/deploy/AWS_ECS
+repo:<OWNER>/<REPO>:ref:refs/heads/main
 ```
 
 Also configure `AWS_GITHUB_OIDC_PROVIDER_ARN`, `AWS_DEMO_ACCOUNT_ID`, `AWS_DEMO_ALLOWED_ACCOUNT_IDS`, the remote-state identifiers, the existing Terraform inputs, and the runtime secrets `BASIC_AUTH_HEADER`, `RAG_DEMO_ADMIN_EMAIL`, and `RAG_DEMO_ADMIN_PASSWORD` as repository secrets. The root tfvars must set `create_github_oidc_provider = false`; the script inspects saved plan JSON and rejects any runtime plan that would create or destroy the bootstrap provider. The lifecycle role must be limited to this sandbox stack and must be able to create and destroy the root Terraform resources, update the external database URL and runtime deployment-config secrets, and read the bootstrap state/lock resources.

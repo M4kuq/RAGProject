@@ -1,7 +1,7 @@
 # AWS新規アカウント・Paid Planクレジット利用手順
 
 更新日: 2026-07-14
-対象ブランチ: `deploy/AWS_ECS`
+対象ブランチ: `main`
 
 ## 採用方針
 
@@ -96,7 +96,7 @@ root/IAM password、MFA code、Access Key、Secret Access Key、Session tokenは
 
 - Account IDが`AWS_DEMO_ALLOWED_ACCOUNT_IDS`と一致する。
 - Regionが`ap-northeast-1`である。
-- `deploy/AWS_ECS`worktreeがcleanである。
+- `main` worktreeがcleanである。
 - Credit balanceと有効期限に余裕がある。
 - Nova Lite、Titan Text Embeddings V2、Bedrock rerankが東京リージョンで利用できる。
 - RDS instance classが必要最小限である。
@@ -114,7 +114,7 @@ root/IAM password、MFA code、Access Key、Secret Access Key、Session tokenは
 - plan/lifecycle/deploy role
 - Secrets Managerのsecret container
 
-GitHubにはAccess Keyを登録せずOIDCを使う。trustは`M4kuq/RAGProject`、`refs/heads/deploy/AWS_ECS`、手動`workflow_dispatch`に限定する。
+GitHubにはAccess Keyを登録せずOIDCを使う。trustは`M4kuq/RAGProject`、`refs/heads/main`、手動`workflow_dispatch`に限定する。
 
 runtime側のTerraform planがGitHub OIDC providerをcreate/destroyしようとした場合、`aws-demo.ps1`は処理を拒否する。
 

@@ -33,7 +33,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: ${{ inputs.command == 'up' && 'aws-demo-up-orchestrator-deploy-AWS_ECS' || 'aws-demo-runtime-deploy-AWS_ECS' }}
+  group: ${{ inputs.command == 'up' && 'aws-demo-up-orchestrator-main' || 'aws-demo-runtime-main' }}
   cancel-in-progress: false
 
 env:
@@ -49,7 +49,7 @@ env:
   TF_VAR_project: ragproject
   TF_VAR_environment: demo
   TF_VAR_github_oidc_repo: ${{ github.repository }}
-  TF_VAR_github_deploy_branch: deploy/AWS_ECS
+  TF_VAR_github_deploy_branch: main
   TF_VAR_create_github_oidc_provider: "false"
   TF_VAR_github_oidc_provider_arn: ${{ secrets.AWS_GITHUB_OIDC_PROVIDER_ARN }}
   TF_VAR_database_url_secret_arn: ${{ secrets.DATABASE_URL_SECRET_ARN }}
@@ -74,8 +74,8 @@ jobs:
       - name: Restrict branch
         shell: bash
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/deploy/AWS_ECS" ]; then
-            echo "This workflow is restricted to refs/heads/deploy/AWS_ECS."
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "This workflow is restricted to refs/heads/main."
             exit 1
           fi
 
@@ -90,7 +90,7 @@ jobs:
             gh run list \
               --repo "$GITHUB_REPOSITORY" \
               --workflow aws-demo.yml \
-              --branch deploy/AWS_ECS \
+              --branch main \
               --limit 100 \
               --json databaseId,displayTitle,status |
               jq --arg run_id "$GITHUB_RUN_ID" '
@@ -120,7 +120,7 @@ jobs:
       - name: Checkout exact branch
         uses: actions/checkout@v6
         with:
-          ref: deploy/AWS_ECS
+          ref: main
 
       - name: Configure lifecycle AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.1.0
