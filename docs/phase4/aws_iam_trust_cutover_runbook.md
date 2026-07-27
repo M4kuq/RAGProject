@@ -122,6 +122,8 @@ bootstrap lifecycle roleのpolicyにはroot runtime roleのtrust更新権限が�
 
 role trustを先に揃え、repository variableとworkflow実行を最後にすることで、「新設定を公開したが対応roleがまだassumeできない」時間を最小化する。`DEPLOY_BRANCH`を先に変更してもAWS trustは変わらず、失敗するworkflowを増やすだけなので先行させない。
 
+trust policyを変更しても、既に発行されたSTS sessionは失効せず、有効期限までAWS resourceを更新できる。さらに旧branchと`main`のconcurrency groupは相互排他ではないため、手順2へ進む直前に両branchの関連runが停止していることを必ず確認する。
+
 | 完了時点 | `main`からAssumeRole可能になる対象 |
 |---|---|
 | 手順2のapply直後 | Terraform plan role、Terraform lifecycle role |
@@ -173,6 +175,80 @@ if ($BootstrapTfvars) {
 foreach ($CommandName in @("git", "terraform", "aws", "gh")) {
   if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
     throw "Required command is unavailable: $CommandName"
+  }
+}
+
+$IsWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+  [Runtime.InteropServices.OSPlatform]::Windows
+)
+if ($IsWindowsPlatform) {
+  if (-not (Get-Command "icacls.exe" -ErrorAction SilentlyContinue)) {
+    throw "icacls.exe is required to protect cutover artifacts on Windows."
+  }
+  $CurrentWindowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+} elseif (-not (Get-Command "chmod" -ErrorAction SilentlyContinue)) {
+  throw "chmod is required to protect cutover artifacts on Unix."
+}
+
+function Protect-CutoverPath {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][ValidateSet("Directory", "File")][string]$Kind
+  )
+  if ($IsWindowsPlatform) {
+    $AclGrant = if ($Kind -ceq "Directory") {
+      "${CurrentWindowsIdentity}:(OI)(CI)F"
+    } else {
+      "${CurrentWindowsIdentity}:F"
+    }
+    & icacls.exe $Path /inheritance:r /grant:r $AclGrant | Out-Null
+  } else {
+    $Mode = if ($Kind -ceq "Directory") { "700" } else { "600" }
+    & chmod $Mode -- $Path
+  }
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not restrict cutover artifact access: $Kind"
+  }
+}
+
+function Protect-CutoverFileIfPresent {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    Protect-CutoverPath $Path "File"
+  }
+}
+
+$CutoverDir = Join-Path ([IO.Path]::GetTempPath()) (
+  "ragproject-trust-cutover-{0}" -f (Get-Date -Format "yyyyMMdd-HHmmss")
+)
+New-Item -ItemType Directory -Path $CutoverDir -ErrorAction Stop | Out-Null
+Protect-CutoverPath $CutoverDir "Directory"
+
+function Invoke-ProtectedCli {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet("aws", "gh")][string]$Command,
+    [Parameter(Mandatory = $true)][ValidatePattern("^[a-z0-9-]+$")][string]$Label,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments
+  )
+  $StdoutPath = Join-Path $CutoverDir "$Label.stdout.log"
+  $StderrPath = Join-Path $CutoverDir "$Label.stderr.log"
+  if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+  }
+  & $Command @Arguments 1> $StdoutPath 2> $StderrPath
+  $ExitCode = $LASTEXITCODE
+  Protect-CutoverFileIfPresent $StdoutPath
+  Protect-CutoverFileIfPresent $StderrPath
+  $Stdout = if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
+    Get-Content -LiteralPath $StdoutPath -Raw
+  } else {
+    ""
+  }
+  return [pscustomobject]@{
+    ExitCode = $ExitCode
+    Stdout = $Stdout
+    StdoutPath = $StdoutPath
+    StderrPath = $StderrPath
   }
 }
 
@@ -255,10 +331,14 @@ function Assert-MainShaUnchanged {
     "Main root stack at checkpoint: $Checkpoint"
 }
 
-$GhRepositoryJson = (gh repo view --json nameWithOwner | Out-String)
-if ($LASTEXITCODE -ne 0) {
-  throw "Could not resolve the GitHub repository."
+$GhRepositoryResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-repository-view" `
+  -Arguments @("repo", "view", "--json", "nameWithOwner")
+if ($GhRepositoryResult.ExitCode -ne 0) {
+  throw "Could not resolve the GitHub repository. Review protected diagnostic file: $($GhRepositoryResult.StderrPath)"
 }
+$GhRepositoryJson = $GhRepositoryResult.Stdout
 $GhRepository = ConvertFrom-Json -InputObject $GhRepositoryJson
 if ([string]$GhRepository.nameWithOwner -cne $Repository) {
   throw "gh is targeting a different repository."
@@ -306,11 +386,19 @@ if (
 if ([string]::IsNullOrWhiteSpace($env:AWS_DEMO_ALLOWED_ACCOUNT_IDS)) {
   throw "AWS_DEMO_ALLOWED_ACCOUNT_IDS must already be present in the operator environment."
 }
-$ProfileCallerAccount = (
-  aws sts get-caller-identity --profile $AwsProfile --query Account --output text --no-cli-pager
-).Trim()
-if ($LASTEXITCODE -ne 0 -or $ProfileCallerAccount -notmatch "^[0-9]{12}$") {
-  throw "Could not validate the explicitly selected profile caller account."
+$ProfileCallerResult = Invoke-ProtectedCli `
+  -Command "aws" `
+  -Label "aws-profile-caller-identity" `
+  -Arguments @(
+    "sts", "get-caller-identity",
+    "--profile", $AwsProfile,
+    "--query", "Account",
+    "--output", "text",
+    "--no-cli-pager"
+  )
+$ProfileCallerAccount = $ProfileCallerResult.Stdout.Trim()
+if ($ProfileCallerResult.ExitCode -ne 0 -or $ProfileCallerAccount -notmatch "^[0-9]{12}$") {
+  throw "Could not validate the explicitly selected profile caller account. Review protected diagnostic file: $($ProfileCallerResult.StderrPath)"
 }
 $AllowedAccounts = @(
   $env:AWS_DEMO_ALLOWED_ACCOUNT_IDS.Split(",") |
@@ -338,16 +426,23 @@ function Restore-OriginalAwsProfile {
 
 $env:AWS_PROFILE = $AwsProfile
 try {
-  $TerraformEnvironmentCallerAccount = (
-    aws sts get-caller-identity --query Account --output text --no-cli-pager
-  ).Trim()
+  $TerraformEnvironmentCallerResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-terraform-environment-caller-identity" `
+    -Arguments @(
+      "sts", "get-caller-identity",
+      "--query", "Account",
+      "--output", "text",
+      "--no-cli-pager"
+    )
+  $TerraformEnvironmentCallerAccount = $TerraformEnvironmentCallerResult.Stdout.Trim()
   if (
-    $LASTEXITCODE -ne 0 -or
+    $TerraformEnvironmentCallerResult.ExitCode -ne 0 -or
     $TerraformEnvironmentCallerAccount -notmatch "^[0-9]{12}$" -or
     $AllowedAccounts -notcontains $TerraformEnvironmentCallerAccount -or
     $TerraformEnvironmentCallerAccount -cne $ProfileCallerAccount
   ) {
-    throw "The Terraform process environment does not resolve to the allowlisted selected profile account."
+    throw "The Terraform process environment does not resolve to the allowlisted selected profile account. Review protected diagnostic file: $($TerraformEnvironmentCallerResult.StderrPath)"
   }
 } catch {
   Restore-OriginalAwsProfile
@@ -368,51 +463,6 @@ function Invoke-Terraform {
 
 Write-Host "Selected profile and Terraform environment caller allowlist: OK"
 
-$IsWindowsPlatform = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-  [Runtime.InteropServices.OSPlatform]::Windows
-)
-if ($IsWindowsPlatform) {
-  if (-not (Get-Command "icacls.exe" -ErrorAction SilentlyContinue)) {
-    throw "icacls.exe is required to protect cutover artifacts on Windows."
-  }
-  $CurrentWindowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-} elseif (-not (Get-Command "chmod" -ErrorAction SilentlyContinue)) {
-  throw "chmod is required to protect cutover artifacts on Unix."
-}
-
-function Protect-CutoverPath {
-  param(
-    [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][ValidateSet("Directory", "File")][string]$Kind
-  )
-  if ($IsWindowsPlatform) {
-    $AclGrant = if ($Kind -ceq "Directory") {
-      "${CurrentWindowsIdentity}:(OI)(CI)F"
-    } else {
-      "${CurrentWindowsIdentity}:F"
-    }
-    & icacls.exe $Path /inheritance:r /grant:r $AclGrant | Out-Null
-  } else {
-    $Mode = if ($Kind -ceq "Directory") { "700" } else { "600" }
-    & chmod $Mode -- $Path
-  }
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not restrict cutover artifact access: $Kind"
-  }
-}
-
-function Protect-CutoverFileIfPresent {
-  param([Parameter(Mandatory = $true)][string]$Path)
-  if (Test-Path -LiteralPath $Path -PathType Leaf) {
-    Protect-CutoverPath $Path "File"
-  }
-}
-
-$CutoverDir = Join-Path ([IO.Path]::GetTempPath()) (
-  "ragproject-trust-cutover-{0}" -f (Get-Date -Format "yyyyMMdd-HHmmss")
-)
-New-Item -ItemType Directory -Path $CutoverDir -ErrorAction Stop | Out-Null
-Protect-CutoverPath $CutoverDir "Directory"
 $BootstrapStateBackup = Join-Path $CutoverDir "bootstrap.terraform.tfstate.before"
 Copy-Item -LiteralPath $BootstrapState -Destination $BootstrapStateBackup -ErrorAction Stop
 Protect-CutoverPath $BootstrapStateBackup "File"
@@ -462,11 +512,19 @@ function Get-RoleNameFromOutput {
   $RoleArn = (
     Invoke-Terraform "-chdir=$TerraformDirectory" output -raw $OutputName
   ).Trim()
-  if ($LASTEXITCODE -ne 0 -or $RoleArn -notmatch "/([^/]+)$") {
-    throw "Could not derive a role name from Terraform output: $OutputName"
+  if (
+    $LASTEXITCODE -ne 0 -or
+    $RoleArn -notmatch "^arn:[a-z0-9-]+:iam::([0-9]{12}):role/(?:[^/]+/)*([^/]+)$"
+  ) {
+    throw "Could not validate the role ARN from Terraform output: $OutputName"
   }
-  $RoleName = $Matches[1]
-  Remove-Variable RoleArn
+  $RoleAccount = $Matches[1]
+  $RoleName = $Matches[2]
+  if ($RoleAccount -cne $ProfileCallerAccount) {
+    Remove-Variable RoleAccount, RoleArn
+    throw "The Terraform state account and selected profile account do not match."
+  }
+  Remove-Variable RoleAccount, RoleArn
   return $RoleName
 }
 
@@ -732,13 +790,20 @@ function Backup-RoleTrustAndGetBranch {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string]$RoleName
   )
-  $RoleJson = (
-    aws iam get-role --profile $AwsProfile --role-name $RoleName --output json --no-cli-pager |
-      Out-String
-  )
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not read role trust: $Label"
+  $RoleResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-get-role-$Label" `
+    -Arguments @(
+      "iam", "get-role",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--output", "json",
+      "--no-cli-pager"
+    )
+  if ($RoleResult.ExitCode -ne 0) {
+    throw "Could not read role trust: $Label. Review protected diagnostic file: $($RoleResult.StderrPath)"
   }
+  $RoleJson = $RoleResult.Stdout
   $Role = ConvertFrom-Json -InputObject $RoleJson
   $Policy = $Role.Role.AssumeRolePolicyDocument
   $Statements = @($Policy.Statement)
@@ -802,10 +867,14 @@ $BeforeBranches.GetEnumerator() | ForEach-Object {
 }
 
 function Get-DeployBranchVariable {
-  $VariablesJson = (gh variable list --json name,value | Out-String)
-  if ($LASTEXITCODE -ne 0) {
-    throw "gh variable list failed; output was suppressed."
+  $VariablesResult = Invoke-ProtectedCli `
+    -Command "gh" `
+    -Label "gh-variable-list" `
+    -Arguments @("variable", "list", "--json", "name,value")
+  if ($VariablesResult.ExitCode -ne 0) {
+    throw "gh variable list failed. Review protected diagnostic file: $($VariablesResult.StderrPath)"
   }
+  $VariablesJson = $VariablesResult.Stdout
   $Variables = ConvertFrom-Json -InputObject $VariablesJson
   $Matches = @($Variables | Where-Object { [string]$_.name -ceq "DEPLOY_BRANCH" })
   if ($Matches.Count -ne 1) {
@@ -823,6 +892,90 @@ Write-Host "DEPLOY_BRANCH: $CurrentDeployBranch"
 if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
   throw "DEPLOY_BRANCH has an unexpected value."
 }
+
+$CutoverWorkflows = @(
+  [pscustomobject]@{ File = "aws-demo.yml"; Name = "AWS Demo Lifecycle" }
+  [pscustomobject]@{ File = "aws-deploy-app.yml"; Name = "AWS Deploy App" }
+  [pscustomobject]@{ File = "aws-deploy-frontend.yml"; Name = "AWS Deploy Frontend" }
+  [pscustomobject]@{ File = "aws-infra-plan.yml"; Name = "AWS Infra Plan" }
+  [pscustomobject]@{ File = "aws-oidc-smoke.yml"; Name = "AWS OIDC Smoke" }
+)
+$BlockingRunStatuses = @("in_progress", "queued", "waiting", "requested", "pending")
+
+function Assert-NoBlockingCutoverRuns {
+  $BlockingRuns = @(
+    foreach ($Workflow in $CutoverWorkflows) {
+      foreach ($Branch in @($OldBranch, $NewBranch)) {
+        foreach ($Status in $BlockingRunStatuses) {
+          $BranchLabel = $Branch.ToLowerInvariant() -replace "[^a-z0-9]+", "-"
+          $WorkflowLabel = $Workflow.File -replace "\.yml$", ""
+          $StatusLabel = $Status -replace "_", "-"
+          $RunListResult = Invoke-ProtectedCli `
+            -Command "gh" `
+            -Label "gh-preflight-$WorkflowLabel-$BranchLabel-$StatusLabel" `
+            -Arguments @(
+              "api",
+              "--method", "GET",
+              "--paginate",
+              "--slurp",
+              "repos/$Repository/actions/workflows/$($Workflow.File)/runs",
+              "-f", "branch=$Branch",
+              "-f", "status=$Status",
+              "-f", "per_page=100"
+            )
+          if ($RunListResult.ExitCode -ne 0) {
+            throw "Could not inspect active workflow runs. Review protected diagnostic file: $($RunListResult.StderrPath)"
+          }
+          $Pages = ConvertFrom-Json -InputObject $RunListResult.Stdout
+          foreach ($Page in $Pages) {
+            $WorkflowRunsProperty = $Page.PSObject.Properties["workflow_runs"]
+            if ($null -eq $WorkflowRunsProperty) {
+              throw "Workflow run query returned an unexpected result shape; values were suppressed."
+            }
+            $PageRuns = @(
+              if ($null -ne $WorkflowRunsProperty.Value) {
+                @($WorkflowRunsProperty.Value)
+              }
+            )
+            foreach ($Run in $PageRuns) {
+              if (
+                [string]$Run.id -notmatch "^[0-9]+$" -or
+                [string]$Run.name -cne $Workflow.Name -or
+                [string]$Run.head_branch -cne $Branch -or
+                [string]$Run.status -cne $Status
+              ) {
+                throw "Workflow run query returned an unexpected result shape; values were suppressed."
+              }
+              [pscustomobject]@{
+                RunId = [string]$Run.id
+                WorkflowName = [string]$Run.name
+                Branch = [string]$Run.head_branch
+                Status = [string]$Run.status
+              }
+            }
+          }
+        }
+      }
+    }
+  )
+  if ($BlockingRuns.Count -ne 0) {
+    $BlockingRuns |
+      Sort-Object RunId -Unique |
+      ForEach-Object {
+        Write-Host (
+          "run_id={0} workflow={1} branch={2} status={3}" -f
+          $_.RunId,
+          $_.WorkflowName,
+          $_.Branch,
+          $_.Status
+        )
+      }
+    throw "Active or waiting cutover-related runs exist. Wait for completion or let a human decide whether to cancel them; this runbook never cancels or reruns runs."
+  }
+  Write-Host "Active or waiting cutover-related runs on old/new branches: none"
+}
+
+Assert-NoBlockingCutoverRuns
 ```
 
 **期待される結果**
@@ -833,9 +986,11 @@ if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
 - 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
 - 開始時の`origin/main` SHAが`$MainSha`に保持され、以後のcheckpointではSHA自体を表示せず一致だけを検証する。
 - `$env:AWS_PROFILE`はこのPowerShell processと子processだけに設定される。明示profile、同じprocess環境のcredential chain、後続plan JSON内のprovider caller accountを同じallowlistと明示profile accountに照合する。
+- bootstrap / root stateのrole ARN accountは、role名を利用する前に明示profile accountと一致する。
 - main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
-- `$CutoverDir`に4 trust backup、bootstrap state backupが作られる。pathを作業記録へ残すが、中身は表示しない。
+- `$CutoverDir`に4 trust backup、bootstrap state backup、AWS CLI / `gh`のstdout・stderr診断logが作られる。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
 - Unixでは`$CutoverDir`が`0700`、配下fileが`0600`になる。Windowsでは継承を遮断したACLにより実行userだけがdirectoryとfileへアクセスできる。
+- 旧branch / `main`の双方について、5 workflowに実行中・待機中runがない。
 
 **失敗時**
 
@@ -843,6 +998,8 @@ if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
 - bootstrap stateがない場合、新しい空stateからapplyしてはいけない。権威あるlocal stateまたは安全なbackupを特定する。
 - trustが旧branch / `main`以外、複数subject、別repository、複数statementならscope外である。policyを自動整形せず、RAG-18を停止して別レビューへ送る。
 - root backend initが失敗した場合、placeholderを実値へ直接置換してcommitしない。bootstrap outputとlocal権限を確認する。
+- active runがある場合は完了または人間が判断したキャンセルを待つ。このrunbookは自動キャンセルやrerunを行わない。
+- active run gate後は、手順6のsmoke dispatchまで対象workflowを新たに起動しない。gateは手順1でだけ実行するため、手順6でdispatchするsmoke自身を誤検出しない。
 - 手順1で停止し、以後TerraformまたはAWS recoveryを実行しない場合は`Restore-OriginalAwsProfile`を呼び、開始時の`AWS_PROFILE`へ戻す。rollbackが必要な場合は復旧完了まで設定を維持し、rollback末尾で戻す。
 - AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作り、元の開始状態と取り違えてはならない。元の`$CutoverDir`を再指定し、変数とfunction定義だけを読み込み直してロールバックを優先する。元のbackup pathを特定できなければ追加更新を停止する。
 
@@ -1176,13 +1333,18 @@ if ($SmokeSubject -cne $ExpectedNewSubject) {
     $SmokeMainPolicy `
     $NewBranch `
     "oidc-smoke"
-  aws iam update-assume-role-policy `
-    --profile $AwsProfile `
-    --role-name $SmokeRoleName `
-    --policy-document "file://$SmokeMainPolicy" `
-    --no-cli-pager
-  if ($LASTEXITCODE -ne 0) {
-    throw "Smoke trust update failed. Restore the backup policy if verification is not main."
+  $SmokeUpdateResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-update-oidc-smoke" `
+    -Arguments @(
+      "iam", "update-assume-role-policy",
+      "--profile", $AwsProfile,
+      "--role-name", $SmokeRoleName,
+      "--policy-document", "file://$SmokeMainPolicy",
+      "--no-cli-pager"
+    )
+  if ($SmokeUpdateResult.ExitCode -ne 0) {
+    throw "Smoke trust update failed. Restore the backup policy if verification is not main. Review protected diagnostic file: $($SmokeUpdateResult.StderrPath)"
   }
 }
 
@@ -1223,9 +1385,12 @@ if (@($TrustBranches | Where-Object { $_ -cne $NewBranch }).Count -ne 0) {
   throw "All four role trusts must be main before changing DEPLOY_BRANCH."
 }
 
-gh variable set DEPLOY_BRANCH --body $NewBranch
-if ($LASTEXITCODE -ne 0) {
-  throw "DEPLOY_BRANCH update failed. IAM trusts are already main; do not run workflows until this is fixed."
+$DeployBranchUpdateResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-variable-set-main" `
+  -Arguments @("variable", "set", "DEPLOY_BRANCH", "--body", $NewBranch)
+if ($DeployBranchUpdateResult.ExitCode -ne 0) {
+  throw "DEPLOY_BRANCH update failed. IAM trusts are already main; do not run workflows until this is fixed. Review protected diagnostic file: $($DeployBranchUpdateResult.StderrPath)"
 }
 $DeployBranchAfter = Get-DeployBranchVariable
 if ($DeployBranchAfter -cne $NewBranch) {
@@ -1252,26 +1417,32 @@ Write-Host "DEPLOY_BRANCH: main"
 Set-Location -LiteralPath $MainRepoRoot
 Assert-MainShaUnchanged "before OIDC smoke dispatch"
 $DispatchTime = (Get-Date).ToUniversalTime()
-gh workflow run aws-oidc-smoke.yml --ref main
-if ($LASTEXITCODE -ne 0) {
-  throw "OIDC smoke dispatch failed."
+$SmokeDispatchResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-smoke-dispatch" `
+  -Arguments @("workflow", "run", "aws-oidc-smoke.yml", "--ref", "main")
+if ($SmokeDispatchResult.ExitCode -ne 0) {
+  throw "OIDC smoke dispatch failed. Review protected diagnostic file: $($SmokeDispatchResult.StderrPath)"
 }
 
 $SmokeRun = $null
 for ($Attempt = 0; $Attempt -lt 12 -and $null -eq $SmokeRun; $Attempt++) {
   Start-Sleep -Seconds 5
-  $RunsJson = (
-    gh run list `
-      --workflow aws-oidc-smoke.yml `
-      --branch main `
-      --event workflow_dispatch `
-      --limit 10 `
-      --json databaseId,createdAt,headBranch,headSha,status,conclusion |
-      Out-String
-  )
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not list OIDC smoke runs."
+  $SmokeRunsResult = Invoke-ProtectedCli `
+    -Command "gh" `
+    -Label "gh-smoke-run-list-$Attempt" `
+    -Arguments @(
+      "run", "list",
+      "--workflow", "aws-oidc-smoke.yml",
+      "--branch", "main",
+      "--event", "workflow_dispatch",
+      "--limit", "10",
+      "--json", "databaseId,createdAt,headBranch,headSha,status,conclusion"
+    )
+  if ($SmokeRunsResult.ExitCode -ne 0) {
+    throw "Could not list OIDC smoke runs. Review protected diagnostic file: $($SmokeRunsResult.StderrPath)"
   }
+  $RunsJson = $SmokeRunsResult.Stdout
   $SmokeRun = @(
     (ConvertFrom-Json -InputObject $RunsJson) |
       Where-Object {
@@ -1286,15 +1457,26 @@ if ($null -eq $SmokeRun) {
   throw "Dispatched OIDC smoke run was not found."
 }
 
-gh run watch ([string]$SmokeRun.databaseId) --exit-status
-if ($LASTEXITCODE -ne 0) {
-  throw "OIDC smoke did not complete successfully. Do not dispatch lifecycle workflows."
+$SmokeWatchResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-smoke-run-watch" `
+  -Arguments @(
+    "run", "watch", ([string]$SmokeRun.databaseId), "--exit-status"
+  )
+if ($SmokeWatchResult.ExitCode -ne 0) {
+  throw "OIDC smoke did not complete successfully. Do not dispatch lifecycle workflows. Review protected diagnostic file: $($SmokeWatchResult.StderrPath)"
 }
-$SmokeResultJson = (
-  gh run view ([string]$SmokeRun.databaseId) `
-    --json headBranch,headSha,status,conclusion |
-    Out-String
-)
+$SmokeViewResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-smoke-run-view" `
+  -Arguments @(
+    "run", "view", ([string]$SmokeRun.databaseId),
+    "--json", "headBranch,headSha,status,conclusion"
+  )
+$SmokeResultJson = $SmokeViewResult.Stdout
+if ($SmokeViewResult.ExitCode -ne 0) {
+  throw "Could not inspect the OIDC smoke result. Review protected diagnostic file: $($SmokeViewResult.StderrPath)"
+}
 $SmokeResult = ConvertFrom-Json -InputObject $SmokeResultJson
 if (
   $SmokeResult.headBranch -cne "main" -or
@@ -1445,7 +1627,7 @@ Write-Host (
 
 **cwd:** 任意。手順7とsmokeが成功し、rollbackしないと人間が判断した後だけ実行する。
 
-`$CutoverDir`にはstate backup、saved plan、plan log、実trust policyが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
+`$CutoverDir`にはstate backup、saved plan、plan log、実trust policy、AWS CLI / `gh`のstdout・stderr診断logが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
 
 ```powershell
 try {
@@ -1505,13 +1687,20 @@ function Restore-RoleTrust {
   if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
     throw "Trust backup not found."
   }
-  $CurrentRoleJson = (
-    aws iam get-role --profile $AwsProfile --role-name $RoleName --output json --no-cli-pager |
-      Out-String
-  )
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not read the current trust before restore."
+  $CurrentRoleResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-restore-get-role" `
+    -Arguments @(
+      "iam", "get-role",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--output", "json",
+      "--no-cli-pager"
+    )
+  if ($CurrentRoleResult.ExitCode -ne 0) {
+    throw "Could not read the current trust before restore. Review protected diagnostic file: $($CurrentRoleResult.StderrPath)"
   }
+  $CurrentRoleJson = $CurrentRoleResult.Stdout
   try {
     $CurrentPolicy = (
       ConvertFrom-Json -InputObject $CurrentRoleJson
@@ -1525,13 +1714,18 @@ function Restore-RoleTrust {
     $BackupPolicy `
     $ExpectedBranch `
     "direct trust restore"
-  aws iam update-assume-role-policy `
-    --profile $AwsProfile `
-    --role-name $RoleName `
-    --policy-document "file://$BackupPath" `
-    --no-cli-pager
-  if ($LASTEXITCODE -ne 0) {
-    throw "Trust restore failed."
+  $TrustRestoreResult = Invoke-ProtectedCli `
+    -Command "aws" `
+    -Label "aws-restore-update-role" `
+    -Arguments @(
+      "iam", "update-assume-role-policy",
+      "--profile", $AwsProfile,
+      "--role-name", $RoleName,
+      "--policy-document", "file://$BackupPath",
+      "--no-cli-pager"
+    )
+  if ($TrustRestoreResult.ExitCode -ne 0) {
+    throw "Trust restore failed. Review protected diagnostic file: $($TrustRestoreResult.StderrPath)"
   }
 }
 
@@ -1539,10 +1733,15 @@ if ([string]$env:AWS_PROFILE -cne $AwsProfile) {
   throw "The validated AWS_PROFILE is not active. Restore the runbook session before rollback."
 }
 
-gh variable set DEPLOY_BRANCH --body $CurrentDeployBranch
-$DeployBranchRollbackOk = $LASTEXITCODE -eq 0
+$DeployBranchRollbackResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-variable-rollback" `
+  -Arguments @(
+    "variable", "set", "DEPLOY_BRANCH", "--body", $CurrentDeployBranch
+  )
+$DeployBranchRollbackOk = $DeployBranchRollbackResult.ExitCode -eq 0
 if (-not $DeployBranchRollbackOk) {
-  Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue IAM recovery."
+  Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue IAM recovery. Review protected diagnostic file: $($DeployBranchRollbackResult.StderrPath)"
 }
 
 $SmokeBeforePath = Join-Path $CutoverDir "oidc-smoke.before.json"
@@ -1667,10 +1866,15 @@ if ([string]$env:AWS_PROFILE -cne $AwsProfile) {
   throw "The validated AWS_PROFILE is not active. Restore the runbook session before direct recovery."
 }
 
-gh variable set DEPLOY_BRANCH --body $CurrentDeployBranch
-$DirectDeployBranchRecoveryOk = $LASTEXITCODE -eq 0
+$DirectDeployBranchRecoveryResult = Invoke-ProtectedCli `
+  -Command "gh" `
+  -Label "gh-variable-direct-recovery" `
+  -Arguments @(
+    "variable", "set", "DEPLOY_BRANCH", "--body", $CurrentDeployBranch
+  )
+$DirectDeployBranchRecoveryOk = $DirectDeployBranchRecoveryResult.ExitCode -eq 0
 if (-not $DirectDeployBranchRecoveryOk) {
-  Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue direct IAM recovery."
+  Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue direct IAM recovery. Review protected diagnostic file: $($DirectDeployBranchRecoveryResult.StderrPath)"
 }
 
 $DirectRecoveryRoles = @(
@@ -1722,7 +1926,9 @@ backupにはprovider識別子が含まれるため、terminalへ出力せず`fil
 ## 7. 完了チェックリスト
 
 - [ ] PR #126 commitが実行用`main`の祖先である
+- [ ] 旧branch / `main`の5 workflowに`in_progress` / `queued` / `waiting` / `requested` / `pending` runがない
 - [ ] 権威あるbootstrap local stateとroot remote stateを特定した
+- [ ] bootstrap / root stateのrole ARN accountが明示profile accountと一致する
 - [ ] 直近applyと同一のbootstrap/root入力を使用した
 - [ ] Terraform plan roleのsubjectが`refs/heads/main`だけである
 - [ ] Terraform lifecycle roleのsubjectが`refs/heads/main`だけである
@@ -1737,6 +1943,7 @@ backupにはprovider識別子が含まれるため、terminalへ出力せず`fil
 - [ ] bootstrap/rootのpost-cutover full planが成功し、exit codeと未適用driftを記録した
 - [ ] saved plan内のTerraform provider caller accountが明示profile accountと一致し、allowlist内である
 - [ ] account ID、ARN、state、plan、trust backup、secret、tokenをissue / PR / chatへ貼っていない
+- [ ] AWS CLI / `gh`のstdout・stderrは保護済み`$CutoverDir`だけに保存し、terminalへ表示していない
 - [ ] rollback判断が終わるまで`$CutoverDir`を保全した
 - [ ] rollback不要の判断後、手順8で一時artifactを削除した
 - [ ] process-scoped `AWS_PROFILE`をrunbook開始時の値へ戻した
