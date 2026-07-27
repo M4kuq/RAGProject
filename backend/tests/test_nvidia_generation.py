@@ -52,7 +52,7 @@ def test_factory_rejects_nvidia_override_outside_local_or_test() -> None:
     settings = Settings(
         _env_file=None,
         app_env="production",
-        generation_provider="fake",
+        generation_provider="lmstudio",
         nvidia_api_key="test-nvidia-key",
         session_cookie_secure=True,
         session_secret="x" * 32,
@@ -109,7 +109,7 @@ def test_nvidia_generator_uses_standard_chat_completions_payload(
     result = generator.generate(_request())
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
-    assert generator.disable_thinking is False
+    assert generator.native_lmstudio_api is False
     assert captured["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
     assert captured["headers"] == {
         "Authorization": "Bearer test-nvidia-key",
@@ -219,7 +219,7 @@ def test_nvidia_generation_with_real_api_key_when_enabled() -> None:
         model_name=os.getenv("NVIDIA_MODEL_NAME", NVIDIA_MODEL),
         timeout_seconds=float(os.getenv("NVIDIA_TIMEOUT_SECONDS", "60")),
         max_output_tokens=512,
-        disable_thinking=False,
+        native_lmstudio_api=False,
     )
 
     result = generator.generate(_request())
@@ -235,7 +235,7 @@ def _generator() -> OpenAICompatibleChatAnswerGenerator:
         base_url="https://integrate.api.nvidia.com/v1",
         model_name=NVIDIA_MODEL,
         timeout_seconds=30,
-        disable_thinking=False,
+        native_lmstudio_api=False,
     )
 
 
@@ -252,3 +252,4 @@ def _request() -> GenerationRequest:
         ],
         max_output_chars=500,
     )
+

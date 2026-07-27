@@ -285,8 +285,8 @@ class Settings(BaseSettings):
     search_snippet_max_chars: int = Field(default=240, ge=20, le=2000)
     ask_top_k_default: int = Field(default=20, ge=1, le=20)
     ask_rerank_top_n_default: int = Field(default=5, ge=1, le=20)
-    generation_provider: str = "fake"
-    generation_model_name: str = "fake-rag-answer"
+    generation_provider: str = "lmstudio"
+    generation_model_name: str = "qwen3.5-9b"
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
@@ -622,8 +622,7 @@ class Settings(BaseSettings):
         ):
             raise ValueError("ASK_RERANK_TOP_N_DEFAULT must be <= RERANK_TOP_N_MAX")
         self.generation_provider = self.generation_provider.lower()
-        if self.generation_provider not in {
-            "fake",
+        allowed_generation_providers = {
             "ollama",
             "lmstudio",
             "openai",
@@ -631,9 +630,12 @@ class Settings(BaseSettings):
             "gemini",
             "nvidia",
             "bedrock",
-        }:
+        }
+        if self.app_env == "test":
+            allowed_generation_providers.add("fake")
+        if self.generation_provider not in allowed_generation_providers:
             raise ValueError(
-                "GENERATION_PROVIDER must be fake, ollama, lmstudio, openai, anthropic, "
+                "GENERATION_PROVIDER must be ollama, lmstudio, openai, anthropic, "
                 "gemini, nvidia, or bedrock"
             )
         if self.generation_provider == "bedrock":
@@ -734,3 +736,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

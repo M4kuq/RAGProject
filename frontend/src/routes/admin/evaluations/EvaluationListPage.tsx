@@ -1,22 +1,29 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { metricDefinitionMap } from "../../../components/admin/EvaluationMetricOverview";
 import {
   HelpTooltip,
   MetricHelp,
   orderedMetricEntries
 } from "../../../components/admin/MetricHelp";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
+import { EvaluationDatasetImportForm } from "../../../components/admin/EvaluationDatasetImportForm";
 import { EmptyState, ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
 import { Pagination } from "../../../components/common/Pagination";
 import {
   useCreateEvaluationRun,
+  useEvaluationCorpusReadiness,
   useEvaluationDatasets,
+  useEvaluationGenerationReadiness,
+  useEvaluationMetricCatalog,
   useEvaluationRuns
 } from "../../../features/evaluations/evaluationHooks";
 import { buildEvaluationGenerationProviders } from "../../../features/evaluations/generationProviders";
 import type {
   EvaluationCacheMode,
   EvaluationGenerationProvider,
+  EvaluationMetricCatalogItem,
+  EvaluationScope,
   EvaluationRunnableStrategy
 } from "../../../features/evaluations/evaluationTypes";
 import { formatDate, truncateText } from "../../../lib/format";
@@ -28,7 +35,9 @@ import {
 } from "../../../lib/modelCatalog";
 
 const PAGE_SIZE = 20;
-const ANSWER_GENERATION_STRATEGIES: EvaluationRunnableStrategy[] = [
+const DEFAULT_GENERATION_PROVIDER: EvaluationGenerationProvider = "lmstudio";
+const DEFAULT_GENERATION_MODEL = "qwen3.5-9b";
+const END_TO_END_ONLY_STRATEGIES: EvaluationRunnableStrategy[] = [
   "llm_tool_orchestrator",
   "langchain_agentic",
   "langgraph_agentic"
@@ -38,18 +47,18 @@ export function EvaluationListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const nvidiaApiEnabled = isNvidiaApiEnabled();
   const nvidiaModels = nvidiaModelIds();
-  const generationProviders: EvaluationGenerationProvider[] =
-    buildEvaluationGenerationProviders(nvidiaApiEnabled);
-
+  const generationProviders = buildEvaluationGenerationProviders(nvidiaApiEnabled);
   const [datasetName, setDatasetName] = useState("phase1_smoke");
   const [evaluationDatasetId, setEvaluationDatasetId] = useState<number | null>(null);
   const [caseLimit, setCaseLimit] = useState(10);
+  const [topK, setTopK] = useState(5);
+  const [evaluationScope, setEvaluationScope] = useState<EvaluationScope>("end_to_end");
   const [strategies, setStrategies] = useState<EvaluationRunnableStrategy[]>(["dense"]);
   const [cacheModes, setCacheModes] = useState<EvaluationCacheMode[]>(["default"]);
-  const [generationProvider, setGenerationProvider] = useState<EvaluationGenerationProvider | "">(
-    ""
+  const [generationProvider, setGenerationProvider] = useState<EvaluationGenerationProvider>(
+    DEFAULT_GENERATION_PROVIDER
   );
-  const [generationModel, setGenerationModel] = useState("");
+  const [generationModel, setGenerationModel] = useState(DEFAULT_GENERATION_MODEL);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedRunIds, setSelectedRunIds] = useState<number[]>([]);
   const navigate = useNavigate();
@@ -62,20 +71,40 @@ export function EvaluationListPage() {
   );
   const runs = useEvaluationRuns(params);
   const datasets = useEvaluationDatasets({ page: 1, page_size: 50 });
+  const metricCatalog = useEvaluationMetricCatalog();
+  const metricDefinitions = metricDefinitionMap(metricCatalog.data);
+  const selectedDataset = useMemo(
+    () =>
+      datasets.data?.items.find(
+        (dataset) => dataset.evaluation_dataset_id === evaluationDatasetId
+      ) ?? null,
+    [datasets.data?.items, evaluationDatasetId]
+  );
+  const selectedReadiness = useEvaluationCorpusReadiness(
+    evaluationDatasetId ?? Number.NaN,
+    selectedDataset?.corpus_mode === "isolated"
+  );
+  const corpusNotReady =
+    selectedDataset?.corpus_mode === "isolated" && selectedReadiness.data?.ready !== true;
   const createRun = useCreateEvaluationRun();
   const trimmedGenerationModel = generationModel.trim();
-  const generationSelectionRequested = Boolean(generationProvider || trimmedGenerationModel);
-  const hasAnswerGenerationStrategy = strategies.some((strategy) =>
-    ANSWER_GENERATION_STRATEGIES.includes(strategy)
+  const generatesAnswers = evaluationScope === "end_to_end";
+  const providerWithoutModel = generatesAnswers && !trimmedGenerationModel;
+  const checksLocalGeneration =
+    generatesAnswers && generationProvider === "lmstudio" && !providerWithoutModel;
+  const generationReadiness = useEvaluationGenerationReadiness(
+    generationProvider,
+    trimmedGenerationModel,
+    checksLocalGeneration
   );
-  const providerWithoutModel = Boolean(generationProvider && !trimmedGenerationModel);
-  const generationSelectionBlocked =
-    generationSelectionRequested && !hasAnswerGenerationStrategy;
+  const generationReadinessBlocked =
+    checksLocalGeneration &&
+    (generationReadiness.isLoading ||
+      generationReadiness.isError ||
+      generationReadiness.data?.ready !== true);
   const generationGuardMessage = providerWithoutModel
-    ? "生成 provider を指定する場合は生成 model も入力してください。"
-    : generationSelectionBlocked
-      ? "provider/model 比較には llm_tool_orchestrator、langchain_agentic、langgraph_agentic のいずれかを選択してください。"
-      : null;
+    ? "回答生成まで評価する場合は生成 model を入力してください。"
+    : null;
 
   function updatePage(page: number) {
     const next = new URLSearchParams(searchParams);
@@ -83,13 +112,13 @@ export function EvaluationListPage() {
     setSearchParams(next);
   }
 
-  function changeGenerationProvider(
-    provider: EvaluationGenerationProvider | ""
-  ) {
+  function changeGenerationProvider(provider: EvaluationGenerationProvider) {
     setGenerationProvider(provider);
     if (
       provider === "nvidia" &&
-      (!generationModel.trim() || generationModel === "meta/llama-3.3-70b-instruct")
+      (!generationModel.trim() ||
+        generationModel === DEFAULT_GENERATION_MODEL ||
+        generationModel === "meta/llama-3.3-70b-instruct")
     ) {
       setGenerationModel(NVIDIA_RECOMMENDED_MODEL_ID);
     }
@@ -101,18 +130,18 @@ export function EvaluationListPage() {
       return;
     }
     const safeCaseLimit = Number.isFinite(caseLimit) ? Math.min(50, Math.max(1, caseLimit)) : 10;
-    const selectedDataset = datasets.data?.items.find(
-      (dataset) => dataset.evaluation_dataset_id === evaluationDatasetId
-    );
+    const safeTopK = Number.isFinite(topK) ? Math.min(20, Math.max(1, topK)) : 5;
     const result = await createRun.mutateAsync({
       dataset_name: selectedDataset?.dataset_name ?? (datasetName.trim() || "phase1_smoke"),
       evaluation_dataset_id: evaluationDatasetId,
       case_limit: safeCaseLimit,
+      top_k: safeTopK,
       strategy_type: strategies[0] ?? "dense",
       strategies,
       cache_modes: cacheModes,
-      generation_provider: generationProvider || undefined,
-      generation_model: trimmedGenerationModel || undefined,
+      evaluation_scope: evaluationScope,
+      generation_provider: generatesAnswers ? generationProvider : undefined,
+      generation_model: generatesAnswers ? trimmedGenerationModel : undefined,
       trigger_type: "manual"
     });
     setMessage(`評価 run #${result.evaluation_run_id} をジョブ #${result.job_id} として登録しました。`);
@@ -144,7 +173,8 @@ export function EvaluationListPage() {
         <div>
           <h1>評価</h1>
           <p className="muted">
-            評価 dataset や fixture を使って検索品質を確認し、安全な metric summary を確認します。
+            通常は全選択ケースで検索から回答生成・引用評価まで実行します。
+            検索のみは、検索品質の原因分析を行う場合に選択してください。
           </p>
         </div>
       </header>
@@ -152,11 +182,70 @@ export function EvaluationListPage() {
       {generationGuardMessage ? (
         <InlineAlert tone="error">{generationGuardMessage}</InlineAlert>
       ) : null}
+      {checksLocalGeneration && generationReadiness.isLoading ? (
+        <InlineAlert tone="info">LM Studioのモデル状態を確認しています。</InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.data?.ready ? (
+        <InlineAlert tone="success">
+          LM Studio接続確認済み: {generationReadiness.data.resolved_model}
+        </InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.data?.ready === false ? (
+        <InlineAlert tone="error">
+          {generationReadinessMessage(generationReadiness.data.reason_code)}
+        </InlineAlert>
+      ) : null}
+      {checksLocalGeneration && generationReadiness.isError ? (
+        <InlineAlert tone="error">
+          LM Studioの状態を確認できません。サーバーとモデルのロード状態を確認してください。
+        </InlineAlert>
+      ) : null}
+      {corpusNotReady ? (
+        <InlineAlert tone="info">
+          評価コーパスの準備とpreflightが完了するまでrunは開始できません。dataset詳細で進捗を確認できます。
+        </InlineAlert>
+      ) : null}
       {generationProvider === "nvidia" ? (
         <InlineAlert>{NVIDIA_EXTERNAL_DATA_WARNING}</InlineAlert>
       ) : null}
       {createRun.error ? <InlineAlert tone="error">{createRun.error.message}</InlineAlert> : null}
       <form className="filter-bar" onSubmit={submit}>
+        <div className="field-group">
+          評価モード
+          <span className="inline-options">
+            <label>
+              <input
+                checked={evaluationScope === "end_to_end"}
+                name="evaluation-scope"
+                onChange={() => setEvaluationScope("end_to_end")}
+                type="radio"
+                value="end_to_end"
+              />
+              回答生成まで（推奨）
+            </label>
+            <label>
+              <input
+                checked={evaluationScope === "retrieval"}
+                name="evaluation-scope"
+                onChange={() => {
+                  setEvaluationScope("retrieval");
+                  setStrategies((current) => {
+                    const compatible = current.filter(
+                      (strategy) => !END_TO_END_ONLY_STRATEGIES.includes(strategy)
+                    );
+                    return compatible.length ? compatible : ["dense"];
+                  });
+                }}
+                type="radio"
+                value="retrieval"
+              />
+              検索のみ（原因分析用）
+            </label>
+          </span>
+          <span className="muted">
+            回答生成までを選ぶと、各ケースで検索・回答・引用をまとめて評価します。
+          </span>
+        </div>
         <label>
           fixture 名
           <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
@@ -197,6 +286,10 @@ export function EvaluationListPage() {
                 <input
                   type="checkbox"
                   checked={strategies.includes(strategy)}
+                  disabled={
+                    evaluationScope === "retrieval" &&
+                    END_TO_END_ONLY_STRATEGIES.includes(strategy)
+                  }
                   onChange={(event) => {
                     const next = event.target.checked
                       ? [...strategies, strategy]
@@ -231,19 +324,19 @@ export function EvaluationListPage() {
           <span className="metric-heading">
             生成 provider
             <HelpTooltip
-              description="未指定ならサーバの既定 provider を使います。"
-              direction="provider を指定する場合は model も入力してください。"
+              description="回答生成に使うLLM providerです。初期設定はローカルのLM Studioです。"
+              direction="検索のみではproviderを使用しません。"
               title="生成 provider"
             />
           </span>
           <select
             aria-label="生成 provider"
+            disabled={!generatesAnswers}
             value={generationProvider}
             onChange={(event) =>
-              changeGenerationProvider(event.target.value as EvaluationGenerationProvider | "")
+              changeGenerationProvider(event.target.value as EvaluationGenerationProvider)
             }
           >
-            <option value="">システム既定</option>
             {generationProviders.map((provider) => (
               <option key={provider} value={provider}>
                 {provider}
@@ -255,16 +348,17 @@ export function EvaluationListPage() {
           <span className="metric-heading">
             生成 model
             <HelpTooltip
-              description="provider/model とも未指定ならサーバ既定モデルを使います。"
-              direction="API key や token ではなく model 名だけを入力してください。"
+              description="初期設定はLM Studioにロード済みのqwen3.5-9bです。"
+              direction="LM Studioの /v1/models が返すmodel idを入力してください。"
               title="生成 model"
             />
           </span>
           <input
             aria-label="生成 model"
+            disabled={!generatesAnswers}
             list={generationProvider === "nvidia" ? "nvidia-generation-models" : undefined}
             maxLength={128}
-            placeholder="例: gpt-4.1-mini"
+            placeholder="例: qwen3.5-9b"
             value={generationModel}
             onChange={(event) => setGenerationModel(event.target.value)}
           />
@@ -286,9 +380,25 @@ export function EvaluationListPage() {
             onChange={(event) => setCaseLimit(Number(event.target.value))}
           />
         </label>
+        <label>
+          Top K
+          <input
+            aria-label="Top K"
+            type="number"
+            min={1}
+            max={20}
+            value={topK}
+            onChange={(event) => setTopK(Number(event.target.value))}
+          />
+        </label>
         <button
           type="submit"
-          disabled={createRun.isPending || providerWithoutModel || generationSelectionBlocked}
+          disabled={
+            createRun.isPending ||
+            providerWithoutModel ||
+            corpusNotReady ||
+            generationReadinessBlocked
+          }
         >
           評価を実行
         </button>
@@ -325,7 +435,8 @@ export function EvaluationListPage() {
                 <th>比較</th>
                 <th>dataset</th>
                 <th>strategy</th>
-                <th>状態</th>
+                <th>評価スコープ</th>
+                <th>実行状態</th>
                 <th>ケース</th>
                 <th>
                   <span className="metric-heading">
@@ -370,6 +481,7 @@ export function EvaluationListPage() {
                   </td>
                   <td>{truncateText(run.dataset_name, 32)}</td>
                   <td>{run.strategies.length ? run.strategies.join(", ") : run.strategy_type}</td>
+                  <td>{formatEvaluationScope(run.evaluation_scope)}</td>
                   <td>
                     <StatusBadge status={run.status} />
                   </td>
@@ -377,7 +489,7 @@ export function EvaluationListPage() {
                     成功 {run.succeeded_count}/{run.case_count}
                     {run.failed_count ? ` / 失敗 ${run.failed_count}` : ""}
                   </td>
-                  <td>{formatMetricSummary(run.metric_summary)}</td>
+                  <td>{formatMetricSummary(run.metric_summary, metricDefinitions)}</td>
                   <td>{formatCost(run.total_estimated_cost_usd)}</td>
                   <td>{run.job_id ? <Link to={`/admin/jobs/${run.job_id}`}>#{run.job_id}</Link> : "-"}</td>
                   <td>{formatDate(run.started_at)}</td>
@@ -389,6 +501,8 @@ export function EvaluationListPage() {
           <Pagination meta={runs.data.pagination} onPageChange={updatePage} />
         </>
       ) : null}
+
+      <EvaluationDatasetImportForm />
 
       <section className="admin-section">
         <h2>Datasets</h2>
@@ -429,7 +543,34 @@ export function EvaluationListPage() {
   );
 }
 
-function formatMetricSummary(summary: Record<string, number>) {
+function generationReadinessMessage(reasonCode: string): string {
+  if (reasonCode === "provider_unreachable") {
+    return "LM Studioへ接続できません。Local Serverを起動してください。";
+  }
+  if (reasonCode === "model_not_found") {
+    return "指定したモデルがLM Studioにありません。モデル名を確認してください。";
+  }
+  if (reasonCode === "model_not_loaded") {
+    return "指定したモデルがロードされていません。LM Studioでロードしてから再実行してください。";
+  }
+  return "LM Studioのモデル状態を判定できません。サーバー設定を確認してください。";
+}
+
+function formatEvaluationScope(scope: EvaluationScope) {
+  if (scope === "end_to_end") {
+    return "検索＋回答";
+  }
+  if (scope === "answer") {
+    return "回答のみ";
+  }
+  return "検索のみ";
+}
+
+
+function formatMetricSummary(
+  summary: Record<string, number>,
+  definitions: Map<string, EvaluationMetricCatalogItem>
+) {
   const entries = orderedMetricEntries(Object.entries(summary));
   if (!entries.length) {
     return "-";
@@ -439,7 +580,7 @@ function formatMetricSummary(summary: Record<string, number>) {
       {entries.map(([name, value]) => (
         <span className="metric-detail-item" key={name}>
           <span>{name}: {value.toFixed(2)}</span>
-          <MetricHelp metricName={name} />
+          <MetricHelp definition={definitions.get(name)} metricName={name} />
         </span>
       ))}
     </span>
@@ -463,3 +604,4 @@ function nextCacheModes(
   }
   return current.filter((item) => item !== mode);
 }
+

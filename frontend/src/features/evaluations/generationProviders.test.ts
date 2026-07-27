@@ -8,11 +8,11 @@ test("adds the NVIDIA evaluation provider only when locally enabled", () => {
 
 test("keeps the existing evaluation providers unchanged when NVIDIA is disabled", () => {
   expect(buildEvaluationGenerationProviders(false)).toEqual([
-    "fake",
-    "ollama",
     "lmstudio",
+    "ollama",
     "openai",
     "anthropic",
     "gemini"
   ]);
 });
+

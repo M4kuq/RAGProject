@@ -2,9 +2,8 @@ import { isNvidiaApiEnabled } from "../../lib/modelCatalog";
 import type { EvaluationGenerationProvider } from "./evaluationTypes";
 
 const BASE_GENERATION_PROVIDERS: EvaluationGenerationProvider[] = [
-  "fake",
-  "ollama",
   "lmstudio",
+  "ollama",
   "openai",
   "anthropic",
   "gemini"
@@ -17,3 +16,4 @@ export function buildEvaluationGenerationProviders(
     ? [...BASE_GENERATION_PROVIDERS, "nvidia"]
     : [...BASE_GENERATION_PROVIDERS];
 }
+
