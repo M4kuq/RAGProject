@@ -327,7 +327,9 @@ class OpenAICompatibleChatAnswerGenerator:
                     {"role": "user", "content": _openai_input(request)},
                 ],
                 "max_tokens": _max_output_tokens(
-                    min(self.max_output_tokens, max(128, request.max_output_chars // 4))
+                    self.max_output_tokens
+                    if not self.native_lmstudio_api
+                    else min(self.max_output_tokens, max(128, request.max_output_chars // 4))
                 ),
                 "temperature": request.temperature if request.temperature is not None else 0.2,
                 "stream": False,
