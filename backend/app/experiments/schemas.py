@@ -170,9 +170,9 @@ class ExperimentTuningGrid(BaseModel):
 class ExperimentManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[
-        "phase2.experiment.v1", "phase2.experiment.v2"
-    ] = MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["phase2.experiment.v1", "phase2.experiment.v2"] = (
+        MANIFEST_SCHEMA_VERSION
+    )
     experiment_name: str = Field(min_length=1, max_length=120)
     dataset: str = Field(min_length=1, max_length=120)
     case_limit: int = Field(default=20, ge=1, le=MAX_EXPERIMENT_CASE_LIMIT)
@@ -252,9 +252,6 @@ class ExperimentManifest(BaseModel):
         for profile in self.retrieval_profiles:
             if profile.embedding_model not in embedding_ids:
                 raise ValueError("profile embedding_model must reference a candidate")
-            if (
-                profile.reranker_model is not None
-                and profile.reranker_model not in reranker_ids
-            ):
+            if profile.reranker_model is not None and profile.reranker_model not in reranker_ids:
                 raise ValueError("profile reranker_model must reference a candidate")
         return self

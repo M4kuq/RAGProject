@@ -877,9 +877,7 @@ class EvaluationService:
         runtime_collection_name: str | None = None
         if evaluation_backend == "runtime_qdrant":
             if self.settings.app_env.lower() not in {"local", "test"}:
-                raise ValidationFailed(
-                    {"evaluation_backend": "runtime_qdrant is local-only"}
-                )
+                raise ValidationFailed({"evaluation_backend": "runtime_qdrant is local-only"})
             if (
                 dataset is None
                 or getattr(dataset, "corpus_mode", "shared_legacy") != "isolated"
@@ -894,11 +892,7 @@ class EvaluationService:
                 )
             if self.settings.embedding_provider == "fake":
                 raise ValidationFailed(
-                    {
-                        "evaluation_backend": (
-                            "runtime_qdrant requires a real embedding provider"
-                        )
-                    }
+                    {"evaluation_backend": ("runtime_qdrant requires a real embedding provider")}
                 )
             if self.settings.embedding_provider == "lmstudio":
                 try:
@@ -951,11 +945,7 @@ class EvaluationService:
                 and resolved_generation_model != "qwen/qwen3.5-9b"
             ):
                 raise ValidationFailed(
-                    {
-                        "generation_model": (
-                            "local accuracy evaluation is fixed to qwen/qwen3.5-9b"
-                        )
-                    }
+                    {"generation_model": ("local accuracy evaluation is fixed to qwen/qwen3.5-9b")}
                 )
         strategy_type = strategy_targets[0].storage_strategy_type
         cache_modes = [mode.value for mode in _selected_cache_modes(payload.cache_modes)]
@@ -994,15 +984,9 @@ class EvaluationService:
                     "qdrant_collection_name": runtime_collection_name,
                     "resolved_generation_model": resolved_generation_model,
                     "generation_temperature": 0.0,
-                    "generation_max_context_chars": (
-                        self.settings.generation_max_context_chars
-                    ),
-                    "generation_max_output_chars": (
-                        self.settings.generation_max_output_chars
-                    ),
-                    "generation_max_output_tokens": (
-                        self.settings.generation_max_output_tokens
-                    ),
+                    "generation_max_context_chars": (self.settings.generation_max_context_chars),
+                    "generation_max_output_chars": (self.settings.generation_max_output_chars),
+                    "generation_max_output_tokens": (self.settings.generation_max_output_tokens),
                     "generation_retry_on_insufficient_evidence": (
                         self.settings.generation_retry_on_insufficient_evidence
                     ),
@@ -1012,17 +996,14 @@ class EvaluationService:
                     "hybrid_sparse_weight": self.settings.hybrid_sparse_weight,
                     "router_mode": self.settings.router_mode,
                     "router_llm_planner_model_name": (
-                        self.settings.router_llm_planner_model_name
-                        or resolved_generation_model
+                        self.settings.router_llm_planner_model_name or resolved_generation_model
                     ),
                     "router_sufficiency_top_score_threshold": (
                         self.settings.router_sufficiency_top_score_threshold
                     ),
                     "graph_store_provider": self.settings.graph_store_provider,
                     "graph_retrieval_max_depth": self.settings.graph_retrieval_max_depth,
-                    "graph_router_min_signal_score": (
-                        self.settings.graph_router_min_signal_score
-                    ),
+                    "graph_router_min_signal_score": (self.settings.graph_router_min_signal_score),
                 }
             )
         run = self.repository.create_run(
@@ -1594,8 +1575,7 @@ class EvaluationService:
             auxiliary_pass_by_item={
                 judgment.evaluation_run_item_id: judgment.auxiliary_pass
                 for judgment in judgments
-                if judgment.status == "succeeded"
-                and judgment.auxiliary_pass is not None
+                if judgment.status == "succeeded" and judgment.auxiliary_pass is not None
             },
         )
 
@@ -2947,17 +2927,13 @@ class EvaluationService:
             generation_models=generation_summary.generation_models,
             requested_generation_provider=cast(str | None, config["generation_provider"]),
             requested_generation_model=cast(str | None, config["generation_model"]),
-            resolved_generation_model=cast(
-                str | None, config["resolved_generation_model"]
-            ),
+            resolved_generation_model=cast(str | None, config["resolved_generation_model"]),
             embedding_provider=cast(str | None, config["embedding_provider"]),
             embedding_model=cast(str | None, config["embedding_model"]),
             embedding_dimension=cast(int | None, config["embedding_dimension"]),
             rerank_provider=cast(str | None, config["rerank_provider"]),
             reranker_model=cast(str | None, config["reranker_model"]),
-            qdrant_collection_name=cast(
-                str | None, config["qdrant_collection_name"]
-            ),
+            qdrant_collection_name=cast(str | None, config["qdrant_collection_name"]),
             error_code=run.error_code,
             error_message=redact_error_message(run.error_message) if run.error_message else None,
             started_at=run.started_at,
@@ -3707,24 +3683,14 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
         "logical_document_ids": logical_document_ids,
         "corpus_fingerprint": corpus_fingerprint,
-        "dataset_content_fingerprint": retrieval_settings.get(
-            "dataset_content_fingerprint"
-        ),
+        "dataset_content_fingerprint": retrieval_settings.get("dataset_content_fingerprint"),
         "experiment_name": retrieval_settings.get("experiment_name"),
         "experiment_profile_id": retrieval_settings.get("experiment_profile_id"),
         "repeat_number": retrieval_settings.get("repeat_number", 1),
-        "resolved_generation_model": retrieval_settings.get(
-            "resolved_generation_model"
-        ),
-        "generation_max_context_chars": retrieval_settings.get(
-            "generation_max_context_chars"
-        ),
-        "generation_max_output_chars": retrieval_settings.get(
-            "generation_max_output_chars"
-        ),
-        "generation_max_output_tokens": retrieval_settings.get(
-            "generation_max_output_tokens"
-        ),
+        "resolved_generation_model": retrieval_settings.get("resolved_generation_model"),
+        "generation_max_context_chars": retrieval_settings.get("generation_max_context_chars"),
+        "generation_max_output_chars": retrieval_settings.get("generation_max_output_chars"),
+        "generation_max_output_tokens": retrieval_settings.get("generation_max_output_tokens"),
         "generation_retry_on_insufficient_evidence": retrieval_settings.get(
             "generation_retry_on_insufficient_evidence"
         ),
@@ -3739,19 +3705,13 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "hybrid_dense_weight": retrieval_settings.get("hybrid_dense_weight"),
         "hybrid_sparse_weight": retrieval_settings.get("hybrid_sparse_weight"),
         "router_mode": retrieval_settings.get("router_mode"),
-        "router_llm_planner_model_name": retrieval_settings.get(
-            "router_llm_planner_model_name"
-        ),
+        "router_llm_planner_model_name": retrieval_settings.get("router_llm_planner_model_name"),
         "router_sufficiency_top_score_threshold": retrieval_settings.get(
             "router_sufficiency_top_score_threshold"
         ),
         "graph_store_provider": retrieval_settings.get("graph_store_provider"),
-        "graph_retrieval_max_depth": retrieval_settings.get(
-            "graph_retrieval_max_depth"
-        ),
-        "graph_router_min_signal_score": retrieval_settings.get(
-            "graph_router_min_signal_score"
-        ),
+        "graph_retrieval_max_depth": retrieval_settings.get("graph_retrieval_max_depth"),
+        "graph_router_min_signal_score": retrieval_settings.get("graph_router_min_signal_score"),
     }
 
 
@@ -3793,22 +3753,16 @@ def _runtime_settings_from_config(
         value = config.get(field_name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             target_name = (
-                "embedding_vector_dimension"
-                if field_name == "embedding_dimension"
-                else field_name
+                "embedding_vector_dimension" if field_name == "embedding_dimension" else field_name
             )
             updates[target_name] = value
     for field_name in float_fields:
         value = config.get(field_name)
         if isinstance(value, int | float) and not isinstance(value, bool):
             updates[field_name] = float(value)
-    retry_on_insufficient_evidence = config.get(
-        "generation_retry_on_insufficient_evidence"
-    )
+    retry_on_insufficient_evidence = config.get("generation_retry_on_insufficient_evidence")
     if isinstance(retry_on_insufficient_evidence, bool):
-        updates["generation_retry_on_insufficient_evidence"] = (
-            retry_on_insufficient_evidence
-        )
+        updates["generation_retry_on_insufficient_evidence"] = retry_on_insufficient_evidence
     return settings.model_copy(update=updates)
 
 
@@ -5127,9 +5081,8 @@ def _run_comparability(
         and base.summary.dataset_name != candidate.summary.dataset_name
     ):
         reasons.append("dataset_mismatch")
-    if (
-        base_config.get("dataset_content_fingerprint")
-        != candidate_config.get("dataset_content_fingerprint")
+    if base_config.get("dataset_content_fingerprint") != candidate_config.get(
+        "dataset_content_fingerprint"
     ):
         reasons.append("dataset_content_fingerprint_mismatch")
     if base.run.corpus_fingerprint != candidate.run.corpus_fingerprint:
@@ -5139,8 +5092,7 @@ def _run_comparability(
     if base.summary.evaluation_backend != candidate.summary.evaluation_backend:
         reasons.append("evaluation_backend_mismatch")
     base_generation_model = (
-        base_config.get("resolved_generation_model")
-        or base.summary.requested_generation_model
+        base_config.get("resolved_generation_model") or base.summary.requested_generation_model
     )
     candidate_generation_model = (
         candidate_config.get("resolved_generation_model")
@@ -5190,9 +5142,9 @@ def _paired_run_statistics(
     )
     if human_pairs:
         pairs = human_pairs
-        outcome_source: Literal[
-            "human_calibration", "auxiliary_judge", "unavailable"
-        ] = "human_calibration"
+        outcome_source: Literal["human_calibration", "auxiliary_judge", "unavailable"] = (
+            "human_calibration"
+        )
     else:
         pairs = _paired_binary_outcomes(
             base,
@@ -5208,9 +5160,7 @@ def _paired_run_statistics(
     candidate_rate = sum(1 for _, candidate_pass in pairs if candidate_pass) / len(pairs)
     absolute_delta_points = (candidate_rate - base_rate) * 100.0
     relative_improvement = (
-        ((candidate_rate - base_rate) / base_rate) * 100.0
-        if base_rate > 0.0
-        else None
+        ((candidate_rate - base_rate) / base_rate) * 100.0 if base_rate > 0.0 else None
     )
     confidence_interval = _paired_bootstrap_confidence_interval(
         pairs,
@@ -5223,9 +5173,7 @@ def _paired_run_statistics(
         candidate_pass_rate=round(candidate_rate, 6),
         absolute_percentage_point_delta=round(absolute_delta_points, 6),
         relative_improvement=(
-            round(relative_improvement, 6)
-            if relative_improvement is not None
-            else None
+            round(relative_improvement, 6) if relative_improvement is not None else None
         ),
         confidence_interval_95=confidence_interval,
         mcnemar_p_value=_exact_mcnemar_p_value(pairs),
@@ -5287,9 +5235,7 @@ def _exact_mcnemar_p_value(pairs: Sequence[tuple[bool, bool]]) -> float:
     if discordant == 0:
         return 1.0
     tail = min(base_only, candidate_only)
-    probability = sum(
-        math.comb(discordant, value) for value in range(tail + 1)
-    ) / (2**discordant)
+    probability = sum(math.comb(discordant, value) for value in range(tail + 1)) / (2**discordant)
     return round(min(1.0, 2.0 * probability), 12)
 
 

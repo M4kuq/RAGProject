@@ -330,18 +330,12 @@ class RetrievalModelExperimentRunner:
                 item for item in embeddings if item.model_id == candidate.embedding_model
             )
             reranker = next(
-                (
-                    item
-                    for item in rerankers
-                    if item.model_id == candidate.reranker_model
-                ),
+                (item for item in rerankers if item.model_id == candidate.reranker_model),
                 None,
             )
             embedding_availability = availability(embedding, ModelKind.EMBEDDING)
             reranker_availability = (
-                availability(reranker, ModelKind.RERANKER)
-                if reranker is not None
-                else None
+                availability(reranker, ModelKind.RERANKER) if reranker is not None else None
             )
             candidate_manifest = manifest.model_copy(
                 update={
@@ -400,16 +394,10 @@ class RetrievalModelExperimentRunner:
                 )
 
         non_supplemental_ids = {
-            candidate.candidate_id
-            for candidate in tuning_candidates
-            if not candidate.supplemental
+            candidate.candidate_id for candidate in tuning_candidates if not candidate.supplemental
         }
         finalist_ids = select_retrieval_finalists(
-            [
-                result
-                for result in screening_results
-                if result.candidate_id in non_supplemental_ids
-            ],
+            [result for result in screening_results if result.candidate_id in non_supplemental_ids],
             limit=3,
         )
         for candidate_id in finalist_ids:
@@ -626,10 +614,7 @@ def _run_runtime_qdrant_evaluation(
                 dataset_name=manifest.dataset,
             )
             user = db.scalar(
-                select(User)
-                .where(User.status == "active")
-                .order_by(User.user_id.asc())
-                .limit(1)
+                select(User).where(User.status == "active").order_by(User.user_id.asc()).limit(1)
             )
             if dataset is None or user is None:
                 raise ExperimentError("runtime_dataset_or_user_unavailable")
@@ -646,9 +631,7 @@ def _run_runtime_qdrant_evaluation(
                 cache_modes=[EvaluationCacheMode.DISABLED],
                 top_k=settings.retrieval_top_k_default,
                 rerank_top_n=settings.rerank_top_n_default,
-                generation_provider=(
-                    generation_profile.provider if end_to_end else None
-                ),
+                generation_provider=(generation_profile.provider if end_to_end else None),
                 generation_model=generation_profile.model if end_to_end else None,
                 trigger_type=EvaluationTriggerType.MANUAL,
                 evaluation_scope=manifest.evaluation_scope,
@@ -682,8 +665,7 @@ def _run_runtime_qdrant_evaluation(
             return ExperimentEvaluationOutcome(
                 status=detail.status,
                 metrics_by_strategy=[
-                    comparison.model_dump(mode="json")
-                    for comparison in detail.strategy_comparison
+                    comparison.model_dump(mode="json") for comparison in detail.strategy_comparison
                 ],
                 metrics=metrics,
                 case_count=detail.case_count,
@@ -699,17 +681,13 @@ def _run_runtime_qdrant_evaluation(
                         for candidate in detail.failure_candidates
                     },
                 },
-                reason_codes=(
-                    [detail.error_code] if detail.error_code is not None else []
-                ),
+                reason_codes=([detail.error_code] if detail.error_code is not None else []),
                 elapsed_ms=elapsed_ms,
             )
     except ExperimentError as exc:
         reason_code = exc.error_code
     except Exception as exc:
-        reason_code = _safe_experiment_reason_code(
-            getattr(exc, "error_code", None)
-        )
+        reason_code = _safe_experiment_reason_code(getattr(exc, "error_code", None))
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return ExperimentEvaluationOutcome(
         status="blocked",
@@ -841,9 +819,7 @@ def _settings_for_candidate(
     return settings.model_copy(
         update={
             "embedding_provider": (
-                "lmstudio"
-                if embedding.provider == ModelProvider.LMSTUDIO
-                else "local"
+                "lmstudio" if embedding.provider == ModelProvider.LMSTUDIO else "local"
             ),
             "embedding_model": embedding.model_id,
             "embedding_vector_dimension": int(dimension),
@@ -903,13 +879,9 @@ def _profile_for_tuning_candidate(
             "dense_weight": candidate.dense_weight,
             "sparse_weight": candidate.sparse_weight,
             "rrf_k": candidate.rrf_k,
-            "agentic_sufficiency_threshold": (
-                candidate.agentic_sufficiency_threshold
-            ),
+            "agentic_sufficiency_threshold": (candidate.agentic_sufficiency_threshold),
             "graph_depth": candidate.graph_depth,
-            "graph_router_signal_threshold": (
-                candidate.graph_router_signal_threshold
-            ),
+            "graph_router_signal_threshold": (candidate.graph_router_signal_threshold),
         }
     )
 
@@ -967,11 +939,7 @@ def _provisional_end_to_end_winner(
                 collected.setdefault(metric_name, []).append(value)
     candidates: list[EndToEndResult] = []
     for candidate_id, metrics in by_candidate.items():
-        required = {
-            metric_name: _mean(values)
-            for metric_name, values in metrics.items()
-            if values
-        }
+        required = {metric_name: _mean(values) for metric_name, values in metrics.items() if values}
         if not all(
             metric_name in required
             for metric_name in (
@@ -985,9 +953,7 @@ def _provisional_end_to_end_winner(
         candidates.append(
             EndToEndResult(
                 candidate_id=candidate_id,
-                grounded_answer_pass_rate=required[
-                    "grounded_answer_pass_rate_provisional"
-                ],
+                grounded_answer_pass_rate=required["grounded_answer_pass_rate_provisional"],
                 citation_correctness=required["citation_correctness"],
                 answer_completeness=required["answer_completeness"],
                 p95_latency_ms=required["p95_latency"],

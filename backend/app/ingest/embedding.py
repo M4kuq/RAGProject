@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 SAFE_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,179}$")
-SECRET_MODEL_ID_RE = re.compile(
-    r"(?i)(api[_-]?key|secret|password|credential|token|bearer|sk-)"
-)
+SECRET_MODEL_ID_RE = re.compile(r"(?i)(api[_-]?key|secret|password|credential|token|bearer|sk-)")
 STOPWORDS = {
     "a",
     "an",

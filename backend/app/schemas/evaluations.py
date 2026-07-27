@@ -1000,9 +1000,7 @@ class EvaluationPairedStatistics(BaseModel):
     relative_improvement: float | None = None
     confidence_interval_95: tuple[float, float] | None = None
     mcnemar_p_value: float | None = Field(default=None, ge=0.0, le=1.0)
-    outcome_source: Literal["human_calibration", "auxiliary_judge", "unavailable"] = (
-        "unavailable"
-    )
+    outcome_source: Literal["human_calibration", "auxiliary_judge", "unavailable"] = "unavailable"
 
 
 class EvaluationRunComparison(BaseModel):
@@ -1012,9 +1010,7 @@ class EvaluationRunComparison(BaseModel):
     metrics: list[EvaluationMetricComparison] = Field(default_factory=list)
     cases: list[EvaluationCaseComparison] = Field(default_factory=list)
     summary: EvaluationRunComparisonSummary
-    comparability: EvaluationRunComparability = Field(
-        default_factory=EvaluationRunComparability
-    )
+    comparability: EvaluationRunComparability = Field(default_factory=EvaluationRunComparability)
     paired_statistics: EvaluationPairedStatistics = Field(
         default_factory=EvaluationPairedStatistics
     )

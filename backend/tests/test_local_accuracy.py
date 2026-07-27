@@ -67,9 +67,7 @@ def test_runtime_collection_is_stable_and_isolates_embedding_profiles() -> None:
     first = runtime_evaluation_collection_name(**common)
     assert first == runtime_evaluation_collection_name(**common)
     assert first.startswith("document_chunks_eval_")
-    assert first != runtime_evaluation_collection_name(
-        **(common | {"embedding_dimension": 1024})
-    )
+    assert first != runtime_evaluation_collection_name(**(common | {"embedding_dimension": 1024}))
     assert first != runtime_evaluation_collection_name(
         **(common | {"corpus_fingerprint": "b" * 64})
     )
@@ -138,9 +136,7 @@ def test_manifest_v1_remains_compatible_and_v2_is_fixed_to_qwen_9b() -> None:
             "schema_version": "phase2.experiment.v1",
             "experiment_name": "legacy",
             "dataset": "phase1_smoke",
-            "embedding_models": [
-                {"model_id": "sentence-transformers/all-MiniLM-L6-v2"}
-            ],
+            "embedding_models": [{"model_id": "sentence-transformers/all-MiniLM-L6-v2"}],
         }
     )
     assert v1.evaluation_backend == "deterministic_db"
@@ -182,12 +178,15 @@ def test_coordinate_search_and_staged_selection_are_bounded_and_deterministic() 
         ]
     )
     assert finalists == ["a", "b", "c"]
-    assert select_end_to_end_winner(
-        [
-            EndToEndResult("slow", 0.8, 0.9, 0.9, 5000),
-            EndToEndResult("fast", 0.8, 0.9, 0.9, 2000),
-        ]
-    ) == "fast"
+    assert (
+        select_end_to_end_winner(
+            [
+                EndToEndResult("slow", 0.8, 0.9, 0.9, 5000),
+                EndToEndResult("fast", 0.8, 0.9, 0.9, 2000),
+            ]
+        )
+        == "fast"
+    )
 
 
 def test_paired_statistics_are_reproducible_and_mcnemar_is_exact() -> None:

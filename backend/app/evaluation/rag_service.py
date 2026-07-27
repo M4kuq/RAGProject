@@ -231,9 +231,7 @@ def runtime_evaluation_collection_name(
         raise RuntimeEvaluationError("runtime_corpus_fingerprint_invalid")
     if embedding_dimension < 1:
         raise RuntimeEvaluationError("runtime_embedding_dimension_invalid")
-    profile_key = (
-        f"{corpus_fingerprint}:{embedding_model.strip()}:{embedding_dimension}"
-    )
+    profile_key = f"{corpus_fingerprint}:{embedding_model.strip()}:{embedding_dimension}"
     profile_hash = hashlib.sha256(profile_key.encode("utf-8")).hexdigest()[:16]
     return f"{base_collection_name}_eval_{profile_hash}"
 
@@ -273,8 +271,7 @@ def prepare_runtime_evaluation_collection(
         document_version = db.scalar(
             select(DocumentVersion)
             .where(
-                DocumentVersion.logical_document_id
-                == logical_document.logical_document_id,
+                DocumentVersion.logical_document_id == logical_document.logical_document_id,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
             )
@@ -286,10 +283,7 @@ def prepare_runtime_evaluation_collection(
         chunks = list(
             db.scalars(
                 select(DocumentChunk)
-                .where(
-                    DocumentChunk.document_version_id
-                    == document_version.document_version_id
-                )
+                .where(DocumentChunk.document_version_id == document_version.document_version_id)
                 .order_by(DocumentChunk.chunk_index.asc())
             )
         )

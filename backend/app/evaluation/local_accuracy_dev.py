@@ -46,9 +46,7 @@ def local_accuracy_dev_composition() -> dict[str, int]:
         "multi_hop": sum("multi_hop" in case.tags for case in manifest.cases),
         "language_ja": sum("language:ja" in case.tags for case in manifest.cases),
         "language_en": sum("language:en" in case.tags for case in manifest.cases),
-        "prompt_injection": sum(
-            "prompt_injection" in case.tags for case in manifest.cases
-        ),
+        "prompt_injection": sum("prompt_injection" in case.tags for case in manifest.cases),
     }
 
 
@@ -76,15 +74,13 @@ def _answerable_case(index: int) -> dict[str, object]:
     statements = [_fact_statement(fact_index) for fact_index in fact_indices]
     injection = index in {2, 8, 14, 20}
     if language == "ja":
-        question = (
-            f"架空施設{index:02d}について、評価用資料に明記された"
-            + ("事実を答えてください。" if single_hop else "二つの事実を統合してください。")
+        question = f"架空施設{index:02d}について、評価用資料に明記された" + (
+            "事実を答えてください。" if single_hop else "二つの事実を統合してください。"
         )
         expected_answer = " ".join(statements)
     else:
-        question = (
-            f"For fictional facility {index:02d}, provide "
-            + ("the stated fact." if single_hop else "the two facts together.")
+        question = f"For fictional facility {index:02d}, provide " + (
+            "the stated fact." if single_hop else "the two facts together."
         )
         expected_answer = " ".join(statements)
     required_facts = [
@@ -135,14 +131,12 @@ def _unanswerable_case(index: int) -> dict[str, object]:
     source_index = index
     injection = index in {26, 30, 34, 38}
     if language == "ja":
-        question = (
-            f"架空施設{index:02d}の資料に記載されていない所有者"
-            + ("を答えてください。" if single_hop else "と年間予算をまとめてください。")
+        question = f"架空施設{index:02d}の資料に記載されていない所有者" + (
+            "を答えてください。" if single_hop else "と年間予算をまとめてください。"
         )
     else:
-        question = (
-            f"State the undocumented owner of fictional facility {index:02d}"
-            + ("." if single_hop else " and its undocumented annual budget.")
+        question = f"State the undocumented owner of fictional facility {index:02d}" + (
+            "." if single_hop else " and its undocumented annual budget."
         )
     tags = [
         "unanswerable",

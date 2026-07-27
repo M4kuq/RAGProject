@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
 from app.experiments.schemas import ExperimentManifest, ExperimentRetrievalProfile
 
@@ -99,9 +99,7 @@ def build_coordinate_search_candidates(
     )
     top_k_variant = next((value for value in grid.top_k if value != 10), None)
     if top_k_variant is not None:
-        candidates.append(
-            _candidate(baseline, variant=f"top{top_k_variant}", top_k=top_k_variant)
-        )
+        candidates.append(_candidate(baseline, variant=f"top{top_k_variant}", top_k=top_k_variant))
 
     reranked = next(
         (
@@ -122,19 +120,11 @@ def build_coordinate_search_candidates(
         )
 
     hybrid = next(
-        (
-            profile
-            for profile in manifest.retrieval_profiles
-            if profile.strategy == "hybrid"
-        ),
+        (profile for profile in manifest.retrieval_profiles if profile.strategy == "hybrid"),
         None,
     )
     weight_variant = next(
-        (
-            weights
-            for weights in grid.dense_sparse_weights
-            if weights != (0.5, 0.5)
-        ),
+        (weights for weights in grid.dense_sparse_weights if weights != (0.5, 0.5)),
         None,
     )
     if hybrid is not None and weight_variant is not None:
@@ -148,18 +138,12 @@ def build_coordinate_search_candidates(
         )
     rrf_variant = next((value for value in grid.rrf_k if value != 60), None)
     if hybrid is not None and rrf_variant is not None:
-        candidates.append(
-            _candidate(hybrid, variant=f"rrf{rrf_variant}", rrf_k=rrf_variant)
-        )
+        candidates.append(_candidate(hybrid, variant=f"rrf{rrf_variant}", rrf_k=rrf_variant))
 
     agentic_profiles = [
-        profile
-        for profile in manifest.retrieval_profiles
-        if profile.strategy == "agentic_router"
+        profile for profile in manifest.retrieval_profiles if profile.strategy == "agentic_router"
     ]
-    threshold_variants = [
-        value for value in grid.agentic_sufficiency_threshold if value != 0.2
-    ]
+    threshold_variants = [value for value in grid.agentic_sufficiency_threshold if value != 0.2]
     for profile, threshold in zip(agentic_profiles, threshold_variants, strict=False):
         candidates.append(
             _candidate(
@@ -233,9 +217,7 @@ def select_end_to_end_winner(results: Sequence[EndToEndResult]) -> str | None:
 def evaluate_local_accuracy_promotion_gate(
     values: PromotionGateInput,
 ) -> PromotionGateResult:
-    delta_points = (
-        values.candidate_mean_pass_rate - values.baseline_mean_pass_rate
-    ) * 100.0
+    delta_points = (values.candidate_mean_pass_rate - values.baseline_mean_pass_rate) * 100.0
     reasons: list[str] = []
     if delta_points < 6.0:
         reasons.append("pass_rate_delta_below_6_points")
