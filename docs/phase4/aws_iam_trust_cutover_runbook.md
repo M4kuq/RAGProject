@@ -1636,7 +1636,9 @@ Write-Host "Root deploy trust: main"
 
 ```powershell
 $SmokeBackup = Join-Path $CutoverDir "oidc-smoke.before.json"
-$SmokeMainPolicy = Join-Path $CutoverDir "oidc-smoke.main.json"
+$SmokeMainPolicy = Join-Path `
+  $CutoverDir `
+  "oidc-smoke-$(New-CutoverArtifactId).main.json"
 $SmokePolicy = Get-Content -LiteralPath $SmokeBackup -Raw | ConvertFrom-Json
 $SmokeStatements = @($SmokePolicy.Statement)
 if ($SmokeStatements.Count -ne 1) {
