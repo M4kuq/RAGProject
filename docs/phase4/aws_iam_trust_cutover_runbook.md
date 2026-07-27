@@ -1,0 +1,1068 @@
+# AWS IAM OIDC trust cutover runbook
+
+## 目的と適用範囲
+
+このrunbookは、Phase4 D1a（[RAG-18](https://keichannel116.atlassian.net/browse/RAG-18)）として、GitHub ActionsのOIDC trustを旧`deploy/AWS_ECS` branchから`main`へ切り替えるための人間向け手順である。
+
+対象は次の3系統、合計4 roleに限る。
+
+1. bootstrap stackのTerraform plan roleとTerraform lifecycle role
+2. root stackのGitHub deploy role
+3. permissionless OIDC smoke role
+
+このrunbookの作成時にはAWS API、Terraform plan/apply、GitHub Actions workflow、GitHub設定変更を実行していない。以下のコマンドは、権限を持つ人間が保守時間帯に上から順に実行するためのものである。D1aではruntime resourceの作成・削除、`.tf` / `.ps1`の変更、旧branch削除、ephemeral lifecycleの実測を行わない。
+
+## 1. 2026-07-27時点の静的な現状記録
+
+基準はPR #126を含む`origin/main`のcommit `5f16ba5`である。
+
+| 系統 | repository内の現在値 | 影響するrole | 参照元 |
+|---|---|---|---|
+| bootstrap | `github_deploy_branch` defaultは`main` | Terraform plan role、Terraform lifecycle role | `deploy/aws-ecs/bootstrap/variables.tf:48-56` |
+| root | `github_deploy_branch` defaultは`main` | GitHub deploy role | `deploy/aws-ecs/variables.tf:233-237` |
+| OIDC smoke | `Branch` defaultは`main` | permissionless OIDC smoke role | `deploy/aws-ecs/scripts/aws-oidc-bootstrap.ps1:1-13` |
+
+root deploy roleのtrust subjectは`deploy/aws-ecs/modules/iam/main.tf:63-66`で次の形に組み立てられる。
+
+```hcl
+values = ["repo:${var.github_oidc_repo}:ref:refs/heads/${var.github_deploy_branch}"]
+```
+
+bootstrapの2 roleも同じsubject形を`deploy/aws-ecs/bootstrap/access.tf:32-35`と`deploy/aws-ecs/bootstrap/lifecycle.tf:65-68`で使う。OIDC smoke scriptは`deploy/aws-ecs/scripts/aws-oidc-bootstrap.ps1:87-107`で同じ形のpolicyを生成し、`146-178`で完全一致を検証する。
+
+GitHub repository variable `DEPLOY_BRANCH`は、2026-07-27のread-only確認では`deploy/AWS_ECS`であった。この値は`AWS Infra Plan`の`TF_VAR_github_deploy_branch`に渡る（`.github/workflows/aws-infra-plan.yml:69-75`）。一方、`AWS Demo Lifecycle`は既に`main`を明示している（`.github/workflows/aws-demo.yml:48-54`）。
+
+AWS上の実trustは、このrunbook作成時には参照していない。D0で記録された「4 roleのtrustは旧branchを許可したまま」を開始仮説とし、手順1のlocal preflightで必ず再確認する。仮説どおりなら、`main` workflowはbranch guardを通過した後、`aws-actions/configure-aws-credentials`による`AssumeRoleWithWebIdentity`で拒否され、Terraformやsmoke本体へ進まない。
+
+### 追加のbranch-scoped roleの調査結果
+
+`sts:AssumeRoleWithWebIdentity`、GitHub OIDC subject、`github_deploy_branch`のrepository内検索では、上記3系統以外のbranch-scoped role定義は見つからなかった。workflowが参照するroleとの対応は次のとおりである。
+
+| workflow | role系統 |
+|---|---|
+| `AWS Infra Plan` | bootstrap Terraform plan role |
+| `AWS Demo Lifecycle` | bootstrap Terraform lifecycle role |
+| `AWS Deploy App` / `AWS Deploy Frontend` | root GitHub deploy role |
+| `AWS OIDC Smoke` | permissionless OIDC smoke role |
+
+## 2. `aws-demo.ps1`経由で切り替えられない理由
+
+`deploy/aws-ecs/scripts/aws-demo.ps1:138-139`はTerraform実行前に、Terraformへ渡すbranchとscriptの期待branchが一致することを強制する。
+
+```powershell
+if ($env:TF_VAR_github_deploy_branch -ne $script:ExpectedBranch) {
+  throw "TF_VAR_github_deploy_branch must be $script:ExpectedBranch."
+}
+```
+
+旧branch側のscriptでは`ExpectedBranch`が旧branchのままである。そのため、旧branchから`TF_VAR_github_deploy_branch=main`を渡すと必ずthrowし、Terraformへ到達しない。D1aは`aws-demo.ps1`を変更せず、人間がlocal認証でTerraformを直接実行する。guardを一時的に外す方法はfail-closedを弱め、復元漏れも起こり得るため推奨しない。
+
+## 3. RAG-17 apply前確認
+
+### 3.1 state分離とbackend値
+
+| stack | backend | 現状 | D1aでの扱い |
+|---|---|---|---|
+| bootstrap | backend blockがないためimplicit local backend | 権威あるstateは、そのbootstrap作業ディレクトリの`terraform.tfstate` | stateを読んだりcommitしたりせず、存在確認と安全なlocal backupを行う |
+| root | S3 remote backend | `backend.tf:7,10`のbucket / lock tableはplaceholder。`key`と`region`はbootstrap defaultと一致 | bootstrapの`backend_config` outputを変数へ取り込み、`terraform init -reconfigure -backend-config=...`で全項目を上書きする |
+
+bootstrapの`backend_config` outputは`deploy/aws-ecs/bootstrap/outputs.tf:11-19`にあり、bucket、lock table、region、key、encryptを一組で返す。`DEPLOY.md:146-170`と`README.md:71-100`も「bootstrapをlocal backendで先にapplyし、そのoutputsをroot backendへ渡す」という同じ順序を記載している。したがって移行方針は現行docsと一致する。
+
+`backend.tf`にあるkey / regionは現行bootstrap defaultと一致しており、静的な不整合はない。ただし、過去のbootstrap applyで`state_key`または`region`を上書きしていた場合、固定値を使うと誤ったstateへ接続する。必ず`backend_config` outputの全項目を渡し、placeholderを使ったままinitしない。
+
+### 3.2 apply入力とoutputs
+
+bootstrap変数にはすべてdefaultがある。ただし、過去のapplyでtfvarsを使った場合は同じtfvarsを再利用し、`github_deploy_branch`だけをCLIで`main`へ上書きする。特に`project`、`environment`、`github_oidc_repo`、`github_oidc_provider_arn`を過去と変えてはならない。
+
+root stackにはdefaultのない変数とsensitiveな入力がある。新しい値をD1aで組み立てず、直近の正常なroot applyで使用した同一のtfvarsまたは同等の安全な環境注入を再利用する。branchだけをCLIで`main`へ上書きする。
+
+利用できるoutputsは次のとおりである。
+
+| output | 用途 |
+|---|---|
+| bootstrap `backend_config` | root remote backendの完全なinit設定 |
+| bootstrap `terraform_plan_role_arn` | plan role名を画面へ出さずに取得 |
+| bootstrap `terraform_lifecycle_role_arn` | lifecycle role名を画面へ出さずに取得 |
+| bootstrap `github_oidc_provider_arn` | rootの既存OIDC provider入力 |
+| root `github_deploy_role_arn` | deploy role名を画面へ出さずに取得 |
+
+### 3.3 必要権限
+
+local実行主体には、少なくとも次が必要である。
+
+- bootstrap local stateが管理するresourceのreadと、bootstrap 2 roleのtrust更新
+- root remote stateのread/writeとlock、root deploy roleのtrust更新
+- smoke roleのreadとtrust更新
+- caller accountが既存の`AWS_DEMO_ALLOWED_ACCOUNT_IDS`に含まれること
+
+bootstrap lifecycle roleのpolicyにはroot runtime roleのtrust更新権限があるが、bootstrap自身の2 roleや別管理のsmoke roleは対象外である。したがって、4 roleすべてを復旧できる既存のlocal運用権限が必要であり、GitHub OIDCだけに依存してはならない。
+
+### 3.4 未解決の前提
+
+次はrepositoryの静的調査だけでは確定できない。いずれかを満たせない場合はapplyせず停止する。
+
+- 権威あるbootstrap local stateを保持するディレクトリの実path
+- bootstrapとrootで過去に使用したtfvarsの実pathと同一性
+- local実行主体が上記権限を持つこと
+- GitHub secretが現在の4 roleを指していること
+- AWS上の各trustが本当に旧branchだけを許可しているか、または既に一部切り替わっているか
+
+## 4. 実行順序と切り替え点
+
+順序は次のとおりとする。
+
+1. local account、state、入力、4 trustをpreflightし、trust policyをlocal一時領域へbackupする
+2. bootstrapのplan / lifecycle roleを`main`へ更新する
+3. rootのdeploy roleを`main`へ更新する
+4. smoke roleを`main`へ更新する
+5. repository variable `DEPLOY_BRANCH`を`main`へ更新する
+6. `main`からOIDC smokeだけを実行する
+7. 4 roleとrepository設定から旧branch依存が消えたことを確認する
+8. rollback不要と判断した後、repository外の一時artifactを安全に削除する
+
+role trustを先に揃え、repository variableとworkflow実行を最後にすることで、「新設定を公開したが対応roleがまだassumeできない」時間を最小化する。`DEPLOY_BRANCH`を先に変更してもAWS trustは変わらず、失敗するworkflowを増やすだけなので先行させない。
+
+| 完了時点 | `main`からAssumeRole可能になる対象 |
+|---|---|
+| 手順2のapply直後 | Terraform plan role、Terraform lifecycle role |
+| 手順3のapply直後 | GitHub deploy role |
+| 手順4のIAM更新直後 | OIDC smoke role |
+| 手順5のvariable更新直後 | 3系統とworkflow入力が整合した状態 |
+
+D1aで実行確認するworkflowはpermissionlessな`AWS OIDC Smoke`だけとする。Terraform plan、lifecycle、app/frontend deployはD1aでは実行しない。
+
+## 5. 実行手順
+
+すべて同じPowerShell sessionで実行する。実値をterminalへ表示、clipboardへcopy、issue / PR / chatへ貼付してはならない。plan、state、trust backupはaccount識別子やpolicyを含む可能性があるため、repository外の一時ディレクトリだけに置く。
+
+### 手順1: local preflight、state入力、trust backup
+
+**cwd:** 最初は任意。`$MainRepoRoot`と`$BootstrapDir`を絶対pathで設定した後、command自身がcwdを切り替える。
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$MainRepoRoot = "<ABSOLUTE_PATH_TO_CLEAN_MAIN_WORKTREE>"
+$BootstrapDir = "<ABSOLUTE_PATH_TO_AUTHORITATIVE_BOOTSTRAP_DIR>"
+$RootTfvars = "<ABSOLUTE_PATH_TO_EXISTING_ROOT_TFVARS>"
+$BootstrapTfvars = "" # 過去に使った場合だけ絶対path。未使用なら空文字
+$AwsProfile = "<AWS_PROFILE>"
+$Repository = "<OWNER>/<REPO>"
+$SmokeRoleName = "ragproject-demo-github-oidc-smoke"
+$OldBranch = "deploy/AWS_ECS"
+$NewBranch = "main"
+
+$RequiredText = @($MainRepoRoot, $BootstrapDir, $RootTfvars, $AwsProfile, $Repository)
+if (@($RequiredText | Where-Object { $_ -match "^<.*>$" -or [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+  throw "Replace every required placeholder before continuing."
+}
+if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
+  throw "Repository must use OWNER/REPO format."
+}
+
+$MainRepoRoot = (Resolve-Path -LiteralPath $MainRepoRoot).Path
+$BootstrapDir = (Resolve-Path -LiteralPath $BootstrapDir).Path
+$RootTfvars = (Resolve-Path -LiteralPath $RootTfvars).Path
+if ($BootstrapTfvars) {
+  $BootstrapTfvars = (Resolve-Path -LiteralPath $BootstrapTfvars).Path
+}
+
+foreach ($CommandName in @("git", "terraform", "aws", "gh")) {
+  if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+    throw "Required command is unavailable: $CommandName"
+  }
+}
+
+Set-Location -LiteralPath $MainRepoRoot
+if ((git branch --show-current).Trim() -cne "main") {
+  throw "MainRepoRoot must be on main."
+}
+git fetch origin --prune
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not refresh origin refs."
+}
+git merge-base --is-ancestor 5f16ba5 HEAD
+if ($LASTEXITCODE -ne 0) {
+  throw "PR #126 commit is not an ancestor of HEAD."
+}
+if ((git rev-parse HEAD).Trim() -cne (git rev-parse origin/main).Trim()) {
+  throw "HEAD must equal the already-fetched origin/main."
+}
+if (@(git status --porcelain --untracked-files=no).Count -ne 0) {
+  throw "MainRepoRoot has tracked changes."
+}
+$GhRepositoryJson = (gh repo view --json nameWithOwner | Out-String)
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not resolve the GitHub repository."
+}
+$GhRepository = ConvertFrom-Json -InputObject $GhRepositoryJson
+if ([string]$GhRepository.nameWithOwner -cne $Repository) {
+  throw "gh is targeting a different repository."
+}
+
+$BootstrapState = Join-Path $BootstrapDir "terraform.tfstate"
+if (-not (Test-Path -LiteralPath $BootstrapState -PathType Leaf)) {
+  throw "Authoritative bootstrap local state was not found. Do not apply from empty state."
+}
+$BootstrapRepoRoot = (git -C $BootstrapDir rev-parse --show-toplevel).Trim()
+git -C $BootstrapRepoRoot diff --quiet HEAD -- deploy/aws-ecs/bootstrap
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap configuration has uncommitted changes."
+}
+git -C $BootstrapRepoRoot diff --cached --quiet HEAD -- deploy/aws-ecs/bootstrap
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap configuration has staged changes."
+}
+git -C $BootstrapRepoRoot diff --quiet origin/main -- deploy/aws-ecs/bootstrap ":!deploy/aws-ecs/bootstrap/variables.tf"
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap configuration differs from origin/main outside variables.tf."
+}
+$VariablesDiff = @(
+  git -C $BootstrapRepoRoot diff --unified=0 origin/main -- deploy/aws-ecs/bootstrap/variables.tf
+)
+$VariableChangeLines = @(
+  $VariablesDiff |
+    Where-Object { $_ -match "^[+-]" -and $_ -notmatch "^[+-]{3}" }
+)
+$ExpectedVariableChangeLines = @(
+  '-  default     = "deploy/AWS_ECS"',
+  '+  default     = "main"'
+)
+$UnexpectedVariableChangeLines = @(
+  Compare-Object $ExpectedVariableChangeLines $VariableChangeLines
+)
+if (
+  $VariableChangeLines.Count -ne 0 -and
+  ($VariableChangeLines.Count -ne 2 -or $UnexpectedVariableChangeLines.Count -ne 0)
+) {
+  throw "Bootstrap variables.tf differs from origin/main in an unexpected way."
+}
+
+if ([string]::IsNullOrWhiteSpace($env:AWS_DEMO_ALLOWED_ACCOUNT_IDS)) {
+  throw "AWS_DEMO_ALLOWED_ACCOUNT_IDS must already be present in the operator environment."
+}
+$CallerAccount = (
+  aws sts get-caller-identity --profile $AwsProfile --query Account --output text --no-cli-pager
+).Trim()
+if ($LASTEXITCODE -ne 0 -or $CallerAccount -notmatch "^[0-9]{12}$") {
+  throw "Could not validate the local caller account."
+}
+$AllowedAccounts = @(
+  $env:AWS_DEMO_ALLOWED_ACCOUNT_IDS.Split(",") |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -match "^[0-9]{12}$" }
+)
+if ($AllowedAccounts -notcontains $CallerAccount) {
+  throw "The local caller account is not allowlisted."
+}
+Remove-Variable CallerAccount, AllowedAccounts
+Write-Host "Local caller account allowlist: OK"
+
+$CutoverDir = Join-Path ([IO.Path]::GetTempPath()) (
+  "ragproject-trust-cutover-{0}" -f (Get-Date -Format "yyyyMMdd-HHmmss")
+)
+New-Item -ItemType Directory -Path $CutoverDir -ErrorAction Stop | Out-Null
+$BootstrapStateBackup = Join-Path $CutoverDir "bootstrap.terraform.tfstate.before"
+Copy-Item -LiteralPath $BootstrapState -Destination $BootstrapStateBackup -ErrorAction Stop
+
+$BootstrapVarArgs = @()
+if ($BootstrapTfvars) {
+  $BootstrapVarArgs += "-var-file=$BootstrapTfvars"
+}
+terraform "-chdir=$BootstrapDir" init -input=false
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap terraform init failed. No apply was attempted."
+}
+
+$BackendJson = (
+  terraform "-chdir=$BootstrapDir" output -json backend_config | Out-String
+)
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not read backend_config from authoritative bootstrap state."
+}
+$Backend = ConvertFrom-Json -InputObject $BackendJson
+foreach ($Name in @("bucket", "key", "region", "dynamodb_table")) {
+  if ([string]::IsNullOrWhiteSpace([string]$Backend.$Name) -or [string]$Backend.$Name -match "REPLACE") {
+    throw "backend_config contains a missing or placeholder value: $Name"
+  }
+}
+
+terraform "-chdir=$(Join-Path $MainRepoRoot 'deploy/aws-ecs')" init -input=false -reconfigure `
+  "-backend-config=bucket=$($Backend.bucket)" `
+  "-backend-config=key=$($Backend.key)" `
+  "-backend-config=region=$($Backend.region)" `
+  "-backend-config=dynamodb_table=$($Backend.dynamodb_table)" `
+  "-backend-config=encrypt=true"
+if ($LASTEXITCODE -ne 0) {
+  throw "Root backend init failed. Confirm bootstrap outputs; do not edit backend.tf with guessed values."
+}
+
+function Get-RoleNameFromOutput {
+  param(
+    [Parameter(Mandatory = $true)][string]$TerraformDirectory,
+    [Parameter(Mandatory = $true)][string]$OutputName
+  )
+  $RoleArn = (
+    terraform "-chdir=$TerraformDirectory" output -raw $OutputName
+  ).Trim()
+  if ($LASTEXITCODE -ne 0 -or $RoleArn -notmatch "/([^/]+)$") {
+    throw "Could not derive a role name from Terraform output: $OutputName"
+  }
+  $RoleName = $Matches[1]
+  Remove-Variable RoleArn
+  return $RoleName
+}
+
+$RootDir = Join-Path $MainRepoRoot "deploy/aws-ecs"
+$PlanRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_plan_role_arn"
+$LifecycleRoleName = Get-RoleNameFromOutput $BootstrapDir "terraform_lifecycle_role_arn"
+$DeployRoleName = Get-RoleNameFromOutput $RootDir "github_deploy_role_arn"
+
+function Backup-RoleTrustAndGetBranch {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string]$RoleName
+  )
+  $RoleJson = (
+    aws iam get-role --profile $AwsProfile --role-name $RoleName --output json --no-cli-pager |
+      Out-String
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read role trust: $Label"
+  }
+  $Role = ConvertFrom-Json -InputObject $RoleJson
+  $Policy = $Role.Role.AssumeRolePolicyDocument
+  $Statements = @($Policy.Statement)
+  if ($Statements.Count -ne 1) {
+    throw "Unexpected trust statement count: $Label"
+  }
+  $Actions = @($Statements[0].Action)
+  $Principals = @($Statements[0].Principal.Federated)
+  if (
+    [string]$Statements[0].Effect -cne "Allow" -or
+    $Actions.Count -ne 1 -or
+    [string]$Actions[0] -cne "sts:AssumeRoleWithWebIdentity" -or
+    $Principals.Count -ne 1 -or
+    [string]::IsNullOrWhiteSpace([string]$Principals[0])
+  ) {
+    throw "Unexpected OIDC trust principal or action: $Label"
+  }
+  $Audience = $Statements[0].Condition.StringEquals.'token.actions.githubusercontent.com:aud'
+  $Subject = $Statements[0].Condition.StringEquals.'token.actions.githubusercontent.com:sub'
+  if ($null -eq $Subject) {
+    $Subject = $Statements[0].Condition.StringLike.'token.actions.githubusercontent.com:sub'
+  }
+  if (@($Audience).Count -ne 1 -or [string]$Audience -cne "sts.amazonaws.com" -or @($Subject).Count -ne 1) {
+    throw "Unexpected OIDC trust shape: $Label"
+  }
+  $ExpectedPrefix = "repo:${Repository}:ref:refs/heads/"
+  if (-not ([string]$Subject).StartsWith($ExpectedPrefix, [StringComparison]::Ordinal)) {
+    throw "Unexpected repository in OIDC trust: $Label"
+  }
+  $Branch = ([string]$Subject).Substring($ExpectedPrefix.Length)
+  if ($Branch -notin @($OldBranch, $NewBranch)) {
+    throw "Unexpected branch in OIDC trust: $Label"
+  }
+  $BackupPath = Join-Path $CutoverDir "$Label.before.json"
+  [IO.File]::WriteAllText(
+    $BackupPath,
+    ($Policy | ConvertTo-Json -Depth 20 -Compress),
+    [Text.UTF8Encoding]::new($false)
+  )
+  return $Branch
+}
+
+$BeforeBranches = [ordered]@{
+  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan" $PlanRoleName
+  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle" $LifecycleRoleName
+  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy" $DeployRoleName
+  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke" $SmokeRoleName
+}
+$BeforeBranches.GetEnumerator() | ForEach-Object {
+  Write-Host ("{0}: {1}" -f $_.Key, $_.Value)
+}
+
+function Get-DeployBranchVariable {
+  $VariablesJson = (gh variable list --json name,value | Out-String)
+  if ($LASTEXITCODE -ne 0) {
+    throw "gh variable list failed; output was suppressed."
+  }
+  $Variables = ConvertFrom-Json -InputObject $VariablesJson
+  $Matches = @($Variables | Where-Object { [string]$_.name -ceq "DEPLOY_BRANCH" })
+  if ($Matches.Count -ne 1) {
+    throw "Expected exactly one DEPLOY_BRANCH repository variable."
+  }
+  $Value = [string]$Matches[0].value
+  if ($Value -notmatch "^[A-Za-z0-9._/-]+$") {
+    throw "DEPLOY_BRANCH is not a branch-shaped value; value was suppressed."
+  }
+  return $Value
+}
+
+$CurrentDeployBranch = Get-DeployBranchVariable
+Write-Host "DEPLOY_BRANCH: $CurrentDeployBranch"
+if ($CurrentDeployBranch -notin @($OldBranch, $NewBranch)) {
+  throw "DEPLOY_BRANCH has an unexpected value."
+}
+```
+
+**期待される結果**
+
+- account IDやARNは表示されず、allowlistが`OK`になる。
+- 4 roleはrole名ではなく論理labelとbranchだけが表示される。
+- D0の想定どおりなら4 labelが`deploy/AWS_ECS`、`DEPLOY_BRANCH`も`deploy/AWS_ECS`になる。
+- 既に一部が`main`なら、その事実を記録し、以後のplanでno-opになることを許容する。
+- `$CutoverDir`に4 trust backup、bootstrap state backupが作られる。pathを作業記録へ残すが、中身は表示しない。
+
+**失敗時**
+
+- ここではAWS resource変更はない。原因を解消するまで進まない。
+- bootstrap stateがない場合、新しい空stateからapplyしてはいけない。権威あるlocal stateまたは安全なbackupを特定する。
+- trustが旧branch / `main`以外、複数subject、別repository、複数statementならscope外である。policyを自動整形せず、RAG-18を停止して別レビューへ送る。
+- root backend initが失敗した場合、placeholderを実値へ直接置換してcommitしない。bootstrap outputとlocal権限を確認する。
+- AWS変更後にPowerShell sessionが失われた場合、手順1全体を再実行して新しいbefore backupを作り、元の開始状態と取り違えてはならない。元の`$CutoverDir`を再指定し、変数とfunction定義だけを読み込み直してロールバックを優先する。元のbackup pathを特定できなければ追加更新を停止する。
+
+### 手順2: bootstrap plan / lifecycle roleを更新
+
+**cwd:** 任意。`terraform -chdir=$BootstrapDir`を使う。
+
+`-target`は通常運用向けではないが、このcutoverではbootstrap stackの他resourceを変更しないための例外的なblast-radius制限として使う。saved planの対象が2 roleのin-place updateだけであることを確認してから、そのplan fileをapplyする。
+
+```powershell
+function Assert-TrustOnlyPlanChanges {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Changes,
+    [Parameter(Mandatory = $true)][string[]]$AllowedAddresses,
+    [Parameter(Mandatory = $true)][string]$ExpectedBranch
+  )
+  foreach ($ResourceChange in $Changes) {
+    if (
+      $ResourceChange.address -notin $AllowedAddresses -or
+      (@($ResourceChange.change.actions) -join ",") -cne "update"
+    ) {
+      throw "Plan contains an unexpected resource address or action."
+    }
+    $AttributeNames = @(
+      @($ResourceChange.change.before.PSObject.Properties.Name) +
+      @($ResourceChange.change.after.PSObject.Properties.Name) |
+        Sort-Object -Unique
+    )
+    $ChangedAttributes = @(
+      foreach ($AttributeName in $AttributeNames) {
+        $BeforeValue = $ResourceChange.change.before.$AttributeName |
+          ConvertTo-Json -Depth 30 -Compress
+        $AfterValue = $ResourceChange.change.after.$AttributeName |
+          ConvertTo-Json -Depth 30 -Compress
+        if ($BeforeValue -cne $AfterValue) {
+          $AttributeName
+        }
+      }
+    )
+    if ($ChangedAttributes.Count -ne 1 -or $ChangedAttributes[0] -cne "assume_role_policy") {
+      throw "Plan changes a role attribute other than assume_role_policy."
+    }
+    $AfterPolicy = ConvertFrom-Json -InputObject (
+      [string]$ResourceChange.change.after.assume_role_policy
+    )
+    $AfterStatements = @($AfterPolicy.Statement)
+    if ($AfterStatements.Count -ne 1) {
+      throw "Planned trust policy has an unexpected statement count."
+    }
+    $AfterSubject = $AfterStatements[0].Condition.StringEquals.'token.actions.githubusercontent.com:sub'
+    if ($null -eq $AfterSubject) {
+      $AfterSubject = $AfterStatements[0].Condition.StringLike.'token.actions.githubusercontent.com:sub'
+    }
+    $ExpectedSubject = "repo:${Repository}:ref:refs/heads/${ExpectedBranch}"
+    if (@($AfterSubject).Count -ne 1 -or [string]$AfterSubject -cne $ExpectedSubject) {
+      throw "Planned trust subject is not the expected exact branch."
+    }
+  }
+}
+
+$BootstrapPlan = Join-Path $CutoverDir "bootstrap-main.tfplan"
+$BootstrapPlanLog = Join-Path $CutoverDir "bootstrap-main.plan.log"
+
+terraform "-chdir=$BootstrapDir" plan -input=false `
+  @BootstrapVarArgs `
+  "-var=github_deploy_branch=$NewBranch" `
+  "-target=aws_iam_role.terraform_plan" `
+  "-target=aws_iam_role.terraform_lifecycle" `
+  "-out=$BootstrapPlan" *> $BootstrapPlanLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap targeted plan failed. Review the local log without sharing identifiers."
+}
+
+$BootstrapPlanJson = (
+  terraform "-chdir=$BootstrapDir" show -json $BootstrapPlan | Out-String
+)
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not inspect bootstrap saved plan."
+}
+$BootstrapChanges = @(
+  (ConvertFrom-Json -InputObject $BootstrapPlanJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+$AllowedBootstrapAddresses = @(
+  "aws_iam_role.terraform_plan",
+  "aws_iam_role.terraform_lifecycle"
+)
+if ($BootstrapChanges.Count -gt 2) {
+  throw "Bootstrap plan contains too many changes."
+}
+Assert-TrustOnlyPlanChanges $BootstrapChanges $AllowedBootstrapAddresses $NewBranch
+Write-Host "Bootstrap approved resource changes: $($BootstrapChanges.Count)"
+Write-Host "Privately inspect $BootstrapPlanLog and confirm only assume_role_policy changes to refs/heads/main."
+
+if ($BootstrapChanges.Count -gt 0) {
+  $BootstrapApplyLog = Join-Path $CutoverDir "bootstrap-main.apply.log"
+  terraform "-chdir=$BootstrapDir" apply -input=false $BootstrapPlan *> $BootstrapApplyLog
+  if ($LASTEXITCODE -ne 0) {
+    throw "Bootstrap saved plan apply failed. Use the rollback section before retrying."
+  }
+}
+
+$PlanBranchAfter = Backup-RoleTrustAndGetBranch "terraform-plan-after" $PlanRoleName
+$LifecycleBranchAfter = Backup-RoleTrustAndGetBranch "terraform-lifecycle-after" $LifecycleRoleName
+if ($PlanBranchAfter -cne $NewBranch -or $LifecycleBranchAfter -cne $NewBranch) {
+  throw "Bootstrap trust verification failed after apply."
+}
+Write-Host "Bootstrap plan/lifecycle trust: main"
+```
+
+**期待される結果**
+
+- 変更前が旧branchなら、`aws_iam_role.terraform_plan`と`aws_iam_role.terraform_lifecycle`だけが`update`になる。
+- apply完了後、両方のbranch検証が`main`になる。この時点で`main`からplan roleとlifecycle roleのAssumeRoleが可能になる。
+
+**失敗時**
+
+- plan段階の失敗は変更なし。入力、権限、権威あるstateを修正してplanから再開する。
+- 想定外address、create、delete、replace、trust以外の属性差分があればapplyしない。
+- applyがpartial failureした場合、2 roleを個別に再確認する。どちらかが`main`なら、残りだけを同じsaved-plan手順で再planするか、ロールバック節で両方を旧policyへ戻す。
+- `terraform.tfstate`を手で編集しない。local state破損時は`$BootstrapStateBackup`を保全し、AWS trustの緊急復旧を先に行う。
+
+### 手順3: root deploy roleを更新
+
+**cwd:** 任意。rootは`$RootDir`とremote backendを使う。
+
+```powershell
+$RootPlan = Join-Path $CutoverDir "root-deploy-main.tfplan"
+$RootPlanLog = Join-Path $CutoverDir "root-deploy-main.plan.log"
+
+terraform "-chdir=$RootDir" plan -input=false `
+  "-var-file=$RootTfvars" `
+  "-var=github_deploy_branch=$NewBranch" `
+  "-target=module.iam.aws_iam_role.github_deploy" `
+  "-out=$RootPlan" *> $RootPlanLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Root targeted plan failed. Review the local log without sharing identifiers."
+}
+
+$RootPlanJson = (
+  terraform "-chdir=$RootDir" show -json $RootPlan | Out-String
+)
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not inspect root saved plan."
+}
+$RootChanges = @(
+  (ConvertFrom-Json -InputObject $RootPlanJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+if ($RootChanges.Count -gt 1) {
+  throw "Root plan contains too many changes."
+}
+Assert-TrustOnlyPlanChanges `
+  $RootChanges `
+  @("module.iam.aws_iam_role.github_deploy") `
+  $NewBranch
+Write-Host "Root approved resource changes: $($RootChanges.Count)"
+Write-Host "Privately inspect $RootPlanLog and confirm only assume_role_policy changes to refs/heads/main."
+
+if ($RootChanges.Count -gt 0) {
+  $RootApplyLog = Join-Path $CutoverDir "root-deploy-main.apply.log"
+  terraform "-chdir=$RootDir" apply -input=false $RootPlan *> $RootApplyLog
+  if ($LASTEXITCODE -ne 0) {
+    throw "Root saved plan apply failed. Use the rollback section before retrying."
+  }
+}
+
+$DeployBranchAfter = Backup-RoleTrustAndGetBranch "github-deploy-after" $DeployRoleName
+if ($DeployBranchAfter -cne $NewBranch) {
+  throw "Deploy role trust verification failed after apply."
+}
+Write-Host "Root deploy trust: main"
+```
+
+**期待される結果**
+
+- 変更前が旧branchなら`module.iam.aws_iam_role.github_deploy`だけがin-place updateになる。
+- apply後のbranch検証が`main`になる。この時点で`main`からapp/frontend deploy roleのAssumeRoleが可能になる。
+
+**失敗時**
+
+- plan失敗または想定外差分ではapplyしない。直近正常applyと同一のroot tfvars、remote backend、local権限を確認する。
+- apply失敗後はrole trustを再確認する。`main`でなければ同じplanを再利用せず、新しいplanを作る。
+- root stack全体の差分をこの手順でapplyしない。無関係なdriftは別issueへ分離する。
+
+### 手順4: OIDC smoke roleを更新
+
+**cwd:** 任意。手順1で作成したbackupを使う。
+
+既存smoke roleのtrustが期待と違う場合、`aws-oidc-bootstrap.ps1`は`deploy/aws-ecs/scripts/aws-oidc-bootstrap.ps1:248-254`でfail closedする。そのため、review済みbackupのsubject一箇所だけを書き換え、local IAM権限で直接更新する。
+
+```powershell
+$SmokeBackup = Join-Path $CutoverDir "oidc-smoke.before.json"
+$SmokeMainPolicy = Join-Path $CutoverDir "oidc-smoke.main.json"
+$SmokePolicy = Get-Content -LiteralPath $SmokeBackup -Raw | ConvertFrom-Json
+$SmokeStatements = @($SmokePolicy.Statement)
+if ($SmokeStatements.Count -ne 1) {
+  throw "Unexpected smoke trust statement count."
+}
+$SmokeEquals = $SmokeStatements[0].Condition.StringEquals
+$SmokeAudience = $SmokeEquals.'token.actions.githubusercontent.com:aud'
+$SmokeSubject = [string]$SmokeEquals.'token.actions.githubusercontent.com:sub'
+$ExpectedOldSubject = "repo:${Repository}:ref:refs/heads/${OldBranch}"
+$ExpectedNewSubject = "repo:${Repository}:ref:refs/heads/${NewBranch}"
+if ([string]$SmokeAudience -cne "sts.amazonaws.com") {
+  throw "Unexpected smoke trust audience."
+}
+if ($SmokeSubject -notin @($ExpectedOldSubject, $ExpectedNewSubject)) {
+  throw "Unexpected smoke trust subject."
+}
+
+if ($SmokeSubject -cne $ExpectedNewSubject) {
+  $SmokeEquals.'token.actions.githubusercontent.com:sub' = $ExpectedNewSubject
+  [IO.File]::WriteAllText(
+    $SmokeMainPolicy,
+    ($SmokePolicy | ConvertTo-Json -Depth 20 -Compress),
+    [Text.UTF8Encoding]::new($false)
+  )
+  aws iam update-assume-role-policy `
+    --profile $AwsProfile `
+    --role-name $SmokeRoleName `
+    --policy-document "file://$SmokeMainPolicy" `
+    --no-cli-pager
+  if ($LASTEXITCODE -ne 0) {
+    throw "Smoke trust update failed. Restore the backup policy if verification is not main."
+  }
+}
+
+$SmokeBranchAfter = Backup-RoleTrustAndGetBranch "oidc-smoke-after" $SmokeRoleName
+if ($SmokeBranchAfter -cne $NewBranch) {
+  throw "Smoke role trust verification failed after update."
+}
+Write-Host "OIDC smoke trust: main"
+```
+
+**期待される結果**
+
+- IAM updateは既存1 statementのsubjectだけを`refs/heads/main`へ変える。
+- branch検証が`main`になる。この時点で`main`からpermissionless smoke roleのAssumeRoleが可能になる。
+
+**失敗時**
+
+- policy shapeまたはsubjectが想定外なら更新しない。
+- update後の検証が`main`でなければ、後述の`Restore-RoleTrust`で`oidc-smoke.before.json`を戻す。
+- provider、audience、permission policy、role名を同時に変更しない。
+
+### 手順5: `DEPLOY_BRANCH`を`main`へ変更
+
+**cwd:** `$MainRepoRoot`
+
+この手順より前に4 roleすべてが`main`であることを再確認する。
+
+```powershell
+Set-Location -LiteralPath $MainRepoRoot
+$TrustBranches = @(
+  Backup-RoleTrustAndGetBranch "terraform-plan-pre-variable" $PlanRoleName
+  Backup-RoleTrustAndGetBranch "terraform-lifecycle-pre-variable" $LifecycleRoleName
+  Backup-RoleTrustAndGetBranch "github-deploy-pre-variable" $DeployRoleName
+  Backup-RoleTrustAndGetBranch "oidc-smoke-pre-variable" $SmokeRoleName
+)
+if (@($TrustBranches | Where-Object { $_ -cne $NewBranch }).Count -ne 0) {
+  throw "All four role trusts must be main before changing DEPLOY_BRANCH."
+}
+
+gh variable set DEPLOY_BRANCH --body $NewBranch
+if ($LASTEXITCODE -ne 0) {
+  throw "DEPLOY_BRANCH update failed. IAM trusts are already main; do not run workflows until this is fixed."
+}
+$CurrentDeployBranch = Get-DeployBranchVariable
+if ($CurrentDeployBranch -cne $NewBranch) {
+  throw "DEPLOY_BRANCH verification failed."
+}
+Write-Host "DEPLOY_BRANCH: main"
+```
+
+**期待される結果**
+
+- `DEPLOY_BRANCH`のread-backが`main`になる。
+- この時点で3系統のtrust、main-only workflow guard、Terraform入力が整合する。
+
+**失敗時**
+
+- IAM trustを直ちに戻す必要はない。workflowを実行せず、repository variable更新権限と値を修正する。
+- 修正できず旧状態へ戻す場合は、ロールバック節の逆順手順を使う。
+
+### 手順6: `main`からOIDC smokeを実行
+
+**cwd:** `$MainRepoRoot`
+
+```powershell
+Set-Location -LiteralPath $MainRepoRoot
+$DispatchTime = (Get-Date).ToUniversalTime()
+gh workflow run aws-oidc-smoke.yml --ref main
+if ($LASTEXITCODE -ne 0) {
+  throw "OIDC smoke dispatch failed."
+}
+
+$SmokeRun = $null
+for ($Attempt = 0; $Attempt -lt 12 -and $null -eq $SmokeRun; $Attempt++) {
+  Start-Sleep -Seconds 5
+  $RunsJson = (
+    gh run list `
+      --workflow aws-oidc-smoke.yml `
+      --branch main `
+      --event workflow_dispatch `
+      --limit 10 `
+      --json databaseId,createdAt,headBranch,status,conclusion |
+      Out-String
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list OIDC smoke runs."
+  }
+  $SmokeRun = @(
+    (ConvertFrom-Json -InputObject $RunsJson) |
+      Where-Object {
+        $_.headBranch -ceq "main" -and
+        ([datetime]$_.createdAt).ToUniversalTime() -ge $DispatchTime.AddSeconds(-5)
+      } |
+      Sort-Object createdAt -Descending
+  ) | Select-Object -First 1
+}
+if ($null -eq $SmokeRun) {
+  throw "Dispatched OIDC smoke run was not found."
+}
+
+gh run watch ([string]$SmokeRun.databaseId) --exit-status
+if ($LASTEXITCODE -ne 0) {
+  throw "OIDC smoke did not complete successfully. Do not dispatch lifecycle workflows."
+}
+$SmokeResultJson = (
+  gh run view ([string]$SmokeRun.databaseId) `
+    --json headBranch,status,conclusion |
+    Out-String
+)
+$SmokeResult = ConvertFrom-Json -InputObject $SmokeResultJson
+if (
+  $SmokeResult.headBranch -cne "main" -or
+  $SmokeResult.status -cne "completed" -or
+  $SmokeResult.conclusion -cne "success"
+) {
+  throw "OIDC smoke result did not meet the completion criteria."
+}
+Write-Host "main OIDC smoke: success"
+```
+
+**期待される結果**
+
+- runの`headBranch`が`main`、`status`が`completed`、`conclusion`が`success`になる。
+- `Configure permissionless OIDC credentials`を通過し、permissionless verifierが成功する。
+
+**失敗時**
+
+- 自動rerunしない。4 trustと`DEPLOY_BRANCH`をbranch名だけで再確認する。
+- `Configure permissionless OIDC credentials`で失敗した場合はsmoke role trust、GitHub secretのrole対応、repository/refを確認する。
+- verifierで失敗した場合はaccount allowlistまたはsecretのrole対応を確認する。account ID、ARN、tokenをissueやlogへ転記しない。
+- 原因を安全に解消できない場合は、ロールバック節で旧状態へ戻す。
+
+### 手順7: 旧branch依存の消滅とtarget後の全体planを確認
+
+**cwd:** `$MainRepoRoot`
+
+```powershell
+$FinalBranches = [ordered]@{
+  terraform_plan = Backup-RoleTrustAndGetBranch "terraform-plan-final" $PlanRoleName
+  terraform_lifecycle = Backup-RoleTrustAndGetBranch "terraform-lifecycle-final" $LifecycleRoleName
+  github_deploy = Backup-RoleTrustAndGetBranch "github-deploy-final" $DeployRoleName
+  oidc_smoke = Backup-RoleTrustAndGetBranch "oidc-smoke-final" $SmokeRoleName
+}
+if (@($FinalBranches.Values | Where-Object { $_ -cne $NewBranch }).Count -ne 0) {
+  throw "At least one role does not trust main."
+}
+if ((Get-DeployBranchVariable) -cne $NewBranch) {
+  throw "DEPLOY_BRANCH is not main."
+}
+
+Set-Location -LiteralPath $MainRepoRoot
+$OperationalOldBranchMatches = @(
+  git grep -n "deploy/AWS_ECS" -- `
+    ".github/workflows/*.yml" `
+    "deploy/aws-ecs/*.tf" `
+    ":(glob)deploy/aws-ecs/**/*.tf" `
+    ":(glob)deploy/aws-ecs/scripts/*.ps1"
+)
+if ($OperationalOldBranchMatches.Count -ne 0) {
+  $OperationalOldBranchMatches
+  throw "An operational old-branch dependency remains."
+}
+Write-Host "Operational old-branch references: none"
+
+$BootstrapPostPlan = Join-Path $CutoverDir "bootstrap-post-cutover.tfplan"
+$BootstrapPostLog = Join-Path $CutoverDir "bootstrap-post-cutover.plan.log"
+terraform "-chdir=$BootstrapDir" plan -input=false `
+  @BootstrapVarArgs `
+  "-var=github_deploy_branch=$NewBranch" `
+  "-out=$BootstrapPostPlan" `
+  -detailed-exitcode *> $BootstrapPostLog
+$BootstrapPostExit = $LASTEXITCODE
+if ($BootstrapPostExit -eq 1) {
+  throw "Bootstrap post-cutover full plan failed."
+}
+
+$RootPostPlan = Join-Path $CutoverDir "root-post-cutover.tfplan"
+$RootPostLog = Join-Path $CutoverDir "root-post-cutover.plan.log"
+terraform "-chdir=$RootDir" plan -input=false `
+  "-var-file=$RootTfvars" `
+  "-var=github_deploy_branch=$NewBranch" `
+  "-out=$RootPostPlan" `
+  -detailed-exitcode *> $RootPostLog
+$RootPostExit = $LASTEXITCODE
+if ($RootPostExit -eq 1) {
+  throw "Root post-cutover full plan failed."
+}
+Write-Host "Post-cutover full plan exit codes: bootstrap=$BootstrapPostExit root=$RootPostExit"
+```
+
+**期待される結果**
+
+- 4 roleのbranchがすべて`main`、`DEPLOY_BRANCH`も`main`になる。
+- operational fileに旧branch参照がない。歴史説明を持つdocs内の旧branch名は対象外である。
+- 通常planの`-detailed-exitcode`は、差分なしなら`0`、差分ありなら`2`である。
+
+**失敗時**
+
+- full planが`2`でも、この手順ではapplyしない。local logを安全な場所でreviewし、targetingで見落としたtrust関連差分ならD1a内で修正、無関係なdriftなら別issueへ分離する。
+- full planが`1`ならbackend、tfvars、権限を確認する。trustとsmokeの個別検証が成功済みでも、D1a完了チェックには失敗として記録する。
+- 一時ファイルはrollback判断が完了するまで削除しない。
+
+### 手順8: 一時artifactを安全に削除
+
+**cwd:** 任意。手順7とsmokeが成功し、rollbackしないと人間が判断した後だけ実行する。
+
+`$CutoverDir`にはstate backup、saved plan、plan log、実trust policyが含まれる。長期保管せず、exact pathがOSの一時directory配下かつこのrunbookのprefixであることを検証してから削除する。
+
+```powershell
+$ResolvedCutoverDir = (Resolve-Path -LiteralPath $CutoverDir).Path
+$ResolvedTempDir = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$CutoverLeaf = Split-Path -Leaf $ResolvedCutoverDir
+if (
+  -not $ResolvedCutoverDir.StartsWith($ResolvedTempDir, [StringComparison]::OrdinalIgnoreCase) -or
+  $CutoverLeaf -notmatch "^ragproject-trust-cutover-[0-9]{8}-[0-9]{6}$"
+) {
+  throw "Refusing to delete an unexpected path."
+}
+Remove-Item -LiteralPath $ResolvedCutoverDir -Recurse -Force
+if (Test-Path -LiteralPath $ResolvedCutoverDir) {
+  throw "Cutover artifact cleanup failed."
+}
+Write-Host "Cutover artifacts: removed"
+```
+
+**期待される結果**
+
+- 検証済みの一時directoryだけが削除される。
+- repository内のfile、Terraform remote state、AWS resourceは削除されない。
+
+**失敗時**
+
+- path validation失敗時は削除commandを変更して強行しない。pathを再確認する。
+- rollbackの可能性が残る場合は削除せず、アクセス制限されたlocal領域で短期間保全する。
+
+## 6. ロールバック
+
+### 6.1 段階別の判断
+
+| 失敗時点 | 戻す対象 | 手順 |
+|---|---|---|
+| 手順1 | なし | AWS変更前。原因解消まで停止 |
+| 手順2の途中 | bootstrap plan / lifecycle role | 同じlocal stateから旧branchを明示したsaved planをapply。state利用不能ならbackup policyを直接復元 |
+| 手順3の途中 | root deploy role、その後bootstrap 2 role | root、bootstrapの順に旧branchへ戻す |
+| 手順4の途中 | smoke、root、bootstrap | smoke backupを戻し、root、bootstrapを旧branchへ戻す |
+| 手順5以後 | repository variable、smoke、root、bootstrap | `DEPLOY_BRANCH`を旧値へ戻してから、roleを逆順で戻す |
+| 手順6 smoke失敗 | 原因に応じて継続または全rollback | workflowは再実行せず、trust / secret対応 / allowlistを確認 |
+
+preferred rollbackはTerraform stateを使い、branchだけを旧値へ戻すことである。
+
+```powershell
+function Restore-RoleTrust {
+  param(
+    [Parameter(Mandatory = $true)][string]$RoleName,
+    [Parameter(Mandatory = $true)][string]$BackupPath
+  )
+  if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
+    throw "Trust backup not found."
+  }
+  aws iam update-assume-role-policy `
+    --profile $AwsProfile `
+    --role-name $RoleName `
+    --policy-document "file://$BackupPath" `
+    --no-cli-pager
+  if ($LASTEXITCODE -ne 0) {
+    throw "Trust restore failed."
+  }
+}
+
+gh variable set DEPLOY_BRANCH --body $OldBranch
+$DeployBranchRollbackOk = $LASTEXITCODE -eq 0
+if (-not $DeployBranchRollbackOk) {
+  Write-Warning "Could not restore DEPLOY_BRANCH. Keep workflows stopped and continue IAM recovery."
+}
+
+Restore-RoleTrust $SmokeRoleName (Join-Path $CutoverDir "oidc-smoke.before.json")
+if ((Backup-RoleTrustAndGetBranch "oidc-smoke-rollback-check" $SmokeRoleName) -cne $OldBranch) {
+  throw "Smoke rollback verification failed."
+}
+
+$RootRollbackPlan = Join-Path $CutoverDir "root-deploy-old.tfplan"
+$RootRollbackLog = Join-Path $CutoverDir "root-deploy-old.plan.log"
+terraform "-chdir=$RootDir" plan -input=false `
+  "-var-file=$RootTfvars" `
+  "-var=github_deploy_branch=$OldBranch" `
+  "-target=module.iam.aws_iam_role.github_deploy" `
+  "-out=$RootRollbackPlan" *> $RootRollbackLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Root rollback plan failed."
+}
+$RootRollbackJson = (
+  terraform "-chdir=$RootDir" show -json $RootRollbackPlan | Out-String
+)
+$RootRollbackChanges = @(
+  (ConvertFrom-Json -InputObject $RootRollbackJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+if ($RootRollbackChanges.Count -gt 1) {
+  throw "Root rollback plan contains too many changes."
+}
+Assert-TrustOnlyPlanChanges `
+  $RootRollbackChanges `
+  @("module.iam.aws_iam_role.github_deploy") `
+  $OldBranch
+$RootRollbackApplyLog = Join-Path $CutoverDir "root-deploy-old.apply.log"
+terraform "-chdir=$RootDir" apply -input=false $RootRollbackPlan *> $RootRollbackApplyLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Root rollback apply failed."
+}
+if ((Backup-RoleTrustAndGetBranch "github-deploy-rollback-check" $DeployRoleName) -cne $OldBranch) {
+  throw "Root rollback verification failed."
+}
+
+$BootstrapRollbackPlan = Join-Path $CutoverDir "bootstrap-old.tfplan"
+$BootstrapRollbackLog = Join-Path $CutoverDir "bootstrap-old.plan.log"
+terraform "-chdir=$BootstrapDir" plan -input=false `
+  @BootstrapVarArgs `
+  "-var=github_deploy_branch=$OldBranch" `
+  "-target=aws_iam_role.terraform_plan" `
+  "-target=aws_iam_role.terraform_lifecycle" `
+  "-out=$BootstrapRollbackPlan" *> $BootstrapRollbackLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap rollback plan failed."
+}
+$BootstrapRollbackJson = (
+  terraform "-chdir=$BootstrapDir" show -json $BootstrapRollbackPlan | Out-String
+)
+$BootstrapRollbackChanges = @(
+  (ConvertFrom-Json -InputObject $BootstrapRollbackJson).resource_changes |
+    Where-Object { @($_.change.actions) -notcontains "no-op" }
+)
+if ($BootstrapRollbackChanges.Count -gt 2) {
+  throw "Bootstrap rollback plan contains too many changes."
+}
+Assert-TrustOnlyPlanChanges `
+  $BootstrapRollbackChanges `
+  @("aws_iam_role.terraform_plan", "aws_iam_role.terraform_lifecycle") `
+  $OldBranch
+$BootstrapRollbackApplyLog = Join-Path $CutoverDir "bootstrap-old.apply.log"
+terraform "-chdir=$BootstrapDir" apply -input=false $BootstrapRollbackPlan *> $BootstrapRollbackApplyLog
+if ($LASTEXITCODE -ne 0) {
+  throw "Bootstrap rollback apply failed."
+}
+if (
+  (Backup-RoleTrustAndGetBranch "terraform-plan-rollback-check" $PlanRoleName) -cne $OldBranch -or
+  (Backup-RoleTrustAndGetBranch "terraform-lifecycle-rollback-check" $LifecycleRoleName) -cne $OldBranch
+) {
+  throw "Bootstrap rollback verification failed."
+}
+if (-not $DeployBranchRollbackOk) {
+  throw "IAM rollback succeeded, but DEPLOY_BRANCH still requires manual restoration. Keep workflows stopped."
+}
+```
+
+rollback後もD0のmain-only workflow guardは変わらない。旧branch workflowを運用経路として再開せず、再cutoverまでAWS workflowを停止する。
+
+### 6.2 `main`からも旧branchからもAssumeRoleできない場合
+
+GitHub OIDC経路を復旧手段に使わない。local AWS認証はGitHub branch trustから独立しているため、次の順で復旧する。
+
+1. workflowを実行しない。`DEPLOY_BRANCH`を旧値へ戻せるなら先に戻す。
+2. preflightで作成した4 trust backupとbootstrap state backupが残っていることを確認する。中身は表示しない。
+3. smoke roleを`oidc-smoke.before.json`から旧branchへ戻す。
+4. root remote stateが利用可能なら、preferred rollbackのtargeted saved planでdeploy roleを旧branchへ戻す。
+5. bootstrap local stateが利用可能なら、preferred rollbackのtargeted saved planでplan / lifecycle roleを旧branchへ戻す。
+6. Terraform stateが利用不能、lockが解消できない、またはapplyが途中で止まる場合は、local IAM権限で該当する`*.before.json`を直接適用する。
+
+緊急直接復旧は次のとおりである。
+
+```powershell
+Restore-RoleTrust $SmokeRoleName (Join-Path $CutoverDir "oidc-smoke.before.json")
+Restore-RoleTrust $DeployRoleName (Join-Path $CutoverDir "github-deploy.before.json")
+Restore-RoleTrust $LifecycleRoleName (Join-Path $CutoverDir "terraform-lifecycle.before.json")
+Restore-RoleTrust $PlanRoleName (Join-Path $CutoverDir "terraform-plan.before.json")
+
+$RecoveredBranches = @(
+  Backup-RoleTrustAndGetBranch "terraform-plan-recovered" $PlanRoleName
+  Backup-RoleTrustAndGetBranch "terraform-lifecycle-recovered" $LifecycleRoleName
+  Backup-RoleTrustAndGetBranch "github-deploy-recovered" $DeployRoleName
+  Backup-RoleTrustAndGetBranch "oidc-smoke-recovered" $SmokeRoleName
+)
+if (@($RecoveredBranches | Where-Object { $_ -cne $OldBranch }).Count -ne 0) {
+  throw "Emergency trust recovery is incomplete."
+}
+Write-Host "Emergency trust recovery: old branch restored"
+```
+
+backupにはprovider識別子が含まれるため、terminalへ出力せず`file://`で渡す。backupが失われ、かつTerraform stateも利用不能なら、推測でpolicyを再作成しない。IAM管理者による別レビューとincident扱いに切り替える。
+
+## 7. 完了チェックリスト
+
+- [ ] PR #126 commitが実行用`main`の祖先である
+- [ ] 権威あるbootstrap local stateとroot remote stateを特定した
+- [ ] 直近applyと同一のbootstrap/root入力を使用した
+- [ ] Terraform plan roleのsubjectが`refs/heads/main`だけである
+- [ ] Terraform lifecycle roleのsubjectが`refs/heads/main`だけである
+- [ ] root GitHub deploy roleのsubjectが`refs/heads/main`だけである
+- [ ] permissionless OIDC smoke roleのsubjectが`refs/heads/main`だけである
+- [ ] audienceは4 roleとも`sts.amazonaws.com`のままである
+- [ ] provider principal、permission policy、role名を変更していない
+- [ ] repository variable `DEPLOY_BRANCH`が`main`である
+- [ ] `main`から実行した`AWS OIDC Smoke`がsuccessである
+- [ ] operational `.yml` / `.tf` / `.ps1`に旧branch依存がない
+- [ ] bootstrap/rootのpost-cutover full planが成功し、exit codeと未適用driftを記録した
+- [ ] account ID、ARN、state、plan、trust backup、secret、tokenをissue / PR / chatへ貼っていない
+- [ ] rollback判断が終わるまで`$CutoverDir`を保全した
+- [ ] rollback不要の判断後、手順8で一時artifactを削除した
+
+全項目を満たした時点でD1aは完了である。履歴説明のdocsに残る旧branch文字列は、運用依存ではないため削除しない。
+
+## 8. D1b（RAG-22）への引き継ぎ
+
+D1a完了後は、`main`のworkflow guard、3系統のOIDC trust、`DEPLOY_BRANCH`が一致するため、D1b（RAG-22）で`main`からAWS lifecycleを安全に実測できる。D1bでは、review済みplanを使ったephemeral runtimeのup / smoke / down、残存resource確認、コストと時間の記録を行える。D1aはその認証経路を整えるだけであり、runtime lifecycle自体は実行しない。
+
+## 9. 参考
+
+- [AWS base branch decision](./aws_base_branch_decision.md)
+- [AWS ECS deploy guide](../../deploy/aws-ecs/DEPLOY.md)
+- [Terraform backend configuration](https://developer.hashicorp.com/terraform/language/backend)
+- [Terraform saved plan workflow](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename)
+- [Terraform resource targeting](https://developer.hashicorp.com/terraform/tutorials/state/resource-targeting)
