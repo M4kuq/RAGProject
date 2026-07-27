@@ -562,12 +562,14 @@ $VariableChangeLines = @(
   $VariablesDiff |
     Where-Object { $_ -match "^[+-]" -and $_ -notmatch "^[+-]{3}" }
 )
+# `git diff $MainSha` treats the recorded main commit as before and the
+# BootstrapDir worktree as after. No change is valid when both contain main.
 $ExpectedVariableChangeLines = @(
-  '-  default     = "deploy/AWS_ECS"',
-  '+  default     = "main"'
+  '-  default     = "main"',
+  '+  default     = "deploy/AWS_ECS"'
 )
 $UnexpectedVariableChangeLines = @(
-  Compare-Object $ExpectedVariableChangeLines $VariableChangeLines
+  Compare-Object -CaseSensitive $ExpectedVariableChangeLines $VariableChangeLines
 )
 if (
   $VariableChangeLines.Count -ne 0 -and
@@ -1745,6 +1747,7 @@ Assert-NoBlockingCutoverRuns
 - bootstrap / root stateのrole ARN accountは、role名を利用する前に明示profile accountと一致する。
 - main root stackと別worktreeの`$BootstrapDir`の双方に、ignored fileを含む未追跡`.tf` / `.tf.json` / `override.tf` / `override.tf.json` / `*_override.tf`がない。
 - `$BootstrapDir`がlinked worktreeならbootstrap側fetchは共有refを安全に再確認し、別cloneならそのclone自身の`origin/main`を更新する。どちらもfetch後のcommitが開始時の`$MainSha`と一致しなければconfiguration diffへ進まない。
+- bootstrap configurationの比較は開始時の`$MainSha`を変更前、`$BootstrapDir`のworktreeを変更後とする。権威ある旧`deploy/AWS_ECS` worktree / cloneでは`variables.tf`の`- main` / `+ deploy/AWS_ECS`だけを許可する。`$BootstrapDir`が`main`と同じ内容なら差分なしとなり、これは正常系として継続する。それ以外の差分は停止する。
 - `$CutoverDir`に4 trust backup、bootstrap state backup、`cutover-initial-state.json`、bootstrap/root別のTerraform data directory、AWS CLI / `gh`のstdout・stderr診断logが作られる。開始時の`$MainSha`、repository / path / branch入力、選択profileと検証済みaccount、開始時`AWS_PROFILE`、4 role名とbranch、`DEPLOY_BRANCH`は保護済みinitial-state fileに一度だけ保存される。
 - `TF_DATA_DIR`はTerraform command実行中だけbootstrap/root別の保護済みdirectoryを指し、command終了時に直前の値へ戻る。root backend metadataはrepository配下の`.terraform`へ作られない。
 - initial-state、開始時4 roleの`*.before.json`、bootstrap state backupは固定名のwrite-onceであり、既存pathへの上書きを拒否する。CLI log、開始後のrole snapshot、saved plan / logは呼び出しごとのartifact IDを持つため、再試行でも既存artifactを上書きしない。失敗時は案内されたpathだけを使ってlocalで確認し、中身をterminalや作業記録へ表示しない。
