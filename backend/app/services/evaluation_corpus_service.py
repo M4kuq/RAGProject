@@ -395,10 +395,7 @@ class EvaluationCorpusService:
             all_sources_indexed
             and present_count == fact_count
             and isolated_fact_retrieved == fact_count
-            and (
-                not answerable_retrieval_required
-                or answerable_retrieved == len(answerable)
-            )
+            and (not answerable_retrieval_required or answerable_retrieved == len(answerable))
         )
         if failed_count:
             corpus_status = "failed"

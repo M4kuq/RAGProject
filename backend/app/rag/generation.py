@@ -304,9 +304,7 @@ class OpenAICompatibleChatAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
-        disable_lmstudio_thinking = (
-            self.native_lmstudio_api and _is_qwen35_model(self.model_name)
-        )
+        disable_lmstudio_thinking = self.native_lmstudio_api and _is_qwen35_model(self.model_name)
         if (
             self.native_lmstudio_api
             and request.response_format is None
