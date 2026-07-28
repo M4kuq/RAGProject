@@ -338,6 +338,14 @@ class EvaluationCorpusService:
             for case in cases
             if isinstance(case.metadata_json, dict) and case.metadata_json.get("answerable") is True
         ]
+        answerable_retrieval_required = not (
+            cases
+            and all(
+                isinstance(case.metadata_json, dict)
+                and case.metadata_json.get("tuning_only") is True
+                for case in cases
+            )
+        )
         answerable_expectations: list[tuple[str, list[int]]] = []
         for case in answerable:
             metadata = case.metadata_json or {}
@@ -387,7 +395,10 @@ class EvaluationCorpusService:
             all_sources_indexed
             and present_count == fact_count
             and isolated_fact_retrieved == fact_count
-            and answerable_retrieved == len(answerable)
+            and (
+                not answerable_retrieval_required
+                or answerable_retrieved == len(answerable)
+            )
         )
         if failed_count:
             corpus_status = "failed"
@@ -401,7 +412,7 @@ class EvaluationCorpusService:
             failures.append("corpus_fact_missing")
         if isolated_fact_retrieved < fact_count:
             failures.append("corpus_fact_not_retrievable")
-        if answerable_retrieved < len(answerable):
+        if answerable_retrieval_required and answerable_retrieved < len(answerable):
             failures.append("corpus_required_fact_not_retrievable")
         if probe_failed:
             failures.append("corpus_retrieval_probe_failed")
@@ -455,7 +466,9 @@ class EvaluationCorpusService:
         if not allowed_ids:
             return 0, 0, True
         probe = self.retrieval_probe or _default_retrieval_probe(db)
-        top_k = min(50, max(10, len(allowed_ids)))
+        # RagSearchRequest accepts at most 20 results. Larger isolated corpora must
+        # still use a schema-valid preflight request instead of failing every probe.
+        top_k = min(20, max(10, len(allowed_ids)))
         fact_retrieved = 0
         answerable_retrieved = 0
         probe_failed = False

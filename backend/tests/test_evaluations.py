@@ -1960,6 +1960,136 @@ def test_evaluation_generation_retries_missing_citation_with_real_generator_cont
     assert "Retry instruction" in requests[1].system_instructions
 
 
+def test_evaluation_generation_fails_closed_after_repeated_missing_citation() -> None:
+    requests: list[GenerationRequest] = []
+    results = iter(
+        [
+            GenerationResult(content="Answer without a marker", usage=TokenUsage(3, 1, 4)),
+            GenerationResult(content="Still no marker", usage=TokenUsage(4, 2, 6)),
+        ]
+    )
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        return next(results)
+
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=Settings(
+                app_env="test",
+                generation_provider="lmstudio",
+                generation_model_name="qwen3.5-9b",
+            ),
+        ),
+    )
+
+    generation, metadata = EvaluationRagQuestionService(rag_service)._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert generation.content == "insufficient evidence"
+    assert generation.usage == TokenUsage(7, 3, 10)
+    assert metadata.total_tokens == 10
+    assert len(requests) == 2
+
+
+def test_evaluation_generation_retries_empty_final_output_once() -> None:
+    requests: list[GenerationRequest] = []
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        if len(requests) == 1:
+            raise AnswerGenerationError(error_category="empty_final")
+        return GenerationResult(content="Answer with evidence [1]", usage=TokenUsage(4, 2, 6))
+
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=Settings(
+                app_env="test",
+                generation_provider="lmstudio",
+                generation_model_name="qwen3.5-9b",
+            ),
+        ),
+    )
+
+    generation, metadata = EvaluationRagQuestionService(rag_service)._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert generation.content == "Answer with evidence [1]"
+    assert metadata.total_tokens == 6
+    assert len(requests) == 2
+    assert requests[1].temperature == 0.0
+    assert requests[1].system_instructions is not None
+    assert "no usable final answer" in requests[1].system_instructions
+
+
+def test_evaluation_generation_fails_closed_after_repeated_empty_final_output() -> None:
+    requests: list[GenerationRequest] = []
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        raise AnswerGenerationError(error_category="empty_final")
+
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=Settings(
+                app_env="test",
+                generation_provider="lmstudio",
+                generation_model_name="qwen3.5-9b",
+            ),
+        ),
+    )
+
+    generation, metadata = EvaluationRagQuestionService(rag_service)._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert generation.content == "insufficient evidence"
+    assert generation.usage is None
+    assert metadata.total_tokens is None
+    assert len(requests) == 2
+
+
 def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
     engine, session_factory = _session_factory()
     try:

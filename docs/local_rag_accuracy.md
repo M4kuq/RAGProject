@@ -93,6 +93,32 @@ If a gate fails, keep the current default and report the observed delta and fail
 reason codes. Compare runs with `strict=true`; incompatible dataset, corpus, case set,
 scope, backend, or generation model returns HTTP 409.
 
+## Latest measured dev result
+
+The first live dev measurement was completed on 2026-07-28 with LM Studio
+`qwen/qwen3.5-9b`, `temperature=0.0`, cache disabled, real Qdrant, and isolated
+collections. This is an auxiliary-judge result from one repeat, not a manually
+calibrated or publishable accuracy claim.
+
+| Metric | B1 Nomic (run 57) | E1 Qwen3 Embedding 4B (run 56) | Delta |
+|---|---:|---:|---:|
+| Auxiliary Grounded Answer Pass Rate | 75.000% (30/40) | 79.487% (31/39 judged) | +4.487 pp raw |
+| Citation correctness | 84.211% | 92.500% | +8.289 pp |
+| Answer completeness | 31.579% | 35.000% | +3.421 pp |
+| Recall@K | 64.583% | 60.417% | -4.167 pp |
+| MRR | 68.419% | 71.250% | +2.831 pp |
+| p95 latency | 92.790 s | 94.280 s | +1.606% |
+| Pipeline failures | 0/40 | 0/40 | unchanged |
+
+Strict same-case comparison used 39 pairs because one candidate auxiliary judgment
+was unavailable. The paired delta was `+2.564 pp`, the 10,000-sample paired bootstrap
+95% confidence interval was `[-12.821, +17.949] pp`, and exact McNemar `p=1.0`.
+
+The candidate improved the auxiliary prompt-injection result from `4/8` to `6/8`,
+but unanswerable cases regressed from `12/16` to `11/16`. It therefore fails both the
+`+6 pp` evidence requirement and the no-regression hard gate. The default profile is
+unchanged, and Gold v2 remains unopened until a dev candidate passes all gates.
+
 ## Security follow-up
 
 After local accuracy validation, perform the repository threat-model phase for

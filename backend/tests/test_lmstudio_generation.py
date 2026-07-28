@@ -8,6 +8,7 @@ import pytest
 
 from app.core.config import Settings
 from app.rag.generation import (
+    AnswerGenerationError,
     GenerationContextItem,
     GenerationRequest,
     OpenAICompatibleChatAnswerGenerator,
@@ -16,7 +17,7 @@ from app.rag.generation import (
 )
 
 
-def test_lmstudio_generator_calls_native_chat_api(
+def test_lmstudio_non_qwen_generator_calls_native_chat_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -52,7 +53,7 @@ def test_lmstudio_generator_calls_native_chat_api(
     generator = OpenAICompatibleChatAnswerGenerator(
         api_key="lm-studio",
         base_url="http://host.docker.internal:1234/v1",
-        model_name="lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M",
+        model_name="ibm/granite-4-micro",
         timeout_seconds=60.0,
     )
 
@@ -62,13 +63,101 @@ def test_lmstudio_generator_calls_native_chat_api(
     assert result.usage == TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20)
     assert captured["url"] == "http://host.docker.internal:1234/api/v1/chat"
     assert captured["headers"]["Authorization"] == "Bearer lm-studio"
-    assert captured["json"]["model"] == "lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M"
+    assert captured["json"]["model"] == "ibm/granite-4-micro"
     assert captured["json"]["input"].startswith("/no_think\n")
     assert "/no_think" in captured["json"]["system_prompt"]
     assert captured["json"]["max_output_tokens"] == 8192
     assert "reasoning" not in captured["json"]
     assert captured["json"]["stream"] is False
     assert captured["json"]["store"] is False
+
+
+def test_lmstudio_qwen35_generator_disables_thinking_via_chat_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Qwen3.5 cites the local context [1].",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                },
+            }
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> Response:
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("app.rag.generation.httpx.post", fake_post)
+    generator = OpenAICompatibleChatAnswerGenerator(
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen/qwen3.5-9b",
+        timeout_seconds=60.0,
+    )
+
+    result = generator.generate(_request())
+
+    assert result.content == "Qwen3.5 cites the local context [1]."
+    assert result.usage == TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20)
+    assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer lm-studio"
+    assert captured["json"]["model"] == "qwen/qwen3.5-9b"
+    assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["json"]["max_tokens"] == 128
+    assert captured["json"]["temperature"] == 0.2
+    assert captured["json"]["stream"] is False
+
+
+def test_lmstudio_qwen35_reports_empty_final_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyFinalResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [{"message": {"content": "Thinking Process: draft only"}}],
+            }
+
+    monkeypatch.setattr(
+        "app.rag.generation.httpx.post",
+        lambda *args, **kwargs: EmptyFinalResponse(),
+    )
+    generator = OpenAICompatibleChatAnswerGenerator(
+        api_key="lm-studio",
+        base_url="http://host.docker.internal:1234/v1",
+        model_name="qwen/qwen3.5-9b",
+        timeout_seconds=180,
+    )
+
+    with pytest.raises(AnswerGenerationError) as exc_info:
+        generator.generate(_request())
+
+    assert exc_info.value.error_category == "empty_final"
 
 
 def test_lmstudio_generator_removes_qwen_thinking_text(
@@ -182,6 +271,7 @@ def test_lmstudio_task_request_preserves_raw_json(
     assert isinstance(payload, dict)
     assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
     assert payload["response_format"] == {"type": "json_object"}
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["max_tokens"] == 128
     assert payload["stream"] is False
     assert "reasoning" not in payload

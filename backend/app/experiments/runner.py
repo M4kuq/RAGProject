@@ -687,7 +687,7 @@ def _run_runtime_qdrant_evaluation(
     except ExperimentError as exc:
         reason_code = exc.error_code
     except Exception as exc:
-        reason_code = _safe_experiment_reason_code(getattr(exc, "error_code", None))
+        reason_code = _safe_exception_reason_code(exc)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return ExperimentEvaluationOutcome(
         status="blocked",
@@ -1091,3 +1091,9 @@ def _safe_experiment_reason_code(value: object) -> str:
         if re.fullmatch(r"[a-z][a-z0-9_:-]{0,99}", normalized):
             return normalized
     return "runtime_evaluation_failed"
+
+
+def _safe_exception_reason_code(exc: Exception) -> str:
+    return _safe_experiment_reason_code(
+        getattr(exc, "error_code", None) or getattr(exc, "code", None)
+    )

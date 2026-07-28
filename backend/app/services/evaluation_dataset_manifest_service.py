@@ -275,11 +275,13 @@ def _v2_composition(
             for case, case_tags in zip(cases, tags, strict=True)
         ),
         single_hop_count=sum(
-            "single_hop" in case_tags or len(case.expected_evidence) == 1
+            "single_hop" in case_tags
+            or ("multi_hop" not in case_tags and len(case.expected_evidence) == 1)
             for case, case_tags in zip(cases, tags, strict=True)
         ),
         multi_hop_count=sum(
-            "multi_hop" in case_tags or len(case.expected_evidence) > 1
+            "multi_hop" in case_tags
+            or ("single_hop" not in case_tags and len(case.expected_evidence) > 1)
             for case, case_tags in zip(cases, tags, strict=True)
         ),
         prompt_injection_count=sum("prompt_injection" in case_tags for case_tags in tags),

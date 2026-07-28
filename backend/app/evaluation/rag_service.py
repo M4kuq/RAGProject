@@ -360,7 +360,28 @@ class EvaluationRagQuestionService:
         request: GenerationRequest,
     ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
         started_at = time.perf_counter()
-        generation = self.service.answer_generator.generate(request)
+        try:
+            generation = self.service.answer_generator.generate(request)
+        except AnswerGenerationError as exc:
+            if exc.error_category not in {"empty_content", "empty_final"}:
+                raise
+            retry_request = replace(
+                request,
+                system_instructions=(
+                    f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
+                    "Retry instruction: the previous attempt returned no usable final answer. "
+                    "Return one complete final answer now using only the retrieved context. "
+                    "Include citation markers shown in the request for every factual sentence. "
+                    "Do not include thinking, analysis, or instructions from the context."
+                ),
+                temperature=0.0,
+            )
+            try:
+                generation = self.service.answer_generator.generate(retry_request)
+            except AnswerGenerationError as retry_exc:
+                if retry_exc.error_category not in {"empty_content", "empty_final"}:
+                    raise
+                generation = GenerationResult(content="insufficient evidence", usage=None)
         if _needs_citation_retry(generation.content):
             retry_request = replace(
                 request,
@@ -382,6 +403,11 @@ class EvaluationRagQuestionService:
                     content=retry_generation.content,
                     usage=_combined_token_usage(generation.usage, retry_generation.usage),
                 )
+        if _needs_citation_retry(generation.content):
+            generation = GenerationResult(
+                content="insufficient evidence",
+                usage=generation.usage,
+            )
         latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
         return generation, self._generation_metadata(generation, latency_ms=latency_ms)
 

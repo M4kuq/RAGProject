@@ -27,7 +27,9 @@ from app.experiments.local_accuracy import (
 from app.experiments.reporting import redact_experiment_artifact
 from app.experiments.schemas import ExperimentManifest
 from app.ingest.embedding import probe_lmstudio_embedding_dimension
+from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import EvaluationRunCreateRequest
+from app.services.evaluation_dataset_manifest_service import EvaluationDatasetManifestService
 from app.services.evaluation_service import (
     _exact_mcnemar_p_value,
     _paired_bootstrap_confidence_interval,
@@ -132,6 +134,11 @@ def test_local_accuracy_dev_dataset_has_required_balance_and_isolated_ids() -> N
         for document in manifest.corpus_documents
         for fact in document.facts
     )
+    validation = EvaluationDatasetManifestService(EvaluationRepository()).validate(
+        manifest=manifest
+    )
+    assert validation.composition.single_hop_count == 20
+    assert validation.composition.multi_hop_count == 20
 
 
 def test_manifest_v1_remains_compatible_and_v2_is_fixed_to_qwen_9b() -> None:
