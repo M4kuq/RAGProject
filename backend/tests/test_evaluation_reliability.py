@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.base import Base
-from app.db.evaluation_models import EvaluationReviewPayload
+from app.db.evaluation_models import EvaluationCorpusSource, EvaluationReviewPayload
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
@@ -479,7 +479,7 @@ def test_retrieval_preflight_caps_top_k_at_search_schema_limit(
 ) -> None:
     db, _user = database
     sources = [
-        SimpleNamespace(
+        EvaluationCorpusSource(
             source_key=f"source-{index}",
             facts_json=[{"fact_id": f"fact-{index}", "statement": f"fact {index}"}],
         )
