@@ -64,6 +64,8 @@ concurrency groupの名前もmain用へ変わるため、旧branchで既に実�
 
 ## D1のOIDC trustカットオーバー
 
+D1aの人間向け実行手順、段階別rollback、RAG-17のapply前確認は [AWS IAM OIDC trust cutover runbook](./aws_iam_trust_cutover_runbook.md) を参照する。
+
 ### 対象は3系統
 
 次のすべてがbranch scopeを持つため、1つでも旧branchのままではmainから対応workflowを実行できない。

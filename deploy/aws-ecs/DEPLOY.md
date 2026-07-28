@@ -1,6 +1,6 @@
 # AWS ECS Fargate デプロイ手順
 
-このrunbookは `main` branchのAWS demo stackと、Bedrock/S3対応済みアプリを配備する手順です。Phase4以降のAWS作業は`main`をbaseとし、旧`deploy/AWS_ECS` branchは新規作業のbaseにしません。判断根拠とD1のカットオーバー手順は [AWS base branch decision](../../docs/phase4/aws_base_branch_decision.md) を参照してください。新規アカウントとクレジット運用は [AWS_PAID_PLAN_CREDIT_SETUP.md](./AWS_PAID_PLAN_CREDIT_SETUP.md) を参照してください。CIはGitHub OIDCの短期認証だけを使い、アプリはECS task roleのdefault credential chainを使います。静的AWS access keyは使いません。
+このrunbookは `main` branchのAWS demo stackと、Bedrock/S3対応済みアプリを配備する手順です。Phase4以降のAWS作業は`main`をbaseとし、旧`deploy/AWS_ECS` branchは新規作業のbaseにしません。判断根拠は [AWS base branch decision](../../docs/phase4/aws_base_branch_decision.md)、D1aの実行順序とrollbackは [AWS IAM OIDC trust cutover runbook](../../docs/phase4/aws_iam_trust_cutover_runbook.md) を参照してください。新規アカウントとクレジット運用は [AWS_PAID_PLAN_CREDIT_SETUP.md](./AWS_PAID_PLAN_CREDIT_SETUP.md) を参照してください。CIはGitHub OIDCの短期認証だけを使い、アプリはECS task roleのdefault credential chainを使います。静的AWS access keyは使いません。
 
 > [!WARNING]
 > D0 merge後からD1のOIDC trustと`DEPLOY_BRANCH`のカットオーバー完了までは、AWS lifecycleを実行しないでください。
