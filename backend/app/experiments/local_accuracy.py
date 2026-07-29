@@ -305,14 +305,14 @@ def _candidate(
     profile: ExperimentRetrievalProfile,
     *,
     variant: str,
-    top_k: int = 10,
-    rerank_top_n: int = 3,
-    dense_weight: float = 0.5,
-    sparse_weight: float = 0.5,
-    rrf_k: int = 60,
-    agentic_sufficiency_threshold: float = 0.2,
-    graph_depth: int = 2,
-    graph_router_signal_threshold: float = 0.5,
+    top_k: int | None = None,
+    rerank_top_n: int | None = None,
+    dense_weight: float | None = None,
+    sparse_weight: float | None = None,
+    rrf_k: int | None = None,
+    agentic_sufficiency_threshold: float | None = None,
+    graph_depth: int | None = None,
+    graph_router_signal_threshold: float | None = None,
 ) -> LocalAccuracyCandidate:
     return LocalAccuracyCandidate(
         candidate_id=f"{profile.profile_id}__{variant}",
@@ -321,13 +321,21 @@ def _candidate(
         reranker_model=profile.reranker_model,
         strategy=profile.strategy,
         router_mode=profile.router_mode,
-        top_k=top_k,
-        rerank_top_n=rerank_top_n,
-        dense_weight=dense_weight,
-        sparse_weight=sparse_weight,
-        rrf_k=rrf_k,
-        agentic_sufficiency_threshold=agentic_sufficiency_threshold,
-        graph_depth=graph_depth,
-        graph_router_signal_threshold=graph_router_signal_threshold,
+        top_k=profile.top_k if top_k is None else top_k,
+        rerank_top_n=profile.rerank_top_n if rerank_top_n is None else rerank_top_n,
+        dense_weight=profile.dense_weight if dense_weight is None else dense_weight,
+        sparse_weight=profile.sparse_weight if sparse_weight is None else sparse_weight,
+        rrf_k=profile.rrf_k if rrf_k is None else rrf_k,
+        agentic_sufficiency_threshold=(
+            profile.agentic_sufficiency_threshold
+            if agentic_sufficiency_threshold is None
+            else agentic_sufficiency_threshold
+        ),
+        graph_depth=profile.graph_depth if graph_depth is None else graph_depth,
+        graph_router_signal_threshold=(
+            profile.graph_router_signal_threshold
+            if graph_router_signal_threshold is None
+            else graph_router_signal_threshold
+        ),
         supplemental=profile.supplemental,
     )

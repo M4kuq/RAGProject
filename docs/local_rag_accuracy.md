@@ -193,10 +193,57 @@ E2 top-k 20 is the provisional dev winner, but it is not promoted:
 Because two hard gates failed, the default profile remains unchanged. No
 three-repeat confirmation or Gold v2 holdout run was started.
 
+## Answerability and output-budget ablation
+
+RAG-32 tested one generation coordinate at a time with E2 top-k 20 retrieval
+held fixed. All measurements used `local_accuracy_dev_v1`, real Qdrant,
+Qwen3 Embedding 4B, BGE reranking, LM Studio `qwen/qwen3.5-9b`,
+`temperature=0.0`, and no retrieval cache. Gold v2 was not opened.
+
+| Ablation | Run | Auxiliary pass | Completeness | Unanswerable | Injection | p95 | Decision |
+|---|---:|---:|---:|---:|---:|---:|---|
+| E2 top-k 20 | 82 | 82.500% (33/40) | 30.435% | 11/16 | 7/8 | 101.841 s | reference |
+| A1 retry disabled | 86 | 85.000% (34/40) | 30.435% | 11/16 | 7/8 | 121.993 s | reject |
+| A2 4,000-token-equivalent (`max_output_chars=16000`) | 88 | 90.000% (36/40) | 33.333% | 13/16 | 7/8 | 232.399 s | latency reject |
+| A3 3,000-token-equivalent (`max_output_chars=12000`) | 90 | 87.500% (35/40) | 33.333% | 12/16 | 7/8 | 186.539 s | provisional candidate |
+| A4 2,850-token-equivalent (`max_output_chars=11400`) | 92 | 86.842% (33/38 judged) | 33.333% | 11 pass, 2 Judge failures | 7/8 | 146.841 s | reject |
+
+The token figures are approximate labels derived from a four-characters-per-token
+budget. The enforced setting is the character cap shown above; actual token
+counts vary by language and tokenizer.
+
+A3 improved the one-repeat auxiliary pass rate over B1 from `75.0%` to
+`87.5%` (`+12.5 pp`), with a paired bootstrap 95% CI of `[-5.0, +30.0] pp`
+and exact McNemar `p=0.266846`. Citation correctness was `100%`,
+completeness was `33.333%`, unanswerable was unchanged at `12/16`,
+prompt injection improved from `4/8` to `7/8`, and pipeline failures were zero.
+
+A3 nevertheless missed the original B1 p95 limit by `0.959 s`:
+`186.539 s` versus `185.580 s`. A4 was then measured while other local tasks
+were running; the observed GPU snapshot was 85% utilization with
+`11.54 / 12.28 GiB` VRAM in use. Therefore A4's `146.841 s` p95 is recorded
+for reproducibility but is not accepted as a promotion-gate result. A4 also
+had two auxiliary-Judge failures, both on unanswerable cases, so it does not
+establish the required no-regression result.
+
+Further tuning on the same 40 cases stops here. A3 is frozen as the provisional
+confirmation candidate:
+
+- manifest:
+  `local_rag_accuracy_e2_output_budget_3k_dev_v2.example.json`
+- SHA-256:
+  `AE98F837EE9B5AB439C69803D9B4CE832F7CAC423E10C8DDD4708C1287FA0A32`
+- next gate: rerun B1 and A3 in an otherwise idle LM Studio/GPU window, then
+  proceed to a separate `confirm_dev` only if all gates pass
+
+These values remain auxiliary-Judge dev evidence, not a calibrated or public
+accuracy claim. The default profile, PR #128, and Gold v2 remain unchanged.
+
 ## Security follow-up
 
 After local accuracy validation, perform the repository threat-model phase for
 retrieved-chunk prompt injection, corpus poisoning, tool authorization, Agentic budget
 exhaustion, cloud escalation cost attacks, rate limits, daily budgets, and the
-external-LLM data boundary. Accuracy promotion and security promotion are separate
-gates.
+external-LLM data boundary. The repository-grounded plan is documented in
+`docs/security/RAGProject-threat-model.md`. Accuracy promotion and security
+promotion are separate gates.

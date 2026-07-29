@@ -19,6 +19,7 @@ from app.experiments.runner import (
     ExperimentRunOptions,
     RetrievalModelExperimentRunner,
     _safe_exception_reason_code,
+    _settings_for_candidate,
     check_dataset_availability,
     load_manifest,
     run_local_strategy_evaluation,
@@ -328,6 +329,48 @@ def test_local_smoke_summary_without_status_counts_as_succeeded(
     assert outcome.status == "succeeded"
     assert outcome.metrics["recall_at_k"] == 0.75
     assert outcome.metrics["p95_latency"] == 9000.0
+
+
+def test_v2_generation_ablation_overrides_are_applied_only_when_declared() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "experiments"
+        / "manifests"
+        / "local_rag_accuracy_e2_no_retry_dev_v2.example.json"
+    )
+    manifest = load_manifest(manifest_path)
+    embedding = manifest.embedding_models[0]
+    profile = manifest.retrieval_profiles[0]
+    availability = ModelAvailability(
+        model_id=embedding.model_id,
+        model_type=ModelKind.EMBEDDING,
+        provider=embedding.provider,
+        status="available",
+        reason_codes=("available",),
+        required=True,
+        download_policy=DownloadPolicy.NEVER,
+        expected_dimension=2560,
+        actual_dimension=2560,
+    )
+
+    candidate_settings = _settings_for_candidate(
+        Settings(
+            generation_retry_on_insufficient_evidence=True,
+            generation_max_output_chars=2000,
+        ),
+        embedding,
+        manifest.reranker_models[0],
+        availability,
+        manifest.experiment_name,
+        generation_profile=manifest.generation_profile,
+        profile=profile,
+    )
+
+    assert candidate_settings.generation_retry_on_insufficient_evidence is False
+    assert candidate_settings.generation_max_output_chars == 8000
+    assert candidate_settings.ask_top_k_default == 20
+    assert candidate_settings.ask_rerank_top_n_default == 3
 
 
 def test_local_smoke_preflight_reasons_are_preserved(
