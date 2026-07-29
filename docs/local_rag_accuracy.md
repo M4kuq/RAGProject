@@ -119,6 +119,80 @@ but unanswerable cases regressed from `12/16` to `11/16`. It therefore fails bot
 `+6 pp` evidence requirement and the no-regression hard gate. The default profile is
 unchanged, and Gold v2 remains unopened until a dev candidate passes all gates.
 
+### E2/E3 bounded development ablation
+
+Use the focused manifest below before running the remaining Agentic and Graph
+profiles:
+
+```powershell
+.\scripts\run_retrieval_model_experiment.ps1 `
+  -Manifest app\experiments\manifests\local_rag_accuracy_e2_e3_dev_v2.example.json `
+  -Mode local `
+  -DownloadPolicy opt-in-download `
+  -SkipSeedIndexing
+```
+
+This manifest keeps Qwen3 Embedding 4B and BGE reranking fixed, screens six E2/E3
+candidates, and runs only the top three candidates end-to-end once. If no candidate
+passes the dev gates against B1, stop without changing the default profile. If a
+candidate is promising, freeze that exact retrieval configuration and run the
+three-repeat confirmation separately.
+
+## Latest E2/E3 dev measurement
+
+The bounded E2/E3 measurement completed on 2026-07-29. It used the 40-case
+`local_accuracy_dev_v1` dataset, real Qdrant, Qwen3 Embedding 4B,
+`BAAI/bge-reranker-v2-m3`, and LM Studio `qwen/qwen3.5-9b`. Cache was disabled and
+generation temperature was `0.0`. All nine runs succeeded with zero pipeline
+failures. Total experiment elapsed time was `8,420,714 ms`.
+
+The implementation audit found that hybrid retrieval previously stopped after
+dense/sparse fusion and did not call the configured BGE reranker. The E3 measurement
+below was run only after adding fusion-then-rerank for explicit external rerank
+providers (`local` and `bedrock`) and confirming non-null rerank scores and
+`rerank_ms` in the live trace.
+
+### Retrieval screening
+
+| Candidate | Run | Recall@K | MRR | p95 latency |
+|---|---:|---:|---:|---:|
+| E2 base, top-k 10, rerank 3 | 76 | 60.417% | 71.250% | 0.761 s |
+| E3 base, hybrid 0.5/0.5, RRF 60 | 77 | 54.167% | 68.651% | 1.338 s |
+| E2 top-k 20 | 78 | **87.500%** | **72.473%** | 1.747 s |
+| E2 rerank 5 | 79 | 60.417% | 71.250% | 1.180 s |
+| E3 hybrid 0.4/0.6 | 80 | 54.167% | 68.651% | 0.889 s |
+| E3 RRF 30 | 81 | 54.167% | 68.651% | 0.964 s |
+
+The selected end-to-end finalists were `E2__top20`, `E2__base`, and
+`E2__rerank5`. E3 did not pass the retrieval screening gate.
+
+### End-to-end auxiliary result
+
+| Candidate | Run | Auxiliary pass | Paired delta vs B1 | Citation correctness | Completeness | p95 latency | Unanswerable | Prompt injection | Judge failures |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| B1 Nomic | 57 | 75.000% (30/40) | baseline | 84.211% | 31.579% | 92.790 s | 12/16 | 4/8 | 0 |
+| E2 top-k 20 | 82 | **82.500% (33/40)** | **+7.500 pp** | **100.000%** | 30.435% | 101.841 s | 11/16 | **7/8** | 0 |
+| E2 base | 83 | 80.556% (29/36 judged) | +2.778 pp on 36 pairs | 100.000% | 26.316% | 111.156 s | 12/14 judged | 7/8 | 4 |
+| E2 rerank 5 | 84 | 78.378% (29/37 judged) | +0.000 pp on 37 pairs | 100.000% | 26.316% | 99.486 s | 12/15 judged | 7/8 | 3 |
+
+For the only complete 40-pair candidate, E2 top-k 20, the paired bootstrap 95%
+confidence interval was `[-10.000, +27.500] pp`, exact McNemar `p=0.607239`, and
+relative improvement was `10.000%`. These are auxiliary-Judge results from one
+repeat, not manually calibrated or publishable accuracy numbers.
+
+E2 top-k 20 is the provisional dev winner, but it is not promoted:
+
+- the `+6 pp` auxiliary threshold passed;
+- unanswerable accuracy regressed from `12/16` to `11/16`;
+- answer completeness regressed from `31.579%` to `30.435%`;
+- prompt-injection resistance improved from `4/8` to `7/8`;
+- citation correctness improved to `100.000%`;
+- pipeline failures remained zero;
+- p95 latency remained below twice the B1 baseline.
+
+Because two hard gates failed, the default profile remains unchanged. No
+three-repeat confirmation or Gold v2 holdout run was started.
+
 ## Security follow-up
 
 After local accuracy validation, perform the repository threat-model phase for

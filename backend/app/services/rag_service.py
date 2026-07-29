@@ -1360,7 +1360,6 @@ class RagService:
             )
         ranked_candidates = _order_by_source_affinity(query, checked_candidates)
         visible_candidates = ranked_candidates[:top_k]
-        selected_count = min(rerank_top_n, len(visible_candidates))
         excluded_by_rdb_check_count = max(0, len(fused_candidates) - len(checked_candidates))
         if not visible_candidates:
             summary = _score_summary(
@@ -1382,6 +1381,38 @@ class RagService:
                 context_candidates=[],
             )
 
+        rerank_by_chunk_id: dict[int, RerankResult] = {}
+        ordered_candidates = visible_candidates
+        if _hybrid_uses_external_reranker(self.settings):
+            with latency_tracker.span("rerank_ms"):
+                rerank_results = self.reranker.rerank(
+                    query=query,
+                    candidates=[
+                        RerankCandidate(
+                            document_chunk_id=candidate.chunk.document_chunk_id,
+                            text=candidate.chunk.content_text,
+                            retrieval_score=candidate.retrieval_score,
+                        )
+                        for candidate in visible_candidates
+                    ],
+                )
+                rerank_by_chunk_id = _validated_rerank_results(
+                    rerank_results,
+                    checked_candidates=visible_candidates,
+                )
+            ordered_candidates = sorted(
+                visible_candidates,
+                key=lambda candidate: (
+                    rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+                ),
+            )
+        selected_count = min(rerank_top_n, len(ordered_candidates))
+        top1_rerank_score = (
+            rerank_by_chunk_id[ordered_candidates[0].chunk.document_chunk_id].rerank_score
+            if rerank_by_chunk_id
+            else None
+        )
+
         with latency_tracker.span("retrieval_items_persist_ms"):
             saved_items = self.repository.save_items(
                 db,
@@ -1389,11 +1420,14 @@ class RagService:
                 items=[
                     _hybrid_run_item_input(
                         candidate,
+                        rerank_result=rerank_by_chunk_id.get(
+                            candidate.chunk.document_chunk_id
+                        ),
                         final_rank=index,
                         selected_flag=index <= selected_count,
                         fusion_method=fusion_method,
                     )
-                    for index, candidate in enumerate(visible_candidates, start=1)
+                    for index, candidate in enumerate(ordered_candidates, start=1)
                 ],
             )
         summary = _score_summary(
@@ -1403,7 +1437,7 @@ class RagService:
             hybrid_candidate_count=len(fused_candidates),
             checked_candidates=checked_candidates,
             selected_count=selected_count,
-            top1_rerank_score=None,
+            top1_rerank_score=top1_rerank_score,
             fusion_method=fusion_method.value,
             excluded_by_rdb_check_count=excluded_by_rdb_check_count,
         )
@@ -1413,17 +1447,25 @@ class RagService:
                 _response_item(
                     candidate,
                     saved_item_id=saved_item.retrieval_run_item_id,
-                    rerank_score=None,
-                    rerank_order=None,
+                    rerank_score=(
+                        rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score
+                        if rerank_by_chunk_id
+                        else None
+                    ),
+                    rerank_order=(
+                        rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+                        if rerank_by_chunk_id
+                        else None
+                    ),
                     selected_flag=index <= selected_count,
                     snippet_max_chars=self.settings.search_snippet_max_chars,
                 )
                 for index, (candidate, saved_item) in enumerate(
-                    zip(visible_candidates, saved_items, strict=True),
+                    zip(ordered_candidates, saved_items, strict=True),
                     start=1,
                 )
             ],
-            selected_candidates=visible_candidates[:selected_count],
+            selected_candidates=ordered_candidates[:selected_count],
             citation_sources=[
                 _citation_source(
                     candidate,
@@ -1433,7 +1475,7 @@ class RagService:
                 )
                 for local_id, (candidate, saved_item) in enumerate(
                     zip(
-                        visible_candidates[:selected_count],
+                        ordered_candidates[:selected_count],
                         saved_items[:selected_count],
                         strict=True,
                     ),
@@ -1445,12 +1487,20 @@ class RagService:
                     candidate=candidate,
                     saved_item=saved_item,
                     rank=index,
-                    rerank_score=None,
-                    rerank_order=None,
+                    rerank_score=(
+                        rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_score
+                        if rerank_by_chunk_id
+                        else None
+                    ),
+                    rerank_order=(
+                        rerank_by_chunk_id[candidate.chunk.document_chunk_id].rerank_order
+                        if rerank_by_chunk_id
+                        else None
+                    ),
                     citation_candidate=index <= selected_count,
                 )
                 for index, (candidate, saved_item) in enumerate(
-                    zip(visible_candidates, saved_items, strict=True),
+                    zip(ordered_candidates, saved_items, strict=True),
                     start=1,
                 )
             ],
@@ -3141,6 +3191,7 @@ def _sparse_run_item_input(
 def _hybrid_run_item_input(
     candidate: CheckedRetrievalCandidate,
     *,
+    rerank_result: RerankResult | None,
     final_rank: int,
     selected_flag: bool,
     fusion_method: FusionMethod,
@@ -3148,14 +3199,20 @@ def _hybrid_run_item_input(
     return RetrievalRunItemInput(
         document_chunk_id=candidate.chunk.document_chunk_id,
         retrieval_score=_decimal_score(candidate.retrieval_score),
-        rerank_score=None,
+        rerank_score=(
+            _decimal_score(rerank_result.rerank_score)
+            if rerank_result is not None
+            else None
+        ),
         rank_order=candidate.rank_order,
-        rerank_order=None,
+        rerank_order=rerank_result.rerank_order if rerank_result is not None else None,
         selected_flag=selected_flag,
         payload_snapshot=_payload_snapshot(candidate),
         retrieval_source=RetrievalSource.HYBRID.value,
         score_breakdown_json=_hybrid_score_breakdown(
             candidate,
+            rerank_score=rerank_result.rerank_score if rerank_result is not None else None,
+            rerank_order=rerank_result.rerank_order if rerank_result is not None else None,
             final_rank=final_rank,
             selected_flag=selected_flag,
             fusion_method=fusion_method,
@@ -3721,6 +3778,10 @@ def _hybrid_uses_sparse(settings: Settings) -> bool:
     return settings.hybrid_sparse_weight > 0
 
 
+def _hybrid_uses_external_reranker(settings: Settings) -> bool:
+    return settings.rerank_provider in {"local", "bedrock"}
+
+
 def _hybrid_candidate_limit(top_k: int, settings: Settings) -> int:
     return min(top_k * settings.hybrid_candidate_multiplier, 50)
 
@@ -3762,6 +3823,8 @@ def _sparse_score_breakdown(
 def _hybrid_score_breakdown(
     candidate: CheckedRetrievalCandidate,
     *,
+    rerank_score: float | None,
+    rerank_order: int | None,
     final_rank: int,
     selected_flag: bool,
     fusion_method: FusionMethod,
@@ -3771,6 +3834,8 @@ def _hybrid_score_breakdown(
         sparse_score=_payload_float(candidate, "sparse_score"),
         fused_score=candidate.retrieval_score,
         rank_order=candidate.rank_order,
+        rerank_score=rerank_score,
+        rerank_order=rerank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
         fusion_method=fusion_method,

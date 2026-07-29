@@ -251,6 +251,8 @@ def test_hybrid_trace_builders_keep_only_safe_metadata() -> None:
         sparse_score=0.82,
         fused_score=0.95,
         rank_order=1,
+        rerank_score=0.88,
+        rerank_order=1,
         final_rank=1,
         selected_flag=True,
         fusion_method=FusionMethod.RRF,
@@ -273,6 +275,8 @@ def test_hybrid_trace_builders_keep_only_safe_metadata() -> None:
     assert score["dense_score"] == 0.91
     assert score["sparse_score"] == 0.82
     assert score["fused_score"] == 0.95
+    assert score["rerank_score"] == 0.88
+    assert score["rerank_order"] == 1
     assert score["fusion_method"] == "rrf"
     assert raw_query not in dumped
     assert "hunter2" not in dumped

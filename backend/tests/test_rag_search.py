@@ -1236,6 +1236,66 @@ def test_rag_search_hybrid_success_persists_fusion_trace_and_score_breakdown(
         assert "raw_chunk_text" not in str(first_score_breakdown)
 
 
+def test_rag_search_hybrid_applies_external_reranker_after_fusion(
+    rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_client
+    settings = Settings(
+        app_env="test",
+        embedding_provider="fake",
+        embedding_fake_dimension=4,
+        retrieval_top_k_default=5,
+        retrieval_top_k_max=5,
+        rerank_provider="local",
+        rerank_top_n_default=1,
+        rerank_top_n_max=5,
+        qdrant_collection_name="document_chunks",
+        search_snippet_max_chars=32,
+    )
+    service = RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=_ReverseOrderReranker(),
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: service
+    csrf_token = _login(client)
+
+    response = client.post(
+        "/api/v1/rag/search",
+        json={
+            "query": "alpha secondary material",
+            "top_k": 5,
+            "rerank_top_n": 1,
+            "strategy": "hybrid",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [item["document_chunk_id"] for item in data["items"]] == [101, 100]
+    assert [item["rerank_order"] for item in data["items"]] == [1, 2]
+    assert data["retrieval_score_summary"]["top1_rerank_score"] == 1.0
+    with session_factory() as db:
+        run = db.get(RetrievalRun, data["retrieval_run_id"])
+        assert run is not None
+        assert run.latency_breakdown_json is not None
+        assert run.latency_breakdown_json["rerank_ms"] >= 0
+        items = (
+            db.query(RetrievalRunItem)
+            .filter_by(retrieval_run_id=run.retrieval_run_id)
+            .order_by(RetrievalRunItem.rerank_order.asc())
+            .all()
+        )
+        assert [item.document_chunk_id for item in items] == [101, 100]
+        assert all(item.rerank_score is not None for item in items)
+        assert items[0].score_breakdown_json is not None
+        assert items[0].score_breakdown_json["retrieval_source"] == "hybrid"
+        assert items[0].score_breakdown_json["rerank_order"] == 1
+        assert items[0].score_breakdown_json["rerank_score"] == 1.0
+
+
 def test_rag_search_hybrid_prefers_matching_source_metadata_for_named_query(
     rag_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:

@@ -1,0 +1,79 @@
+{
+  "schema_version": "phase2.experiment.v2",
+  "experiment_name": "qwen35_9b_local_rag_accuracy_e2_e3_dev",
+  "dataset": "local_accuracy_dev_v1",
+  "case_limit": 40,
+  "strategies": [
+    "dense",
+    "hybrid"
+  ],
+  "embedding_models": [
+    {
+      "model_id": "text-embedding-qwen3-embedding-4b",
+      "provider": "lmstudio",
+      "enabled": true,
+      "required": true,
+      "download_policy": "never",
+      "notes": "Qwen3 Embedding 4B fixed for the E2/E3 development ablation."
+    }
+  ],
+  "reranker_models": [
+    {
+      "model_id": "BAAI/bge-reranker-v2-m3",
+      "provider": "sentence_transformers",
+      "enabled": true,
+      "required": true,
+      "download_policy": "opt-in-download",
+      "notes": "Required local reranker for the E2/E3 development ablation."
+    }
+  ],
+  "metrics": [
+    "recall_at_k",
+    "mrr",
+    "citation_coverage",
+    "citation_correctness",
+    "answer_completeness",
+    "no_context_rate",
+    "p95_latency"
+  ],
+  "mode": "local_opt_in",
+  "evaluation_backend": "runtime_qdrant",
+  "evaluation_scope": "end_to_end",
+  "repeats": 1,
+  "generation_profile": {
+    "provider": "lmstudio",
+    "model": "qwen/qwen3.5-9b",
+    "planner_model": "qwen/qwen3.5-9b",
+    "judge_model": "qwen/qwen3.5-9b",
+    "temperature": 0.0
+  },
+  "retrieval_profiles": [
+    {
+      "profile_id": "E2",
+      "embedding_model": "text-embedding-qwen3-embedding-4b",
+      "reranker_model": "BAAI/bge-reranker-v2-m3",
+      "strategy": "dense"
+    },
+    {
+      "profile_id": "E3",
+      "embedding_model": "text-embedding-qwen3-embedding-4b",
+      "reranker_model": "BAAI/bge-reranker-v2-m3",
+      "strategy": "hybrid"
+    }
+  ],
+  "tuning_grid": {
+    "max_profiles": 6,
+    "top_k": [10, 20],
+    "rerank_top_n": [3, 5],
+    "dense_sparse_weights": [
+      [0.4, 0.6],
+      [0.5, 0.5],
+      [0.6, 0.4]
+    ],
+    "rrf_k": [30, 60],
+    "agentic_sufficiency_threshold": [0.2],
+    "graph_depth": [2],
+    "graph_router_signal_threshold": [0.5]
+  },
+  "baseline_profile": "E2"
+}
