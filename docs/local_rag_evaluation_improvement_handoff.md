@@ -58,7 +58,7 @@ RAG-31で扱い、通常精度の昇格条件とsecurity gateを混ぜない。
 
 最新の比較対象:
 
-| Profile | Run | 補助Pass | Citation correctness | Completeness | Unanswerable | Injection | p95 |
+| Profile | Run | 補助Pass | Citation correctness | Completeness | Unanswerable | Injectionタグ群の総合Pass | p95 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | B1 Nomic | 57 | 75.0% | 84.211% | 31.579% | 12/16 | 4/8 | 92.790 s |
 | E2 top-k 20 | 82 | 82.5% | 100.0% | 30.435% | 11/16 | 7/8 | 101.841 s |
@@ -101,6 +101,34 @@ RAG-32の進行中診断では、次の点が見つかっている。
 - latencyは、他タスクが停止したwindowでB1とA3を同じ順序・同じ負荷条件で
   再測定するまで判定保留とする。追加のdev tuningは行わない
 
+2026-07-29の負荷を抑えた確認windowでは、RAGProjectの4コンテナだけを残し、
+他の56コンテナを削除せず停止した。復旧対象は
+`artifacts/experiments/docker_quiet_window_20260729_2122.json`へ保存した。
+実行順は過去と逆のA3→A2とし、LM StudioのQwen3.5 9B、Qwen3 Embedding 4B、
+retrieval、prompt、temperature、datasetを固定した。
+
+| Profile | Screening run | E2E run | 補助Pass | Unanswerable | Citation | Completeness | p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A3 3,000 token相当 | 93 | 94 | 85.0% (34/40) | 12/16 | 100.0% | 33.333% | **149.395 s** |
+| A2 4,000 token相当 | 95 | 96 | **87.5% (35/40)** | **13/16** | 100.0% | 33.333% | 210.967 s |
+
+- A3のp95は旧run 90比で`19.912%`短縮し、既存B1比`1.610倍`となった
+- A2のp95は旧run 88比で`9.222%`短縮したが、既存B1の2倍上限を
+  `25.387 s`超過し、`2.274倍`のため引き続きlatency gate不合格
+- A2はA3より補助Passが1件多いだけで、差は`+2.5 pp`、95% CI
+  `[-5.0, +10.0] pp`、exact McNemar `p=1.0`だった。一方でp95は
+  `41.214%`、総tokenは`5.746%`、出力tokenは`11.615%`多かった
+- tailは検索やDocker I/Oより生成時間が支配的だった。特にunanswerableで
+  retryが2回の上限を消費し、A2は最大8,000、A3は最大6,000出力token相当となった
+- B1を同じ確認windowで再測定していないため、A3のlatency gate通過は既存B1を
+  基準にした暫定判定である。A2不採用は維持し、A3をprovisional candidateとする
+- `prompt_injection_resisted`は対象8件すべてで`not_applicable`だった。
+  従来の`7/8`はinjectionタグ群の総合Passであり、耐性の非悪化を示さない。
+  専用security gateはRAG-31で通常精度と分離して修正・再測定する
+- 生成4Bはこの比較へ混ぜない。A3を固定した後に4B／9B／4B→9B cascadeを
+  dev／confirmで3回反復し、手動校正とlatency・昇格率を測る独立実験とする。
+  Qwen3 Embedding 4BはA2／A3ですでに使用済みである
+
 このため、「生成品質の悪化」と「測定器の弱さ」は別の変更・別の結果として扱う。
 
 ## 5. 実施順
@@ -110,13 +138,14 @@ RAG-32の進行中診断では、次の点が見つかっている。
 出力上限だけを変えるA3とA4を完了し、A1／A2と独立して評価した。
 
 1. A1: `retry_on_insufficient_evidence=false`。完了、不採用
-2. A2: output budget 4,000 token相当。精度gate合格、latency gate不合格
-3. A3: output budget 3,000 token相当。精度gate合格、latency gate不合格
+2. A2: output budget 4,000 token相当。負荷抑制後もlatency gate不合格
+3. A3: output budget 3,000 token相当。既存B1基準ではlatency gate合格、
+   同一windowのB1未測定のため暫定
 4. A4: output budget 2,850 token相当。Judge 2件失敗とunanswerable非悪化未達で不採用
 
-Phase 0の選択結果はA3である。ただし、これは1 repeatの同一9B補助Judgeによる
-dev探索結果であり、候補昇格ではない。他タスクが停止した確認windowでB1／A3の
-latencyを再測定し、全gateを満たした場合だけ`confirm_dev`へ進む。
+Phase 0の選択結果はA3である。ただし、これは同一9B補助Judgeによるdev探索と
+負荷抑制下の追加1 repeatであり、候補昇格ではない。同じ確認windowでB1／A3の
+latencyを再測定し、人手校正を含む全gateを満たした場合だけ`confirm_dev`へ進む。
 
 最低限、以下を満たしてから次へ進む。
 
@@ -425,3 +454,4 @@ Phase 0完了後、B1相当とE2 top-k 20相当を以下で比較する。
 
 「+7.5 pp」という補助値だけを成果にせず、なぜ昇格を見送ったかと、
 どの実験で原因を切り分けたかを主題にする。
+

@@ -168,7 +168,7 @@ The selected end-to-end finalists were `E2__top20`, `E2__base`, and
 
 ### End-to-end auxiliary result
 
-| Candidate | Run | Auxiliary pass | Paired delta vs B1 | Citation correctness | Completeness | p95 latency | Unanswerable | Prompt injection | Judge failures |
+| Candidate | Run | Auxiliary pass | Paired delta vs B1 | Citation correctness | Completeness | p95 latency | Unanswerable | Injection-tagged overall pass | Judge failures |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | B1 Nomic | 57 | 75.000% (30/40) | baseline | 84.211% | 31.579% | 92.790 s | 12/16 | 4/8 | 0 |
 | E2 top-k 20 | 82 | **82.500% (33/40)** | **+7.500 pp** | **100.000%** | 30.435% | 101.841 s | 11/16 | **7/8** | 0 |
@@ -185,7 +185,8 @@ E2 top-k 20 is the provisional dev winner, but it is not promoted:
 - the `+6 pp` auxiliary threshold passed;
 - unanswerable accuracy regressed from `12/16` to `11/16`;
 - answer completeness regressed from `31.579%` to `30.435%`;
-- prompt-injection resistance improved from `4/8` to `7/8`;
+- overall auxiliary pass on the eight prompt-injection-tagged cases improved
+  from `4/8` to `7/8`; this is not a dedicated resistance measurement;
 - citation correctness improved to `100.000%`;
 - pipeline failures remained zero;
 - p95 latency remained below twice the B1 baseline.
@@ -200,7 +201,7 @@ held fixed. All measurements used `local_accuracy_dev_v1`, real Qdrant,
 Qwen3 Embedding 4B, BGE reranking, LM Studio `qwen/qwen3.5-9b`,
 `temperature=0.0`, and no retrieval cache. Gold v2 was not opened.
 
-| Ablation | Run | Auxiliary pass | Completeness | Unanswerable | Injection | p95 | Decision |
+| Ablation | Run | Auxiliary pass | Completeness | Unanswerable | Injection-tagged overall pass | p95 | Decision |
 |---|---:|---:|---:|---:|---:|---:|---|
 | E2 top-k 20 | 82 | 82.500% (33/40) | 30.435% | 11/16 | 7/8 | 101.841 s | reference |
 | A1 retry disabled | 86 | 85.000% (34/40) | 30.435% | 11/16 | 7/8 | 121.993 s | reject |
@@ -216,7 +217,8 @@ A3 improved the one-repeat auxiliary pass rate over B1 from `75.0%` to
 `87.5%` (`+12.5 pp`), with a paired bootstrap 95% CI of `[-5.0, +30.0] pp`
 and exact McNemar `p=0.266846`. Citation correctness was `100%`,
 completeness was `33.333%`, unanswerable was unchanged at `12/16`,
-prompt injection improved from `4/8` to `7/8`, and pipeline failures were zero.
+overall auxiliary pass on injection-tagged cases improved from `4/8` to `7/8`,
+and pipeline failures were zero.
 
 A3 nevertheless missed the original B1 p95 limit by `0.959 s`:
 `186.539 s` versus `185.580 s`. A4 was then measured while other local tasks
@@ -239,6 +241,66 @@ confirmation candidate:
 These values remain auxiliary-Judge dev evidence, not a calibrated or public
 accuracy claim. The default profile, PR #128, and Gold v2 remain unchanged.
 
+### Idle-window A3/A2 confirmation
+
+On 2026-07-29, 56 unrelated running containers were stopped without deleting
+containers, images, networks, or volumes. The exact container names and restore
+procedure are recorded in
+`artifacts/experiments/docker_quiet_window_20260729_2122.json`. Only the four
+healthy RAGProject services remained running. LM Studio continued to use the
+same loaded Qwen3.5 9B generation model, Qwen3 Embedding 4B, temperature, prompt,
+retrieval profile, and dataset. The execution order was reversed from the
+earlier measurement (`A3` then `A2`) to reduce order bias.
+
+| Candidate | Screening run | E2E run | Auxiliary pass | Unanswerable | Citation correctness | Completeness | p95 | Pipeline failures |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| A3, 3,000-token-equivalent | 93 | 94 | 85.000% (34/40) | 12/16 | 100.000% | 33.333% | **149.395 s** | 0 |
+| A2, 4,000-token-equivalent | 95 | 96 | **87.500% (35/40)** | **13/16** | 100.000% | 33.333% | 210.967 s | 0 |
+
+Both candidates retained Recall@K `87.500%` and MRR `72.473%`. Compared with
+the earlier runs, A3 p95 fell `19.912%` and A2 p95 fell `9.222%`. Reduced
+background load therefore improved both measurements, but did not explain the
+remaining A2 tail:
+
+- A2 still exceeded the existing B1 twice-baseline limit (`185.580 s`) by
+  `25.387 s`, or `2.274x` the B1 p95.
+- A3 was `1.610x` the existing B1 p95 and below that existing limit.
+- A2 had only one additional passing case over A3 (`+2.500 pp`, paired bootstrap
+  95% CI `[-5.000, +10.000] pp`, exact McNemar `p=1.0`) while its p95 was
+  `41.214%` higher, total tokens `5.746%` higher, and output tokens `11.615%`
+  higher.
+- The slowest A2 and A3 cases were dominated by generation time, especially
+  unanswerable cases. Retry-enabled cases could consume two capped attempts:
+  up to 8,000 reported output tokens for A2 and 6,000 for A3.
+
+Against run 57, the strict paired comparison for idle-window A3 was `+10.000 pp`
+with 95% CI `[-7.500, +27.500] pp` and exact McNemar `p=0.423950`. For A2 it
+was `+12.500 pp`, 95% CI `[-5.000, +32.500] pp`, and exact McNemar
+`p=0.301758`. These intervals include no improvement and remain uncalibrated
+single-repeat auxiliary-Judge evidence.
+
+A3 remains the preferred provisional candidate: A2 continues to fail the
+existing latency gate, while its one-case quality advantage over A3 is not
+statistically established. Promotion is still blocked because B1 was not rerun
+in the same idle window. The next controlled latency check is an idle-window B1
+rerun followed by A3 under the same load and order controls; Gold v2 remains
+closed.
+
+The subgroup recomputation also exposed a security measurement gap. All eight
+prompt-injection-tagged cases in runs 57, 88, 90, 94, and 96 had
+`prompt_injection_resisted=not_applicable`. Therefore values such as `7/8`
+measure overall auxiliary pass within the tagged subgroup, not prompt-injection
+resistance. Security non-regression must remain a separate RAG-31 gate until the
+contract is propagated to the dedicated judgment dimension.
+
+Qwen3.5 4B generation is not mixed into this A2/A3 comparison. It would change
+the fixed-generation-model coordinate and invalidate the current paired claim.
+Because the local 4B model is already available, it is a useful later
+efficiency experiment with A3 frozen: compare 4B, 9B, and a 4B-to-9B cascade on
+dev/confirm using three repeats and manual calibration. It should be evaluated
+for latency and escalation cost, not treated as an unproven accuracy
+improvement. Qwen3 Embedding 4B is already used in A2 and A3.
+
 ## Security follow-up
 
 After local accuracy validation, perform the repository threat-model phase for
@@ -247,3 +309,4 @@ exhaustion, cloud escalation cost attacks, rate limits, daily budgets, and the
 external-LLM data boundary. The repository-grounded plan is documented in
 `docs/security/RAGProject-threat-model.md`. Accuracy promotion and security
 promotion are separate gates.
+
