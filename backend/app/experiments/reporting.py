@@ -41,6 +41,14 @@ _FORBIDDEN_KEY_PARTS = (
     "text",
     "token",
 )
+_SAFE_ANALYTIC_KEYS = frozenset(
+    {
+        "answer_completeness",
+        "answer_coverage",
+        "grounded_answer_pass_rate_calibrated",
+        "grounded_answer_pass_rate_provisional",
+    }
+)
 
 
 def redact_experiment_artifact(value: object) -> object:
@@ -117,6 +125,8 @@ def render_markdown_report(artifact: Mapping[str, object]) -> str:
 
 def _is_forbidden_key(key: str) -> bool:
     lowered = key.lower()
+    if lowered in _SAFE_ANALYTIC_KEYS:
+        return False
     return any(part in lowered for part in _FORBIDDEN_KEY_PARTS)
 
 

@@ -148,6 +148,7 @@ services:
 
   ollama:
     image: ollama/ollama:0.5.7
+    profiles: ["ollama"]
     volumes:
       - ollama_data:/root/.ollama
     expose:
@@ -176,8 +177,6 @@ services:
       qdrant:
         condition: service_healthy
       neo4j:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

@@ -40,6 +40,14 @@ LM Studio 側で次を行います。
 
 Docker 上の backend からホスト側 LM Studio に接続するため、compose では `host.docker.internal` を使います。Chat 画面では `Local Qwen3.5` が初期選択されます。
 
+通常の `scripts/dev.ps1` / `scripts/dev.sh` 起動では Ollama を起動せず、
+`11434` ポートも使用しません。Ollama provider を明示的に検証する場合だけ、
+次のように profile を有効化してください。
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile ollama up --build
+```
+
 実サーバーだけを先に確認する場合は次を使います。
 
 ```powershell

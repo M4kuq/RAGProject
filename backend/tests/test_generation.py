@@ -128,7 +128,9 @@ class LegitimateWillResponse:
         }
 
 
-def test_lmstudio_generator_uses_native_chat_api(monkeypatch) -> None:
+def test_lmstudio_qwen_generator_disables_thinking_via_chat_completions(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
 
     def fake_post(url: str, **kwargs: object) -> DummyResponse:
@@ -158,16 +160,18 @@ def test_lmstudio_generator_uses_native_chat_api(monkeypatch) -> None:
         )
     )
 
-    assert captured["url"] == "http://host.docker.internal:1234/api/v1/chat"
+    assert captured["url"] == "http://host.docker.internal:1234/v1/chat/completions"
     payload = captured["json"]
     assert isinstance(payload, dict)
     assert payload["model"] == "qwen3.5-9b"
-    assert payload["max_output_tokens"] == 8192
+    assert payload["max_tokens"] == 500
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning" not in payload
     assert payload["stream"] is False
-    assert payload["store"] is False
-    system_prompt = payload["system_prompt"]
-    input_text = payload["input"]
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    system_prompt = messages[0]["content"]
+    input_text = messages[1]["content"]
     assert isinstance(system_prompt, str)
     assert isinstance(input_text, str)
     assert "/no_think" in system_prompt

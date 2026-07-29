@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.base import Base
-from app.db.evaluation_models import EvaluationReviewPayload
+from app.db.evaluation_models import EvaluationCorpusSource, EvaluationReviewPayload
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
@@ -472,6 +472,107 @@ def test_readiness_requires_isolated_fact_and_answerable_case_retrieval(
     assert len(calls) == 2
     assert cached.ready is True
     assert len(calls) == 2
+
+
+def test_retrieval_preflight_caps_top_k_at_search_schema_limit(
+    database: tuple[Session, User],
+) -> None:
+    db, _user = database
+    sources = [
+        EvaluationCorpusSource(
+            source_key=f"source-{index}",
+            facts_json=[{"fact_id": f"fact-{index}", "statement": f"fact {index}"}],
+        )
+        for index in range(1, 26)
+    ]
+    source_document_ids = {f"source-{index}": index for index in range(1, 26)}
+    observed_top_k: list[int] = []
+
+    def probe(
+        _db: Session,
+        query: str,
+        logical_document_ids: Sequence[int],
+        top_k: int,
+        _request_id: str,
+    ) -> Sequence[RetrievedEvaluationItem]:
+        observed_top_k.append(top_k)
+        document_id = int(query.removeprefix("fact "))
+        assert document_id in logical_document_ids
+        return [
+            RetrievedEvaluationItem(
+                document_chunk_id=document_id,
+                logical_document_id=document_id,
+                rank_order=1,
+                snippet=query,
+            )
+        ]
+
+    result = EvaluationCorpusService(
+        EvaluationRepository(),
+        retrieval_probe=probe,
+    )._run_retrieval_preflight(
+        db,
+        evaluation_dataset_id=1,
+        sources=sources,
+        source_document_ids=source_document_ids,
+        answerable_expectations=[],
+    )
+
+    assert result == (25, 0, False)
+    assert set(observed_top_k) == {20}
+
+
+def test_tuning_dataset_keeps_question_recall_diagnostic_out_of_readiness_gate(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    repository = EvaluationRepository()
+    payload = _manifest_payload()
+    for case in payload["cases"]:
+        case["metadata_json"] = {"tuning_only": True}
+    imported = EvaluationDatasetManifestService(repository).import_manifest(
+        db,
+        manifest=EvaluationDatasetManifestV2.model_validate(payload),
+        user=user,
+    )
+    source_document_id = _mark_imported_corpus_indexed(
+        db,
+        repository=repository,
+        evaluation_dataset_id=imported.evaluation_dataset_id,
+        owner_user_id=user.user_id,
+    )
+
+    def probe(
+        _db: Session,
+        query: str,
+        _logical_document_ids: Sequence[int],
+        _top_k: int,
+        _request_id: str,
+    ) -> Sequence[RetrievedEvaluationItem]:
+        if query != "Alpha policy requires owner approval.":
+            return []
+        return [
+            RetrievedEvaluationItem(
+                document_chunk_id=1,
+                logical_document_id=source_document_id,
+                rank_order=1,
+                snippet=query,
+            )
+        ]
+
+    readiness = EvaluationCorpusService(
+        repository,
+        retrieval_probe=probe,
+    ).readiness(
+        db,
+        evaluation_dataset_id=imported.evaluation_dataset_id,
+    )
+
+    assert readiness.ready is True
+    assert readiness.run_allowed is True
+    assert readiness.isolated_fact_retrieval_count == 1
+    assert readiness.answerable_retrieval_count == 0
+    assert "corpus_required_fact_not_retrievable" not in readiness.failure_reasons
 
 
 def test_readiness_rejects_retrieval_contamination(

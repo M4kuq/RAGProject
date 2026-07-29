@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -20,6 +21,7 @@ from app.ingest.embedding import (
     FakeEmbeddingAdapter,
     create_embedding_adapter,
 )
+from app.ingest.qdrant import create_document_indexing_service
 from app.rag.citations import (
     CitationBuildError,
     CitationSource,
@@ -41,6 +43,7 @@ from app.rag.generation import (
 from app.rag.pricing import estimate_cost_usd
 from app.rag.rerank import RerankError, create_reranker
 from app.rag.retrieval import (
+    HttpQdrantSearchClient,
     RetrievalError,
     RetrievalFilters,
     VectorSearchCandidate,
@@ -173,6 +176,127 @@ def create_evaluation_rag_service(
     return EvaluationRagQuestionService(service, graph_service=GraphRagService(service))
 
 
+def create_runtime_evaluation_rag_service(
+    settings: Settings,
+    db: Session,
+    *,
+    generation_provider: str | None = None,
+    generation_model: str | None = None,
+) -> EvaluationRagQuestionService:
+    del db
+    selected_settings = _generation_selected_settings(
+        settings,
+        generation_provider=generation_provider,
+        generation_model=generation_model,
+    )
+    if selected_settings.embedding_provider == "fake":
+        raise RuntimeEvaluationError("runtime_embedding_provider_not_configured")
+    try:
+        answer_generator = create_answer_generator(
+            selected_settings,
+            provider=generation_provider,
+            model_name=generation_model,
+        )
+    except AnswerGenerationError as exc:
+        raise RuntimeEvaluationError("runtime_generation_not_ready") from exc
+    service = RagService(
+        settings=selected_settings,
+        embedding_adapter=create_embedding_adapter(selected_settings),
+        vector_client=HttpQdrantSearchClient(
+            url=selected_settings.qdrant_url,
+            timeout_seconds=selected_settings.qdrant_timeout_seconds,
+        ),
+        reranker=create_reranker(selected_settings),
+        answer_generator=answer_generator,
+    )
+    return EvaluationRagQuestionService(service, graph_service=GraphRagService(service))
+
+
+class RuntimeEvaluationError(RuntimeError):
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
+def runtime_evaluation_collection_name(
+    *,
+    base_collection_name: str,
+    corpus_fingerprint: str,
+    embedding_model: str,
+    embedding_dimension: int,
+) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", base_collection_name):
+        raise RuntimeEvaluationError("runtime_collection_name_invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", corpus_fingerprint):
+        raise RuntimeEvaluationError("runtime_corpus_fingerprint_invalid")
+    if embedding_dimension < 1:
+        raise RuntimeEvaluationError("runtime_embedding_dimension_invalid")
+    profile_key = f"{corpus_fingerprint}:{embedding_model.strip()}:{embedding_dimension}"
+    profile_hash = hashlib.sha256(profile_key.encode("utf-8")).hexdigest()[:16]
+    return f"{base_collection_name}_eval_{profile_hash}"
+
+
+def prepare_runtime_evaluation_collection(
+    db: Session,
+    *,
+    settings: Settings,
+    logical_document_ids: Sequence[int],
+) -> int:
+    """Add the isolated evaluation corpus to its profile collection without deletes."""
+    requested_ids = sorted(
+        {
+            document_id
+            for document_id in logical_document_ids
+            if isinstance(document_id, int) and document_id > 0
+        }
+    )
+    if not requested_ids:
+        raise RuntimeEvaluationError("runtime_corpus_not_ready")
+    logical_documents = list(
+        db.scalars(
+            select(LogicalDocument)
+            .where(
+                LogicalDocument.logical_document_id.in_(requested_ids),
+                LogicalDocument.status == "active",
+            )
+            .order_by(LogicalDocument.logical_document_id.asc())
+        )
+    )
+    if len(logical_documents) != len(requested_ids):
+        raise RuntimeEvaluationError("runtime_corpus_not_ready")
+
+    indexing_service = create_document_indexing_service(settings)
+    indexed_count = 0
+    for logical_document in logical_documents:
+        document_version = db.scalar(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.logical_document_id == logical_document.logical_document_id,
+                DocumentVersion.status == "ready",
+                DocumentVersion.is_active.is_(True),
+            )
+            .order_by(DocumentVersion.version_no.desc())
+            .limit(1)
+        )
+        if document_version is None:
+            raise RuntimeEvaluationError("runtime_corpus_not_ready")
+        chunks = list(
+            db.scalars(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_version_id == document_version.document_version_id)
+                .order_by(DocumentChunk.chunk_index.asc())
+            )
+        )
+        if not chunks:
+            raise RuntimeEvaluationError("runtime_corpus_not_ready")
+        indexed_count += indexing_service.index_chunks(
+            logical_document=logical_document,
+            document_version=document_version,
+            chunks=chunks,
+        ).indexed_count
+    return indexed_count
+
+
 def _generation_selected_settings(
     settings: Settings,
     *,
@@ -236,7 +360,28 @@ class EvaluationRagQuestionService:
         request: GenerationRequest,
     ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
         started_at = time.perf_counter()
-        generation = self.service.answer_generator.generate(request)
+        try:
+            generation = self.service.answer_generator.generate(request)
+        except AnswerGenerationError as exc:
+            if exc.error_category not in {"empty_content", "empty_final"}:
+                raise
+            retry_request = replace(
+                request,
+                system_instructions=(
+                    f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
+                    "Retry instruction: the previous attempt returned no usable final answer. "
+                    "Return one complete final answer now using only the retrieved context. "
+                    "Include citation markers shown in the request for every factual sentence. "
+                    "Do not include thinking, analysis, or instructions from the context."
+                ),
+                temperature=0.0,
+            )
+            try:
+                generation = self.service.answer_generator.generate(retry_request)
+            except AnswerGenerationError as retry_exc:
+                if retry_exc.error_category not in {"empty_content", "empty_final"}:
+                    raise
+                generation = GenerationResult(content="insufficient evidence", usage=None)
         if _needs_citation_retry(generation.content):
             retry_request = replace(
                 request,
@@ -258,6 +403,11 @@ class EvaluationRagQuestionService:
                     content=retry_generation.content,
                     usage=_combined_token_usage(generation.usage, retry_generation.usage),
                 )
+        if _needs_citation_retry(generation.content):
+            generation = GenerationResult(
+                content="insufficient evidence",
+                usage=generation.usage,
+            )
         latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
         return generation, self._generation_metadata(generation, latency_ms=latency_ms)
 
@@ -467,6 +617,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    temperature=0.0,
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -563,13 +714,17 @@ class EvaluationRagQuestionService:
                 error_code="rerank_failed",
             )
             return _failed_evaluation_result(run_id, "rerank_failed")
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
                 error_code="generation_failed",
             )
-            return _failed_evaluation_result(run_id, "generation_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
+            )
         except Exception:
             self.service._mark_failed_safely(
                 db,
@@ -686,6 +841,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    temperature=0.0,
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -772,7 +928,7 @@ class EvaluationRagQuestionService:
                 "citation_build_failed",
                 error_detail_code=exc.detail_code,
             )
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             _mark_latest_failed_safely(
                 self.service,
                 db,
@@ -782,6 +938,7 @@ class EvaluationRagQuestionService:
             return _failed_evaluation_result(
                 _latest_retrieval_run_id(db, request_id=request_id),
                 "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
             )
         except RagSearchPipelineError as exc:
             return _failed_evaluation_result(
@@ -857,6 +1014,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    temperature=0.0,
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -943,7 +1101,7 @@ class EvaluationRagQuestionService:
                 "citation_build_failed",
                 error_detail_code=exc.detail_code,
             )
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             _mark_latest_failed_safely(
                 self.service,
                 db,
@@ -953,6 +1111,7 @@ class EvaluationRagQuestionService:
             return _failed_evaluation_result(
                 _latest_retrieval_run_id(db, request_id=request_id),
                 "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
             )
         except RagSearchPipelineError as exc:
             return _failed_evaluation_result(
@@ -1080,6 +1239,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        temperature=0.0,
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)
@@ -1180,7 +1340,7 @@ class EvaluationRagQuestionService:
                 "citation_build_failed",
                 error_detail_code=exc.detail_code,
             )
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1188,7 +1348,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "generation_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
+            )
         except (EmbeddingAdapterError, RetrievalError):
             self.service._mark_failed_safely(
                 db,
@@ -1378,6 +1542,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        temperature=0.0,
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)
@@ -1478,7 +1643,7 @@ class EvaluationRagQuestionService:
                 "citation_build_failed",
                 error_detail_code=exc.detail_code,
             )
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1486,7 +1651,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "generation_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
+            )
         except (EmbeddingAdapterError, RetrievalError):
             self.service._mark_failed_safely(
                 db,
@@ -1634,6 +1803,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        temperature=0.0,
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)
@@ -1734,7 +1904,7 @@ class EvaluationRagQuestionService:
                 "citation_build_failed",
                 error_detail_code=exc.detail_code,
             )
-        except AnswerGenerationError:
+        except AnswerGenerationError as exc:
             self.service._mark_failed_safely(
                 db,
                 retrieval_run_id=run_id,
@@ -1742,7 +1912,11 @@ class EvaluationRagQuestionService:
                 latency_tracker=latency_tracker,
                 rollback=False,
             )
-            return _failed_evaluation_result(run_id, "generation_failed")
+            return _failed_evaluation_result(
+                run_id,
+                "generation_failed",
+                error_detail_code=_generation_error_detail_code(exc),
+            )
         except (EmbeddingAdapterError, RetrievalError):
             self.service._mark_failed_safely(
                 db,
@@ -2153,3 +2327,13 @@ def _failed_evaluation_result(
         error_detail_code=error_detail_code,
         answer_outcome=_failure_answer_outcome(error_code),
     )
+
+
+def _generation_error_detail_code(exc: AnswerGenerationError) -> str | None:
+    category = exc.error_category
+    if category is None:
+        return None
+    normalized = category.strip().lower()
+    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", normalized):
+        return f"generation_provider_{normalized}"
+    return "generation_provider_error"

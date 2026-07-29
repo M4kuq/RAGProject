@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+import random
 import re
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -59,7 +60,18 @@ from app.evaluation.metrics import (
     calculate_metrics,
     failure_metrics,
 )
-from app.evaluation.rag_service import RagEvaluationResult, create_evaluation_rag_service
+from app.evaluation.rag_service import (
+    RagEvaluationResult,
+    RuntimeEvaluationError,
+    create_evaluation_rag_service,
+    create_runtime_evaluation_rag_service,
+    prepare_runtime_evaluation_collection,
+    runtime_evaluation_collection_name,
+)
+from app.ingest.embedding import (
+    EmbeddingAdapterError,
+    probe_lmstudio_embedding_dimension,
+)
 from app.observability.trace_export import TraceExportService
 from app.rag.generation import LMStudioModelReadiness, check_lmstudio_model_readiness
 from app.rag.graph_citations import (
@@ -84,6 +96,7 @@ from app.schemas.evaluations import (
     EVALUATION_SCHEMA_VERSION,
     KNOWN_GENERATION_PROVIDERS,
     EvaluationAnswerOutcome,
+    EvaluationBackend,
     EvaluationCacheMode,
     EvaluationCaseComparison,
     EvaluationCaseCreateRequest,
@@ -119,7 +132,9 @@ from app.schemas.evaluations import (
     EvaluationMetricMethod,
     EvaluationMetricName,
     EvaluationMetricResult,
+    EvaluationPairedStatistics,
     EvaluationQualityStatus,
+    EvaluationRunComparability,
     EvaluationRunComparison,
     EvaluationRunComparisonSummary,
     EvaluationRunCreateRequest,
@@ -707,6 +722,8 @@ class LoadedEvaluationRunComparison:
     summary: EvaluationRunSummary
     items: list[EvaluationRunItem]
     results_by_item: dict[int, list[EvaluationResult]]
+    human_pass_by_item: dict[int, bool]
+    auxiliary_pass_by_item: dict[int, bool]
 
 
 @dataclass(frozen=True)
@@ -776,6 +793,9 @@ class EvaluationService:
         repository: EvaluationRepository | None = None,
         job_repository: JobRepository | None = None,
         rag_service_factory: Callable[..., EvaluationRagService] = create_evaluation_rag_service,
+        runtime_rag_service_factory: Callable[
+            ..., EvaluationRagService
+        ] = create_runtime_evaluation_rag_service,
         settings: Settings | None = None,
         trace_export_service: TraceExportService | None = None,
         claim_judge_factory: Callable[[Settings], EvaluationClaimJudgeService] | None = None,
@@ -786,6 +806,7 @@ class EvaluationService:
         self.repository = repository or EvaluationRepository()
         self.job_repository = job_repository or JobRepository()
         self.rag_service_factory = rag_service_factory
+        self.runtime_rag_service_factory = runtime_rag_service_factory
         self.settings = settings or get_settings()
         self.trace_export_service = trace_export_service or TraceExportService(self.settings)
         self.claim_judge_factory = claim_judge_factory or EvaluationClaimJudgeService
@@ -805,7 +826,9 @@ class EvaluationService:
         user: User,
     ) -> EvaluationRunCreateResponse:
         dataset_name = payload.dataset_name
+        dataset: EvaluationDataset | None = None
         corpus_fingerprint: str | None = None
+        dataset_content_fingerprint: str | None = None
         logical_document_ids: list[int] = []
         if payload.evaluation_dataset_id is not None:
             dataset = self.repository.get_dataset(
@@ -825,6 +848,7 @@ class EvaluationService:
                 raise ValidationFailed({"evaluation_dataset_id": "dataset has no active cases"})
             dataset_name = dataset.dataset_name
             corpus_fingerprint = getattr(dataset, "corpus_fingerprint", None)
+            dataset_content_fingerprint = getattr(dataset, "content_fingerprint", None)
             if getattr(dataset, "corpus_mode", "shared_legacy") == "isolated":
                 readiness = self.get_corpus_readiness(
                     db,
@@ -844,20 +868,84 @@ class EvaluationService:
         evaluation_scope = payload.evaluation_scope or _evaluation_scope_from_targets(
             strategy_targets
         )
+        evaluation_backend = payload.evaluation_backend
+        generation_provider = payload.generation_provider
+        generation_model = payload.generation_model
+        resolved_generation_model: str | None = None
+        resolved_embedding_model = self.settings.embedding_model
+        embedding_dimension = self.settings.effective_embedding_dimension
+        runtime_collection_name: str | None = None
+        if evaluation_backend == "runtime_qdrant":
+            if self.settings.app_env.lower() not in {"local", "test"}:
+                raise ValidationFailed({"evaluation_backend": "runtime_qdrant is local-only"})
+            if (
+                dataset is None
+                or getattr(dataset, "corpus_mode", "shared_legacy") != "isolated"
+                or corpus_fingerprint is None
+                or not logical_document_ids
+            ):
+                raise EvaluationCorpusNotReady(
+                    details={
+                        "evaluation_backend": evaluation_backend,
+                        "reason_code": "isolated_corpus_required",
+                    }
+                )
+            if self.settings.embedding_provider == "fake":
+                raise ValidationFailed(
+                    {"evaluation_backend": ("runtime_qdrant requires a real embedding provider")}
+                )
+            if self.settings.embedding_provider == "lmstudio":
+                try:
+                    embedding_probe = probe_lmstudio_embedding_dimension(self.settings)
+                except EmbeddingAdapterError as exc:
+                    raise ConflictError(
+                        "evaluation_embedding_not_ready",
+                        details={
+                            "reason_code": exc.error_code,
+                            "error_category": exc.error_category,
+                        },
+                    ) from exc
+                embedding_dimension = embedding_probe.dimension
+                resolved_embedding_model = embedding_probe.resolved_model
+            runtime_collection_name = runtime_evaluation_collection_name(
+                base_collection_name=self.settings.qdrant_collection_name,
+                corpus_fingerprint=corpus_fingerprint,
+                embedding_model=resolved_embedding_model,
+                embedding_dimension=embedding_dimension,
+            )
+            if evaluation_scope == "end_to_end":
+                generation_provider = generation_provider or self.settings.generation_provider
+                generation_model = generation_model or self.settings.generation_model_name
+                if generation_provider != "lmstudio":
+                    raise ValidationFailed(
+                        {
+                            "generation_provider": (
+                                "runtime_qdrant end-to-end evaluation requires lmstudio"
+                            )
+                        }
+                    )
         if (
             evaluation_scope == "end_to_end"
-            and payload.generation_provider == "lmstudio"
-            and payload.generation_model is not None
+            and generation_provider == "lmstudio"
+            and generation_model is not None
         ):
             generation_readiness = self.get_generation_readiness(
                 payload=EvaluationGenerationReadinessRequest(
-                    generation_provider=payload.generation_provider,
-                    generation_model=payload.generation_model,
+                    generation_provider=generation_provider,
+                    generation_model=generation_model,
                 )
             )
             if not generation_readiness.ready:
                 raise EvaluationGenerationNotReady(
                     details=generation_readiness.model_dump(mode="json")
+                )
+            resolved_generation_model = generation_readiness.resolved_model
+            if (
+                evaluation_backend == "runtime_qdrant"
+                and resolved_generation_model != "qwen/qwen3.5-9b"
+            ):
+                raise ValidationFailed(
+                    {"generation_model": ("local accuracy evaluation is fixed to qwen/qwen3.5-9b")}
                 )
         strategy_type = strategy_targets[0].storage_strategy_type
         cache_modes = [mode.value for mode in _selected_cache_modes(payload.cache_modes)]
@@ -873,10 +961,51 @@ class EvaluationService:
             top_k=payload.top_k,
             rerank_top_n=payload.rerank_top_n,
         )
+        retrieval_settings["evaluation_backend"] = evaluation_backend
+        if payload.experiment_name is not None:
+            retrieval_settings["experiment_name"] = payload.experiment_name
+        if payload.experiment_profile_id is not None:
+            retrieval_settings["experiment_profile_id"] = payload.experiment_profile_id
+        retrieval_settings["repeat_number"] = payload.repeat_number
+        if dataset_content_fingerprint is not None:
+            retrieval_settings["dataset_content_fingerprint"] = dataset_content_fingerprint
         if corpus_fingerprint is not None:
             retrieval_settings["corpus_fingerprint"] = corpus_fingerprint
         if logical_document_ids:
             retrieval_settings["logical_document_ids"] = logical_document_ids
+        if evaluation_backend == "runtime_qdrant":
+            retrieval_settings.update(
+                {
+                    "embedding_provider": self.settings.embedding_provider,
+                    "embedding_model": resolved_embedding_model,
+                    "embedding_dimension": embedding_dimension,
+                    "rerank_provider": self.settings.rerank_provider,
+                    "reranker_model": self.settings.reranker_model,
+                    "qdrant_collection_name": runtime_collection_name,
+                    "resolved_generation_model": resolved_generation_model,
+                    "generation_temperature": 0.0,
+                    "generation_max_context_chars": (self.settings.generation_max_context_chars),
+                    "generation_max_output_chars": (self.settings.generation_max_output_chars),
+                    "generation_max_output_tokens": (self.settings.generation_max_output_tokens),
+                    "generation_retry_on_insufficient_evidence": (
+                        self.settings.generation_retry_on_insufficient_evidence
+                    ),
+                    "hybrid_fusion_method": self.settings.hybrid_fusion_method,
+                    "hybrid_rrf_k": self.settings.hybrid_rrf_k,
+                    "hybrid_dense_weight": self.settings.hybrid_dense_weight,
+                    "hybrid_sparse_weight": self.settings.hybrid_sparse_weight,
+                    "router_mode": self.settings.router_mode,
+                    "router_llm_planner_model_name": (
+                        self.settings.router_llm_planner_model_name or resolved_generation_model
+                    ),
+                    "router_sufficiency_top_score_threshold": (
+                        self.settings.router_sufficiency_top_score_threshold
+                    ),
+                    "graph_store_provider": self.settings.graph_store_provider,
+                    "graph_retrieval_max_depth": self.settings.graph_retrieval_max_depth,
+                    "graph_router_min_signal_score": (self.settings.graph_router_min_signal_score),
+                }
+            )
         run = self.repository.create_run(
             db,
             created_by=user.user_id,
@@ -889,8 +1018,8 @@ class EvaluationService:
             evaluation_scope=evaluation_scope,
             top_k=payload.top_k,
             rerank_top_n=payload.rerank_top_n,
-            generation_provider=payload.generation_provider,
-            generation_model=payload.generation_model,
+            generation_provider=generation_provider,
+            generation_model=generation_model,
             trigger_type=trigger_type,
             corpus_fingerprint=corpus_fingerprint,
             retrieval_settings_json=retrieval_settings,
@@ -912,11 +1041,22 @@ class EvaluationService:
                 "metrics": metrics,
                 "cache_modes": cache_modes,
                 "evaluation_scope": evaluation_scope,
+                "evaluation_backend": evaluation_backend,
+                "experiment_name": payload.experiment_name,
+                "experiment_profile_id": payload.experiment_profile_id,
+                "repeat_number": payload.repeat_number,
                 "strategy_targets": [_target_metadata_json(target) for target in strategy_targets],
                 "top_k": payload.top_k,
                 "rerank_top_n": payload.rerank_top_n,
-                "generation_provider": payload.generation_provider,
-                "generation_model": payload.generation_model,
+                "generation_provider": generation_provider,
+                "generation_model": generation_model,
+                "resolved_generation_model": resolved_generation_model,
+                "embedding_provider": self.settings.embedding_provider,
+                "embedding_model": resolved_embedding_model,
+                "embedding_dimension": embedding_dimension,
+                "rerank_provider": self.settings.rerank_provider,
+                "reranker_model": self.settings.reranker_model,
+                "qdrant_collection_name": runtime_collection_name,
                 "trigger_type": trigger_type,
             },
             created_by=user.user_id,
@@ -931,6 +1071,7 @@ class EvaluationService:
             status="queued",
             strategies=strategies,
             evaluation_scope=evaluation_scope,
+            evaluation_backend=evaluation_backend,
         )
 
     def get_generation_readiness(
@@ -1416,11 +1557,26 @@ class EvaluationService:
             evaluation_run_item_ids=[item.evaluation_run_item_id for item in items],
         )
         summary = self._summary_from_loaded(db, run, items, results_by_item)
+        calibrations = self.repository.list_human_calibrations(
+            db, evaluation_run_id=evaluation_run_id
+        )
+        judgments = self.repository.list_auxiliary_judgments(
+            db, evaluation_run_id=evaluation_run_id
+        )
         return LoadedEvaluationRunComparison(
             run=run,
             summary=summary,
             items=items,
             results_by_item=results_by_item,
+            human_pass_by_item={
+                calibration.evaluation_run_item_id: calibration.human_pass
+                for calibration in calibrations
+            },
+            auxiliary_pass_by_item={
+                judgment.evaluation_run_item_id: judgment.auxiliary_pass
+                for judgment in judgments
+                if judgment.status == "succeeded" and judgment.auxiliary_pass is not None
+            },
         )
 
     def get_run_detail(self, db: Session, *, evaluation_run_id: int) -> EvaluationRunDetail:
@@ -1727,6 +1883,7 @@ class EvaluationService:
         *,
         base_run_id: int,
         candidate_run_id: int,
+        strict: bool = False,
     ) -> EvaluationRunComparison:
         base = self._load_run_comparison(db, evaluation_run_id=base_run_id)
         candidate = (
@@ -1748,6 +1905,17 @@ class EvaluationService:
             base.results_by_item,
             candidate.items,
             candidate.results_by_item,
+        )
+        comparability = _run_comparability(base, candidate)
+        if strict and comparability.status != "comparable":
+            raise ConflictError(
+                "evaluation_runs_not_comparable",
+                details=comparability.model_dump(mode="json"),
+            )
+        paired_statistics = _paired_run_statistics(
+            base,
+            candidate,
+            seed=f"{base_run_id}:{candidate_run_id}",
         )
         return EvaluationRunComparison(
             base_run=base.summary,
@@ -1775,6 +1943,8 @@ class EvaluationService:
                 base_only_case_count=sum(1 for case in cases if case.transition == "removed"),
                 candidate_only_case_count=sum(1 for case in cases if case.transition == "added"),
             ),
+            comparability=comparability,
+            paired_statistics=paired_statistics,
         )
 
     def get_strategy_comparison(
@@ -1993,16 +2163,30 @@ class EvaluationService:
         try:
             generation_provider = cast(str | None, config["generation_provider"])
             generation_model = cast(str | None, config["generation_model"])
+            evaluation_backend = cast(EvaluationBackend, config["evaluation_backend"])
+            selected_settings = (
+                _runtime_settings_from_config(self.settings, config)
+                if evaluation_backend == "runtime_qdrant"
+                else self.settings
+            )
+            if evaluation_backend == "runtime_qdrant":
+                prepare_runtime_evaluation_collection(
+                    db,
+                    settings=selected_settings,
+                    logical_document_ids=cast(list[int], config["logical_document_ids"]),
+                )
             rag_service = self._create_rag_service(
                 db,
                 generation_provider=generation_provider,
                 generation_model=generation_model,
+                evaluation_backend=evaluation_backend,
+                settings=selected_settings,
             )
             strategy_targets = _strategy_targets_from_config(config)
             requested_metrics = set(cast(list[str], config["metrics"]))
             evaluation_scope = cast(EvaluationScope, config["evaluation_scope"])
             claim_judge = (
-                self.claim_judge_factory(self.settings)
+                self.claim_judge_factory(selected_settings)
                 if evaluation_scope == "end_to_end"
                 and cast(str | None, config["corpus_fingerprint"]) is not None
                 else None
@@ -2079,13 +2263,18 @@ class EvaluationService:
                         claim_judge=claim_judge,
                     )
                     db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
             run = self._require_run(db, evaluation_run_id)
+            error_code = (
+                exc.error_code
+                if isinstance(exc, RuntimeEvaluationError | EmbeddingAdapterError)
+                else "internal_error"
+            )
             self.repository.mark_run_failed(
                 db,
                 run=run,
-                error_code="internal_error",
+                error_code=error_code,
                 error_message=None,
                 finished_at=datetime.now(UTC),
             )
@@ -2146,15 +2335,23 @@ class EvaluationService:
         *,
         generation_provider: str | None,
         generation_model: str | None,
+        evaluation_backend: EvaluationBackend = "deterministic_db",
+        settings: Settings | None = None,
     ) -> EvaluationRagService:
-        if _factory_accepts_generation_selection(self.rag_service_factory):
-            return self.rag_service_factory(
-                self.settings,
+        selected_factory = (
+            self.runtime_rag_service_factory
+            if evaluation_backend == "runtime_qdrant"
+            else self.rag_service_factory
+        )
+        selected_settings = settings or self.settings
+        if _factory_accepts_generation_selection(selected_factory):
+            return selected_factory(
+                selected_settings,
                 db,
                 generation_provider=generation_provider,
                 generation_model=generation_model,
             )
-        return self.rag_service_factory(self.settings, db)
+        return selected_factory(selected_settings, db)
 
     def _run_case(
         self,
@@ -2697,6 +2894,10 @@ class EvaluationService:
             strategies=_strategy_values(config),
             metric_names=cast(list[str], config["metrics"]),
             evaluation_scope=cast(EvaluationScope, config["evaluation_scope"]),
+            evaluation_backend=cast(EvaluationBackend, config["evaluation_backend"]),
+            experiment_name=cast(str | None, config["experiment_name"]),
+            experiment_profile_id=cast(str | None, config["experiment_profile_id"]),
+            repeat_number=cast(int, config["repeat_number"]),
             trigger_type=run.trigger_type,
             status=cast(EvaluationStatus, run.status),
             case_count=case_count,
@@ -2726,6 +2927,13 @@ class EvaluationService:
             generation_models=generation_summary.generation_models,
             requested_generation_provider=cast(str | None, config["generation_provider"]),
             requested_generation_model=cast(str | None, config["generation_model"]),
+            resolved_generation_model=cast(str | None, config["resolved_generation_model"]),
+            embedding_provider=cast(str | None, config["embedding_provider"]),
+            embedding_model=cast(str | None, config["embedding_model"]),
+            embedding_dimension=cast(int | None, config["embedding_dimension"]),
+            rerank_provider=cast(str | None, config["rerank_provider"]),
+            reranker_model=cast(str | None, config["reranker_model"]),
+            qdrant_collection_name=cast(str | None, config["qdrant_collection_name"]),
             error_code=run.error_code,
             error_message=redact_error_message(run.error_message) if run.error_message else None,
             started_at=run.started_at,
@@ -3449,6 +3657,12 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         if raw_evaluation_scope in {"retrieval", "answer", "end_to_end"}
         else _evaluation_scope_from_strategy_labels(strategies)
     )
+    raw_evaluation_backend = retrieval_settings.get("evaluation_backend")
+    evaluation_backend: EvaluationBackend = (
+        cast(EvaluationBackend, raw_evaluation_backend)
+        if raw_evaluation_backend in {"deterministic_db", "runtime_qdrant"}
+        else "deterministic_db"
+    )
     return {
         "dataset_name": dataset_name if isinstance(dataset_name, str) else "phase1_smoke",
         "evaluation_dataset_id": (
@@ -3460,6 +3674,7 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "metrics": metrics,
         "cache_modes": cache_modes,
         "evaluation_scope": evaluation_scope,
+        "evaluation_backend": evaluation_backend,
         "strategy_targets": strategy_targets,
         "top_k": top_k if isinstance(top_k, int) else None,
         "rerank_top_n": rerank_top_n if isinstance(rerank_top_n, int) else None,
@@ -3468,7 +3683,87 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "trigger_type": trigger_type if isinstance(trigger_type, str) else "manual",
         "logical_document_ids": logical_document_ids,
         "corpus_fingerprint": corpus_fingerprint,
+        "dataset_content_fingerprint": retrieval_settings.get("dataset_content_fingerprint"),
+        "experiment_name": retrieval_settings.get("experiment_name"),
+        "experiment_profile_id": retrieval_settings.get("experiment_profile_id"),
+        "repeat_number": retrieval_settings.get("repeat_number", 1),
+        "resolved_generation_model": retrieval_settings.get("resolved_generation_model"),
+        "generation_max_context_chars": retrieval_settings.get("generation_max_context_chars"),
+        "generation_max_output_chars": retrieval_settings.get("generation_max_output_chars"),
+        "generation_max_output_tokens": retrieval_settings.get("generation_max_output_tokens"),
+        "generation_retry_on_insufficient_evidence": retrieval_settings.get(
+            "generation_retry_on_insufficient_evidence"
+        ),
+        "embedding_provider": retrieval_settings.get("embedding_provider"),
+        "embedding_model": retrieval_settings.get("embedding_model"),
+        "embedding_dimension": retrieval_settings.get("embedding_dimension"),
+        "rerank_provider": retrieval_settings.get("rerank_provider"),
+        "reranker_model": retrieval_settings.get("reranker_model"),
+        "qdrant_collection_name": retrieval_settings.get("qdrant_collection_name"),
+        "hybrid_fusion_method": retrieval_settings.get("hybrid_fusion_method"),
+        "hybrid_rrf_k": retrieval_settings.get("hybrid_rrf_k"),
+        "hybrid_dense_weight": retrieval_settings.get("hybrid_dense_weight"),
+        "hybrid_sparse_weight": retrieval_settings.get("hybrid_sparse_weight"),
+        "router_mode": retrieval_settings.get("router_mode"),
+        "router_llm_planner_model_name": retrieval_settings.get("router_llm_planner_model_name"),
+        "router_sufficiency_top_score_threshold": retrieval_settings.get(
+            "router_sufficiency_top_score_threshold"
+        ),
+        "graph_store_provider": retrieval_settings.get("graph_store_provider"),
+        "graph_retrieval_max_depth": retrieval_settings.get("graph_retrieval_max_depth"),
+        "graph_router_min_signal_score": retrieval_settings.get("graph_router_min_signal_score"),
     }
+
+
+def _runtime_settings_from_config(
+    settings: Settings,
+    config: dict[str, object],
+) -> Settings:
+    updates: dict[str, object] = {}
+    string_fields = (
+        "embedding_provider",
+        "embedding_model",
+        "rerank_provider",
+        "reranker_model",
+        "qdrant_collection_name",
+        "hybrid_fusion_method",
+        "router_mode",
+        "router_llm_planner_model_name",
+        "graph_store_provider",
+    )
+    integer_fields = (
+        "embedding_dimension",
+        "generation_max_context_chars",
+        "generation_max_output_chars",
+        "generation_max_output_tokens",
+        "hybrid_rrf_k",
+        "graph_retrieval_max_depth",
+    )
+    float_fields = (
+        "hybrid_dense_weight",
+        "hybrid_sparse_weight",
+        "router_sufficiency_top_score_threshold",
+        "graph_router_min_signal_score",
+    )
+    for field_name in string_fields:
+        value = config.get(field_name)
+        if isinstance(value, str) and value:
+            updates[field_name] = value
+    for field_name in integer_fields:
+        value = config.get(field_name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            target_name = (
+                "embedding_vector_dimension" if field_name == "embedding_dimension" else field_name
+            )
+            updates[target_name] = value
+    for field_name in float_fields:
+        value = config.get(field_name)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            updates[field_name] = float(value)
+    retry_on_insufficient_evidence = config.get("generation_retry_on_insufficient_evidence")
+    if isinstance(retry_on_insufficient_evidence, bool):
+        updates["generation_retry_on_insufficient_evidence"] = retry_on_insufficient_evidence
+    return settings.model_copy(update=updates)
 
 
 def _factory_accepts_generation_selection(
@@ -4770,6 +5065,178 @@ def _metric_comparison_direction(
         return "unchanged"
     effective_delta = -delta if lower_is_better else delta
     return "improved" if effective_delta > 0 else "regressed"
+
+
+def _run_comparability(
+    base: LoadedEvaluationRunComparison,
+    candidate: LoadedEvaluationRunComparison,
+) -> EvaluationRunComparability:
+    reasons: list[str] = []
+    base_config = _config(base.run)
+    candidate_config = _config(candidate.run)
+    if base.run.evaluation_dataset_id != candidate.run.evaluation_dataset_id:
+        reasons.append("dataset_mismatch")
+    elif (
+        base.run.evaluation_dataset_id is None
+        and base.summary.dataset_name != candidate.summary.dataset_name
+    ):
+        reasons.append("dataset_mismatch")
+    if base_config.get("dataset_content_fingerprint") != candidate_config.get(
+        "dataset_content_fingerprint"
+    ):
+        reasons.append("dataset_content_fingerprint_mismatch")
+    if base.run.corpus_fingerprint != candidate.run.corpus_fingerprint:
+        reasons.append("corpus_fingerprint_mismatch")
+    if base.summary.evaluation_scope != candidate.summary.evaluation_scope:
+        reasons.append("evaluation_scope_mismatch")
+    if base.summary.evaluation_backend != candidate.summary.evaluation_backend:
+        reasons.append("evaluation_backend_mismatch")
+    base_generation_model = (
+        base_config.get("resolved_generation_model") or base.summary.requested_generation_model
+    )
+    candidate_generation_model = (
+        candidate_config.get("resolved_generation_model")
+        or candidate.summary.requested_generation_model
+    )
+    if base_generation_model != candidate_generation_model:
+        reasons.append("generation_model_mismatch")
+    if (
+        base.summary.requested_generation_provider
+        != candidate.summary.requested_generation_provider
+    ):
+        reasons.append("generation_provider_mismatch")
+    if _comparison_case_set(base) != _comparison_case_set(candidate):
+        reasons.append("case_set_mismatch")
+    return EvaluationRunComparability(
+        status="not_comparable" if reasons else "comparable",
+        reason_codes=reasons,
+    )
+
+
+def _comparison_case_set(
+    loaded: LoadedEvaluationRunComparison,
+) -> set[tuple[str, str | None, str | None, str | None]]:
+    return {
+        (
+            source.case_id,
+            source.comparison_label,
+            source.question_hash,
+            source.case_snapshot_hash,
+        )
+        for source in _case_comparison_sources(loaded.items, loaded.results_by_item)
+    }
+
+
+def _paired_run_statistics(
+    base: LoadedEvaluationRunComparison,
+    candidate: LoadedEvaluationRunComparison,
+    *,
+    seed: str,
+    bootstrap_iterations: int = 10_000,
+) -> EvaluationPairedStatistics:
+    human_pairs = _paired_binary_outcomes(
+        base,
+        candidate,
+        base.human_pass_by_item,
+        candidate.human_pass_by_item,
+    )
+    if human_pairs:
+        pairs = human_pairs
+        outcome_source: Literal["human_calibration", "auxiliary_judge", "unavailable"] = (
+            "human_calibration"
+        )
+    else:
+        pairs = _paired_binary_outcomes(
+            base,
+            candidate,
+            base.auxiliary_pass_by_item,
+            candidate.auxiliary_pass_by_item,
+        )
+        outcome_source = "auxiliary_judge" if pairs else "unavailable"
+    if not pairs:
+        return EvaluationPairedStatistics(outcome_source=outcome_source)
+
+    base_rate = sum(1 for base_pass, _ in pairs if base_pass) / len(pairs)
+    candidate_rate = sum(1 for _, candidate_pass in pairs if candidate_pass) / len(pairs)
+    absolute_delta_points = (candidate_rate - base_rate) * 100.0
+    relative_improvement = (
+        ((candidate_rate - base_rate) / base_rate) * 100.0 if base_rate > 0.0 else None
+    )
+    confidence_interval = _paired_bootstrap_confidence_interval(
+        pairs,
+        iterations=bootstrap_iterations,
+        seed=seed,
+    )
+    return EvaluationPairedStatistics(
+        paired_case_count=len(pairs),
+        base_pass_rate=round(base_rate, 6),
+        candidate_pass_rate=round(candidate_rate, 6),
+        absolute_percentage_point_delta=round(absolute_delta_points, 6),
+        relative_improvement=(
+            round(relative_improvement, 6) if relative_improvement is not None else None
+        ),
+        confidence_interval_95=confidence_interval,
+        mcnemar_p_value=_exact_mcnemar_p_value(pairs),
+        outcome_source=outcome_source,
+    )
+
+
+def _paired_binary_outcomes(
+    base: LoadedEvaluationRunComparison,
+    candidate: LoadedEvaluationRunComparison,
+    base_outcomes: dict[int, bool],
+    candidate_outcomes: dict[int, bool],
+) -> list[tuple[bool, bool]]:
+    base_sources = _case_comparison_sources(base.items, base.results_by_item)
+    candidate_sources = _case_comparison_sources(candidate.items, candidate.results_by_item)
+    duplicate_case_ids = _duplicated_case_ids(base_sources, candidate_sources)
+    base_by_key = _case_sources_by_match_key(base_sources, duplicate_case_ids)
+    candidate_by_key = _case_sources_by_match_key(candidate_sources, duplicate_case_ids)
+    pairs: list[tuple[bool, bool]] = []
+    for match_key in sorted(set(base_by_key) & set(candidate_by_key)):
+        base_source = base_by_key[match_key]
+        candidate_source = candidate_by_key[match_key]
+        base_pass = base_outcomes.get(base_source.evaluation_run_item_id)
+        candidate_pass = candidate_outcomes.get(candidate_source.evaluation_run_item_id)
+        if base_pass is not None and candidate_pass is not None:
+            pairs.append((base_pass, candidate_pass))
+    return pairs
+
+
+def _paired_bootstrap_confidence_interval(
+    pairs: Sequence[tuple[bool, bool]],
+    *,
+    iterations: int,
+    seed: str,
+) -> tuple[float, float]:
+    if not pairs or iterations < 1:
+        raise ValueError("paired bootstrap requires pairs and positive iterations")
+    rng = random.Random(hashlib.sha256(seed.encode("utf-8")).digest())
+    deltas: list[float] = []
+    pair_count = len(pairs)
+    for _ in range(iterations):
+        delta_sum = 0
+        for _ in range(pair_count):
+            base_pass, candidate_pass = pairs[rng.randrange(pair_count)]
+            delta_sum += int(candidate_pass) - int(base_pass)
+        deltas.append((delta_sum / pair_count) * 100.0)
+    deltas.sort()
+    lower_index = max(0, math.floor((iterations - 1) * 0.025))
+    upper_index = min(iterations - 1, math.ceil((iterations - 1) * 0.975))
+    return round(deltas[lower_index], 6), round(deltas[upper_index], 6)
+
+
+def _exact_mcnemar_p_value(pairs: Sequence[tuple[bool, bool]]) -> float:
+    base_only = sum(1 for base_pass, candidate_pass in pairs if base_pass and not candidate_pass)
+    candidate_only = sum(
+        1 for base_pass, candidate_pass in pairs if not base_pass and candidate_pass
+    )
+    discordant = base_only + candidate_only
+    if discordant == 0:
+        return 1.0
+    tail = min(base_only, candidate_only)
+    probability = sum(math.comb(discordant, value) for value in range(tail + 1)) / (2**discordant)
+    return round(min(1.0, 2.0 * probability), 12)
 
 
 def _compare_run_cases(

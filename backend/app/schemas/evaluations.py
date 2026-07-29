@@ -19,6 +19,7 @@ from app.schemas.common import PaginationMeta
 
 EvaluationStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 EvaluationScope = Literal["retrieval", "answer", "end_to_end"]
+EvaluationBackend = Literal["deterministic_db", "runtime_qdrant"]
 EVALUATION_SCHEMA_VERSION: Literal["phase2.evaluation.v1"] = "phase2.evaluation.v1"
 DATASET_MANIFEST_SCHEMA_VERSION: Literal["phase2.evaluation_dataset.v1"] = (
     "phase2.evaluation_dataset.v1"
@@ -512,11 +513,22 @@ class EvaluationRunCreateRequest(BaseModel):
     generation_model: str | None = Field(default=None, min_length=1, max_length=128)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
     evaluation_scope: EvaluationScope | None = None
+    evaluation_backend: EvaluationBackend = "deterministic_db"
+    experiment_name: str | None = Field(default=None, min_length=1, max_length=120)
+    experiment_profile_id: str | None = Field(default=None, min_length=1, max_length=40)
+    repeat_number: int = Field(default=1, ge=1, le=100)
 
     @field_validator("dataset_name")
     @classmethod
     def validate_dataset_name(cls, value: str) -> str:
         return _safe_key(value, field_name="dataset_name")
+
+    @field_validator("experiment_name", "experiment_profile_id")
+    @classmethod
+    def validate_experiment_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _safe_key(value, field_name="experiment_key")
 
     @field_validator("generation_provider")
     @classmethod
@@ -582,6 +594,11 @@ class EvaluationRunCreateRequest(BaseModel):
             raise ValueError(
                 "retrieval evaluation scope does not support answer-generating strategies"
             )
+        if (
+            self.evaluation_backend == "runtime_qdrant"
+            and self.trigger_type != EvaluationTriggerType.MANUAL
+        ):
+            raise ValueError("runtime_qdrant evaluation requires manual trigger_type")
         self.strategies = deduped
         self.strategy_type = deduped[0]
         self.metrics = list(dict.fromkeys(self.metrics))
@@ -602,6 +619,7 @@ class EvaluationRunCreateResponse(BaseModel):
     status: Literal["queued"]
     strategies: list[str] = Field(default_factory=list)
     evaluation_scope: EvaluationScope = "retrieval"
+    evaluation_backend: EvaluationBackend = "deterministic_db"
 
 
 class EvaluationGenerationReadinessRequest(BaseModel):
@@ -692,6 +710,10 @@ class EvaluationRunSummary(BaseModel):
     strategies: list[str] = Field(default_factory=lambda: [DEFAULT_RETRIEVAL_STRATEGY.value])
     metric_names: list[str] = Field(default_factory=list)
     evaluation_scope: EvaluationScope = "retrieval"
+    evaluation_backend: EvaluationBackend = "deterministic_db"
+    experiment_name: str | None = None
+    experiment_profile_id: str | None = None
+    repeat_number: int = Field(default=1, ge=1)
     trigger_type: EvaluationTriggerType = EvaluationTriggerType.MANUAL
     status: EvaluationStatus
     case_count: int
@@ -721,6 +743,13 @@ class EvaluationRunSummary(BaseModel):
     generation_models: list[str] = Field(default_factory=list)
     requested_generation_provider: str | None = None
     requested_generation_model: str | None = None
+    resolved_generation_model: str | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    embedding_dimension: int | None = Field(default=None, ge=1)
+    rerank_provider: str | None = None
+    reranker_model: str | None = None
+    qdrant_collection_name: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     started_at: datetime | None = None
@@ -955,6 +984,25 @@ class EvaluationRunComparisonSummary(BaseModel):
     candidate_only_case_count: int = Field(default=0, ge=0)
 
 
+EvaluationComparabilityStatus = Literal["comparable", "not_comparable"]
+
+
+class EvaluationRunComparability(BaseModel):
+    status: EvaluationComparabilityStatus = "comparable"
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class EvaluationPairedStatistics(BaseModel):
+    paired_case_count: int = Field(default=0, ge=0)
+    base_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    candidate_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    absolute_percentage_point_delta: float | None = None
+    relative_improvement: float | None = None
+    confidence_interval_95: tuple[float, float] | None = None
+    mcnemar_p_value: float | None = Field(default=None, ge=0.0, le=1.0)
+    outcome_source: Literal["human_calibration", "auxiliary_judge", "unavailable"] = "unavailable"
+
+
 class EvaluationRunComparison(BaseModel):
     base_run: EvaluationRunSummary
     candidate_run: EvaluationRunSummary
@@ -962,6 +1010,10 @@ class EvaluationRunComparison(BaseModel):
     metrics: list[EvaluationMetricComparison] = Field(default_factory=list)
     cases: list[EvaluationCaseComparison] = Field(default_factory=list)
     summary: EvaluationRunComparisonSummary
+    comparability: EvaluationRunComparability = Field(default_factory=EvaluationRunComparability)
+    paired_statistics: EvaluationPairedStatistics = Field(
+        default_factory=EvaluationPairedStatistics
+    )
 
 
 class EvaluationStrategyComparisonResponse(BaseModel):

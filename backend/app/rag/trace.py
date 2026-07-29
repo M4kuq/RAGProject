@@ -496,13 +496,17 @@ def build_hybrid_score_breakdown(
     fusion_method: FusionMethod,
     dense_rank: int | None,
     sparse_rank: int | None,
+    rerank_score: float | None = None,
+    rerank_order: int | None = None,
 ) -> dict[str, object]:
     breakdown = ScoreBreakdown(
         retrieval_source=RetrievalSource.HYBRID,
         dense_score=round(float(dense_score), 6) if dense_score is not None else None,
         sparse_score=round(float(sparse_score), 6) if sparse_score is not None else None,
         fused_score=round(float(fused_score), 6),
+        rerank_score=round(float(rerank_score), 6) if rerank_score is not None else None,
         rank_order=rank_order,
+        rerank_order=rerank_order,
         final_rank=final_rank,
         selected_flag=selected_flag,
         fusion_method=fusion_method.value,

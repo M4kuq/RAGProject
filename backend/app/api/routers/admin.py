@@ -293,6 +293,7 @@ def compare_evaluation_runs(
     request: Request,
     base: int = Query(ge=1),
     candidate: int = Query(ge=1),
+    strict: bool = Query(default=False),
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
@@ -300,6 +301,7 @@ def compare_evaluation_runs(
         db,
         base_run_id=base,
         candidate_run_id=candidate,
+        strict=strict,
     )
     return success_response(result.model_dump(mode="json"), request)
 

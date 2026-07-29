@@ -18,6 +18,7 @@ from app.experiments.runner import (
     ExperimentEvaluationOutcome,
     ExperimentRunOptions,
     RetrievalModelExperimentRunner,
+    _safe_exception_reason_code,
     check_dataset_availability,
     load_manifest,
     run_local_strategy_evaluation,
@@ -577,6 +578,13 @@ def test_local_mode_executor_failure_is_safe_result() -> None:
     assert first_result["status"] == "failed"
     assert first_result["reason_codes"] == ["available", "evaluation_execution_failed"]
     assert "raw prompt should not leak" not in str(artifact)
+
+
+def test_runtime_reason_code_uses_safe_app_error_code() -> None:
+    exc = RuntimeError("raw prompt should not leak")
+    exc.code = "evaluation_generation_not_ready"  # type: ignore[attr-defined]
+
+    assert _safe_exception_reason_code(exc) == "evaluation_generation_not_ready"
 
 
 def test_artifact_redaction_removes_raw_text_and_paths() -> None:

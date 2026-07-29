@@ -304,7 +304,12 @@ class OpenAICompatibleChatAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
-        if self.native_lmstudio_api and request.response_format is None:
+        disable_lmstudio_thinking = self.native_lmstudio_api and _is_qwen35_model(self.model_name)
+        if (
+            self.native_lmstudio_api
+            and request.response_format is None
+            and not disable_lmstudio_thinking
+        ):
             endpoint = f"{self.base_url}/api/v1/chat"
             request_payload: dict[str, object] = {
                 "model": self.model_name,
@@ -339,6 +344,8 @@ class OpenAICompatibleChatAnswerGenerator:
                     else {}
                 ),
             }
+            if disable_lmstudio_thinking:
+                request_payload["chat_template_kwargs"] = {"enable_thinking": False}
         try:
             response = httpx.post(
                 endpoint,
@@ -356,19 +363,19 @@ class OpenAICompatibleChatAnswerGenerator:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise AnswerGenerationError() from exc
+            raise AnswerGenerationError(error_category="invalid_response") from exc
         if not isinstance(payload, dict):
-            raise AnswerGenerationError()
+            raise AnswerGenerationError(error_category="invalid_response")
         raw_content = _extract_lmstudio_output_text(payload)
         if not raw_content:
-            raise AnswerGenerationError()
+            raise AnswerGenerationError(error_category="empty_content")
         final_content = _generation_output_text(
             raw_content,
             request,
             cleanup_final_answer=True,
         )
         if not final_content:
-            raise AnswerGenerationError()
+            raise AnswerGenerationError(error_category="empty_final")
         return GenerationResult(
             content=final_content,
             usage=_extract_lmstudio_usage(payload),
@@ -1161,6 +1168,10 @@ def _lmstudio_native_model_name(value: str) -> str:
     if normalized.lower() == "qwen3.5-9b":
         return "qwen/qwen3.5-9b"
     return normalized
+
+
+def _is_qwen35_model(value: str) -> bool:
+    return "qwen3.5" in value.strip().lower()
 
 
 def check_lmstudio_model_readiness(
