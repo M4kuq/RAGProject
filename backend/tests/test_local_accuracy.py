@@ -25,7 +25,7 @@ from app.experiments.local_accuracy import (
     select_retrieval_finalists,
 )
 from app.experiments.reporting import redact_experiment_artifact
-from app.experiments.schemas import ExperimentManifest
+from app.experiments.schemas import ExperimentManifest, GenerationProfile
 from app.ingest.embedding import probe_lmstudio_embedding_dimension
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluations import EvaluationRunCreateRequest
@@ -157,6 +157,10 @@ def test_manifest_v1_remains_compatible_and_v2_is_fixed_to_qwen_9b() -> None:
     assert manifest.generation_profile.planner_model == "qwen/qwen3.5-9b"
     assert manifest.generation_profile.judge_model == "qwen/qwen3.5-9b"
     assert manifest.generation_profile.temperature == 0.0
+    assert manifest.generation_profile.retry_on_insufficient_evidence is None
+    assert manifest.generation_profile.max_output_chars is None
+    with pytest.raises(ValidationError, match="less than or equal to 20000"):
+        GenerationProfile(max_output_chars=20_001)
 
 
 def test_experiment_redaction_keeps_safe_metrics_but_removes_raw_answers() -> None:
@@ -198,6 +202,17 @@ def test_coordinate_search_and_staged_selection_are_bounded_and_deterministic() 
         )
         == "fast"
     )
+
+
+def test_coordinate_search_base_candidate_preserves_profile_retrieval_inputs() -> None:
+    manifest = _v2_manifest()
+    manifest.retrieval_profiles[0] = manifest.retrieval_profiles[0].model_copy(
+        update={"top_k": 20, "rerank_top_n": 5}
+    )
+    candidates = build_coordinate_search_candidates(manifest)
+    assert candidates[0].profile_id == manifest.retrieval_profiles[0].profile_id
+    assert candidates[0].top_k == 20
+    assert candidates[0].rerank_top_n == 5
 
 
 def test_paired_statistics_are_reproducible_and_mcnemar_is_exact() -> None:

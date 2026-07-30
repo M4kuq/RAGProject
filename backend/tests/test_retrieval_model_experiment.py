@@ -19,6 +19,7 @@ from app.experiments.runner import (
     ExperimentRunOptions,
     RetrievalModelExperimentRunner,
     _safe_exception_reason_code,
+    _settings_for_candidate,
     check_dataset_availability,
     load_manifest,
     run_local_strategy_evaluation,
@@ -328,6 +329,81 @@ def test_local_smoke_summary_without_status_counts_as_succeeded(
     assert outcome.status == "succeeded"
     assert outcome.metrics["recall_at_k"] == 0.75
     assert outcome.metrics["p95_latency"] == 9000.0
+
+
+def test_v2_generation_ablation_overrides_are_applied_only_when_declared() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "experiments"
+        / "manifests"
+        / "local_rag_accuracy_e2_no_retry_dev_v2.example.json"
+    )
+    manifest = load_manifest(manifest_path)
+    embedding = manifest.embedding_models[0]
+    profile = manifest.retrieval_profiles[0]
+    availability = ModelAvailability(
+        model_id=embedding.model_id,
+        model_type=ModelKind.EMBEDDING,
+        provider=embedding.provider,
+        status="available",
+        reason_codes=("available",),
+        required=True,
+        download_policy=DownloadPolicy.NEVER,
+        expected_dimension=2560,
+        actual_dimension=2560,
+    )
+
+    candidate_settings = _settings_for_candidate(
+        Settings(
+            generation_retry_on_insufficient_evidence=True,
+            generation_max_output_chars=2000,
+        ),
+        embedding,
+        manifest.reranker_models[0],
+        availability,
+        manifest.experiment_name,
+        generation_profile=manifest.generation_profile,
+        profile=profile,
+    )
+
+    assert candidate_settings.generation_retry_on_insufficient_evidence is False
+    assert candidate_settings.generation_max_output_chars == 8000
+    assert candidate_settings.ask_top_k_default == 20
+    assert candidate_settings.ask_rerank_top_n_default == 3
+
+
+def test_b1_confirmation_manifest_preserves_the_frozen_claim_baseline() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "experiments"
+        / "manifests"
+        / "local_rag_accuracy_b1_confirm_dev_v2.example.json"
+    )
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.dataset == "local_accuracy_dev_v1"
+    assert manifest.evaluation_backend == "runtime_qdrant"
+    assert manifest.evaluation_scope == "end_to_end"
+    assert manifest.repeats == 1
+    assert manifest.reranker_models == []
+    assert manifest.generation_profile is not None
+    assert manifest.generation_profile.model == "qwen/qwen3.5-9b"
+    assert manifest.generation_profile.judge_model == "qwen/qwen3.5-9b"
+    assert manifest.generation_profile.temperature == 0.0
+    assert manifest.generation_profile.retry_on_insufficient_evidence is True
+    assert manifest.generation_profile.max_output_chars == 8000
+
+    embedding = manifest.embedding_models[0]
+    profile = manifest.retrieval_profiles[0]
+    assert embedding.model_id == "text-embedding-nomic-embed-text-v1.5"
+    assert embedding.provider == "lmstudio"
+    assert profile.embedding_model == embedding.model_id
+    assert profile.reranker_model is None
+    assert profile.strategy == "dense"
+    assert profile.top_k == 10
+    assert profile.rerank_top_n == 3
 
 
 def test_local_smoke_preflight_reasons_are_preserved(

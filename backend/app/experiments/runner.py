@@ -816,6 +816,12 @@ def _settings_for_candidate(
         "model",
         settings.generation_model_name,
     )
+    retry_on_insufficient_evidence = getattr(
+        generation_profile,
+        "retry_on_insufficient_evidence",
+        None,
+    )
+    max_output_chars = getattr(generation_profile, "max_output_chars", None)
     return settings.model_copy(
         update={
             "embedding_provider": (
@@ -830,6 +836,16 @@ def _settings_for_candidate(
             "qdrant_collection_name": collection_name,
             "generation_provider": generation_provider,
             "generation_model_name": generation_model,
+            "generation_retry_on_insufficient_evidence": (
+                settings.generation_retry_on_insufficient_evidence
+                if retry_on_insufficient_evidence is None
+                else retry_on_insufficient_evidence
+            ),
+            "generation_max_output_chars": (
+                settings.generation_max_output_chars
+                if max_output_chars is None
+                else max_output_chars
+            ),
             "router_mode": (
                 profile.router_mode
                 if profile is not None and profile.router_mode is not None
