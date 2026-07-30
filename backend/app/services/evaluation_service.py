@@ -1646,9 +1646,7 @@ class EvaluationService:
                         judgment.status if judgment is not None else "missing",
                     ),
                     judge_failure_code=(judgment.failure_code if judgment is not None else None),
-                    judge_attempt_count=(
-                        judgment.attempt_count if judgment is not None else None
-                    ),
+                    judge_attempt_count=(judgment.attempt_count if judgment is not None else None),
                     judge_first_failure_code=(
                         judgment.first_failure_code if judgment is not None else None
                     ),

@@ -53,10 +53,13 @@ JudgeFailureCode: TypeAlias = Literal[
     "judge_response_not_json",
     "judge_response_schema_invalid",
 ]
-JudgeTerminalReasonCode: TypeAlias = Literal[
-    "judge_succeeded_first_attempt",
-    "judge_recovered_after_retry",
-] | JudgeFailureCode
+JudgeTerminalReasonCode: TypeAlias = (
+    Literal[
+        "judge_succeeded_first_attempt",
+        "judge_recovered_after_retry",
+    ]
+    | JudgeFailureCode
+)
 
 
 class ClaimSupportDecision(BaseModel):

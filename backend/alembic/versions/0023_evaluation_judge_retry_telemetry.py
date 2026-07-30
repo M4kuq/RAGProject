@@ -55,9 +55,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_eval_auxiliary_judgments_retry_recovery",
         "evaluation_auxiliary_judgments",
-        "recovered_after_retry IS NULL "
-        "OR recovered_after_retry = FALSE "
-        "OR status = 'succeeded'",
+        "recovered_after_retry IS NULL OR recovered_after_retry = FALSE OR status = 'succeeded'",
     )
 
 

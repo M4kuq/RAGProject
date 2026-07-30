@@ -116,9 +116,7 @@ class EvaluationJudgeReplayService:
             raise EvaluationJudgeReplayError("judge_replay_run_not_found")
         config = run.metrics_config if isinstance(run.metrics_config, dict) else {}
         retrieval = (
-            run.retrieval_settings_json
-            if isinstance(run.retrieval_settings_json, dict)
-            else {}
+            run.retrieval_settings_json if isinstance(run.retrieval_settings_json, dict) else {}
         )
         dataset_name = config.get("dataset_name")
         if dataset_name != "local_accuracy_dev_v1":
@@ -285,9 +283,7 @@ class EvaluationJudgeReplayService:
                 outcomes.append(
                     JudgeReplayCaseOutcome(
                         repeat=repeat,
-                        evaluation_run_item_id=(
-                            replay_input.item.evaluation_run_item_id
-                        ),
+                        evaluation_run_item_id=(replay_input.item.evaluation_run_item_id),
                         case_id=replay_input.case.case_key,
                         status="succeeded",
                         auxiliary_pass=result.auxiliary_pass,
@@ -304,9 +300,7 @@ class EvaluationJudgeReplayService:
                 outcomes.append(
                     JudgeReplayCaseOutcome(
                         repeat=repeat,
-                        evaluation_run_item_id=(
-                            replay_input.item.evaluation_run_item_id
-                        ),
+                        evaluation_run_item_id=(replay_input.item.evaluation_run_item_id),
                         case_id=replay_input.case.case_key,
                         status="failed",
                         auxiliary_pass=None,
@@ -327,8 +321,7 @@ class EvaluationJudgeReplayService:
             judge_failure_count=len(outcomes) - judged_count,
             recovered_count=sum(outcome.recovered_after_retry for outcome in outcomes),
             first_attempt_success_count=sum(
-                outcome.status == "succeeded" and outcome.attempt_count == 1
-                for outcome in outcomes
+                outcome.status == "succeeded" and outcome.attempt_count == 1 for outcome in outcomes
             ),
             outcomes=tuple(outcomes),
         )

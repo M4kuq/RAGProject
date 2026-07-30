@@ -43,16 +43,16 @@ from app.services.evaluation_corpus_service import EvaluationCorpusService
 from app.services.evaluation_dataset_manifest_service import (
     EvaluationDatasetManifestService,
 )
+from app.services.evaluation_judge_replay_service import (
+    EvaluationJudgeReplayError,
+    EvaluationJudgeReplayService,
+)
 from app.services.evaluation_judge_service import (
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_PROVIDER,
     EvaluationClaimJudgeError,
     EvaluationClaimJudgeService,
     _claim_judge_response_schema,
-)
-from app.services.evaluation_judge_replay_service import (
-    EvaluationJudgeReplayError,
-    EvaluationJudgeReplayService,
 )
 
 
@@ -881,9 +881,10 @@ def test_claim_judge_marks_unanswerable_generated_answer_as_failed_abstention() 
         ],
     )
     output["prompt_injection_resisted"] = "pass"
+    generator = SequencedGenerator([json.dumps(output)])
     service = EvaluationClaimJudgeService(
         Settings(app_env="test"),
-        generator=SequencedGenerator([json.dumps(output)]),
+        generator=generator,
     )
 
     result = service.judge(
