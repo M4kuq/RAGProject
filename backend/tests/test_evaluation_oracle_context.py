@@ -75,6 +75,14 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
 ) -> None:
     db, user = database
     run = _seed_oracle_source_run(db, created_by=user.user_id)
+    r_judge_replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
     answer_generator = SequencedGenerator(
         [
             "Fictional facility 01 has evaluation code L01. [1]",
@@ -112,6 +120,7 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
         db,
         evaluation_run_id=run.evaluation_run_id,
         expected_case_count=2,
+        r_judge_replay=r_judge_replay,
     )
 
     assert summary.gate_passed is True
@@ -122,6 +131,8 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
     assert summary.answerable_retrieval_missing_gap_count == 1
     assert summary.answerable_oracle_generation_gap_count == 0
     assert summary.primary_next_target == "retrieval_reranker_chunking"
+    assert summary.r_judge_replay_count == 3
+    assert len(summary.r_judge_replay_fingerprint) == 64
     assert summary.r_mean_claim_recall == 0.0
     assert summary.o_mean_claim_recall == 1.0
     assert summary.o_mean_context_utilization == 1.0
@@ -153,6 +164,14 @@ def test_oracle_context_preflight_stops_before_generation_when_source_is_missing
 ) -> None:
     db, user = database
     run = _seed_oracle_source_run(db, created_by=user.user_id)
+    r_judge_replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
     source = (
         db.query(EvaluationCorpusSource)
         .filter(EvaluationCorpusSource.source_key == "local_dev_source_01")
@@ -178,6 +197,7 @@ def test_oracle_context_preflight_stops_before_generation_when_source_is_missing
             db,
             evaluation_run_id=run.evaluation_run_id,
             expected_case_count=2,
+            r_judge_replay=r_judge_replay,
         )
     assert factory_called is False
 
@@ -419,3 +439,85 @@ def _unanswerable_judge_output() -> dict[str, object]:
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _stable_r_judge_replay(
+    db: Session,
+    *,
+    run: EvaluationRun,
+    passes: dict[str, bool],
+) -> dict[str, object]:
+    rows = (
+        db.query(EvaluationRunItem, EvaluationCase, EvaluationReviewPayload)
+        .join(
+            EvaluationCase,
+            EvaluationCase.evaluation_case_id == EvaluationRunItem.evaluation_case_id,
+        )
+        .join(
+            EvaluationReviewPayload,
+            EvaluationReviewPayload.evaluation_run_item_id
+            == EvaluationRunItem.evaluation_run_item_id,
+        )
+        .filter(EvaluationRunItem.evaluation_run_id == run.evaluation_run_id)
+        .order_by(EvaluationRunItem.evaluation_run_item_id.asc())
+        .all()
+    )
+    answer_set = [
+        {
+            "case_id": case.case_key,
+            "answer_hash": payload.answer_hash,
+            "context_hash": payload.context_hash,
+        }
+        for _item, case, payload in rows
+    ]
+    repeat_summaries: list[dict[str, object]] = []
+    for repeat in range(1, 4):
+        outcomes = [
+            {
+                "repeat": repeat,
+                "evaluation_run_item_id": item.evaluation_run_item_id,
+                "case_id": case.case_key,
+                "status": "succeeded",
+                "auxiliary_pass": passes[case.case_key],
+                "attempt_count": 1,
+                "first_failure_code": None,
+                "terminal_reason_code": "judge_succeeded_first_attempt",
+                "recovered_after_retry": False,
+                "answer_hash": payload.answer_hash,
+                "context_hash": _sha256("\x00".join(payload.context_json or [])),
+                "decision_fingerprint": _sha256(f"{case.case_key}:{passes[case.case_key]}"),
+            }
+            for item, case, payload in rows
+        ]
+        repeat_summaries.append(
+            {
+                "repeat": repeat,
+                "applicable_count": len(rows),
+                "judged_count": len(rows),
+                "judge_failure_count": 0,
+                "recovered_count": 0,
+                "first_attempt_success_count": len(rows),
+                "outcomes": outcomes,
+            }
+        )
+    retrieval = run.retrieval_settings_json
+    assert isinstance(retrieval, dict)
+    return {
+        "schema_version": "phase3.judge_replay.v1",
+        "source_evaluation_run_id": run.evaluation_run_id,
+        "dataset_name": "local_accuracy_dev_v1",
+        "dataset_content_fingerprint": retrieval["dataset_content_fingerprint"],
+        "corpus_fingerprint": run.corpus_fingerprint,
+        "resolved_generation_model": "qwen/qwen3.5-9b",
+        "judge_provider": "lmstudio",
+        "judge_model": "qwen3.5-9b",
+        "expected_case_count": len(rows),
+        "repeats": 3,
+        "answer_set_fingerprint": _sha256(
+            json.dumps(answer_set, sort_keys=True, separators=(",", ":"))
+        ),
+        "repeat_summaries": repeat_summaries,
+        "stable_case_count": len(rows),
+        "unstable_case_ids": [],
+        "gate_passed": True,
+    }

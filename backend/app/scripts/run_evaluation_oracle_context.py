@@ -18,6 +18,7 @@ def main() -> int:
     )
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--expected-case-count", type=int, default=40)
+    parser.add_argument("--r-judge-replay", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--confirm-local-only", action="store_true")
     args = parser.parse_args()
@@ -27,11 +28,25 @@ def main() -> int:
         raise SystemExit("oracle_context_local_confirmation_required")
 
     try:
+        replay_payload = json.loads(args.r_judge_replay.read_text(encoding="utf-8"))
+        if not isinstance(replay_payload, dict):
+            raise ValueError
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        print(
+            json.dumps(
+                {"status": "blocked", "reason_code": "oracle_r_judge_replay_unreadable"},
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    try:
         with SessionLocal() as db:
             summary = EvaluationOracleContextService(settings).run(
                 db,
                 evaluation_run_id=args.run_id,
                 expected_case_count=args.expected_case_count,
+                r_judge_replay=replay_payload,
             )
     except EvaluationOracleContextError as exc:
         print(json.dumps({"status": "blocked", "reason_code": str(exc)}, sort_keys=True))

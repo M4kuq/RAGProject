@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.evaluation_models import (
-    EvaluationAuxiliaryJudgment,
     EvaluationCorpusSource,
     EvaluationReviewPayload,
 )
@@ -90,6 +89,8 @@ class OracleContextDiagnosticSummary:
     corpus_fingerprint: str
     case_set_fingerprint: str
     generation_config_fingerprint: str
+    r_judge_replay_fingerprint: str
+    r_judge_replay_count: int
     resolved_generation_model: str
     generation_temperature: float
     generation_max_context_chars: int
@@ -126,7 +127,6 @@ class _OracleInput:
     item: EvaluationRunItem
     case: EvaluationCase
     payload: EvaluationReviewPayload
-    judgment: EvaluationAuxiliaryJudgment
     answerable: bool
     tags: tuple[str, ...]
     required_facts: tuple[dict[str, object], ...]
@@ -140,6 +140,21 @@ class _OracleGeneration:
     answer_outcome: Literal["answered", "abstained"]
     citations: tuple[dict[str, object], ...]
     context: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _StableRJudgment:
+    auxiliary_pass: bool
+    answer_hash: str
+    context_hash: str
+    decision_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _StableRReplay:
+    replay_count: int
+    replay_fingerprint: str
+    judgments: dict[str, _StableRJudgment]
 
 
 class EvaluationOracleContextService:
@@ -160,6 +175,7 @@ class EvaluationOracleContextService:
         *,
         evaluation_run_id: int,
         expected_case_count: int,
+        r_judge_replay: dict[str, object],
     ) -> OracleContextDiagnosticSummary:
         if expected_case_count < 1:
             raise EvaluationOracleContextError("oracle_expected_case_count_invalid")
@@ -172,6 +188,12 @@ class EvaluationOracleContextService:
         inputs = self._load_inputs(
             db,
             run=run,
+            expected_case_count=expected_case_count,
+        )
+        stable_r_replay = _validate_r_judge_replay(
+            r_judge_replay,
+            run=run,
+            inputs=inputs,
             expected_case_count=expected_case_count,
         )
         sources = self._load_sources(db, dataset=dataset, inputs=inputs)
@@ -190,6 +212,7 @@ class EvaluationOracleContextService:
                 settings=generation_settings,
                 generator=generator,
                 judge=judge,
+                r_judgment=stable_r_replay.judgments[oracle_input.case.case_key],
             )
             for oracle_input in inputs
         )
@@ -252,6 +275,8 @@ class EvaluationOracleContextService:
             corpus_fingerprint=corpus_fingerprint,
             case_set_fingerprint=case_set_fingerprint,
             generation_config_fingerprint=generation_config_fingerprint,
+            r_judge_replay_fingerprint=stable_r_replay.replay_fingerprint,
+            r_judge_replay_count=stable_r_replay.replay_count,
             resolved_generation_model=_EXPECTED_GENERATION_MODEL,
             generation_temperature=0.0,
             generation_max_context_chars=generation_settings.generation_max_context_chars,
@@ -365,14 +390,6 @@ class EvaluationOracleContextService:
                 )
             ).all()
         }
-        judgments = {
-            judgment.evaluation_run_item_id: judgment
-            for judgment in db.scalars(
-                select(EvaluationAuxiliaryJudgment).where(
-                    EvaluationAuxiliaryJudgment.evaluation_run_item_id.in_(item_ids)
-                )
-            ).all()
-        }
         now = datetime.now(UTC)
         result: list[_OracleInput] = []
         seen_case_ids: set[int] = set()
@@ -384,16 +401,13 @@ class EvaluationOracleContextService:
             seen_case_ids.add(item.evaluation_case_id)
             case = db.get(EvaluationCase, item.evaluation_case_id)
             payload = payloads.get(item.evaluation_run_item_id)
-            judgment = judgments.get(item.evaluation_run_item_id)
-            if case is None or payload is None or judgment is None:
+            if case is None or payload is None:
                 raise EvaluationOracleContextError("oracle_source_evidence_missing")
             if (
                 payload.purged_at is not None
                 or _aware_utc(payload.expires_at) <= now
                 or payload.answer_text is None
                 or payload.context_json is None
-                or judgment.status != "succeeded"
-                or judgment.auxiliary_pass is None
             ):
                 raise EvaluationOracleContextError("oracle_source_evidence_unavailable")
             metadata = case.metadata_json if isinstance(case.metadata_json, dict) else {}
@@ -418,7 +432,6 @@ class EvaluationOracleContextService:
                     item=item,
                     case=case,
                     payload=payload,
-                    judgment=judgment,
                     answerable=answerable,
                     tags=_string_tuple(case.tags),
                     required_facts=required_facts,
@@ -468,6 +481,7 @@ class EvaluationOracleContextService:
         settings: Settings,
         generator: AnswerGenerator,
         judge: EvaluationClaimJudgeService,
+        r_judgment: _StableRJudgment,
     ) -> OracleContextCaseOutcome:
         selected_sources = tuple(sources[key] for key in oracle_input.source_keys)
         context_items, citation_sources = _oracle_context_items(
@@ -596,7 +610,7 @@ class EvaluationOracleContextService:
             o_used_required_fact_count=o_used_value,
             o_claim_recall=o_claim_recall,
             o_context_utilization=o_context_utilization,
-            r_auxiliary_pass=cast(bool, oracle_input.judgment.auxiliary_pass),
+            r_auxiliary_pass=r_judgment.auxiliary_pass,
             o_auxiliary_pass=judged.auxiliary_pass if judged is not None else None,
             r_answer_hash=oracle_input.payload.answer_hash,
             r_context_hash=oracle_input.payload.context_hash,
@@ -722,6 +736,121 @@ def _generation_settings(settings: Settings, retrieval: dict[str, object]) -> Se
         else:
             raise EvaluationOracleContextError(f"oracle_{field}_invalid")
     return settings.model_copy(update=updates)
+
+
+def _validate_r_judge_replay(
+    replay: dict[str, object],
+    *,
+    run: EvaluationRun,
+    inputs: tuple[_OracleInput, ...],
+    expected_case_count: int,
+) -> _StableRReplay:
+    retrieval = cast(dict[str, object], run.retrieval_settings_json)
+    if (
+        replay.get("schema_version") != "phase3.judge_replay.v1"
+        or replay.get("source_evaluation_run_id") != run.evaluation_run_id
+        or replay.get("dataset_name") != _ALLOWED_DATASET
+        or replay.get("resolved_generation_model") != _EXPECTED_GENERATION_MODEL
+        or replay.get("dataset_content_fingerprint") != retrieval.get("dataset_content_fingerprint")
+        or replay.get("corpus_fingerprint") != run.corpus_fingerprint
+        or replay.get("expected_case_count") != expected_case_count
+        or replay.get("gate_passed") is not True
+        or replay.get("stable_case_count") != expected_case_count
+        or replay.get("unstable_case_ids") != []
+    ):
+        raise EvaluationOracleContextError("oracle_r_judge_replay_not_comparable")
+    replay_count = replay.get("repeats")
+    summaries = replay.get("repeat_summaries")
+    if (
+        not isinstance(replay_count, int)
+        or isinstance(replay_count, bool)
+        or replay_count < 3
+        or not isinstance(summaries, list)
+        or len(summaries) != replay_count
+    ):
+        raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+    if replay.get("answer_set_fingerprint") != _r_answer_set_fingerprint(inputs):
+        raise EvaluationOracleContextError("oracle_r_judge_replay_answer_set_mismatch")
+
+    expected_case_ids = {item.case.case_key for item in inputs}
+    expected_hashes = {
+        item.case.case_key: (
+            item.payload.answer_hash,
+            _sha256("\x00".join(_string_tuple(item.payload.context_json))),
+        )
+        for item in inputs
+    }
+    stable: dict[str, _StableRJudgment] | None = None
+    for repeat_index, summary in enumerate(summaries, start=1):
+        if (
+            not isinstance(summary, dict)
+            or summary.get("repeat") != repeat_index
+            or summary.get("applicable_count") != expected_case_count
+            or summary.get("judged_count") != expected_case_count
+            or summary.get("judge_failure_count") != 0
+        ):
+            raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+        raw_outcomes = summary.get("outcomes")
+        if not isinstance(raw_outcomes, list) or len(raw_outcomes) != expected_case_count:
+            raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+        current: dict[str, _StableRJudgment] = {}
+        for outcome in raw_outcomes:
+            if not isinstance(outcome, dict):
+                raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+            case_id = outcome.get("case_id")
+            auxiliary_pass = outcome.get("auxiliary_pass")
+            answer_hash = outcome.get("answer_hash")
+            context_hash = outcome.get("context_hash")
+            decision_fingerprint = outcome.get("decision_fingerprint")
+            if (
+                not isinstance(case_id, str)
+                or case_id not in expected_case_ids
+                or case_id in current
+                or not isinstance(auxiliary_pass, bool)
+                or outcome.get("status") != "succeeded"
+                or outcome.get("terminal_reason_code")
+                not in {
+                    "judge_succeeded_first_attempt",
+                    "judge_recovered_after_retry",
+                }
+                or not isinstance(answer_hash, str)
+                or not isinstance(context_hash, str)
+                or not isinstance(decision_fingerprint, str)
+                or len(decision_fingerprint) != 64
+                or (answer_hash, context_hash) != expected_hashes[case_id]
+            ):
+                raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+            current[case_id] = _StableRJudgment(
+                auxiliary_pass=auxiliary_pass,
+                answer_hash=answer_hash,
+                context_hash=context_hash,
+                decision_fingerprint=decision_fingerprint,
+            )
+        if set(current) != expected_case_ids:
+            raise EvaluationOracleContextError("oracle_r_judge_replay_case_set_mismatch")
+        if stable is None:
+            stable = current
+        elif current != stable:
+            raise EvaluationOracleContextError("oracle_r_judge_replay_unstable")
+    if stable is None:
+        raise EvaluationOracleContextError("oracle_r_judge_replay_invalid")
+    return _StableRReplay(
+        replay_count=replay_count,
+        replay_fingerprint=_sha256(json.dumps(replay, sort_keys=True, separators=(",", ":"))),
+        judgments=stable,
+    )
+
+
+def _r_answer_set_fingerprint(inputs: tuple[_OracleInput, ...]) -> str:
+    payload = [
+        {
+            "case_id": item.case.case_key,
+            "answer_hash": item.payload.answer_hash,
+            "context_hash": item.payload.context_hash,
+        }
+        for item in inputs
+    ]
+    return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
 def _case_set_fingerprint(inputs: tuple[_OracleInput, ...]) -> str:
