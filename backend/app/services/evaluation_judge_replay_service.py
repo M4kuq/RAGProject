@@ -217,7 +217,7 @@ class EvaluationJudgeReplayService:
                 raise EvaluationJudgeReplayError("judge_replay_payload_missing")
             if (
                 payload.purged_at is not None
-                or payload.expires_at <= now
+                or _aware_utc(payload.expires_at) <= now
                 or payload.answer_text is None
                 or payload.context_json is None
                 or payload.citations_json is None
@@ -369,6 +369,12 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     ):
         raise EvaluationJudgeReplayError("judge_replay_payload_shape_invalid")
     return tuple(cast(str, item) for item in value)
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _sha256(value: str) -> str:
