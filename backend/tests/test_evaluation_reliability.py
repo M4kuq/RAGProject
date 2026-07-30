@@ -934,6 +934,7 @@ def test_judge_replay_uses_frozen_hashes_and_emits_no_raw_payload(
             }
         ]
     )
+    valid_output["case_id"] = "local_dev_answerable_01"
     generator = SequencedGenerator([json.dumps(valid_output)] * 3)
     service = EvaluationJudgeReplayService(
         Settings(app_env="test"),
