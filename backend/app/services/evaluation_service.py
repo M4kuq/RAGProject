@@ -158,6 +158,7 @@ from app.services.evaluation_judge_service import (
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_PROVIDER,
     JUDGE_RUBRIC_VERSION,
+    EvaluationClaimJudgeError,
     EvaluationClaimJudgeService,
 )
 from app.services.rag_service import _safe_generation_label
@@ -1645,6 +1646,18 @@ class EvaluationService:
                         judgment.status if judgment is not None else "missing",
                     ),
                     judge_failure_code=(judgment.failure_code if judgment is not None else None),
+                    judge_attempt_count=(
+                        judgment.attempt_count if judgment is not None else None
+                    ),
+                    judge_first_failure_code=(
+                        judgment.first_failure_code if judgment is not None else None
+                    ),
+                    judge_terminal_reason_code=(
+                        judgment.terminal_reason_code if judgment is not None else None
+                    ),
+                    judge_recovered_after_retry=(
+                        judgment.recovered_after_retry if judgment is not None else None
+                    ),
                     auxiliary_decision=decision,
                     claim_faithfulness=(
                         _decimal_float(judgment.claim_faithfulness)
@@ -2659,12 +2672,16 @@ class EvaluationService:
             for citation in rag_result.citations
         ]
         answer_hash = hashlib.sha256(rag_result.answer_text.encode("utf-8")).hexdigest()
-        context_hash = hashlib.sha256("\\x00".join(context).encode("utf-8")).hexdigest()
+        context_hash = hashlib.sha256("\x00".join(context).encode("utf-8")).hexdigest()
         now = datetime.now(UTC)
         expires_at = now + timedelta(days=30)
         metric_score: float | None = None
         metric_label = "not_applicable"
         reason_code = "judge_failed"
+        judge_attempt_count: int | None = None
+        judge_first_failure_code: str | None = None
+        judge_terminal_reason_code: str | None = None
+        judge_recovered_after_retry: bool | None = None
         try:
             judged = claim_judge.judge(
                 case_id=case.case_id,
@@ -2702,9 +2719,17 @@ class EvaluationService:
                     "failure_code": None,
                     "answer_hash": judged.answer_hash,
                     "context_hash": judged.context_hash,
+                    "attempt_count": judged.attempt_count,
+                    "first_failure_code": judged.first_failure_code,
+                    "terminal_reason_code": judged.terminal_reason_code,
+                    "recovered_after_retry": judged.recovered_after_retry,
                 },
                 updated_at=now,
             )
+            judge_attempt_count = judged.attempt_count
+            judge_first_failure_code = judged.first_failure_code
+            judge_terminal_reason_code = judged.terminal_reason_code
+            judge_recovered_after_retry = judged.recovered_after_retry
             metric_score = judged.claim_faithfulness
             metric_label = (
                 _metric_label(metric_score) if metric_score is not None else "not_applicable"
@@ -2714,7 +2739,11 @@ class EvaluationService:
                 if metric_score is not None
                 else "claim_faithfulness_not_applicable"
             )
-        except Exception:
+        except EvaluationClaimJudgeError as exc:
+            judge_attempt_count = exc.attempt_count
+            judge_first_failure_code = exc.first_failure_code
+            judge_terminal_reason_code = exc.terminal_reason_code
+            judge_recovered_after_retry = exc.recovered_after_retry
             self.repository.upsert_auxiliary_judgment(
                 db,
                 evaluation_run_item_id=item.evaluation_run_item_id,
@@ -2735,6 +2764,42 @@ class EvaluationService:
                     "failure_code": "judge_failed",
                     "answer_hash": answer_hash,
                     "context_hash": context_hash,
+                    "attempt_count": exc.attempt_count,
+                    "first_failure_code": exc.first_failure_code,
+                    "terminal_reason_code": exc.terminal_reason_code,
+                    "recovered_after_retry": exc.recovered_after_retry,
+                },
+                updated_at=now,
+            )
+        except Exception:
+            judge_attempt_count = 0
+            judge_first_failure_code = "judge_unexpected_error"
+            judge_terminal_reason_code = "judge_unexpected_error"
+            judge_recovered_after_retry = False
+            self.repository.upsert_auxiliary_judgment(
+                db,
+                evaluation_run_item_id=item.evaluation_run_item_id,
+                values={
+                    "status": "failed",
+                    "rubric_version": JUDGE_RUBRIC_VERSION,
+                    "judge_provider": DEFAULT_JUDGE_PROVIDER,
+                    "judge_model": DEFAULT_JUDGE_MODEL,
+                    "required_facts_supported": None,
+                    "citation_support": None,
+                    "forbidden_claims_absent": None,
+                    "abstention_correct": None,
+                    "prompt_injection_resisted": None,
+                    "confidence": None,
+                    "reason_codes_json": [],
+                    "auxiliary_pass": None,
+                    "claim_faithfulness": None,
+                    "failure_code": "judge_failed",
+                    "answer_hash": answer_hash,
+                    "context_hash": context_hash,
+                    "attempt_count": 0,
+                    "first_failure_code": "judge_unexpected_error",
+                    "terminal_reason_code": "judge_unexpected_error",
+                    "recovered_after_retry": False,
                 },
                 updated_at=now,
             )
@@ -2762,6 +2827,10 @@ class EvaluationService:
                 "method": "local_judge",
                 "reason_code": reason_code,
                 "judge_coverage": 1.0 if metric_score is not None else 0.0,
+                "judge_attempt_count": judge_attempt_count,
+                "judge_first_failure_code": judge_first_failure_code,
+                "judge_terminal_reason_code": judge_terminal_reason_code,
+                "judge_recovered_after_retry": judge_recovered_after_retry,
             },
         )
 

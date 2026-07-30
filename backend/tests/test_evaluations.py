@@ -5718,6 +5718,10 @@ def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
                 failure_code=None,
                 answer_hash="a" * 64,
                 context_hash="b" * 64,
+                attempt_count=2,
+                first_failure_code="judge_response_not_json",
+                terminal_reason_code="judge_recovered_after_retry",
+                recovered_after_retry=True,
             )
         )
         db.commit()
@@ -5738,6 +5742,10 @@ def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
     assert target["required_citation"] is True
     assert target["prompt_injection"] is False
     assert target["judge_status"] == "succeeded"
+    assert target["judge_attempt_count"] == 2
+    assert target["judge_first_failure_code"] == "judge_response_not_json"
+    assert target["judge_terminal_reason_code"] == "judge_recovered_after_retry"
+    assert target["judge_recovered_after_retry"] is True
     assert target["auxiliary_decision"]["case_id"] == "gold_v2_001"
     assert target["claim_faithfulness"] == 1.0
     assert target["review_payload_available"] is False

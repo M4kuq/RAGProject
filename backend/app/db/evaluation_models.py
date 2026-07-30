@@ -275,6 +275,29 @@ class EvaluationAuxiliaryJudgment(Base):
             "claim_faithfulness IS NULL OR (claim_faithfulness >= 0 AND claim_faithfulness <= 1)",
             name="ck_eval_auxiliary_judgments_claim_faithfulness",
         ),
+        CheckConstraint(
+            "(attempt_count IS NULL "
+            "AND first_failure_code IS NULL "
+            "AND terminal_reason_code IS NULL "
+            "AND recovered_after_retry IS NULL) OR "
+            "(attempt_count BETWEEN 0 AND 2 "
+            "AND terminal_reason_code IS NOT NULL "
+            "AND recovered_after_retry IS NOT NULL "
+            "AND ((attempt_count = 0 "
+            "AND first_failure_code IS NOT NULL "
+            "AND recovered_after_retry = FALSE) "
+            "OR (attempt_count = 1 "
+            "AND first_failure_code IS NULL "
+            "AND recovered_after_retry = FALSE) "
+            "OR (attempt_count = 2 AND first_failure_code IS NOT NULL)))",
+            name="ck_eval_auxiliary_judgments_attempt_telemetry",
+        ),
+        CheckConstraint(
+            "recovered_after_retry IS NULL "
+            "OR recovered_after_retry = FALSE "
+            "OR status = 'succeeded'",
+            name="ck_eval_auxiliary_judgments_retry_recovery",
+        ),
     )
 
     evaluation_auxiliary_judgment_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
@@ -295,6 +318,10 @@ class EvaluationAuxiliaryJudgment(Base):
     failure_code: Mapped[str | None] = mapped_column(String(100))
     answer_hash: Mapped[str | None] = mapped_column(String(64))
     context_hash: Mapped[str | None] = mapped_column(String(64))
+    attempt_count: Mapped[int | None] = mapped_column(Integer)
+    first_failure_code: Mapped[str | None] = mapped_column(String(100))
+    terminal_reason_code: Mapped[str | None] = mapped_column(String(100))
+    recovered_after_retry: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
