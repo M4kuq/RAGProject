@@ -373,6 +373,39 @@ def test_v2_generation_ablation_overrides_are_applied_only_when_declared() -> No
     assert candidate_settings.ask_rerank_top_n_default == 3
 
 
+def test_b1_confirmation_manifest_preserves_the_frozen_claim_baseline() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "experiments"
+        / "manifests"
+        / "local_rag_accuracy_b1_confirm_dev_v2.example.json"
+    )
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.dataset == "local_accuracy_dev_v1"
+    assert manifest.evaluation_backend == "runtime_qdrant"
+    assert manifest.evaluation_scope == "end_to_end"
+    assert manifest.repeats == 1
+    assert manifest.reranker_models == []
+    assert manifest.generation_profile is not None
+    assert manifest.generation_profile.model == "qwen/qwen3.5-9b"
+    assert manifest.generation_profile.judge_model == "qwen/qwen3.5-9b"
+    assert manifest.generation_profile.temperature == 0.0
+    assert manifest.generation_profile.retry_on_insufficient_evidence is True
+    assert manifest.generation_profile.max_output_chars == 8000
+
+    embedding = manifest.embedding_models[0]
+    profile = manifest.retrieval_profiles[0]
+    assert embedding.model_id == "text-embedding-nomic-embed-text-v1.5"
+    assert embedding.provider == "lmstudio"
+    assert profile.embedding_model == embedding.model_id
+    assert profile.reranker_model is None
+    assert profile.strategy == "dense"
+    assert profile.top_k == 10
+    assert profile.rerank_top_n == 3
+
+
 def test_local_smoke_preflight_reasons_are_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

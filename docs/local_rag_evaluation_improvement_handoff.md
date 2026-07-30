@@ -1,6 +1,6 @@
 # ローカルSLM RAG評価改善 実装引き継ぎ
 
-最終更新: 2026-07-29
+最終更新: 2026-07-30
 
 ## 1. この文書の目的
 
@@ -129,6 +129,39 @@ retrieval、prompt、temperature、datasetを固定した。
   dev／confirmで3回反復し、手動校正とlatency・昇格率を測る独立実験とする。
   Qwen3 Embedding 4BはA2／A3ですでに使用済みである
 
+2026-07-30には、開始時のDocker状態を
+`artifacts/experiments/docker_quiet_window_20260730_0940.json`へ保存し、
+RAGProjectの4サービスだけを稼働させた同一windowでB1／A3を各3回測定した。
+Qwen3.5 9B、temperature 0、cache disabled、dataset、corpus、prompt、
+B1／A3それぞれの凍結manifestを固定した。実行順は
+`B1, A3, A3, B1, B1, A3`である。
+
+| Profile | E2E runs | 3回平均補助Pass | 多数決Pass | Unanswerable | Citation | Completeness | 平均p95 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| B1 | 98 / 108 / 110 | 74.167% | 75.000% | 75.000% | 84.211% | 31.579% | 92.381 s |
+| A3 | 104 / 106 / 112 | 85.000%（欠損をFail扱い） | 85.000% | 75.000% | 100.000% | 33.333% | 145.054 s |
+
+- A3の保守的な3回平均差は`+10.833 pp`
+- case多数決差は`+10.000 pp`、相対改善`+13.333%`
+- 10,000回paired bootstrap 95% CIは`[-7.500, +27.500] pp`
+- exact McNemarは`p=0.423950`
+- p95比は`1.570倍`で2倍上限内
+- 両profileともpipeline failure 0
+- unanswerableは非悪化、citationとcompletenessも非悪化
+- run 106の`local_dev_unanswerable_37`で補助Judgeが1件失敗した。
+  観測値は`34/39`だが、集計では分母から除外せず`34/40`として扱った。
+  他のA3 2 repeatが一致したためcase多数決40件は解決可能
+- run 100／102はそれぞれ`invalid_parallel_measurement`／
+  `invalid_interrupted_measurement`として除外し、削除していない
+
+数値gateは通過したが、Judge失敗が1件残り、CIも0を跨ぐ。このためA3を
+`confirm_dev`へ自動昇格しない。A3は凍結候補のままとし、Phase 1へ進む前に
+初回失敗を監査証跡として保持するbounded Judge retryとterminal reason codeを
+独立ablationとして実装・再確認する。これはretrieval、prompt、output budgetと
+同じ比較へ混ぜない。結果artifactは
+`artifacts/experiments/b1a3-confirm-20260730/`にあり、raw質問、回答、
+retrieved contextは含まない。
+
 このため、「生成品質の悪化」と「測定器の弱さ」は別の変更・別の結果として扱う。
 
 ## 5. 実施順
@@ -139,13 +172,13 @@ retrieval、prompt、temperature、datasetを固定した。
 
 1. A1: `retry_on_insufficient_evidence=false`。完了、不採用
 2. A2: output budget 4,000 token相当。負荷抑制後もlatency gate不合格
-3. A3: output budget 3,000 token相当。既存B1基準ではlatency gate合格、
-   同一windowのB1未測定のため暫定
+3. A3: output budget 3,000 token相当。同一windowのB1／A3各3回では
+   精度・非悪化・latency数値gateを通過したが、Judge 1件失敗により自動昇格なし
 4. A4: output budget 2,850 token相当。Judge 2件失敗とunanswerable非悪化未達で不採用
 
-Phase 0の選択結果はA3である。ただし、これは同一9B補助Judgeによるdev探索と
-負荷抑制下の追加1 repeatであり、候補昇格ではない。同じ確認windowでB1／A3の
-latencyを再測定し、人手校正を含む全gateを満たした場合だけ`confirm_dev`へ進む。
+Phase 0の選択結果はA3である。ただし、同一windowの3 repeatでも補助Judge失敗が
+1件残り、95% CIは0を跨いだため候補昇格ではない。Judge reliabilityを独立して
+改善・再確認し、人手校正を含む全gateを満たした場合だけ`confirm_dev`へ進む。
 
 最低限、以下を満たしてから次へ進む。
 
@@ -454,4 +487,3 @@ Phase 0完了後、B1相当とE2 top-k 20相当を以下で比較する。
 
 「+7.5 pp」という補助値だけを成果にせず、なぜ昇格を見送ったかと、
 どの実験で原因を切り分けたかを主題にする。
-

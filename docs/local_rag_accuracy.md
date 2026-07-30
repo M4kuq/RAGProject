@@ -301,6 +301,69 @@ dev/confirm using three repeats and manual calibration. It should be evaluated
 for latency and escalation cost, not treated as an unproven accuracy
 improvement. Qwen3 Embedding 4B is already used in A2 and A3.
 
+### Three-repeat B1/A3 idle-window confirmation
+
+On 2026-07-30, the previously running non-RAG containers were stopped without
+deleting containers, images, networks, or volumes. The exact reversible state
+is recorded in
+`artifacts/experiments/docker_quiet_window_20260730_0940.json`. The six valid
+end-to-end runs used Qwen3.5 9B, temperature `0.0`, disabled retrieval cache,
+the same 40-case `local_accuracy_dev_v1` dataset, fixed corpus and generation
+prompt, and the frozen B1 or A3 manifest. The controlled order was
+`B1, A3, A3, B1, B1, A3`, which balances profile position across the six-run
+window. Runs `100` and `102` were excluded with explicit
+`invalid_parallel_measurement` and `invalid_interrupted_measurement` reason
+codes; no data was deleted.
+
+| Profile | Repeat | E2E run | Auxiliary pass | Unanswerable | Citation correctness | Completeness | p95 | Pipeline failures |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| B1 | 1 | 98 | 72.500% (29/40) | 12/16 | 84.211% | 31.579% | 105.093 s | 0 |
+| B1 | 2 | 108 | 75.000% (30/40) | 12/16 | 84.211% | 31.579% | 82.864 s | 0 |
+| B1 | 3 | 110 | 75.000% (30/40) | 12/16 | 84.211% | 31.579% | 89.185 s | 0 |
+| A3 | 1 | 104 | 85.000% (34/40) | 12/16 | 100.000% | 33.333% | 155.527 s | 0 |
+| A3 | 2 | 106 | 87.179% observed (34/39); 85.000% conservative (34/40) | 12/15 observed; 12/16 conservative | 100.000% | 33.333% | 128.728 s | 0 |
+| A3 | 3 | 112 | 85.000% (34/40) | 12/16 | 100.000% | 33.333% | 150.908 s | 0 |
+
+Run `106` had one failed auxiliary judgment,
+`local_dev_unanswerable_37` / `judge_failed`. The conservative aggregate counts
+that missing judgment as a failed case instead of silently removing it from the
+denominator. Its other two A3 repeats agree, so all 40 case-majority outcomes
+remain resolvable.
+
+| Three-repeat aggregate | B1 | A3 | Delta / ratio |
+|---|---:|---:|---:|
+| Mean conservative auxiliary pass | 74.167% | 85.000% | **+10.833 pp** |
+| Case-majority pass | 75.000% | 85.000% | **+10.000 pp** |
+| Mean conservative unanswerable accuracy | 75.000% | 75.000% | 0.000 pp |
+| Mean citation correctness | 84.211% | 100.000% | +15.789 pp |
+| Mean answer completeness | 31.579% | 33.333% | +1.754 pp |
+| Mean p95 latency | 92.381 s | 145.054 s | **1.570x** |
+| Pipeline failures | 0 | 0 | 0 |
+
+The 40-case majority comparison produced a `+10.000 pp` absolute change and
+`+13.333%` relative improvement. Its 10,000-sample paired-bootstrap 95%
+confidence interval was `[-7.500, +27.500] pp`, and exact McNemar was
+`p=0.423950`. Each paired repeat was strictly comparable. The candidate passed
+the `+6 pp`, unanswerable, citation, completeness, pipeline, and p95-within-2x
+numeric gates, but the confidence interval includes no improvement and one
+Judge failure remains.
+
+Therefore A3 is **not promoted to `confirm_dev`** by this automatic run. It
+remains the preferred frozen candidate. The next accuracy action is a separate,
+reviewable Judge-reliability ablation: add bounded automatic Judge retry with an
+explicit attempt count and terminal reason code, retain the first failure as
+audit evidence, and repeat confirmation without changing retrieval, prompt, or
+output budget. A second-model or human calibration gate is still required
+before any public accuracy claim.
+
+All 24 prompt-injection-tag observations per profile still record
+`prompt_injection_resisted=not_applicable`. Prompt-injection resistance was not
+used to inflate the accuracy result and remains a separate RAG-31 security
+gate. Gold v2, the default profile, PR #128, and `feature/local-rag-accuracy`
+were not changed. Safe artifacts are stored under
+`artifacts/experiments/b1a3-confirm-20260730/`; they contain no raw question,
+answer, or retrieved-context text.
+
 ## Security follow-up
 
 After local accuracy validation, perform the repository threat-model phase for
@@ -309,4 +372,3 @@ exhaustion, cloud escalation cost attacks, rate limits, daily budgets, and the
 external-LLM data boundary. The repository-grounded plan is documented in
 `docs/security/RAGProject-threat-model.md`. Accuracy promotion and security
 promotion are separate gates.
-
