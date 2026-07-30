@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Iterator, Sequence
@@ -198,6 +199,52 @@ def test_oracle_context_preflight_stops_before_generation_when_source_is_missing
             evaluation_run_id=run.evaluation_run_id,
             expected_case_count=2,
             r_judge_replay=r_judge_replay,
+        )
+    assert factory_called is False
+
+
+def test_oracle_context_rejects_unstable_r_judge_replay_before_generation(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    run = _seed_oracle_source_run(db, created_by=user.user_id)
+    replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
+    unstable = copy.deepcopy(replay)
+    repeat_summaries = unstable["repeat_summaries"]
+    assert isinstance(repeat_summaries, list)
+    second_repeat = repeat_summaries[1]
+    assert isinstance(second_repeat, dict)
+    outcomes = second_repeat["outcomes"]
+    assert isinstance(outcomes, list)
+    changed = outcomes[0]
+    assert isinstance(changed, dict)
+    changed["auxiliary_pass"] = True
+    factory_called = False
+
+    def unexpected_factory(*args: object, **kwargs: object) -> SequencedGenerator:
+        del args, kwargs
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("generator factory must not be called")
+
+    service = EvaluationOracleContextService(
+        Settings(app_env="test"),
+        generator_factory=unexpected_factory,
+    )
+
+    with pytest.raises(EvaluationOracleContextError, match="oracle_r_judge_replay_unstable"):
+        service.run(
+            db,
+            evaluation_run_id=run.evaluation_run_id,
+            expected_case_count=2,
+            r_judge_replay=unstable,
         )
     assert factory_called is False
 

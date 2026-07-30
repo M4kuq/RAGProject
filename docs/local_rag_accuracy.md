@@ -119,6 +119,71 @@ but unanswerable cases regressed from `12/16` to `11/16`. It therefore fails bot
 `+6 pp` evidence requirement and the no-regression hard gate. The default profile is
 unchanged, and Gold v2 remains unopened until a dev candidate passes all gates.
 
+## Dev-only Oracle Context diagnostic (2026-07-30)
+
+Run 112 was diagnosed with the same `qwen/qwen3.5-9b`, temperature `0.0`,
+`generation_max_context_chars=6000`, `generation_max_output_chars=12000`, and
+`generation_max_output_tokens=8192`. The R condition used the frozen answers and the
+case-level decisions from the stable three-repeat Judge replay. The O condition
+replaced only the retrieved context with each dev case's expected evidence source.
+It did not read or inject `expected_answer`.
+
+The first attempted comparison was discarded before use because the older judgments
+stored in the database reported `34/40`, while the stable replay reported `27/40`.
+The accepted diagnostic requires all three replay decisions, answer/context hashes,
+case set, dataset, corpus, and model to match before Oracle generation starts.
+
+| Metric | R: frozen retrieval | O: Oracle Context | Delta |
+|---|---:|---:|---:|
+| Auxiliary Grounded Answer Pass | 67.5% (27/40) | 72.5% (29/40) | +5.0 pp |
+| Answerable auxiliary pass | 75.0% (18/24) | 70.833% (17/24) | -4.167 pp |
+| Unanswerable auxiliary pass | 56.25% (9/16) | 75.0% (12/16) | +18.75 pp |
+| Mean Claim Recall | 0.875 | 1.000 | +0.125 |
+| Mean deterministic Context Utilization | 0.333333 | 0.312500 | -0.020833 |
+| Pipeline failures | 0 | 0 | unchanged |
+
+Answerable transitions were 15 pass/pass, 2 fail/pass, 3 pass/fail, and 4 fail/fail.
+The two Oracle rescues already had all required facts in R, so no answerable rescue
+was classified as a missing-retrieval gap. Seven answerable cases still failed with
+complete Oracle evidence: `local_dev_answerable_02`, `_08`, `_14`, `_16`, `_17`,
+`_20`, and `_24`. Four of these are the answerable prompt-injection cases.
+
+All eight prompt-injection cases failed the composite auxiliary pass in both
+conditions. This does not by itself prove that the injected instruction succeeded;
+the composite can fail on another rubric dimension. Security dimension results must
+remain a separate RAG-31 measurement.
+
+The deterministic Context Utilization value uses exact normalized fact-statement
+matches. It is additive diagnostic evidence, not semantic completeness: for example,
+an auxiliary-pass answer can paraphrase a fact and score zero on this detector. It
+must not replace the auxiliary Judge or human calibration.
+
+The accepted run completed 40/40 comparable cases in 2,438 seconds, with no Judge
+retry recovery and no pipeline failure. The safe artifact contained 40 case records,
+valid answer/context hashes, no forbidden raw-content keys, and zero matches against
+932 frozen raw payload values. The full raw-free artifact is intentionally not
+committed.
+
+Reproducibility fingerprints:
+
+- dataset: `fb28ebfa7faf894d3850131bdb4fe14abe8ce0e6805f3b7806cb846c87905b6e`
+- corpus: `f28554eeab050420119adff43669ad78c9380d395dd9bd131a94c460c0634333`
+- case set: `83a02913a5143a061d61427613d4956b8e6273f73468a019a997ddd620fa5419`
+- generation config: `886564b7237786e113b1acc105b664e041101606c4fbd8700c7a1e5c8615e898`
+- R Judge replay: `5c58833e55b548aeb9225a53b224b4d518dabf717a3f83ea8bc79d60220b7495`
+
+The next local accuracy work should therefore prioritize:
+
+1. dimension-level and human review of the seven Oracle answerable failures;
+2. a fixed-Oracle ablation of evidence grouping and multi-fact answer instructions,
+   without changing retrieval or output budget in the same comparison;
+3. prompt-injection handling as a separate security gate;
+4. only then, position/noise perturbations and retrieval changes.
+
+A 4B generator is not the next accuracy experiment. It would change the generator
+while the 9B generation gap is still unresolved. Evaluate 4B later as an independent
+cost/latency routing candidate with the same frozen cases and no-regression gates.
+
 ### E2/E3 bounded development ablation
 
 Use the focused manifest below before running the remaining Agentic and Graph
