@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -124,8 +124,8 @@ def test_screening_runs_fixed_profiles_and_selects_guardrail_safe_candidate() ->
     _FakeOracleService.calls.clear()
     service = EvaluationOraclePromptScreeningService(
         Settings(app_env="test"),
-        replay_service_factory=_FakeReplayService,
-        oracle_service_factory=_FakeOracleService,
+        replay_service_factory=cast(Any, _FakeReplayService),
+        oracle_service_factory=cast(Any, _FakeOracleService),
     )
 
     summary = service.run(
