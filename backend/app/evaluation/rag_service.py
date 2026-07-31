@@ -458,8 +458,8 @@ class EvaluationRagQuestionService:
     def __init__(self, service: RagService, graph_service: GraphRagService | None = None) -> None:
         self.service = service
         self.graph_service = graph_service or GraphRagService(service)
-        self.generation_prompt_profile: GenerationPromptProfile = (
-            resolve_generation_prompt_profile(service.settings.generation_prompt_profile)
+        self.generation_prompt_profile: GenerationPromptProfile = resolve_generation_prompt_profile(
+            service.settings.generation_prompt_profile
         )
 
     def _generate_answer(

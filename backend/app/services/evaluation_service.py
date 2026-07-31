@@ -993,9 +993,7 @@ class EvaluationService:
                     "generation_max_output_chars": (self.settings.generation_max_output_chars),
                     "generation_max_output_tokens": (self.settings.generation_max_output_tokens),
                     "generation_prompt_profile": generation_prompt_profile.name,
-                    "generation_prompt_fingerprint": (
-                        generation_prompt_profile.prompt_fingerprint
-                    ),
+                    "generation_prompt_fingerprint": (generation_prompt_profile.prompt_fingerprint),
                     "generation_retry_on_insufficient_evidence": (
                         self.settings.generation_retry_on_insufficient_evidence
                     ),
@@ -3767,9 +3765,7 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "generation_max_output_chars": retrieval_settings.get("generation_max_output_chars"),
         "generation_max_output_tokens": retrieval_settings.get("generation_max_output_tokens"),
         "generation_prompt_profile": retrieval_settings.get("generation_prompt_profile"),
-        "generation_prompt_fingerprint": retrieval_settings.get(
-            "generation_prompt_fingerprint"
-        ),
+        "generation_prompt_fingerprint": retrieval_settings.get("generation_prompt_fingerprint"),
         "generation_retry_on_insufficient_evidence": retrieval_settings.get(
             "generation_retry_on_insufficient_evidence"
         ),

@@ -2170,9 +2170,7 @@ def test_compare_runs_rejects_generation_prompt_fingerprint_mismatch() -> None:
                 )
 
         assert comparison.comparability.status == "not_comparable"
-        assert comparison.comparability.reason_codes == [
-            "generation_prompt_fingerprint_mismatch"
-        ]
+        assert comparison.comparability.reason_codes == ["generation_prompt_fingerprint_mismatch"]
     finally:
         engine.dispose()
 

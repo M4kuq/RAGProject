@@ -411,8 +411,7 @@ def test_v2_generation_prompt_profile_is_applied_to_candidate_settings() -> None
     )
 
     assert (
-        candidate_settings.generation_prompt_profile
-        == "multi_fact_coverage_instruction_guard_v1"
+        candidate_settings.generation_prompt_profile == "multi_fact_coverage_instruction_guard_v1"
     )
 
 
