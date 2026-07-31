@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import median
-from typing import Any
+from typing import Any, Literal
 
 from app.ingest.extractors.base import ExtractedDocument, ExtractedPage
 from app.ingest.hashing import chunk_hash, normalize_chunk_text
 
 _TOKEN_RE = re.compile(r"\S+")
+
+ChunkTokenizerProfile = Literal["whitespace_v1", "japanese_aware_v1"]
+ChunkBoundaryProfile = Literal["fixed_v1", "structure_v1"]
 
 
 class ChunkingError(RuntimeError):
@@ -23,6 +28,8 @@ class ChunkingError(RuntimeError):
 class ChunkingConfig:
     chunk_size_tokens: int = 512
     chunk_overlap_tokens: int = 128
+    tokenizer_profile: ChunkTokenizerProfile = "whitespace_v1"
+    boundary_profile: ChunkBoundaryProfile = "fixed_v1"
 
     def __post_init__(self) -> None:
         if self.chunk_size_tokens <= 0:
@@ -31,6 +38,10 @@ class ChunkingConfig:
             raise ValueError("chunk_overlap_tokens must not be negative")
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
             raise ValueError("chunk_overlap_tokens must be smaller than chunk_size_tokens")
+        if self.tokenizer_profile not in {"whitespace_v1", "japanese_aware_v1"}:
+            raise ValueError("unsupported tokenizer_profile")
+        if self.boundary_profile not in {"fixed_v1", "structure_v1"}:
+            raise ValueError("unsupported boundary_profile")
 
 
 @dataclass(frozen=True)
@@ -54,6 +65,7 @@ class _Token:
     page_number: int | None
     section_title: str | None
     metadata: dict[str, object]
+    separator_before: str = " "
 
 
 class FixedTokenChunker:
@@ -61,17 +73,26 @@ class FixedTokenChunker:
         self.config = config
 
     def chunk(self, document: ExtractedDocument, *, document_version_id: int) -> list[Chunk]:
-        tokens = _document_tokens(document.pages)
+        tokens = _document_tokens(
+            document.pages,
+            tokenizer_profile=self.config.tokenizer_profile,
+        )
         if not tokens:
             raise ChunkingError("no_chunks_created", "No chunks were created.")
 
         chunks: list[Chunk] = []
         step = self.config.chunk_size_tokens - self.config.chunk_overlap_tokens
-        for segment in _token_segments(tokens):
+        for segment in _token_segments(
+            tokens,
+            boundary_profile=self.config.boundary_profile,
+        ):
             start = 0
             while start < len(segment):
                 window = segment[start : start + self.config.chunk_size_tokens]
-                content_text = " ".join(token.value for token in window).strip()
+                content_text = _render_window(
+                    window,
+                    tokenizer_profile=self.config.tokenizer_profile,
+                )
                 normalized_text = normalize_chunk_text(content_text)
                 if normalized_text:
                     chunk_index = len(chunks)
@@ -88,7 +109,7 @@ class FixedTokenChunker:
                                 chunk_index=chunk_index,
                             ),
                             content_text=content_text,
-                            token_count=estimate_token_count(content_text),
+                            token_count=len(window),
                             char_count=len(content_text),
                             page_from=min(page_numbers) if page_numbers else None,
                             page_to=max(page_numbers) if page_numbers else None,
@@ -149,7 +170,30 @@ def estimate_token_count(text: str) -> int:
     return len(_TOKEN_RE.findall(text))
 
 
-def _document_tokens(pages: list[ExtractedPage]) -> list[_Token]:
+def chunk_profile_fingerprint(config: ChunkingConfig) -> str:
+    payload = {
+        "schema_version": "rag60.chunk_profile.v1",
+        "chunk_size_tokens": config.chunk_size_tokens,
+        "chunk_overlap_tokens": config.chunk_overlap_tokens,
+        "tokenizer_profile": config.tokenizer_profile,
+        "boundary_profile": config.boundary_profile,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _document_tokens(
+    pages: list[ExtractedPage],
+    *,
+    tokenizer_profile: ChunkTokenizerProfile,
+) -> list[_Token]:
+    if tokenizer_profile == "japanese_aware_v1":
+        return _japanese_aware_document_tokens(pages)
     tokens: list[_Token] = []
     for page in pages:
         text = _normalize_page_text(page.text)
@@ -165,8 +209,68 @@ def _document_tokens(pages: list[ExtractedPage]) -> list[_Token]:
     return tokens
 
 
+def _japanese_aware_document_tokens(pages: list[ExtractedPage]) -> list[_Token]:
+    tokens: list[_Token] = []
+    for page in pages:
+        text = _normalize_page_text(page.text)
+        pending_separator = "\n" if tokens else ""
+        index = 0
+        while index < len(text):
+            if text[index].isspace():
+                whitespace_start = index
+                while index < len(text) and text[index].isspace():
+                    index += 1
+                whitespace = text[whitespace_start:index]
+                pending_separator = "\n" if "\n" in whitespace else " "
+                continue
+            if ord(text[index]) < 128:
+                ascii_start = index
+                while (
+                    index < len(text)
+                    and not text[index].isspace()
+                    and ord(text[index]) < 128
+                ):
+                    index += 1
+                ascii_run = text[ascii_start:index]
+                for offset in range(0, len(ascii_run), 4):
+                    value = ascii_run[offset : offset + 4]
+                    tokens.append(
+                        _Token(
+                            value=value,
+                            page_number=page.page_number,
+                            section_title=page.section_title,
+                            metadata=page.metadata,
+                            separator_before=pending_separator if offset == 0 else "",
+                        )
+                    )
+                pending_separator = ""
+                continue
+            tokens.append(
+                _Token(
+                    value=text[index],
+                    page_number=page.page_number,
+                    section_title=page.section_title,
+                    metadata=page.metadata,
+                    separator_before=pending_separator,
+                )
+            )
+            pending_separator = ""
+            index += 1
+    return tokens
+
+
 def _normalize_page_text(text: str) -> str:
     return "\n".join(line.strip() for line in text.splitlines()).strip()
+
+
+def _render_window(
+    tokens: list[_Token],
+    *,
+    tokenizer_profile: ChunkTokenizerProfile,
+) -> str:
+    if tokenizer_profile == "whitespace_v1":
+        return " ".join(token.value for token in tokens).strip()
+    return "".join(f"{token.separator_before}{token.value}" for token in tokens).strip()
 
 
 def _first_section_title(tokens: list[_Token]) -> str | None:
@@ -176,13 +280,22 @@ def _first_section_title(tokens: list[_Token]) -> str | None:
     return None
 
 
-def _token_segments(tokens: list[_Token]) -> list[list[_Token]]:
+def _token_segments(
+    tokens: list[_Token],
+    *,
+    boundary_profile: ChunkBoundaryProfile,
+) -> list[list[_Token]]:
     segments: list[list[_Token]] = []
     current: list[_Token] = []
     current_key: tuple[object, ...] | None = None
     has_current_key = False
     for token in tokens:
         key = _metadata_boundary_key(token.metadata)
+        if key is None and boundary_profile == "structure_v1":
+            if token.section_title:
+                key = ("section", token.section_title)
+            elif token.page_number is not None:
+                key = ("page", token.page_number)
         if current and has_current_key and key != current_key:
             segments.append(current)
             current = []
