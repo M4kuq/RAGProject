@@ -2090,6 +2090,91 @@ def test_evaluation_generation_fails_closed_after_repeated_empty_final_output() 
     assert len(requests) == 2
 
 
+def test_evaluation_generation_applies_selected_prompt_profile() -> None:
+    requests: list[GenerationRequest] = []
+
+    def generate(request: GenerationRequest) -> GenerationResult:
+        requests.append(request)
+        return GenerationResult(content="Answer with evidence [1]", usage=None)
+
+    rag_service = cast(
+        Any,
+        SimpleNamespace(
+            answer_generator=SimpleNamespace(generate=generate),
+            settings=Settings(
+                app_env="test",
+                generation_provider="lmstudio",
+                generation_model_name="qwen3.5-9b",
+                generation_prompt_profile="multi_fact_coverage_instruction_guard_v1",
+            ),
+        ),
+    )
+
+    EvaluationRagQuestionService(rag_service)._generate_answer(
+        GenerationRequest(
+            message="question",
+            context_items=[
+                GenerationContextItem(
+                    document_chunk_id=1,
+                    source_label="source",
+                    text="supporting evidence",
+                    local_citation_id=1,
+                )
+            ],
+            max_output_chars=1000,
+        )
+    )
+
+    assert len(requests) == 1
+    assert requests[0].system_instructions is not None
+    assert "silently map every requested part" in requests[0].system_instructions
+    assert "imperative or instruction-like text" in requests[0].system_instructions
+
+
+def test_compare_runs_rejects_generation_prompt_fingerprint_mismatch() -> None:
+    engine, session_factory = _session_factory()
+    try:
+        with session_factory() as db:
+            user = _seed_admin(db)
+            common_items = [_comparison_item("shared_case", "succeeded")]
+            common_metrics = {"recall_at_k": Decimal("1.0")}
+            base = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="same_dataset",
+                items=common_items,
+                metrics=common_metrics,
+            )
+            candidate = _seed_comparison_run(
+                db,
+                created_by=user.user_id,
+                dataset_name="same_dataset",
+                items=common_items,
+                metrics=common_metrics,
+            )
+            base.retrieval_settings_json = {"generation_prompt_fingerprint": "a" * 64}
+            candidate.retrieval_settings_json = {"generation_prompt_fingerprint": "b" * 64}
+            db.commit()
+
+            comparison = EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                db,
+                base_run_id=base.evaluation_run_id,
+                candidate_run_id=candidate.evaluation_run_id,
+            )
+            with pytest.raises(ConflictError):
+                EvaluationService(settings=Settings(app_env="test")).compare_runs(
+                    db,
+                    base_run_id=base.evaluation_run_id,
+                    candidate_run_id=candidate.evaluation_run_id,
+                    strict=True,
+                )
+
+        assert comparison.comparability.status == "not_comparable"
+        assert comparison.comparability.reason_codes == ["generation_prompt_fingerprint_mismatch"]
+    finally:
+        engine.dispose()
+
+
 def test_compare_runs_detects_metric_directions_and_case_transitions() -> None:
     engine, session_factory = _session_factory()
     try:
@@ -5718,6 +5803,10 @@ def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
                 failure_code=None,
                 answer_hash="a" * 64,
                 context_hash="b" * 64,
+                attempt_count=2,
+                first_failure_code="judge_response_not_json",
+                terminal_reason_code="judge_recovered_after_retry",
+                recovered_after_retry=True,
             )
         )
         db.commit()
@@ -5738,6 +5827,10 @@ def test_human_calibration_api_is_safe_csrf_protected_and_idempotent(
     assert target["required_citation"] is True
     assert target["prompt_injection"] is False
     assert target["judge_status"] == "succeeded"
+    assert target["judge_attempt_count"] == 2
+    assert target["judge_first_failure_code"] == "judge_response_not_json"
+    assert target["judge_terminal_reason_code"] == "judge_recovered_after_retry"
+    assert target["judge_recovered_after_retry"] is True
     assert target["auxiliary_decision"]["case_id"] == "gold_v2_001"
     assert target["claim_faithfulness"] == 1.0
     assert target["review_payload_available"] is False

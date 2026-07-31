@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -34,6 +34,32 @@ _JUDGE_SYSTEM_INSTRUCTIONS = (
     "Return only JSON matching the requested schema."
 )
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+_MAX_JUDGE_ATTEMPTS = 2
+
+JudgeFailureCode: TypeAlias = Literal[
+    "judge_context_missing",
+    "judge_generation_auth",
+    "judge_generation_connection",
+    "judge_generation_empty_content",
+    "judge_generation_empty_final",
+    "judge_generation_failed",
+    "judge_generation_http_error",
+    "judge_generation_invalid_response",
+    "judge_generation_rate_limited",
+    "judge_generation_timeout",
+    "judge_response_case_mismatch",
+    "judge_response_claims_missing",
+    "judge_response_invalid",
+    "judge_response_not_json",
+    "judge_response_schema_invalid",
+]
+JudgeTerminalReasonCode: TypeAlias = (
+    Literal[
+        "judge_succeeded_first_attempt",
+        "judge_recovered_after_retry",
+    ]
+    | JudgeFailureCode
+)
 
 
 class ClaimSupportDecision(BaseModel):
@@ -113,6 +139,10 @@ class EvaluationJudgeResult:
     claim_faithfulness: float | None
     answer_hash: str
     context_hash: str
+    attempt_count: int
+    first_failure_code: JudgeFailureCode | None
+    terminal_reason_code: JudgeTerminalReasonCode
+    recovered_after_retry: bool
 
 
 @dataclass(frozen=True)
@@ -124,7 +154,18 @@ class _CaseContract:
 
 
 class EvaluationClaimJudgeError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        *,
+        attempt_count: int,
+        first_failure_code: JudgeFailureCode,
+        terminal_reason_code: JudgeFailureCode,
+    ) -> None:
+        super().__init__("judge_failed")
+        self.attempt_count = attempt_count
+        self.first_failure_code = first_failure_code
+        self.terminal_reason_code = terminal_reason_code
+        self.recovered_after_retry = False
 
 
 class EvaluationClaimJudgeService:
@@ -230,12 +271,17 @@ class EvaluationClaimJudgeService:
             },
         )
         if not request.context_items:
-            raise EvaluationClaimJudgeError("judge_context_missing")
+            raise EvaluationClaimJudgeError(
+                attempt_count=0,
+                first_failure_code="judge_context_missing",
+                terminal_reason_code="judge_context_missing",
+            )
 
         output: ClaimJudgeOutput | None = None
         decision: AuxiliaryJudgeDecision | None = None
         auxiliary_pass: bool | None = None
-        for attempt in range(2):
+        attempt_failures: list[JudgeFailureCode] = []
+        for attempt in range(_MAX_JUDGE_ATTEMPTS):
             current_request = request
             if attempt == 1:
                 current_request = replace(
@@ -267,12 +313,22 @@ class EvaluationClaimJudgeService:
                 decision = candidate_decision
                 auxiliary_pass = candidate_pass
                 break
-            except (AnswerGenerationError, ValidationError, ValueError, json.JSONDecodeError):
+            except (
+                AnswerGenerationError,
+                ValidationError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                attempt_failures.append(_judge_failure_code(exc))
                 output = None
                 decision = None
                 auxiliary_pass = None
         if output is None or decision is None or auxiliary_pass is None:
-            raise EvaluationClaimJudgeError("judge_failed")
+            raise EvaluationClaimJudgeError(
+                attempt_count=len(attempt_failures),
+                first_failure_code=attempt_failures[0],
+                terminal_reason_code=attempt_failures[-1],
+            )
 
         claim_faithfulness = (
             round(
@@ -288,6 +344,14 @@ class EvaluationClaimJudgeService:
             claim_faithfulness=claim_faithfulness,
             answer_hash=_sha256(answer_text),
             context_hash=_sha256("\x00".join(context)),
+            attempt_count=len(attempt_failures) + 1,
+            first_failure_code=(attempt_failures[0] if attempt_failures else None),
+            terminal_reason_code=(
+                "judge_recovered_after_retry"
+                if attempt_failures
+                else "judge_succeeded_first_attempt"
+            ),
+            recovered_after_retry=bool(attempt_failures),
         )
 
 
@@ -373,6 +437,39 @@ def _json_payload(value: str) -> str:
     if start < 0 or end < start:
         raise ValueError("judge response is not JSON")
     return normalized[start : end + 1]
+
+
+def _judge_failure_code(
+    exc: AnswerGenerationError | ValidationError | ValueError | json.JSONDecodeError,
+) -> JudgeFailureCode:
+    if isinstance(exc, AnswerGenerationError):
+        category = exc.error_category
+        generation_codes: dict[str, JudgeFailureCode] = {
+            "auth": "judge_generation_auth",
+            "connection": "judge_generation_connection",
+            "empty_content": "judge_generation_empty_content",
+            "empty_final": "judge_generation_empty_final",
+            "invalid_response": "judge_generation_invalid_response",
+            "rate_limited": "judge_generation_rate_limited",
+            "timeout": "judge_generation_timeout",
+        }
+        if category in generation_codes:
+            return generation_codes[category]
+        if category is not None and (
+            category == "http_error" or re.fullmatch(r"http_[1-5][0-9]{2}", category)
+        ):
+            return "judge_generation_http_error"
+        return "judge_generation_failed"
+    if isinstance(exc, json.JSONDecodeError):
+        return "judge_response_not_json"
+    if isinstance(exc, ValidationError):
+        return "judge_response_schema_invalid"
+    safe_value_error_codes: dict[str, JudgeFailureCode] = {
+        "judge response is not JSON": "judge_response_not_json",
+        "judge_case_mismatch": "judge_response_case_mismatch",
+        "judge_claims_missing": "judge_response_claims_missing",
+    }
+    return safe_value_error_codes.get(str(exc), "judge_response_invalid")
 
 
 def _sha256(value: str) -> str:

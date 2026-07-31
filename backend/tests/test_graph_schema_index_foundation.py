@@ -590,7 +590,7 @@ def test_graph_system_settings_defaults_are_safe() -> None:
 def test_graph_postgres_schema_constraints_indexes_and_seed_settings(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0022_eval_reliability"
+    assert version == "0023_eval_judge_retry"
 
     expected_tables = {
         "graph_entities",

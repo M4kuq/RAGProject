@@ -369,8 +369,50 @@ def test_v2_generation_ablation_overrides_are_applied_only_when_declared() -> No
 
     assert candidate_settings.generation_retry_on_insufficient_evidence is False
     assert candidate_settings.generation_max_output_chars == 8000
+    assert candidate_settings.generation_prompt_profile == "baseline"
     assert candidate_settings.ask_top_k_default == 20
     assert candidate_settings.ask_rerank_top_n_default == 3
+
+
+def test_v2_generation_prompt_profile_is_applied_to_candidate_settings() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "experiments"
+        / "manifests"
+        / "local_rag_accuracy_e2_output_budget_3k_dev_v2.example.json"
+    )
+    manifest = load_manifest(manifest_path)
+    assert manifest.generation_profile is not None
+    generation_profile = manifest.generation_profile.model_copy(
+        update={"prompt_profile": "multi_fact_coverage_instruction_guard_v1"}
+    )
+    embedding = manifest.embedding_models[0]
+    availability = ModelAvailability(
+        model_id=embedding.model_id,
+        model_type=ModelKind.EMBEDDING,
+        provider=embedding.provider,
+        status="available",
+        reason_codes=("available",),
+        required=True,
+        download_policy=DownloadPolicy.NEVER,
+        expected_dimension=2560,
+        actual_dimension=2560,
+    )
+
+    candidate_settings = _settings_for_candidate(
+        Settings(),
+        embedding,
+        manifest.reranker_models[0],
+        availability,
+        manifest.experiment_name,
+        generation_profile=generation_profile,
+        profile=manifest.retrieval_profiles[0],
+    )
+
+    assert (
+        candidate_settings.generation_prompt_profile == "multi_fact_coverage_instruction_guard_v1"
+    )
 
 
 def test_b1_confirmation_manifest_preserves_the_frozen_claim_baseline() -> None:

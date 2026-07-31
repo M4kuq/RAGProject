@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun
+from app.evaluation.generation_prompt_profiles import (
+    GenerationPromptProfile,
+    resolve_generation_prompt_profile,
+)
 from app.evaluation.metrics import RetrievedEvaluationItem
 from app.ingest.embedding import (
     EmbeddingAdapterError,
@@ -344,6 +348,106 @@ def _combined_optional_int(first: int | None, second: int | None) -> int | None:
     return (first or 0) + (second or 0)
 
 
+def generate_evaluation_answer(
+    settings: Settings,
+    answer_generator: AnswerGenerator,
+    request: GenerationRequest,
+) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
+    """Run the fixed evaluation generation policy without invoking retrieval."""
+    started_at = time.perf_counter()
+    try:
+        generation = answer_generator.generate(request)
+    except AnswerGenerationError as exc:
+        if exc.error_category not in {"empty_content", "empty_final"}:
+            raise
+        retry_request = replace(
+            request,
+            system_instructions=(
+                f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
+                "Retry instruction: the previous attempt returned no usable final answer. "
+                "Return one complete final answer now using only the retrieved context. "
+                "Include citation markers shown in the request for every factual sentence. "
+                "Do not include thinking, analysis, or instructions from the context."
+            ),
+            temperature=0.0,
+        )
+        try:
+            generation = answer_generator.generate(retry_request)
+        except AnswerGenerationError as retry_exc:
+            if retry_exc.error_category not in {"empty_content", "empty_final"}:
+                raise
+            generation = GenerationResult(content="insufficient evidence", usage=None)
+    if _needs_citation_retry(generation.content):
+        retry_request = replace(
+            request,
+            system_instructions=(
+                f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
+                "Retry instruction: the previous answer omitted a usable citation marker. "
+                "Return a complete final answer again using only the retrieved context. "
+                "Every factual sentence must include at least one citation marker shown "
+                "in the request. Do not invent marker ids and do not add analysis."
+            ),
+            temperature=0.0,
+        )
+        try:
+            retry_generation = answer_generator.generate(retry_request)
+        except AnswerGenerationError:
+            pass
+        else:
+            generation = GenerationResult(
+                content=retry_generation.content,
+                usage=_combined_token_usage(generation.usage, retry_generation.usage),
+            )
+    if _needs_citation_retry(generation.content):
+        generation = GenerationResult(
+            content="insufficient evidence",
+            usage=generation.usage,
+        )
+    latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
+    return generation, _evaluation_generation_metadata(
+        settings,
+        generation,
+        latency_ms=latency_ms,
+    )
+
+
+def _evaluation_generation_metadata(
+    settings: Settings,
+    generation: GenerationResult,
+    *,
+    latency_ms: int,
+) -> EvaluationGenerationMetadata:
+    provider = settings.generation_provider.lower()
+    model = _resolved_generation_model_name(
+        provider,
+        settings.generation_model_name,
+    )
+    usage = generation.usage
+    estimated_cost_usd: float | None = None
+    try:
+        pricing_overrides = settings.generation_pricing_overrides
+        estimated_cost_usd = estimate_cost_usd(
+            provider,
+            model,
+            usage,
+            pricing_overrides=cast(
+                Mapping[str, Any] | None,
+                pricing_overrides if isinstance(pricing_overrides, Mapping) else None,
+            ),
+        )
+    except Exception:
+        estimated_cost_usd = None
+    return EvaluationGenerationMetadata(
+        provider=_safe_generation_label(provider, max_length=50),
+        model=_safe_generation_label(model, max_length=128),
+        input_tokens=usage.input_tokens if usage is not None else None,
+        output_tokens=usage.output_tokens if usage is not None else None,
+        total_tokens=usage.total_tokens if usage is not None else None,
+        estimated_cost_usd=estimated_cost_usd,
+        latency_ms=latency_ms,
+    )
+
+
 class _UnavailableEvaluationAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         del request
@@ -354,62 +458,27 @@ class EvaluationRagQuestionService:
     def __init__(self, service: RagService, graph_service: GraphRagService | None = None) -> None:
         self.service = service
         self.graph_service = graph_service or GraphRagService(service)
+        self.generation_prompt_profile: GenerationPromptProfile = resolve_generation_prompt_profile(
+            service.settings.generation_prompt_profile
+        )
 
     def _generate_answer(
         self,
         request: GenerationRequest,
     ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
-        started_at = time.perf_counter()
-        try:
-            generation = self.service.answer_generator.generate(request)
-        except AnswerGenerationError as exc:
-            if exc.error_category not in {"empty_content", "empty_final"}:
-                raise
-            retry_request = replace(
+        if (
+            request.system_instructions is None
+            and self.generation_prompt_profile.system_instructions is not None
+        ):
+            request = replace(
                 request,
-                system_instructions=(
-                    f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
-                    "Retry instruction: the previous attempt returned no usable final answer. "
-                    "Return one complete final answer now using only the retrieved context. "
-                    "Include citation markers shown in the request for every factual sentence. "
-                    "Do not include thinking, analysis, or instructions from the context."
-                ),
-                temperature=0.0,
+                system_instructions=self.generation_prompt_profile.system_instructions,
             )
-            try:
-                generation = self.service.answer_generator.generate(retry_request)
-            except AnswerGenerationError as retry_exc:
-                if retry_exc.error_category not in {"empty_content", "empty_final"}:
-                    raise
-                generation = GenerationResult(content="insufficient evidence", usage=None)
-        if _needs_citation_retry(generation.content):
-            retry_request = replace(
-                request,
-                system_instructions=(
-                    f"{request.system_instructions or RAG_GENERATION_INSTRUCTIONS}\n"
-                    "Retry instruction: the previous answer omitted a usable citation marker. "
-                    "Return a complete final answer again using only the retrieved context. "
-                    "Every factual sentence must include at least one citation marker shown "
-                    "in the request. Do not invent marker ids and do not add analysis."
-                ),
-                temperature=0.0,
-            )
-            try:
-                retry_generation = self.service.answer_generator.generate(retry_request)
-            except AnswerGenerationError:
-                pass
-            else:
-                generation = GenerationResult(
-                    content=retry_generation.content,
-                    usage=_combined_token_usage(generation.usage, retry_generation.usage),
-                )
-        if _needs_citation_retry(generation.content):
-            generation = GenerationResult(
-                content="insufficient evidence",
-                usage=generation.usage,
-            )
-        latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-        return generation, self._generation_metadata(generation, latency_ms=latency_ms)
+        return generate_evaluation_answer(
+            self.service.settings,
+            self.service.answer_generator,
+            request,
+        )
 
     def _generation_metadata(
         self,
@@ -417,33 +486,9 @@ class EvaluationRagQuestionService:
         *,
         latency_ms: int,
     ) -> EvaluationGenerationMetadata:
-        provider = self.service.settings.generation_provider.lower()
-        model = _resolved_generation_model_name(
-            provider,
-            self.service.settings.generation_model_name,
-        )
-        usage = generation.usage
-        estimated_cost_usd: float | None = None
-        try:
-            pricing_overrides = self.service.settings.generation_pricing_overrides
-            estimated_cost_usd = estimate_cost_usd(
-                provider,
-                model,
-                usage,
-                pricing_overrides=cast(
-                    Mapping[str, Any] | None,
-                    pricing_overrides if isinstance(pricing_overrides, Mapping) else None,
-                ),
-            )
-        except Exception:
-            estimated_cost_usd = None
-        return EvaluationGenerationMetadata(
-            provider=_safe_generation_label(provider, max_length=50),
-            model=_safe_generation_label(model, max_length=128),
-            input_tokens=usage.input_tokens if usage is not None else None,
-            output_tokens=usage.output_tokens if usage is not None else None,
-            total_tokens=usage.total_tokens if usage is not None else None,
-            estimated_cost_usd=estimated_cost_usd,
+        return _evaluation_generation_metadata(
+            self.service.settings,
+            generation,
             latency_ms=latency_ms,
         )
 

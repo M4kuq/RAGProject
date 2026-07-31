@@ -881,6 +881,10 @@ class EvaluationHumanCalibrationTarget(BaseModel):
     prompt_injection: bool
     judge_status: Literal["succeeded", "failed", "missing"] = "missing"
     judge_failure_code: str | None = None
+    judge_attempt_count: int | None = Field(default=None, ge=0, le=2)
+    judge_first_failure_code: str | None = None
+    judge_terminal_reason_code: str | None = None
+    judge_recovered_after_retry: bool | None = None
     auxiliary_decision: AuxiliaryJudgeDecision | None = None
     claim_faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
     generated_answer: str | None = None

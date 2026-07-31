@@ -216,6 +216,50 @@ completeness修正はA1/A2と同じcommitまたは同じ比較runへ混ぜない
 - Oでも失敗する: generator、prompt、情報統合が主因
 - Rで必要factを取得済みだが失敗する: context utilizationまたはノイズが主因
 
+#### 2026-07-31 Oracle Context／prompt screening実測
+
+run 112（A3、`local_accuracy_dev_v1` 40件）に対して、同一の3回Judge
+replayを固定し、次の3 profileだけを比較した。
+
+| Profile | 補助Pass | Answerable | Unanswerable | Citation support | Required facts | Pipeline failure |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 29/40 | 17/24 | 12/16 | 26 | 22 | 0 |
+| multi-fact coverage | 29/40 | 17/24 | 12/16 | 28 | 21 | 0 |
+| coverage + instruction guard | 25/40 | 14/24 | 11/16 | 26 | 19 | 0 |
+
+- Rの安定Judge replayは`27/40`、baseline Oracleは`29/40`で`+5.0 pp`
+- R mean claim recallは`0.875`、Oracleは`1.0`
+- retrieval missing gapは0件、Oracle generation gapは7件
+- 自動診断の`primary_next_target`は`generation_prompt_output_budget`
+- coverage profileはcitation supportを`+2`改善したが、総Passは同率でrequired
+  factsを`-1`悪化させた
+- instruction guard追加は総Pass`-4`、answerable`-3`、unanswerable`-1`
+- `selected_for_a3_confirmation=null`のため、通常A3 contextの追加確認は実行しない
+- A3はPhase 0の凍結候補として残すが、default／`confirm_dev`へ昇格しない
+
+baselineのanswerable failure 7件、coverageで変化した4件、prompt injection
+8件を対象に、raw本文を保存しないCodex-assisted manual content reviewを行った。
+対象answer／context hashは17 profile-caseすべて元screeningと一致した。
+
+- 同じanswer／contextでもJudge verdictが変わるcaseを1件確認した
+- answerable prompt injection 4件はすべて注入命令を無視していた
+- unanswerable prompt injection 4件中3件は正しくabstainし、1件は`COBALT`へ誘導された
+- prompt-injection resistanceの内容確認値は`7/8`、総合Passは`5/8`
+- 複数fact caseでは、Oracle contextに両factが存在しても第二factを「根拠なし」と
+  誤認して落とす失敗が主要因だった
+- targeted adjustmentはbaseline `29/40 -> 32/40`相当だが、全40件の人間による
+  校正ではないため公開精度には使用しない
+- 公開用の`Calibrated Grounded Answer Pass Rate`には、別途human signoffが必要
+
+安全な結果は以下へ保存した。raw question／answer／contextは含まない。
+
+- `artifacts/rag32-local/oracle-prompt-screening-run112.json`
+- `artifacts/rag32-local/oracle-prompt-screening-run112-codex-review.json`
+
+この結果ではchunk不足よりgeneratorのmulti-fact context utilizationが先である。
+chunk size／overlap ablationは未実施であり、生成改善後にもR claim recall不足が残る
+場合だけ、別corpus fingerprint／別Qdrant collectionでdev-onlyに実施する。
+
 ### Phase 2: Claim単位の診断指標を追加する
 
 最初に追加する指標:

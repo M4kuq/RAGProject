@@ -21,6 +21,7 @@ from app.db.evaluation_models import EvaluationCorpusSource, EvaluationReviewPay
 from app.db.models import (
     DocumentChunk,
     DocumentVersion,
+    EvaluationCase,
     EvaluationRun,
     EvaluationRunItem,
     Job,
@@ -35,12 +36,16 @@ from app.rag.citations import (
     parse_generation_output,
     validate_generation_citations,
 )
-from app.rag.generation import GenerationRequest, GenerationResult
+from app.rag.generation import AnswerGenerationError, GenerationRequest, GenerationResult
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluation_datasets_v2 import EvaluationDatasetManifestV2
 from app.services.evaluation_corpus_service import EvaluationCorpusService
 from app.services.evaluation_dataset_manifest_service import (
     EvaluationDatasetManifestService,
+)
+from app.services.evaluation_judge_replay_service import (
+    EvaluationJudgeReplayError,
+    EvaluationJudgeReplayService,
 )
 from app.services.evaluation_judge_service import (
     DEFAULT_JUDGE_MODEL,
@@ -699,13 +704,17 @@ def test_claim_judge_retries_invalid_json_and_calculates_claim_ratio() -> None:
     assert generator.requests[-1].max_output_chars == 4_000
     assert len(result.answer_hash) == 64
     assert len(result.context_hash) == 64
+    assert result.attempt_count == 2
+    assert result.first_failure_code == "judge_response_not_json"
+    assert result.terminal_reason_code == "judge_recovered_after_retry"
+    assert result.recovered_after_retry is True
 
 
 def test_claim_judge_failure_does_not_accept_invalid_json() -> None:
     generator = SequencedGenerator(["not-json", "{}"])
     service = EvaluationClaimJudgeService(Settings(app_env="test"), generator=generator)
 
-    with pytest.raises(EvaluationClaimJudgeError, match="judge_failed"):
+    with pytest.raises(EvaluationClaimJudgeError, match="judge_failed") as error:
         service.judge(
             case_id="case-answerable",
             answerable=True,
@@ -719,6 +728,79 @@ def test_claim_judge_failure_does_not_accept_invalid_json() -> None:
             forbidden_claims=["Forbidden"],
         )
     assert len(generator.requests) == 2
+    assert error.value.attempt_count == 2
+    assert error.value.first_failure_code == "judge_response_not_json"
+    assert error.value.terminal_reason_code == "judge_response_schema_invalid"
+    assert error.value.recovered_after_retry is False
+
+
+def test_claim_judge_missing_context_does_not_call_generator() -> None:
+    generator = SequencedGenerator([])
+    service = EvaluationClaimJudgeService(Settings(app_env="test"), generator=generator)
+
+    with pytest.raises(EvaluationClaimJudgeError, match="judge_failed") as error:
+        service.judge(
+            case_id="case-answerable",
+            answerable=True,
+            required_citation=True,
+            tags=["answerable"],
+            answer_outcome="answered",
+            answer_text="Answer [1].",
+            citations=[{"citation_id": 1}],
+            context=[],
+            required_facts=[{"fact_id": "fact-alpha", "statement": "Fact"}],
+            forbidden_claims=[],
+        )
+
+    assert generator.requests == []
+    assert error.value.attempt_count == 0
+    assert error.value.first_failure_code == "judge_context_missing"
+    assert error.value.terminal_reason_code == "judge_context_missing"
+
+
+def test_claim_judge_classifies_generation_timeout_and_recovers() -> None:
+    valid_output = _judge_output(
+        claims=[
+            {
+                "claim_id": "claim-1",
+                "claim_text": "Supported claim",
+                "supported": True,
+                "citation_ids": [1],
+            }
+        ]
+    )
+
+    class TimeoutThenSuccessGenerator:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def generate(self, request: GenerationRequest) -> GenerationResult:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                raise AnswerGenerationError(error_category="timeout")
+            return GenerationResult(content=json.dumps(valid_output))
+
+    generator = TimeoutThenSuccessGenerator()
+    service = EvaluationClaimJudgeService(Settings(app_env="test"), generator=generator)
+
+    result = service.judge(
+        case_id="case-answerable",
+        answerable=True,
+        required_citation=True,
+        tags=["answerable"],
+        answer_outcome="answered",
+        answer_text="Supported claim [1].",
+        citations=[{"citation_id": 1}],
+        context=["Supported claim."],
+        required_facts=[{"fact_id": "fact-alpha", "statement": "Supported claim."}],
+        forbidden_claims=[],
+    )
+
+    assert len(generator.requests) == 2
+    assert result.attempt_count == 2
+    assert result.first_failure_code == "judge_generation_timeout"
+    assert result.terminal_reason_code == "judge_recovered_after_retry"
+    assert result.recovered_after_retry is True
 
 
 def test_claim_judge_accepts_correct_unanswerable_abstention() -> None:
@@ -761,9 +843,10 @@ def test_claim_judge_normalizes_deterministic_not_applicable_dimensions() -> Non
         ],
     )
     output["prompt_injection_resisted"] = "pass"
+    generator = SequencedGenerator([json.dumps(output)])
     service = EvaluationClaimJudgeService(
         Settings(app_env="test"),
-        generator=SequencedGenerator([json.dumps(output)]),
+        generator=generator,
     )
 
     result = service.judge(
@@ -798,9 +881,10 @@ def test_claim_judge_marks_unanswerable_generated_answer_as_failed_abstention() 
         ],
     )
     output["prompt_injection_resisted"] = "pass"
+    generator = SequencedGenerator([json.dumps(output)])
     service = EvaluationClaimJudgeService(
         Settings(app_env="test"),
-        generator=SequencedGenerator([json.dumps(output)]),
+        generator=generator,
     )
 
     result = service.judge(
@@ -819,6 +903,99 @@ def test_claim_judge_marks_unanswerable_generated_answer_as_failed_abstention() 
     assert result.decision.abstention_correct.value == "fail"
     assert "failed_to_abstain" in [code.value for code in result.decision.reason_codes]
     assert result.auxiliary_pass is False
+    assert len(generator.requests) == 1
+    assert result.attempt_count == 1
+    assert result.first_failure_code is None
+    assert result.terminal_reason_code == "judge_succeeded_first_attempt"
+    assert result.recovered_after_retry is False
+
+
+def test_judge_replay_uses_frozen_hashes_and_emits_no_raw_payload(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    answer_text = "Sensitive frozen answer [1]."
+    context = ["Sensitive frozen context."]
+    run, payload = _seed_judge_replay_run(
+        db,
+        created_by=user.user_id,
+        answer_text=answer_text,
+        context=context,
+    )
+    payload.context_hash = hashlib.sha256("\\x00".join(context).encode()).hexdigest()
+    db.commit()
+    valid_output = _judge_output(
+        claims=[
+            {
+                "claim_id": "claim-1",
+                "claim_text": "Supported claim",
+                "supported": True,
+                "citation_ids": [1],
+            }
+        ]
+    )
+    valid_output["case_id"] = "local_dev_answerable_01"
+    generator = SequencedGenerator([json.dumps(valid_output)] * 3)
+    service = EvaluationJudgeReplayService(
+        Settings(app_env="test"),
+        judge_factory=lambda settings: EvaluationClaimJudgeService(
+            settings,
+            generator=generator,
+        ),
+    )
+
+    summary = service.replay(
+        db,
+        evaluation_run_id=run.evaluation_run_id,
+        repeats=3,
+        expected_case_count=1,
+    )
+
+    assert summary.gate_passed is True
+    assert summary.stable_case_count == 1
+    assert summary.unstable_case_ids == ()
+    assert [repeat.judged_count for repeat in summary.repeat_summaries] == [1, 1, 1]
+    assert [repeat.judge_failure_count for repeat in summary.repeat_summaries] == [0, 0, 0]
+    assert len(generator.requests) == 3
+    serialized = json.dumps(summary.safe_dict(), sort_keys=True)
+    assert answer_text not in serialized
+    assert context[0] not in serialized
+    assert "task_instructions" not in serialized
+
+
+def test_judge_replay_preflight_stops_before_llm_when_payload_is_missing(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    run, payload = _seed_judge_replay_run(
+        db,
+        created_by=user.user_id,
+        answer_text="Frozen answer [1].",
+        context=["Frozen context."],
+    )
+    db.delete(payload)
+    db.commit()
+    factory_called = False
+
+    def unexpected_factory(settings: Settings) -> EvaluationClaimJudgeService:
+        del settings
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("judge factory must not be called")
+
+    service = EvaluationJudgeReplayService(
+        Settings(app_env="test"),
+        judge_factory=unexpected_factory,
+    )
+
+    with pytest.raises(EvaluationJudgeReplayError, match="judge_replay_payload_missing"):
+        service.replay(
+            db,
+            evaluation_run_id=run.evaluation_run_id,
+            repeats=3,
+            expected_case_count=1,
+        )
+    assert factory_called is False
 
 
 @pytest.mark.parametrize(
@@ -899,6 +1076,78 @@ def test_expired_review_payload_is_physically_purged_but_hashes_remain(
     assert payload.purged_at is not None
     assert payload.answer_hash == "a" * 64
     assert payload.context_hash == "b" * 64
+
+
+def _seed_judge_replay_run(
+    db: Session,
+    *,
+    created_by: int,
+    answer_text: str,
+    context: list[str],
+) -> tuple[EvaluationRun, EvaluationReviewPayload]:
+    now = datetime.now(UTC)
+    case = EvaluationCase(
+        evaluation_dataset_id=1,
+        case_key="local_dev_answerable_01",
+        question="What is the policy?",
+        expected_answer="The policy requires approval.",
+        required_citation=True,
+        tags=["answerable"],
+        metadata_json={
+            "answerable": True,
+            "forbidden_claims": ["Approval is not required."],
+        },
+        status="active",
+    )
+    db.add(case)
+    db.flush()
+    run = EvaluationRun(
+        created_by=created_by,
+        evaluation_dataset_id=None,
+        status="succeeded",
+        target_type="fixture_dataset",
+        metrics_config={
+            "dataset_name": "local_accuracy_dev_v1",
+            "evaluation_scope": "end_to_end",
+        },
+        strategy_type="hybrid",
+        trigger_type="manual",
+        retrieval_settings_json={
+            "resolved_generation_model": "qwen/qwen3.5-9b",
+            "dataset_content_fingerprint": "d" * 64,
+        },
+        corpus_fingerprint="c" * 64,
+        started_at=now,
+        finished_at=now,
+    )
+    db.add(run)
+    db.flush()
+    item = EvaluationRunItem(
+        evaluation_run_id=run.evaluation_run_id,
+        evaluation_case_id=case.evaluation_case_id,
+        status="succeeded",
+        strategy_type="hybrid",
+        answer_outcome="answered",
+    )
+    db.add(item)
+    db.flush()
+    payload = EvaluationReviewPayload(
+        evaluation_run_item_id=item.evaluation_run_item_id,
+        answer_text=answer_text,
+        context_json=context,
+        citations_json=[{"citation_id": 1, "snippet": context[0]}],
+        required_facts_json=[
+            {"fact_id": "fact-alpha", "statement": "The policy requires approval."}
+        ],
+        answer_hash=hashlib.sha256(answer_text.encode()).hexdigest(),
+        context_hash=hashlib.sha256("\x00".join(context).encode()).hexdigest(),
+        expires_at=now + timedelta(days=1),
+    )
+    db.add(payload)
+    db.commit()
+    db.refresh(run)
+    db.refresh(payload)
+    return run, payload
 
 
 def _manifest_payload() -> dict[str, Any]:

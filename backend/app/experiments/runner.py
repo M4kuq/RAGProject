@@ -822,6 +822,7 @@ def _settings_for_candidate(
         None,
     )
     max_output_chars = getattr(generation_profile, "max_output_chars", None)
+    generation_prompt_profile = getattr(generation_profile, "prompt_profile", "baseline")
     return settings.model_copy(
         update={
             "embedding_provider": (
@@ -846,6 +847,7 @@ def _settings_for_candidate(
                 if max_output_chars is None
                 else max_output_chars
             ),
+            "generation_prompt_profile": generation_prompt_profile,
             "router_mode": (
                 profile.router_mode
                 if profile is not None and profile.router_mode is not None
