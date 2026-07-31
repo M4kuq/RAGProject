@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.evaluation.generation_prompt_profiles import generation_prompt_profile_names
 from app.services.evaluation_oracle_context_service import (
     EvaluationOracleContextError,
     EvaluationOracleContextService,
@@ -19,6 +20,11 @@ def main() -> int:
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--expected-case-count", type=int, default=40)
     parser.add_argument("--r-judge-replay", type=Path, required=True)
+    parser.add_argument(
+        "--prompt-profile",
+        choices=generation_prompt_profile_names(),
+        default="baseline",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--confirm-local-only", action="store_true")
     args = parser.parse_args()
@@ -42,7 +48,10 @@ def main() -> int:
 
     try:
         with SessionLocal() as db:
-            summary = EvaluationOracleContextService(settings).run(
+            summary = EvaluationOracleContextService(
+                settings,
+                generation_prompt_profile=args.prompt_profile,
+            ).run(
                 db,
                 evaluation_run_id=args.run_id,
                 expected_case_count=args.expected_case_count,

@@ -16,6 +16,10 @@ from app.db.evaluation_models import (
     EvaluationReviewPayload,
 )
 from app.db.models import EvaluationCase, EvaluationDataset, EvaluationRun, EvaluationRunItem
+from app.evaluation.generation_prompt_profiles import (
+    GenerationPromptProfile,
+    resolve_generation_prompt_profile,
+)
 from app.evaluation.rag_service import generate_evaluation_answer
 from app.rag.citations import (
     CitationBuildError,
@@ -33,6 +37,7 @@ from app.rag.generation import (
 from app.services.evaluation_judge_service import (
     EvaluationClaimJudgeError,
     EvaluationClaimJudgeService,
+    EvaluationJudgeResult,
 )
 from app.services.rag_service import (
     _is_insufficient_evidence_answer,
@@ -76,6 +81,13 @@ class OracleContextCaseOutcome:
     o_judge_first_failure_code: str | None
     o_judge_terminal_reason_code: str
     o_judge_recovered_after_retry: bool
+    o_required_facts_supported: str | None
+    o_citation_support: str | None
+    o_forbidden_claims_absent: str | None
+    o_abstention_correct: str | None
+    o_prompt_injection_resisted: str | None
+    o_judge_confidence: float | None
+    o_judge_reason_codes: tuple[str, ...]
     metric_reason_codes: tuple[str, ...]
     pipeline_failure_code: str | None
 
@@ -92,6 +104,8 @@ class OracleContextDiagnosticSummary:
     r_judge_replay_fingerprint: str
     r_judge_replay_count: int
     resolved_generation_model: str
+    generation_prompt_profile: str
+    generation_prompt_fingerprint: str
     generation_temperature: float
     generation_max_context_chars: int
     generation_max_output_chars: int
@@ -143,6 +157,21 @@ class _OracleGeneration:
 
 
 @dataclass(frozen=True)
+class OracleGenerationObservation:
+    case_id: str
+    question: str
+    answerable: bool
+    tags: tuple[str, ...]
+    required_facts: tuple[dict[str, object], ...]
+    forbidden_claims: tuple[str, ...]
+    answer_text: str
+    answer_outcome: Literal["answered", "abstained"]
+    citations: tuple[dict[str, object], ...]
+    context: tuple[str, ...]
+    judge_result: EvaluationJudgeResult
+
+
+@dataclass(frozen=True)
 class _StableRJudgment:
     auxiliary_pass: bool
     answer_hash: str
@@ -164,10 +193,19 @@ class EvaluationOracleContextService:
         *,
         generator_factory: Callable[..., AnswerGenerator] | None = None,
         judge_factory: Callable[[Settings], EvaluationClaimJudgeService] | None = None,
+        generation_prompt_profile: str = "baseline",
+        observation_callback: Callable[[OracleGenerationObservation], None] | None = None,
     ) -> None:
         self.settings = settings
         self.generator_factory = generator_factory or create_answer_generator
         self.judge_factory = judge_factory or EvaluationClaimJudgeService
+        try:
+            self.generation_prompt_profile: GenerationPromptProfile = (
+                resolve_generation_prompt_profile(generation_prompt_profile)
+            )
+        except ValueError as exc:
+            raise EvaluationOracleContextError("oracle_generation_prompt_profile_invalid") from exc
+        self.observation_callback = observation_callback
 
     def run(
         self,
@@ -278,6 +316,8 @@ class EvaluationOracleContextService:
             r_judge_replay_fingerprint=stable_r_replay.replay_fingerprint,
             r_judge_replay_count=stable_r_replay.replay_count,
             resolved_generation_model=_EXPECTED_GENERATION_MODEL,
+            generation_prompt_profile=self.generation_prompt_profile.name,
+            generation_prompt_fingerprint=self.generation_prompt_profile.prompt_fingerprint,
             generation_temperature=0.0,
             generation_max_context_chars=generation_settings.generation_max_context_chars,
             generation_max_output_chars=generation_settings.generation_max_output_chars,
@@ -531,6 +571,7 @@ class EvaluationOracleContextService:
                 question=oracle_input.case.question,
                 context_items=context_items,
                 citation_sources=citation_sources,
+                system_instructions=self.generation_prompt_profile.system_instructions,
             )
             judged = judge.judge(
                 case_id=oracle_input.case.case_key,
@@ -544,6 +585,22 @@ class EvaluationOracleContextService:
                 required_facts=list(oracle_input.required_facts),
                 forbidden_claims=list(oracle_input.forbidden_claims),
             )
+            if self.observation_callback is not None:
+                self.observation_callback(
+                    OracleGenerationObservation(
+                        case_id=oracle_input.case.case_key,
+                        question=oracle_input.case.question,
+                        answerable=oracle_input.answerable,
+                        tags=oracle_input.tags,
+                        required_facts=oracle_input.required_facts,
+                        forbidden_claims=oracle_input.forbidden_claims,
+                        answer_text=generation.answer_text,
+                        answer_outcome=generation.answer_outcome,
+                        citations=generation.citations,
+                        context=generation.context,
+                        judge_result=judged,
+                    )
+                )
         except EvaluationClaimJudgeError as exc:
             pipeline_failure_code = exc.terminal_reason_code
             judge_attempt_count = exc.attempt_count
@@ -573,6 +630,8 @@ class EvaluationOracleContextService:
             judge_first_failure_code = judged.first_failure_code
             judge_terminal_reason_code = judged.terminal_reason_code
             judge_recovered_after_retry = judged.recovered_after_retry
+
+        decision = judged.decision if judged is not None else None
 
         o_used = (
             _used_fact_count(
@@ -621,6 +680,25 @@ class EvaluationOracleContextService:
             o_judge_first_failure_code=judge_first_failure_code,
             o_judge_terminal_reason_code=judge_terminal_reason_code,
             o_judge_recovered_after_retry=judge_recovered_after_retry,
+            o_required_facts_supported=(
+                decision.required_facts_supported.value if decision is not None else None
+            ),
+            o_citation_support=decision.citation_support.value if decision is not None else None,
+            o_forbidden_claims_absent=(
+                decision.forbidden_claims_absent.value if decision is not None else None
+            ),
+            o_abstention_correct=(
+                decision.abstention_correct.value if decision is not None else None
+            ),
+            o_prompt_injection_resisted=(
+                decision.prompt_injection_resisted.value if decision is not None else None
+            ),
+            o_judge_confidence=decision.confidence if decision is not None else None,
+            o_judge_reason_codes=(
+                tuple(sorted(code.value for code in decision.reason_codes))
+                if decision is not None
+                else ()
+            ),
             metric_reason_codes=tuple(metric_reason_codes),
             pipeline_failure_code=pipeline_failure_code,
         )
@@ -633,6 +711,7 @@ def _generate_oracle_answer(
     question: str,
     context_items: tuple[GenerationContextItem, ...],
     citation_sources: tuple[CitationSource, ...],
+    system_instructions: str | None,
 ) -> _OracleGeneration:
     generation, _metadata = generate_evaluation_answer(
         settings,
@@ -641,6 +720,7 @@ def _generate_oracle_answer(
             message=question,
             context_items=context_items,
             max_output_chars=settings.generation_max_output_chars,
+            system_instructions=system_instructions,
             temperature=0.0,
         ),
     )

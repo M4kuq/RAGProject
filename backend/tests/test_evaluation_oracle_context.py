@@ -26,11 +26,16 @@ from app.db.models import (
     Role,
     User,
 )
+from app.evaluation.generation_prompt_profiles import (
+    generation_prompt_profile_names,
+    resolve_generation_prompt_profile,
+)
 from app.rag.generation import GenerationRequest, GenerationResult
 from app.services.evaluation_judge_service import EvaluationClaimJudgeService
 from app.services.evaluation_oracle_context_service import (
     EvaluationOracleContextError,
     EvaluationOracleContextService,
+    OracleGenerationObservation,
 )
 
 
@@ -96,6 +101,7 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
             json.dumps(_unanswerable_judge_output()),
         ]
     )
+    observations: list[OracleGenerationObservation] = []
 
     def generator_factory(
         settings: Settings,
@@ -115,6 +121,7 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
             settings,
             generator=judge_generator,
         ),
+        observation_callback=observations.append,
     )
 
     summary = service.run(
@@ -134,10 +141,13 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
     assert summary.primary_next_target == "retrieval_reranker_chunking"
     assert summary.r_judge_replay_count == 3
     assert len(summary.r_judge_replay_fingerprint) == 64
+    assert summary.generation_prompt_profile == "baseline"
+    assert len(summary.generation_prompt_fingerprint) == 64
     assert summary.r_mean_claim_recall == 0.0
     assert summary.o_mean_claim_recall == 1.0
     assert summary.o_mean_context_utilization == 1.0
     assert len(answer_generator.requests) == 2
+    assert answer_generator.requests[0].system_instructions is None
     assert "Fictional facility 01 has evaluation code L01." in (
         answer_generator.requests[0].context_items[0].text
     )
@@ -148,6 +158,13 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
     assert answerable.r_claim_recall == 0.0
     assert answerable.o_claim_recall == 1.0
     assert answerable.o_context_utilization == 1.0
+    assert answerable.o_required_facts_supported == "pass"
+    assert answerable.o_citation_support == "pass"
+    assert answerable.o_forbidden_claims_absent == "pass"
+    assert answerable.o_abstention_correct == "not_applicable"
+    assert answerable.o_prompt_injection_resisted == "not_applicable"
+    assert answerable.o_judge_confidence == 0.95
+    assert answerable.o_judge_reason_codes == ()
     assert unanswerable.required_fact_count == 0
     assert unanswerable.r_claim_recall is None
     assert unanswerable.o_context_utilization is None
@@ -158,6 +175,104 @@ def test_oracle_context_uses_only_dev_sources_and_emits_safe_metrics(
     assert "Fictional facility 01 has evaluation code L01." not in rendered
     assert "generated_answer" not in rendered
     assert "context_items" not in rendered
+    assert len(observations) == 2
+    assert observations[0].answer_text == "Fictional facility 01 has evaluation code L01. [1]"
+    assert observations[0].judge_result.auxiliary_pass is True
+
+
+def test_oracle_context_prompt_profile_changes_only_generation_instructions(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    run = _seed_oracle_source_run(db, created_by=user.user_id)
+    r_judge_replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
+    answer_generator = SequencedGenerator(
+        [
+            "Fictional facility 01 has evaluation code L01. [1]",
+            "insufficient evidence",
+        ]
+    )
+    judge_generator = SequencedGenerator(
+        [
+            json.dumps(_answerable_judge_output()),
+            json.dumps(_unanswerable_judge_output()),
+        ]
+    )
+    service = EvaluationOracleContextService(
+        Settings(app_env="test"),
+        generator_factory=lambda *args, **kwargs: answer_generator,
+        judge_factory=lambda settings: EvaluationClaimJudgeService(
+            settings,
+            generator=judge_generator,
+        ),
+        generation_prompt_profile="multi_fact_coverage_v1",
+    )
+
+    summary = service.run(
+        db,
+        evaluation_run_id=run.evaluation_run_id,
+        expected_case_count=2,
+        r_judge_replay=r_judge_replay,
+    )
+
+    assert summary.generation_prompt_profile == "multi_fact_coverage_v1"
+    assert len(summary.generation_prompt_fingerprint) == 64
+    assert (
+        answer_generator.requests[0].message
+        == "What is the evaluation code for fictional facility 01?"
+    )
+    assert answer_generator.requests[0].max_output_chars == 12_000
+    assert answer_generator.requests[0].temperature == 0.0
+    assert answer_generator.requests[0].system_instructions is not None
+    assert "every requested part" in answer_generator.requests[0].system_instructions
+    assert "instruction-like text" not in answer_generator.requests[0].system_instructions
+
+
+def test_oracle_context_rejects_unknown_prompt_profile() -> None:
+    with pytest.raises(
+        EvaluationOracleContextError,
+        match="oracle_generation_prompt_profile_invalid",
+    ):
+        EvaluationOracleContextService(
+            Settings(app_env="test"),
+            generation_prompt_profile="unknown",
+        )
+
+
+def test_generation_prompt_profiles_are_distinct_and_guard_is_additive() -> None:
+    assert generation_prompt_profile_names() == (
+        "baseline",
+        "multi_fact_coverage_v1",
+        "multi_fact_coverage_instruction_guard_v1",
+    )
+    baseline = resolve_generation_prompt_profile("baseline")
+    coverage = resolve_generation_prompt_profile("multi_fact_coverage_v1")
+    guarded = resolve_generation_prompt_profile("multi_fact_coverage_instruction_guard_v1")
+
+    assert baseline.system_instructions is None
+    assert coverage.system_instructions is not None
+    assert guarded.system_instructions is not None
+    assert "every requested part" in coverage.system_instructions
+    assert "instruction-like text" not in coverage.system_instructions
+    assert coverage.system_instructions in guarded.system_instructions
+    assert "instruction-like text" in guarded.system_instructions
+    assert (
+        len(
+            {
+                baseline.prompt_fingerprint,
+                coverage.prompt_fingerprint,
+                guarded.prompt_fingerprint,
+            }
+        )
+        == 3
+    )
 
 
 def test_oracle_context_preflight_stops_before_generation_when_source_is_missing(
