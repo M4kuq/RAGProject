@@ -10,7 +10,12 @@ from docx import Document
 from app.core.config import get_settings
 from app.core.errors import UnsafeFileRejected, UnsupportedMediaType
 from app.core.job_utils import redact_error_message
-from app.ingest.chunking import ChunkingConfig, ChunkingError, FixedTokenChunker
+from app.ingest.chunking import (
+    ChunkingConfig,
+    ChunkingError,
+    FixedTokenChunker,
+    chunk_profile_fingerprint,
+)
 from app.ingest.extractors.base import ExtractedDocument, ExtractedPage, ExtractionError
 from app.ingest.extractors.csv import CsvExtractor
 from app.ingest.extractors.dispatcher import ExtractorDispatcher
@@ -799,6 +804,72 @@ def test_chunking_overlap_zero_and_size_boundaries() -> None:
 
     assert [chunk.content_text for chunk in exact_chunks] == ["one two three"]
     assert [chunk.content_text for chunk in plus_one_chunks] == ["one two three", "four"]
+
+
+def test_japanese_aware_chunking_splits_unspaced_text_without_inserting_spaces() -> None:
+    document = ExtractedDocument(
+        pages=[ExtractedPage("架空施設01の評価コードはL01です。", page_number=1)],
+        metadata=_extraction_metadata(page_count=1),
+    )
+
+    whitespace_chunks = FixedTokenChunker(
+        ChunkingConfig(chunk_size_tokens=4, chunk_overlap_tokens=0)
+    ).chunk(document, document_version_id=1)
+    japanese_chunks = FixedTokenChunker(
+        ChunkingConfig(
+            chunk_size_tokens=4,
+            chunk_overlap_tokens=0,
+            tokenizer_profile="japanese_aware_v1",
+        )
+    ).chunk(document, document_version_id=1)
+
+    assert len(whitespace_chunks) == 1
+    assert len(japanese_chunks) > 1
+    assert all(chunk.token_count <= 4 for chunk in japanese_chunks)
+    assert "".join(chunk.content_text for chunk in japanese_chunks) == document.pages[0].text
+    assert "架 空" not in "".join(chunk.content_text for chunk in japanese_chunks)
+
+
+def test_structure_aware_chunking_does_not_cross_section_boundaries() -> None:
+    document = ExtractedDocument(
+        pages=[
+            ExtractedPage("alpha beta", page_number=1, section_title="Intro"),
+            ExtractedPage("gamma delta", page_number=2, section_title="Policy"),
+        ],
+        metadata=_extraction_metadata(page_count=2),
+    )
+
+    fixed_chunks = FixedTokenChunker(
+        ChunkingConfig(chunk_size_tokens=10, chunk_overlap_tokens=0)
+    ).chunk(document, document_version_id=1)
+    structured_chunks = FixedTokenChunker(
+        ChunkingConfig(
+            chunk_size_tokens=10,
+            chunk_overlap_tokens=0,
+            boundary_profile="structure_v1",
+        )
+    ).chunk(document, document_version_id=1)
+
+    assert [chunk.content_text for chunk in fixed_chunks] == ["alpha beta gamma delta"]
+    assert [chunk.content_text for chunk in structured_chunks] == [
+        "alpha beta",
+        "gamma delta",
+    ]
+
+
+def test_chunk_profile_fingerprint_is_stable_and_changes_with_geometry() -> None:
+    baseline = ChunkingConfig()
+    same = ChunkingConfig()
+    japanese = ChunkingConfig(tokenizer_profile="japanese_aware_v1")
+    smaller = ChunkingConfig(
+        chunk_size_tokens=256,
+        chunk_overlap_tokens=64,
+        tokenizer_profile="japanese_aware_v1",
+    )
+
+    assert chunk_profile_fingerprint(baseline) == chunk_profile_fingerprint(same)
+    assert chunk_profile_fingerprint(baseline) != chunk_profile_fingerprint(japanese)
+    assert chunk_profile_fingerprint(japanese) != chunk_profile_fingerprint(smaller)
 
 
 def test_redaction_helper_removes_sensitive_error_content() -> None:

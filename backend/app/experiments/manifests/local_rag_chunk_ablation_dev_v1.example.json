@@ -1,0 +1,92 @@
+{
+  "schema_version": "rag60.chunk_ablation.v1",
+  "experiment_name": "local_rag_japanese_chunk_ablation_dev_v1",
+  "jira_issue": "RAG-60",
+  "dataset": "local_accuracy_chunk_dev_v1",
+  "base_dataset": "local_accuracy_dev_v1",
+  "holdout_dataset": "gold_answer_quality_v2",
+  "holdout_opened": false,
+  "evaluation_scope": "retrieval_screening",
+  "baseline_profile": "C0",
+  "profiles": [
+    {
+      "profile_id": "C0",
+      "chunk_size_tokens": 512,
+      "chunk_overlap_tokens": 128,
+      "tokenizer_profile": "whitespace_v1",
+      "boundary_profile": "fixed_v1"
+    },
+    {
+      "profile_id": "C1",
+      "chunk_size_tokens": 512,
+      "chunk_overlap_tokens": 128,
+      "tokenizer_profile": "japanese_aware_v1",
+      "boundary_profile": "fixed_v1"
+    },
+    {
+      "profile_id": "C2",
+      "chunk_size_tokens": 256,
+      "chunk_overlap_tokens": 64,
+      "tokenizer_profile": "japanese_aware_v1",
+      "boundary_profile": "fixed_v1"
+    },
+    {
+      "profile_id": "C3",
+      "chunk_size_tokens": 768,
+      "chunk_overlap_tokens": 128,
+      "tokenizer_profile": "japanese_aware_v1",
+      "boundary_profile": "fixed_v1"
+    },
+    {
+      "profile_id": "C4",
+      "chunk_size_tokens": 512,
+      "chunk_overlap_tokens": 128,
+      "tokenizer_profile": "japanese_aware_v1",
+      "boundary_profile": "structure_v1"
+    }
+  ],
+  "retrieval": {
+    "embedding_provider": "lmstudio",
+    "embedding_model": "text-embedding-qwen3-embedding-4b",
+    "reranker_provider": "local",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "top_k": 20,
+    "rerank_top_n": 3,
+    "cache_enabled": false
+  },
+  "screening_metrics": [
+    "dense_recall_at_k",
+    "recall_at_n",
+    "fact_recall_at_n",
+    "mrr",
+    "no_context_rate",
+    "retrieval_p95_latency_ms",
+    "pipeline_failure_count"
+  ],
+  "finalist_limit": 2,
+  "finalist_rule": {
+    "pipeline_failure_count": 0,
+    "no_context_not_worse_than_c0": true,
+    "recall_not_worse_than_c0": true,
+    "fact_recall_not_worse_than_c0": true,
+    "must_improve_one_of": [
+      "recall_at_n",
+      "fact_recall_at_n",
+      "mrr"
+    ]
+  },
+  "end_to_end_if_selected": {
+    "generation_provider": "lmstudio",
+    "generation_model": "qwen/qwen3.5-9b",
+    "generation_profile": "A3",
+    "temperature": 0.0,
+    "max_repeats": 3
+  },
+  "safety": {
+    "local_only": true,
+    "raw_content_in_artifacts": false,
+    "existing_collections_deleted": false,
+    "existing_volumes_reset": false,
+    "default_ingest_profile_changed": false
+  }
+}
