@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from typing import Literal, cast
@@ -111,7 +112,10 @@ class EvaluationOraclePromptScreeningService:
         if not replay.gate_passed:
             raise EvaluationOraclePromptScreeningError("oracle_screening_judge_replay_gate_failed")
 
-        replay_payload = replay.safe_dict()
+        replay_payload = cast(
+            dict[str, object],
+            json.loads(json.dumps(replay.safe_dict())),
+        )
         oracle_summaries: list[OracleContextDiagnosticSummary] = []
         for profile in generation_prompt_profile_names():
             try:

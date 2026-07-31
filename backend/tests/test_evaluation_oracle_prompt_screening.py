@@ -19,6 +19,8 @@ class _FakeReplay:
             "schema_version": "phase3.judge_replay.v1",
             "source_evaluation_run_id": 112,
             "gate_passed": True,
+            "unstable_case_ids": (),
+            "repeat_summaries": ({"repeat": 1},),
         }
 
 
@@ -65,6 +67,8 @@ class _FakeOracleService:
         assert evaluation_run_id == 112
         assert expected_case_count == 4
         assert r_judge_replay["gate_passed"] is True
+        assert r_judge_replay["unstable_case_ids"] == []
+        assert isinstance(r_judge_replay["repeat_summaries"], list)
         self.calls.append(self.profile)
         passes = {
             "baseline": (True, False, True, False),
