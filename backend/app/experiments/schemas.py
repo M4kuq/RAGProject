@@ -91,6 +91,11 @@ class GenerationProfile(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=0.0)
     retry_on_insufficient_evidence: bool | None = None
     max_output_chars: int | None = Field(default=None, ge=512, le=20_000)
+    prompt_profile: Literal[
+        "baseline",
+        "multi_fact_coverage_v1",
+        "multi_fact_coverage_instruction_guard_v1",
+    ] = "baseline"
 
 
 class ExperimentRetrievalProfile(BaseModel):

@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun
+from app.evaluation.generation_prompt_profiles import (
+    GenerationPromptProfile,
+    resolve_generation_prompt_profile,
+)
 from app.evaluation.metrics import RetrievedEvaluationItem
 from app.ingest.embedding import (
     EmbeddingAdapterError,
@@ -454,11 +458,22 @@ class EvaluationRagQuestionService:
     def __init__(self, service: RagService, graph_service: GraphRagService | None = None) -> None:
         self.service = service
         self.graph_service = graph_service or GraphRagService(service)
+        self.generation_prompt_profile: GenerationPromptProfile = (
+            resolve_generation_prompt_profile(service.settings.generation_prompt_profile)
+        )
 
     def _generate_answer(
         self,
         request: GenerationRequest,
     ) -> tuple[GenerationResult, EvaluationGenerationMetadata]:
+        if (
+            request.system_instructions is None
+            and self.generation_prompt_profile.system_instructions is not None
+        ):
+            request = replace(
+                request,
+                system_instructions=self.generation_prompt_profile.system_instructions,
+            )
         return generate_evaluation_answer(
             self.service.settings,
             self.service.answer_generator,

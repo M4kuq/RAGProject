@@ -48,6 +48,7 @@ from app.evaluation.fixtures import (
     evaluation_case_snapshot_hash,
     load_evaluation_cases,
 )
+from app.evaluation.generation_prompt_profiles import resolve_generation_prompt_profile
 from app.evaluation.gold_v2 import (
     AuxiliaryJudgeDecision,
     HumanCalibrationRecord,
@@ -975,6 +976,9 @@ class EvaluationService:
         if logical_document_ids:
             retrieval_settings["logical_document_ids"] = logical_document_ids
         if evaluation_backend == "runtime_qdrant":
+            generation_prompt_profile = resolve_generation_prompt_profile(
+                self.settings.generation_prompt_profile
+            )
             retrieval_settings.update(
                 {
                     "embedding_provider": self.settings.embedding_provider,
@@ -988,6 +992,10 @@ class EvaluationService:
                     "generation_max_context_chars": (self.settings.generation_max_context_chars),
                     "generation_max_output_chars": (self.settings.generation_max_output_chars),
                     "generation_max_output_tokens": (self.settings.generation_max_output_tokens),
+                    "generation_prompt_profile": generation_prompt_profile.name,
+                    "generation_prompt_fingerprint": (
+                        generation_prompt_profile.prompt_fingerprint
+                    ),
                     "generation_retry_on_insufficient_evidence": (
                         self.settings.generation_retry_on_insufficient_evidence
                     ),
@@ -3758,6 +3766,10 @@ def _config(run: EvaluationRun) -> dict[str, object]:
         "generation_max_context_chars": retrieval_settings.get("generation_max_context_chars"),
         "generation_max_output_chars": retrieval_settings.get("generation_max_output_chars"),
         "generation_max_output_tokens": retrieval_settings.get("generation_max_output_tokens"),
+        "generation_prompt_profile": retrieval_settings.get("generation_prompt_profile"),
+        "generation_prompt_fingerprint": retrieval_settings.get(
+            "generation_prompt_fingerprint"
+        ),
         "generation_retry_on_insufficient_evidence": retrieval_settings.get(
             "generation_retry_on_insufficient_evidence"
         ),
@@ -3797,6 +3809,7 @@ def _runtime_settings_from_config(
         "router_mode",
         "router_llm_planner_model_name",
         "graph_store_provider",
+        "generation_prompt_profile",
     )
     integer_fields = (
         "embedding_dimension",
@@ -5167,6 +5180,10 @@ def _run_comparability(
     )
     if base_generation_model != candidate_generation_model:
         reasons.append("generation_model_mismatch")
+    if base_config.get("generation_prompt_fingerprint") != candidate_config.get(
+        "generation_prompt_fingerprint"
+    ):
+        reasons.append("generation_prompt_fingerprint_mismatch")
     if (
         base.summary.requested_generation_provider
         != candidate.summary.requested_generation_provider
