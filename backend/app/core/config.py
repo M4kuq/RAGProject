@@ -290,6 +290,8 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    rag_user_model_selection_enabled: bool = False
+    rag_user_selectable_model_keys: list[str] = Field(default_factory=list)
     bedrock_generation_model_id: str = "amazon.nova-lite-v1:0"
     generation_retry_on_insufficient_evidence: bool = True
     generation_pricing_overrides: object = Field(default={})
@@ -351,6 +353,7 @@ class Settings(BaseSettings):
         "trusted_proxy_ips",
         "document_url_fetch_allowed_schemes",
         "document_url_fetch_allowed_content_types",
+        "rag_user_selectable_model_keys",
         "mcp_allowed_strategies",
         mode="before",
     )
@@ -640,6 +643,17 @@ class Settings(BaseSettings):
             )
         if self.generation_provider == "bedrock":
             self.generation_model_name = self.bedrock_generation_model_id
+        self.rag_user_selectable_model_keys = sorted(
+            {
+                _normalize_user_selectable_model_key(model_key)
+                for model_key in self.rag_user_selectable_model_keys
+            }
+        )
+        if self.rag_user_selectable_model_keys and not self.rag_user_model_selection_enabled:
+            raise ValueError(
+                "RAG_USER_MODEL_SELECTION_ENABLED=true is required when "
+                "RAG_USER_SELECTABLE_MODEL_KEYS is set"
+            )
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
         self.openai_api_key = self.openai_api_key.strip() if self.openai_api_key else None
@@ -731,6 +745,22 @@ class Settings(BaseSettings):
         if self.embedding_provider == "fake":
             return self.embedding_fake_dimension
         return self.embedding_vector_dimension
+
+
+def _normalize_user_selectable_model_key(value: str) -> str:
+    stripped = value.strip()
+    provider, separator, model_name = stripped.partition(":")
+    provider = provider.strip().lower()
+    if provider == "google":
+        provider = "gemini"
+    if (
+        not separator
+        or not model_name.strip()
+        or len(stripped) > 128
+        or provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
+    ):
+        raise ValueError("RAG_USER_SELECTABLE_MODEL_KEYS contains an invalid model key")
+    return f"{provider}:{model_name.strip()}"
 
 
 @lru_cache

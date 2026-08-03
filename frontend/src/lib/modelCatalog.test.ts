@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   buildChatModelOptions,
+  EXTERNAL_MODEL_OPTIONS,
+  isExternalModelSelectionEnabled,
   isNvidiaApiEnabled,
   isNvidiaModelKey,
   NVIDIA_EXTERNAL_DATA_WARNING,
@@ -11,6 +13,23 @@ import {
 } from "./modelCatalog";
 
 describe("NVIDIA local model catalog", () => {
+  test("hides general external models unless explicitly enabled", () => {
+    const safeDefault = buildChatModelOptions(false, false);
+    const explicitlyEnabled = buildChatModelOptions(false, true);
+
+    expect(safeDefault.map((option) => option.value)).toEqual(["lmstudio:qwen3.5-9b"]);
+    expect(
+      explicitlyEnabled.filter((option) => option.value !== "lmstudio:qwen3.5-9b")
+    ).toEqual(EXTERNAL_MODEL_OPTIONS);
+  });
+
+  test("treats only the literal true value as external model selection opt-in", () => {
+    expect(isExternalModelSelectionEnabled("true")).toBe(true);
+    expect(isExternalModelSelectionEnabled(true)).toBe(true);
+    expect(isExternalModelSelectionEnabled("false")).toBe(false);
+    expect(isExternalModelSelectionEnabled(undefined)).toBe(false);
+  });
+
   test("shows the recommended NVIDIA model only when the feature flag is enabled", () => {
     const enabled = buildChatModelOptions(true);
     const disabled = buildChatModelOptions(false);
