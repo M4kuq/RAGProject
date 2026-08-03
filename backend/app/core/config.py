@@ -292,6 +292,11 @@ class Settings(BaseSettings):
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
     bedrock_generation_model_id: str = "amazon.nova-lite-v1:0"
     generation_retry_on_insufficient_evidence: bool = True
+    rag_injection_policy: Literal[
+        "observe_only",
+        "quarantine_context",
+        "block_user_quarantine_context",
+    ] = "observe_only"
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
