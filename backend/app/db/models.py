@@ -1038,6 +1038,80 @@ class AuditLog(Base):
     )
 
 
+class RagRequestAdmission(Base):
+    __tablename__ = "rag_request_admissions"
+    __table_args__ = (
+        pg_check("subject_hash ~ '^[0-9a-f]{64}$'", "ck_rag_request_admissions_subject_hash"),
+        pg_check("request_hash ~ '^[0-9a-f]{64}$'", "ck_rag_request_admissions_request_hash"),
+        CheckConstraint("charged_units > 0", name="ck_rag_request_admissions_charged_units"),
+        CheckConstraint(
+            "lease_expires_at > admitted_at",
+            name="ck_rag_request_admissions_lease_expiry",
+        ),
+        CheckConstraint(
+            "(outcome = 'running' AND released_at IS NULL) OR "
+            "(outcome IN ('succeeded', 'failed', 'replayed') AND released_at IS NOT NULL)",
+            name="ck_rag_request_admissions_outcome",
+        ),
+    )
+
+    admission_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subject_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    charged_units: Mapped[int] = mapped_column(Integer, nullable=False)
+    admitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str] = mapped_column(
+        String(20), server_default=text("'running'"), default="running", nullable=False
+    )
+
+
+class RagAbuseDenialBucket(Base):
+    __tablename__ = "rag_abuse_denial_buckets"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope",
+            "subject_hash",
+            "window_started_at",
+            "reason_code",
+            name="uq_rag_abuse_denial_bucket",
+        ),
+        CheckConstraint(
+            "scope IN ('user', 'global', 'service')",
+            name="ck_rag_abuse_denial_buckets_scope",
+        ),
+        CheckConstraint(
+            "reason_code IN ("
+            "'rag_user_rate_limited', "
+            "'rag_capacity_rate_limited', "
+            "'rag_user_concurrency_limited', "
+            "'rag_capacity_concurrency_limited', "
+            "'rag_user_daily_budget_exhausted', "
+            "'rag_capacity_daily_budget_exhausted'"
+            ")",
+            name="ck_rag_abuse_denial_buckets_reason",
+        ),
+        pg_check("subject_hash ~ '^[0-9a-f]{64}$'", "ck_rag_abuse_denial_buckets_subject_hash"),
+        CheckConstraint("denied_count > 0", name="ck_rag_abuse_denial_buckets_count"),
+    )
+
+    denial_bucket_id: Mapped[int] = mapped_column(big_int(), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    subject_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    denied_count: Mapped[int] = mapped_column(
+        Integer, server_default=text("1"), default=1, nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class SystemSetting(Base, TimestampMixin):
     __tablename__ = "system_settings"
     __table_args__ = (
@@ -1214,3 +1288,16 @@ Index("ix_evaluation_run_items_case", EvaluationRunItem.evaluation_case_id)
 Index("ix_audit_logs_created", AuditLog.created_at.desc())
 Index("ix_audit_logs_action_created", AuditLog.action_type, AuditLog.created_at.desc())
 Index("ix_audit_logs_target", AuditLog.target_type, AuditLog.target_id, AuditLog.created_at.desc())
+Index(
+    "ix_rag_request_admissions_subject_admitted",
+    RagRequestAdmission.subject_hash,
+    RagRequestAdmission.admitted_at.desc(),
+)
+Index("ix_rag_request_admissions_admitted", RagRequestAdmission.admitted_at.desc())
+Index(
+    "ix_rag_request_admissions_active_lease",
+    RagRequestAdmission.lease_expires_at,
+    postgresql_where=RagRequestAdmission.released_at.is_(None),
+    sqlite_where=RagRequestAdmission.released_at.is_(None),
+)
+Index("ix_rag_abuse_denial_buckets_window", RagAbuseDenialBucket.window_started_at.desc())
