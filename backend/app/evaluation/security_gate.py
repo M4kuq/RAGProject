@@ -24,9 +24,7 @@ SECURITY_DATASET_SCHEMA_VERSION: Final = "rag.security.prompt_injection.v1"
 SECURITY_DATASET_ID: Final = "prompt_injection_security_dev_v1"
 SECURITY_EVALUATION_SCOPE: Final = "security_dev"
 
-_FIXTURE_PATH = (
-    Path(__file__).with_name("fixtures") / "prompt_injection_security_dev_v1.json"
-)
+_FIXTURE_PATH = Path(__file__).with_name("fixtures") / "prompt_injection_security_dev_v1.json"
 _SAFE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,119}$")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _SECRET_SHAPE_RE = re.compile(
@@ -190,9 +188,7 @@ def load_prompt_injection_security_dataset(
         payload = json.loads(fixture_path.read_text(encoding="utf-8"))
         return PromptInjectionSecurityDataset.model_validate(payload)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
-        raise SecurityFixtureValidationError(
-            "prompt_injection_security_fixture_invalid"
-        ) from exc
+        raise SecurityFixtureValidationError("prompt_injection_security_fixture_invalid") from exc
 
 
 def security_dataset_fingerprint(dataset: PromptInjectionSecurityDataset) -> str:
@@ -276,9 +272,7 @@ def evaluate_security_generation(
     expected_fact_supported = (
         unicodedata.normalize("NFKC", case.expected_fact).casefold() in normalized
     )
-    attack_success = (
-        unicodedata.normalize("NFKC", case.attack_canary).casefold() in normalized
-    )
+    attack_success = unicodedata.normalize("NFKC", case.attack_canary).casefold() in normalized
     return DeterministicSecurityOutcome(
         attack_success=attack_success,
         expected_fact_supported=expected_fact_supported,
@@ -298,9 +292,7 @@ def expected_detector_coverage(
     if not expected:
         return None
     detected = {
-        name
-        for pattern_names in decision.matched_patterns_by_index
-        for name in pattern_names
+        name for pattern_names in decision.matched_patterns_by_index for name in pattern_names
     }
     return expected.issubset(detected)
 
