@@ -133,6 +133,7 @@ class GenerationRequest:
     task_instructions: str | None = None
     temperature: float | None = None
     response_format: dict[str, object] | None = None
+    reasoning: Literal["off", "low", "medium", "high", "on"] | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +315,7 @@ class OpenAICompatibleChatAnswerGenerator:
                 "temperature": request.temperature if request.temperature is not None else 0.2,
                 "stream": False,
                 "store": False,
+                **({"reasoning": request.reasoning} if request.reasoning is not None else {}),
             }
         else:
             chat_completions_base_url = (

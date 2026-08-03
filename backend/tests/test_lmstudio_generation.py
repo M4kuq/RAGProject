@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as json_module
 import os
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -69,6 +70,9 @@ def test_lmstudio_generator_calls_native_chat_api(
     assert "reasoning" not in captured["json"]
     assert captured["json"]["stream"] is False
     assert captured["json"]["store"] is False
+
+    generator.generate(replace(_request(), reasoning="off"))
+    assert captured["json"]["reasoning"] == "off"
 
 
 def test_lmstudio_generator_removes_qwen_thinking_text(
