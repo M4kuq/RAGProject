@@ -268,6 +268,7 @@ def test_settings_accepts_canonical_and_legacy_env_names(monkeypatch) -> None:
     monkeypatch.setenv("CORS_ORIGINS", '["http://legacy.local"]')
     monkeypatch.setenv("SESSION_SECRET", "x" * 32)
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("RAG_ABUSE_CONTROL_ENABLED", "false")
 
     legacy_settings = Settings()
     assert legacy_settings.app_env == "legacy"

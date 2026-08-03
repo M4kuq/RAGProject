@@ -10,11 +10,11 @@ from typing import Any, cast
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routers.rag import rag_search_service
+from app.api.routers.rag import rag_abuse_control_service, rag_search_service
 from app.core.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db.base import Base
@@ -24,6 +24,8 @@ from app.db.models import (
     DocumentChunk,
     DocumentVersion,
     LogicalDocument,
+    RagAbuseDenialBucket,
+    RagRequestAdmission,
     RetrievalRun,
     RetrievalRunItem,
     Role,
@@ -58,6 +60,7 @@ from app.rag.rerank import FakeRerankerClient, NoopRerankerClient, RerankCandida
 from app.rag.retrieval import RetrievalError, RetrievalFilters, VectorSearchCandidate
 from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag_strategy import RouterDecisionTrace
+from app.services.rag_abuse_control_service import RagAbuseControlService
 from app.services.rag_service import RagService, _retrieval_summary_response, _safe_generation_label
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -382,6 +385,7 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         assert run.context_budget_json["items"]["selected_count"] == 1
         assert run.context_budget_json["items"]["dropped_count"] == 1
         assert run.context_budget_json["drop_reasons"] == {"not_selected_by_rerank": 1}
+
         assert run.context_budget_json["usage"]["estimated_context_tokens"] > 0
         budget_dump = str(run.context_budget_json)
         assert "full active chunk text should not be returned whole" not in budget_dump
@@ -552,6 +556,60 @@ def test_rag_ask_success_replay_and_duplicate_state_handling(
         headers=_unsafe_headers(admin_csrf),
     )
     assert admin.status_code == 200
+
+
+def test_rag_ask_rate_limit_stops_pipeline_and_returns_typed_retry_after(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    control_settings = Settings(
+        app_env="test",
+        session_secret="x" * 32,
+        generation_provider="fake",
+        rag_abuse_user_requests_per_minute=1,
+        rag_abuse_global_requests_per_minute=100,
+    )
+    cast(Any, client.app).dependency_overrides[rag_abuse_control_service] = lambda: (
+        RagAbuseControlService(control_settings)
+    )
+    viewer_csrf = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, viewer_csrf, title="rate limited ask")
+
+    first = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "rate-limit-1",
+            "message": "alpha policy summary",
+            "model_key": "lmstudio:qwen3.5-9b",
+        },
+        headers=_unsafe_headers(viewer_csrf),
+    )
+    denied = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "rate-limit-2",
+            "message": "a different raw question",
+            "model_key": "lmstudio:qwen3.5-9b",
+        },
+        headers=_unsafe_headers(viewer_csrf),
+    )
+
+    assert first.status_code == 200
+    assert denied.status_code == 429
+    assert denied.headers["Retry-After"].isdigit()
+    assert denied.json()["error"]["code"] == "rag_user_rate_limited"
+    assert len(vector_client.query_vectors) == 1
+    with session_factory() as db:
+        admissions = list(db.scalars(select(RagRequestAdmission)))
+        buckets = list(db.scalars(select(RagAbuseDenialBucket)))
+    assert len(admissions) == 1
+    assert len(buckets) == 1
+    persisted = str(admissions[0].__dict__) + str(buckets[0].__dict__)
+    assert "alpha policy summary" not in persisted
+    assert "a different raw question" not in persisted
+    assert "viewer@example.com" not in persisted
 
 
 def test_rag_ask_context_budget_finalizes_trace_after_context_assembly(
@@ -3007,6 +3065,7 @@ def test_rag_ask_rejects_nvidia_outside_local_without_persisting_message(
     client, session_factory, vector_client = rag_ask_client
     settings = _settings(
         app_env="production",
+        database_url="postgresql://localhost/ragproject_test",
         generation_provider="lmstudio",
         nvidia_api_key="test-nvidia-key",
         session_cookie_secure=True,
