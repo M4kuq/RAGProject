@@ -104,7 +104,8 @@ Safe evidence examples:
 
 ## deploy/aws Boundary
 
-External provider and AWS export decisions remain future work. Before any graph,
-OCR, or image evidence leaves local runtime, the export policy must preserve
-Context Budget, Evidence Pack, Tool Result Compression, and this redaction
-policy.
+External model text egress is now governed by
+[`docs/phase4/external_model_pii_egress_gate.md`](../phase4/external_model_pii_egress_gate.md).
+Graph extraction and auxiliary Judge calls created through the generation factory use that gate.
+Before any OCR or image evidence leaves local runtime, its export policy must also preserve Context
+Budget, Evidence Pack, Tool Result Compression, and this redaction policy.
