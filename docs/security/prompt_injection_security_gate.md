@@ -123,7 +123,9 @@ security reviewでは、元からcontextが空の経路まで全隔離とみな�
 ## Remaining security work
 
 - false-positive corpusを、security文書・命令文・引用文を含むclean setへ拡張する
-- semantic／Base64／multimodal／multi-turn injection
+- Base64／Unicode／多言語／tool-result／cost attackのPhase 2は
+  `docs/security/prompt_injection_security_phase2.md`を参照する
+- semantic／typoglycemia／multimodal／multi-turn injection
 - ingest provenance、trust level、review、quarantine
 - response DLPとsystem-prompt／PII leakage canary
 - 外部LLM送信前PII maskingとfail-closed egress policy

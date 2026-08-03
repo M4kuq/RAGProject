@@ -15,6 +15,11 @@ from app.rag.agentic import (
     merge_dedupe_candidates,
 )
 from app.rag.generation import _lmstudio_model_name
+from app.rag.injection_detection import (
+    INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE,
+    InjectionPolicyName,
+    evaluate_context_injection_policy,
+)
 from app.rag.strategy import RetrievalStrategy
 from app.rag.tool_result_compression import (
     CompressedToolResult,
@@ -60,7 +65,22 @@ class LLMToolResult:
     def truncated(self) -> bool:
         return self.dropped_item_count > 0
 
-    def to_planner_payload(self) -> dict[str, object]:
+    def to_planner_payload(
+        self,
+        *,
+        injection_policy: InjectionPolicyName = "observe_only",
+    ) -> dict[str, object]:
+        decision = evaluate_context_injection_policy(
+            [_planner_item_injection_text(item) for item in self.items],
+            policy=injection_policy,
+        )
+        allowed = set(decision.allowed_indices)
+        planner_items = [
+            item.to_planner_payload() for index, item in enumerate(self.items) if index in allowed
+        ]
+        planner_reason_codes = list(decision.reason_codes)
+        if decision.quarantined_indices:
+            planner_reason_codes.append(INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE)
         return TraceRedactor.safe_dict(
             {
                 "tool_call_id": self.tool_call_id,
@@ -71,7 +91,9 @@ class LLMToolResult:
                 # are a truncated subset of what the tool actually retrieved.
                 "dropped_item_count": self.dropped_item_count,
                 "truncated": self.truncated,
-                "items": [item.to_planner_payload() for item in self.items],
+                "items": planner_items,
+                "planner_quarantined_item_count": len(decision.quarantined_indices),
+                "planner_security_reason_codes": planner_reason_codes,
                 "error_code": self.error_code,
                 "trace_summary": self.trace_summary,
             }
@@ -100,6 +122,7 @@ class LLMToolPlanningRequest:
     remaining_search_calls: int
     available_tools: Sequence[str]
     tool_results: Sequence[LLMToolResult]
+    injection_policy: InjectionPolicyName = "observe_only"
 
 
 class LLMToolCallPlanner(Protocol):
@@ -370,6 +393,12 @@ class LLMToolCallingRetrievalOrchestrator:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
                     break
+                reason_codes.extend(
+                    _planner_security_reason_codes(
+                        tool_results,
+                        policy=self.settings.rag_injection_policy,
+                    )
+                )
                 with latency_tracker.span("llm_tool_planning_ms"):
                     planned_calls = self.planner.plan(
                         LLMToolPlanningRequest(
@@ -381,6 +410,7 @@ class LLMToolCallingRetrievalOrchestrator:
                             remaining_search_calls=max_search_calls - search_call_count,
                             available_tools=available_tools,
                             tool_results=tool_results,
+                            injection_policy=self.settings.rag_injection_policy,
                         )
                     )
                 if self._remaining_seconds(deadline) <= 0:
@@ -707,7 +737,10 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
             "remaining_search_calls": request.remaining_search_calls,
             "remaining_timeout_seconds": round(max(0.0, request.remaining_timeout_seconds), 3),
             "available_tools": sorted(request.available_tools),
-            "tool_results": [result.to_planner_payload() for result in request.tool_results],
+            "tool_results": [
+                result.to_planner_payload(injection_policy=request.injection_policy)
+                for result in request.tool_results
+            ],
             "instruction": (
                 "Choose one retrieval tool if more evidence is needed, otherwise call "
                 "finalize_answer with selected_tool_call_ids."
@@ -719,6 +752,31 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
         max_chars=request.max_query_chars,
     )
     return payload
+
+
+def _planner_security_reason_codes(
+    tool_results: Sequence[LLMToolResult],
+    *,
+    policy: InjectionPolicyName,
+) -> list[str]:
+    if policy == "observe_only":
+        return []
+    for result in tool_results:
+        decision = evaluate_context_injection_policy(
+            [_planner_item_injection_text(item) for item in result.items],
+            policy=policy,
+        )
+        if decision.quarantined_indices:
+            return [INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE]
+    return []
+
+
+def _planner_item_injection_text(item: ToolResultItem) -> str:
+    return "\n".join(
+        value
+        for value in (item.source_label, item.section_title, item.source_group_key, item.snippet)
+        if value
+    )
 
 
 def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall]:
