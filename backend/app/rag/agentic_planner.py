@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, cast
 import httpx
 
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 from app.rag.generation import _lmstudio_model_name
 from app.rag.query_planner import redact_query_preview
 from app.rag.strategy import QueryIntent, RetrievalStrategy
@@ -126,6 +127,7 @@ class OpenAICompatibleAgenticStrategyPlanner:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.provider = provider
         self.api_key = api_key
@@ -133,13 +135,31 @@ class OpenAICompatibleAgenticStrategyPlanner:
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.egress_guard = egress_guard
 
     def plan(self, request: AgenticStrategyPlanningRequest) -> AgenticPlannerResult:
         payload = _planner_input_payload(request)
+        system_instruction = _planner_system_instruction()
+        if self.egress_guard is not None:
+            try:
+                protected = self.egress_guard.protect_payload(
+                    {"system_instruction": system_instruction, "payload": payload},
+                    provider=self.provider,
+                    purpose="agentic_strategy_planner",
+                )
+            except ModelEgressBlockedError as exc:
+                return AgenticPlannerResult(
+                    fallback_reason=f"planner_egress_{exc.reason_code}",
+                    provider=self.provider,
+                    model=self.model_name,
+                )
+            protected_payload = cast(dict[str, Any], protected.payload)
+            system_instruction = cast(str, protected_payload["system_instruction"])
+            payload = cast(dict[str, object], protected_payload["payload"])
         request_body: dict[str, object] = {
             "model": self.model_name,
             "messages": [
-                {"role": "system", "content": _planner_system_instruction()},
+                {"role": "system", "content": system_instruction},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             "temperature": 0.0,
@@ -240,6 +260,7 @@ def create_agentic_strategy_planner(settings: Settings) -> AgenticStrategyPlanne
                 settings.router_llm_planner_timeout_seconds,
             ),
             max_output_tokens=settings.router_llm_planner_max_output_tokens,
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     return None
 

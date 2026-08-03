@@ -103,6 +103,8 @@ def test_nvidia_generator_uses_standard_chat_completions_payload(
         nvidia_api_key="test-nvidia-key",
         nvidia_base_url="https://integrate.api.nvidia.com/v1/",
         nvidia_timeout_seconds=45,
+        external_model_egress_policy="mask",
+        external_model_egress_allowed_providers=["nvidia"],
     )
 
     generator = create_answer_generator(settings)
