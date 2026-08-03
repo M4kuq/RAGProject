@@ -2915,26 +2915,112 @@ def test_rag_ask_request_rejects_non_public_strategies_without_persisting_messag
         assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
 
 
-def test_rag_ask_rejects_unsupported_model_key_without_persisting_message(
+def test_rag_ask_denies_non_default_model_before_pipeline_without_logging_model_id(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    client, session_factory, _ = rag_ask_client
+    client, session_factory, vector_client = rag_ask_client
     csrf_token = _login(client, email="viewer@example.com")
     chat_session_id = _create_chat_session(client, csrf_token, title="unsupported model")
+
+    with caplog.at_level("WARNING", logger="app.services.rag_service"):
+        response = client.post(
+            "/api/v1/rag/ask",
+            json={
+                "chat_session_id": chat_session_id,
+                "client_message_id": "unsupported-model-msg",
+                "message": "alpha policy summary",
+                "model_key": "openai:gpt-5.5",
+            },
+            headers=_unsafe_headers(csrf_token),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "model_selection_denied"
+    assert vector_client.query_vectors == []
+    policy_records = [
+        record for record in caplog.records if record.message == "RAG user model selection denied"
+    ]
+    assert len(policy_records) == 1
+    assert policy_records[0].__dict__.get("reason_code") == "model_selection_denied"
+    assert policy_records[0].__dict__.get("requested_provider") == "openai"
+    assert "gpt-5.5" not in str(policy_records[0].__dict__)
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+        assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
+
+
+def test_rag_ask_rejects_unknown_model_provider_without_persisting_message(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="unknown model provider")
 
     response = client.post(
         "/api/v1/rag/ask",
         json={
             "chat_session_id": chat_session_id,
-            "client_message_id": "unsupported-model-msg",
+            "client_message_id": "unknown-model-provider-msg",
             "message": "alpha policy summary",
-            "model_key": "openai:gpt-5.5",
+            "model_key": "unknown:forced-plus",
         },
         headers=_unsafe_headers(csrf_token),
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "unsupported_model"
+    assert vector_client.query_vectors == []
+    with session_factory() as db:
+        assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
+        assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
+
+
+def test_rag_ask_does_not_allowlist_an_expensive_model_by_provider_only(
+    rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_factory, vector_client = rag_ask_client
+    settings = _lmstudio_test_settings(
+        rag_user_model_selection_enabled=True,
+        rag_user_selectable_model_keys=["openai:gpt-entry"],
+    )
+    factory_calls = 0
+
+    def unexpected_factory(*args: Any, **kwargs: Any) -> _ObservedCitationAnswerGenerator:
+        nonlocal factory_calls
+        factory_calls += 1
+        return _ObservedCitationAnswerGenerator()
+
+    monkeypatch.setattr(
+        "app.services.rag_service.create_answer_generator",
+        unexpected_factory,
+    )
+    cast(Any, client.app).dependency_overrides[rag_search_service] = lambda: RagService(
+        settings=settings,
+        embedding_adapter=FakeEmbeddingAdapter(dimension=4),
+        vector_client=vector_client,
+        reranker=FakeRerankerClient(),
+        answer_generator=_ObservedCitationAnswerGenerator(),
+    )
+    csrf_token = _login(client, email="viewer@example.com")
+    chat_session_id = _create_chat_session(client, csrf_token, title="server owned escalation")
+
+    response = client.post(
+        "/api/v1/rag/ask",
+        json={
+            "chat_session_id": chat_session_id,
+            "client_message_id": "forced-expensive-model-msg",
+            "message": "alpha policy summary",
+            "model_key": "openai:gpt-expensive",
+        },
+        headers=_unsafe_headers(csrf_token),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "model_selection_denied"
+    assert factory_calls == 0
+    assert vector_client.query_vectors == []
     with session_factory() as db:
         assert db.query(ChatMessage).filter_by(chat_session_id=chat_session_id).count() == 0
         assert db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).count() == 0
@@ -2945,7 +3031,11 @@ def test_rag_ask_uses_nvidia_model_key_and_persists_safe_generation_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, session_factory, vector_client = rag_ask_client
-    settings = _lmstudio_test_settings(nvidia_api_key="test-nvidia-key")
+    settings = _lmstudio_test_settings(
+        nvidia_api_key="test-nvidia-key",
+        rag_user_model_selection_enabled=True,
+        rag_user_selectable_model_keys=["nvidia:meta/llama-3.3-70b-instruct"],
+    )
 
     def fake_create_answer_generator(*args: Any, **kwargs: Any) -> _ObservedCitationAnswerGenerator:
         assert args[0] is settings
@@ -3009,6 +3099,8 @@ def test_rag_ask_rejects_nvidia_outside_local_without_persisting_message(
         app_env="production",
         generation_provider="lmstudio",
         nvidia_api_key="test-nvidia-key",
+        rag_user_model_selection_enabled=True,
+        rag_user_selectable_model_keys=["nvidia:meta/llama-3.3-70b-instruct"],
         session_cookie_secure=True,
         session_secret="x" * 32,
     )

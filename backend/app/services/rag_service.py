@@ -2794,47 +2794,58 @@ class RagService:
             return
 
     def _generation_selection_for_request(self, payload: RagAskRequest) -> GenerationSelection:
+        default_selection = self._default_generation_selection()
         if payload.model_key is None:
-            provider = self.settings.generation_provider.lower()
-            return GenerationSelection(
-                provider=provider,
-                model_name=_resolved_generation_model_name(
-                    provider,
-                    self.settings.generation_model_name,
-                ),
-            )
-        provider, separator, model_name = payload.model_key.partition(MODEL_KEY_SEPARATOR)
-        provider = provider.lower()
-        model_name = model_name.strip()
-        if provider == "google":
-            provider = "gemini"
-        if (
-            provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
-            or not separator
-            or not model_name
-        ):
+            return default_selection
+        selection = _generation_selection_from_model_key(payload.model_key)
+        if selection is None:
             raise RagAskPipelineError("unsupported_model", 422)
-        if provider == "lmstudio" and self.settings.generation_provider == "fake":
-            return GenerationSelection(
-                provider=self.settings.generation_provider.lower(),
-                model_name=_resolved_generation_model_name(
-                    self.settings.generation_provider,
-                    self.settings.generation_model_name,
-                ),
-            )
+        if selection.provider == "lmstudio" and self.settings.generation_provider == "fake":
+            return default_selection
+        if self._user_generation_selection_allowed(selection, default_selection=default_selection):
+            return selection
+        policy_reason = (
+            "model_not_allowlisted"
+            if self.settings.rag_user_model_selection_enabled
+            else "user_model_selection_disabled"
+        )
+        logger.warning(
+            "RAG user model selection denied",
+            extra={
+                "reason_code": "model_selection_denied",
+                "requested_provider": selection.provider,
+                "policy_reason": policy_reason,
+            },
+        )
+        raise RagAskPipelineError("model_selection_denied", 403)
+
+    def _default_generation_selection(self) -> GenerationSelection:
+        provider = self.settings.generation_provider.lower()
         return GenerationSelection(
             provider=provider,
-            model_name=_resolved_generation_model_name(provider, model_name),
-        )
-
-    def _answer_generator_for_selection(self, selection: GenerationSelection) -> AnswerGenerator:
-        default_selection = GenerationSelection(
-            provider=self.settings.generation_provider.lower(),
             model_name=_resolved_generation_model_name(
-                self.settings.generation_provider,
+                provider,
                 self.settings.generation_model_name,
             ),
         )
+
+    def _user_generation_selection_allowed(
+        self,
+        selection: GenerationSelection,
+        *,
+        default_selection: GenerationSelection,
+    ) -> bool:
+        if selection == default_selection:
+            return True
+        if not self.settings.rag_user_model_selection_enabled:
+            return False
+        return any(
+            _generation_selection_from_model_key(model_key) == selection
+            for model_key in self.settings.rag_user_selectable_model_keys
+        )
+
+    def _answer_generator_for_selection(self, selection: GenerationSelection) -> AnswerGenerator:
+        default_selection = self._default_generation_selection()
         if selection == default_selection:
             return self.answer_generator
         try:
@@ -2903,6 +2914,24 @@ def _resolved_generation_model_name(provider: str, model_name: str) -> str:
     if normalized_provider == "lmstudio":
         return _lmstudio_model_name(model_name)
     return model_name.strip()
+
+
+def _generation_selection_from_model_key(model_key: str) -> GenerationSelection | None:
+    provider, separator, model_name = model_key.partition(MODEL_KEY_SEPARATOR)
+    provider = provider.strip().lower()
+    model_name = model_name.strip()
+    if provider == "google":
+        provider = "gemini"
+    if (
+        provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
+        or not separator
+        or not model_name
+    ):
+        return None
+    return GenerationSelection(
+        provider=provider,
+        model_name=_resolved_generation_model_name(provider, model_name),
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:
