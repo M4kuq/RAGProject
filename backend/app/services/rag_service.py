@@ -746,6 +746,24 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
+            user_decision = evaluate_user_injection_policy(
+                payload.message,
+                policy=self.settings.rag_injection_policy,
+            )
+            self._record_injection_reason_codes(
+                db,
+                retrieval_run_id=run_id,
+                reason_codes=user_decision.reason_codes,
+            )
+            if user_decision.blocked:
+                self._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="injection_user_blocked",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                raise RagAskPipelineError("injection_user_blocked", 422)
 
             def retrieve_uncached() -> RetrievalPipelineResult:
                 retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
@@ -881,24 +899,6 @@ class RagService:
                     retrieval_run_id=run_id,
                     context_texts=[item.text for item in context_items],
                 )
-                user_decision = evaluate_user_injection_policy(
-                    payload.message,
-                    policy=self.settings.rag_injection_policy,
-                )
-                self._record_injection_reason_codes(
-                    db,
-                    retrieval_run_id=run_id,
-                    reason_codes=user_decision.reason_codes,
-                )
-                if user_decision.blocked:
-                    self._mark_failed_safely(
-                        db,
-                        retrieval_run_id=run_id,
-                        error_code="injection_user_blocked",
-                        latency_tracker=latency_tracker,
-                        rollback=False,
-                    )
-                    raise RagAskPipelineError("injection_user_blocked", 422)
                 allowed_context_indices = set(context_decision.allowed_indices)
                 context_items = [
                     item

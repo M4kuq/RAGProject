@@ -3486,7 +3486,7 @@ def test_rag_ask_fails_closed_when_all_context_is_quarantined(
 def test_rag_ask_blocks_composite_user_injection_before_generation(
     rag_ask_client: tuple[TestClient, sessionmaker[Session], _StaticVectorClient],
 ) -> None:
-    client, session_factory, _ = rag_ask_client
+    client, session_factory, vector_client = rag_ask_client
     service = cast(Any, client.app).dependency_overrides[rag_search_service]()
     service.settings.rag_injection_policy = "block_user_quarantine_context"
     csrf_token = _login(client, email="viewer@example.com")
@@ -3505,6 +3505,7 @@ def test_rag_ask_blocks_composite_user_injection_before_generation(
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "injection_user_blocked"
+    assert vector_client.query_vectors == []
     with session_factory() as db:
         run = db.query(RetrievalRun).filter_by(chat_session_id=chat_session_id).one()
         assert run.status == "failed"

@@ -68,7 +68,7 @@ class PromptInjectionSecurityCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_id: str
-    language: Literal["en", "ja"]
+    language: Literal["en", "ja", "zh", "ko", "es"]
     delivery: Literal["retrieved_context", "user_message"]
     channel: Literal["dense", "graph"]
     clean_question: str = Field(min_length=1, max_length=1000)
