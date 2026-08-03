@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import create_engine, delete, select, text
@@ -396,4 +397,4 @@ def _settings(**overrides: object) -> Settings:
     if values["app_env"] == "production":
         values["session_cookie_secure"] = True
         values["generation_provider"] = "ollama"
-    return Settings(**values)
+    return Settings(**cast(Any, values))
