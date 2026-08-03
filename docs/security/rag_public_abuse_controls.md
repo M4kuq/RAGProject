@@ -116,6 +116,7 @@ downgradeは新規2表を削除するため、日常的なrollbackには使わ�
 - SQLite admission: `9 passed, 2 PostgreSQL-only skipped`
 - mypy（CI同等、tests込み）: `Success: no issues found in 276 source files`
 - GitHub Backend CI初回はtest helperの`dict[str, object]`展開を型エラーとして検出。`cast(Any, values)`へ限定修正し、上記full mypyと対象pytestで再検証した。
+- GitHub Backend CI再実行はmigration後に旧head `0022_eval_reliability`を期待するPostgreSQL test固定値2箇所を検出。全testsを検索し、該当2箇所だけを`0023_rag_abuse_controls`へ更新した。
 - backend full retry: `982 passed, 21 skipped, 3 known warnings`
 - Ruff: `All checks passed`
 - frontend Vitest: `16 files, 103 tests passed`
