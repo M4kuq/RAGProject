@@ -1,0 +1,230 @@
+{
+  "schema_version": "rag31-security-closure-v1",
+  "captured_at": "2026-08-04T11:19:25.065Z",
+  "jira_issue": "RAG-69",
+  "repository": "M4kuq/RAGProject",
+  "main_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+  "audited_integration": {
+    "pull_request": 141,
+    "head_sha": "8de37d299940bd29d8971af5b9e8c28c776e8bc5",
+    "state": "open",
+    "draft": true,
+    "mergeable_state": "clean",
+    "commit_count": 21,
+    "changed_file_count": 96,
+    "checks": [
+      {
+        "name": "Ruff / mypy / pytest",
+        "conclusion": "success",
+        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362668/job/91972620644"
+      },
+      {
+        "name": "lint / typecheck / test / build",
+        "conclusion": "success",
+        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362607/job/91972620597"
+      },
+      {
+        "name": "docker compose smoke",
+        "conclusion": "success",
+        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362481/job/91972620012"
+      }
+    ]
+  },
+  "source_pull_requests": [
+    {
+      "pull_request": 133,
+      "jira_issue": "RAG-31",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "6e88b6ebb7750d769c1fd8e19c9751c09376d088",
+      "changed_file_count": 13,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 134,
+      "jira_issue": "RAG-61",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "076aceabaff80871ca3f61aa9aace301b7072d5b",
+      "changed_file_count": 12,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 135,
+      "jira_issue": "RAG-62",
+      "base_sha": "6e88b6ebb7750d769c1fd8e19c9751c09376d088",
+      "head_sha": "a72fac96fb897dbe9aaad0c0241d83981b2a7982",
+      "changed_file_count": 16,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 136,
+      "jira_issue": "RAG-63",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "6e0b5032b0fe75f405e16a5331d1e7b44487df0b",
+      "changed_file_count": 15,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 137,
+      "jira_issue": "RAG-64",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "c9d548fc499cf216d1538f9aec05a65081bfba09",
+      "changed_file_count": 8,
+      "check_count": 3,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 138,
+      "jira_issue": "RAG-65",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "dbcb139392930bf9819d6a214dc1335b932994c3",
+      "changed_file_count": 3,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 139,
+      "jira_issue": "RAG-66",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "4c7db1cee7dbbfcda150403a9f997879d635bf3c",
+      "changed_file_count": 40,
+      "check_count": 2,
+      "all_checks_success": true
+    },
+    {
+      "pull_request": 140,
+      "jira_issue": "RAG-67",
+      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+      "head_sha": "db39cce9daff9236b845cab2fa5a4dd98ed37c81",
+      "changed_file_count": 10,
+      "check_count": 2,
+      "all_checks_success": true
+    }
+  ],
+  "ancestry_verification": {
+    "stacked_relation": {
+      "base_pull_request": 133,
+      "head_pull_request": 135,
+      "ahead_by": 1,
+      "behind_by": 0,
+      "base_is_merge_base": true
+    },
+    "source_heads_to_integration": [
+      {
+        "pull_request": 133,
+        "ahead_by": 19,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 134,
+        "ahead_by": 20,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 135,
+        "ahead_by": 18,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 136,
+        "ahead_by": 18,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 137,
+        "ahead_by": 20,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 138,
+        "ahead_by": 20,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 139,
+        "ahead_by": 19,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      },
+      {
+        "pull_request": 140,
+        "ahead_by": 20,
+        "behind_by": 0,
+        "base_is_merge_base": true
+      }
+    ]
+  },
+  "file_set_verification": {
+    "source_union_count": 93,
+    "integration_count": 96,
+    "missing_from_integration": [],
+    "integration_only": [
+      "backend/alembic/versions/0024_security_integration_merge.py",
+      "backend/tests/test_rag31_security_integration_gate.py",
+      "docs/security/rag31_security_integration_gate.md"
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "id": 1,
+      "status": "satisfied",
+      "evidence_pull_requests": [133, 135, 141],
+      "limitation": "The attack fixtures are synthetic and small; zero observed failures are not a population-wide safety guarantee."
+    },
+    {
+      "id": 2,
+      "status": "partial",
+      "evidence_pull_requests": [133, 135, 141],
+      "follow_up": "RAG-72",
+      "limitation": "Block, quarantine, abstain, and false-action metrics exist, but observe_only remains the default and no separate down-rank action is promoted."
+    },
+    {
+      "id": 3,
+      "status": "satisfied",
+      "evidence_pull_requests": [139, 141],
+      "limitation": "Legacy rows are intentionally treated as trusted and approved for backward compatibility."
+    },
+    {
+      "id": 4,
+      "status": "satisfied",
+      "evidence_pull_requests": [140, 141],
+      "limitation": "The current public surface is read-only; future external write tools require a new authorization review."
+    },
+    {
+      "id": 5,
+      "status": "partial",
+      "evidence_pull_requests": [135, 136, 137, 141],
+      "follow_up": "RAG-70",
+      "limitation": "Atomic rate, concurrency, work-unit budgets, model allowlisting, and a provider-independent cascade guard exist, but real Qwen token/currency accounting and a provider circuit breaker are not wired."
+    },
+    {
+      "id": 6,
+      "status": "partial",
+      "evidence_pull_requests": [134, 138, 141],
+      "follow_up": "RAG-71",
+      "limitation": "Deny-by-default egress, provider allowlisting, masking, and raw-free audit exist; data classification, explicit consent state, and provider retention enforcement do not."
+    },
+    {
+      "id": 7,
+      "status": "satisfied",
+      "evidence_pull_requests": [133, 135, 136, 139, 140, 141],
+      "limitation": "The zero-bypass composite gate covers implemented local and provider-independent boundaries; RAG-70 and RAG-71 must extend it before external cascade closure."
+    }
+  ],
+  "closure_decision": {
+    "rag31_status": "not_closed",
+    "canonical_review_pull_request": 141,
+    "do_not_merge_source_pull_requests_separately_if_141_is_selected": true,
+    "do_not_close_source_pull_requests_before_141_is_on_main": true,
+    "follow_up_issues": ["RAG-70", "RAG-71", "RAG-72"]
+  }
+}
