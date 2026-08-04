@@ -146,7 +146,15 @@ def _qdrant_filter(filters: RetrievalFilters) -> dict[str, object]:
                 "match": {"any": list(filters.logical_document_ids)},
             }
         )
-    return {"must": must}
+    return {
+        "must": must,
+        "must_not": [
+            {
+                "key": "security_review_status",
+                "match": {"any": ["pending", "quarantined"]},
+            }
+        ],
+    }
 
 
 def _parse_qdrant_results(payload: object) -> list[VectorSearchCandidate]:
@@ -185,6 +193,9 @@ def _payload_matches_filters(payload: dict[str, object], filters: RetrievalFilte
     if payload.get("document_version_status") != "ready":
         return False
     if payload.get("logical_document_status") != "active":
+        return False
+    security_review_status = payload.get("security_review_status")
+    if security_review_status not in {None, "approved"}:
         return False
     if payload.get("modality") != filters.modality:
         return False

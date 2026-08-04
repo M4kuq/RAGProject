@@ -7,6 +7,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.core.errors import ResourceNotFound
 from app.db.models import (
     ChatSession,
@@ -92,7 +93,11 @@ class SourceLocatorService:
                 LogicalDocument,
                 LogicalDocument.logical_document_id == DocumentVersion.logical_document_id,
             )
-            .where(Citation.citation_id == citation_id, RetrievalRunItem.selected_flag.is_(True))
+            .where(
+                Citation.citation_id == citation_id,
+                RetrievalRunItem.selected_flag.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
+            )
         )
         if role_name != "admin":
             statement = statement.join(
@@ -159,6 +164,9 @@ def build_source_locator(
         preview=preview,
         preview_truncated=preview_truncated,
         old_version_flag=old_version_flag(located.version, located.document),
+        source_provenance=located.version.source_provenance,  # type: ignore[arg-type]
+        source_trust_level=located.version.source_trust_level,  # type: ignore[arg-type]
+        security_review_status="approved",
     )
 
 

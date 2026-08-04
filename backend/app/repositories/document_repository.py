@@ -7,6 +7,7 @@ from typing import NamedTuple
 from sqlalchemy import Select, and_, delete, func, insert, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.rag.retrieval_cache import touch_retrieval_cache_corpus_marker
 from app.schemas.common import PaginationParams
@@ -16,6 +17,15 @@ class ChunkIndexPayloadRef(NamedTuple):
     document_version_id: int
     logical_document_id: int
     modality: str
+
+
+class VersionIndexState(NamedTuple):
+    version_status: str
+    is_active: bool
+    document_status: str
+    source_provenance: str
+    source_trust_level: str
+    security_review_status: str
 
 
 class DocumentRepository:
@@ -44,6 +54,11 @@ class DocumentRepository:
         storage_key: str,
         created_by: int,
         metadata_json: dict[str, object] | None = None,
+        source_provenance: str = "legacy",
+        source_trust_level: str = "trusted",
+        security_review_status: str = SECURITY_REVIEW_APPROVED,
+        security_review_reason_code: str | None = None,
+        security_reviewed_at: datetime | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             logical_document_id=logical_document_id,
@@ -57,6 +72,11 @@ class DocumentRepository:
             storage_key=storage_key,
             created_by=created_by,
             metadata_json=metadata_json,
+            source_provenance=source_provenance,
+            source_trust_level=source_trust_level,
+            security_review_status=security_review_status,
+            security_review_reason_code=security_review_reason_code,
+            security_reviewed_at=security_reviewed_at,
         )
         db.add(version)
         db.flush()
@@ -164,6 +184,7 @@ class DocumentRepository:
             select(DocumentVersion).where(
                 DocumentVersion.logical_document_id.in_(logical_document_ids),
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
             )
         ).all()
         return {row.logical_document_id: row for row in rows}
@@ -279,8 +300,8 @@ class DocumentRepository:
 
     def version_index_states(
         self, db: Session, *, document_version_ids: Sequence[int]
-    ) -> dict[int, tuple[str, bool, str]]:
-        """Return {document_version_id: (version_status, is_active, document_status)}.
+    ) -> dict[int, VersionIndexState]:
+        """Return the Postgres-authoritative Qdrant visibility payload state.
 
         Versions absent from the result do not exist in Postgres.
         """
@@ -292,6 +313,9 @@ class DocumentRepository:
                 DocumentVersion.status,
                 DocumentVersion.is_active,
                 LogicalDocument.status,
+                DocumentVersion.source_provenance,
+                DocumentVersion.source_trust_level,
+                DocumentVersion.security_review_status,
             )
             .join(
                 LogicalDocument,
@@ -300,8 +324,23 @@ class DocumentRepository:
             .where(DocumentVersion.document_version_id.in_(list(document_version_ids)))
         ).all()
         return {
-            int(document_version_id): (str(version_status), bool(is_active), str(document_status))
-            for document_version_id, version_status, is_active, document_status in rows
+            int(document_version_id): VersionIndexState(
+                version_status=str(version_status),
+                is_active=bool(is_active),
+                document_status=str(document_status),
+                source_provenance=str(source_provenance),
+                source_trust_level=str(source_trust_level),
+                security_review_status=str(security_review_status),
+            )
+            for (
+                document_version_id,
+                version_status,
+                is_active,
+                document_status,
+                source_provenance,
+                source_trust_level,
+                security_review_status,
+            ) in rows
         }
 
     def list_chunks_for_embedding(
@@ -466,6 +505,8 @@ class DocumentRepository:
         version: DocumentVersion,
         updated_at: datetime,
     ) -> int | None:
+        if version.security_review_status != SECURITY_REVIEW_APPROVED:
+            raise ValueError("document version security review must be approved")
         active = db.scalar(
             select(DocumentVersion).where(
                 DocumentVersion.logical_document_id == logical_document_id,
@@ -481,6 +522,40 @@ class DocumentRepository:
         touch_retrieval_cache_corpus_marker(db, updated_at=updated_at)
         db.flush()
         return previous_id
+
+    def set_version_security_review(
+        self,
+        db: Session,
+        *,
+        version: DocumentVersion,
+        status: str,
+        reason_code: str,
+        reviewed_at: datetime,
+    ) -> tuple[bool, bool]:
+        changed = (
+            version.security_review_status != status
+            or version.security_review_reason_code != reason_code
+        )
+        was_active = version.is_active
+        if not changed:
+            return False, was_active
+        was_visible = self._version_is_retrieval_visible(
+            db,
+            document_version_id=version.document_version_id,
+        )
+        version.security_review_status = status
+        version.security_review_reason_code = reason_code
+        version.security_reviewed_at = reviewed_at
+        version.updated_at = reviewed_at
+        if status != SECURITY_REVIEW_APPROVED:
+            version.is_active = False
+        if was_visible or self._version_is_retrieval_visible(
+            db,
+            document_version_id=version.document_version_id,
+        ):
+            touch_retrieval_cache_corpus_marker(db, updated_at=reviewed_at)
+        db.flush()
+        return changed, was_active
 
     def touch_document(
         self,
@@ -533,6 +608,7 @@ class DocumentRepository:
                     DocumentVersion.document_version_id.in_(document_version_ids),
                     DocumentVersion.status == "ready",
                     DocumentVersion.is_active.is_(True),
+                    DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                     LogicalDocument.status == "active",
                 )
                 .limit(1)

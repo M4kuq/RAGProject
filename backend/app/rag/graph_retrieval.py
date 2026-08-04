@@ -1030,6 +1030,7 @@ class Neo4jGraphStore:
             WHERE chunk.modality = $modality
               AND chunk.document_version_status = "ready"
               AND coalesce(chunk.document_version_is_active, false) = true
+              AND coalesce(chunk.security_review_status, "approved") = "approved"
               AND chunk.logical_document_status = "active"
               AND (
                   size($logical_document_ids) = 0
@@ -1073,6 +1074,7 @@ class Neo4jGraphStore:
                 WHERE chunk.modality = $modality
                   AND chunk.document_version_status = "ready"
                   AND coalesce(chunk.document_version_is_active, false) = true
+                  AND coalesce(chunk.security_review_status, "approved") = "approved"
                   AND chunk.logical_document_status = "active"
                   AND (
                       size($logical_document_ids) = 0
@@ -1326,6 +1328,7 @@ class Neo4jGraphStore:
                           WHERE chunk.modality = $modality
                             AND chunk.document_version_status = "ready"
                             AND coalesce(chunk.document_version_is_active, false) = true
+                            AND coalesce(chunk.security_review_status, "approved") = "approved"
                             AND chunk.logical_document_status = "active"
                             AND (
                                 size($logical_document_ids) = 0
@@ -1439,6 +1442,7 @@ class Neo4jGraphStore:
             WHERE chunk.modality = $modality
               AND chunk.document_version_status = "ready"
               AND coalesce(chunk.document_version_is_active, false) = true
+              AND coalesce(chunk.security_review_status, "approved") = "approved"
               AND chunk.logical_document_status = "active"
               AND (
                   size($logical_document_ids) = 0

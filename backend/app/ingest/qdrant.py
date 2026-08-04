@@ -549,6 +549,9 @@ class DocumentIndexingService:
         logical_document_status: str,
         document_version_status: str,
         is_active: bool,
+        source_provenance: str,
+        source_trust_level: str,
+        security_review_status: str,
     ) -> None:
         self.vector_store.sync_payload(
             document_version_id=document_version_id,
@@ -556,6 +559,9 @@ class DocumentIndexingService:
                 "logical_document_status": logical_document_status,
                 "document_version_status": document_version_status,
                 "is_active": is_active,
+                "source_provenance": source_provenance,
+                "source_trust_level": source_trust_level,
+                "security_review_status": security_review_status,
             },
         )
 
@@ -645,6 +651,11 @@ def build_qdrant_payload(
         "is_active": bool(document_version_obj.is_active),
         "logical_document_status": str(logical_document_obj.status),
         "document_version_status": document_version_status,
+        "source_provenance": str(getattr(document_version_obj, "source_provenance", "legacy")),
+        "source_trust_level": str(getattr(document_version_obj, "source_trust_level", "trusted")),
+        "security_review_status": str(
+            getattr(document_version_obj, "security_review_status", "approved")
+        ),
     }
     # Record which embedding model/dimension produced this vector so that
     # collection contents can be audited and re-embedded safely after a model swap.

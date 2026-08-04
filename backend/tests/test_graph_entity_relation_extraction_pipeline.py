@@ -1807,6 +1807,9 @@ def test_neo4j_projection_service_projects_safe_rows_idempotently(
         assert all(row["modality"] == "text" for row in projected_chunks)
         assert all(row["document_version_status"] == "ready" for row in projected_chunks)
         assert all(row["document_version_is_active"] is True for row in projected_chunks)
+        assert all(row["source_provenance"] == "legacy" for row in projected_chunks)
+        assert all(row["source_trust_level"] == "trusted" for row in projected_chunks)
+        assert all(row["security_review_status"] == "approved" for row in projected_chunks)
         assert all(row["logical_document_status"] == "active" for row in projected_chunks)
 
         parameter_dump = str([parameters for _, parameters in fake_driver.calls]).lower()
