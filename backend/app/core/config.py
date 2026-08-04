@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     citation_source_preview_max_chars: int = Field(default=500, ge=40, le=2000)
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
+    external_model_egress_policy: Literal["deny", "mask", "allow"] = "deny"
+    external_model_egress_allowed_providers: list[str] = Field(default_factory=list)
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection_name: str = "document_chunks"
     qdrant_distance: str = "Cosine"
@@ -356,6 +358,7 @@ class Settings(BaseSettings):
         "trusted_proxy_ips",
         "document_url_fetch_allowed_schemes",
         "document_url_fetch_allowed_content_types",
+        "external_model_egress_allowed_providers",
         "mcp_allowed_strategies",
         mode="before",
     )
@@ -384,6 +387,11 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("external_model_egress_policy", mode="before")
+    @classmethod
+    def normalize_external_model_egress_policy(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
     @field_validator("generation_pricing_overrides", mode="before")
     @classmethod
     def parse_generation_pricing_overrides(cls, value: object) -> object:
@@ -410,6 +418,24 @@ class Settings(BaseSettings):
     def validate_security_settings(self) -> Self:
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE=true is required when SameSite=None")
+        normalized_egress_providers = {
+            provider.strip().lower()
+            for provider in self.external_model_egress_allowed_providers
+            if provider.strip()
+        }
+        unsupported_egress_providers = normalized_egress_providers - {
+            "anthropic",
+            "bedrock",
+            "gemini",
+            "nvidia",
+            "openai",
+            "qwen",
+        }
+        if unsupported_egress_providers:
+            raise ValueError(
+                "EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS contains unsupported providers"
+            )
+        self.external_model_egress_allowed_providers = sorted(normalized_egress_providers)
         if self.ingest_chunk_overlap_tokens >= self.ingest_chunk_size_tokens:
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"

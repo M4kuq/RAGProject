@@ -4,11 +4,12 @@ import json
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
@@ -179,15 +180,35 @@ class OpenAICompatibleJSONToolPlanner:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int,
+        provider: str = "lmstudio",
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.provider = provider
+        self.egress_guard = egress_guard
+        self.last_reason_code: str | None = None
 
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        self.last_reason_code = None
         payload = _planner_input_payload(request)
+        system_instruction = _planner_system_instruction()
+        if self.egress_guard is not None:
+            try:
+                protected = self.egress_guard.protect_payload(
+                    {"system_instruction": system_instruction, "payload": payload},
+                    provider=self.provider,
+                    purpose="llm_tool_planner",
+                )
+            except ModelEgressBlockedError as exc:
+                self.last_reason_code = f"planner_egress_{exc.reason_code}"
+                return []
+            protected_payload = cast(dict[str, Any], protected.payload)
+            system_instruction = cast(str, protected_payload["system_instruction"])
+            payload = cast(dict[str, object], protected_payload["payload"])
         try:
             response = httpx.post(
                 f"{self.base_url}/chat/completions",
@@ -198,7 +219,7 @@ class OpenAICompatibleJSONToolPlanner:
                 json={
                     "model": self.model_name,
                     "messages": [
-                        {"role": "system", "content": _planner_system_instruction()},
+                        {"role": "system", "content": system_instruction},
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
                     "temperature": 0.0,
@@ -418,6 +439,9 @@ class LLMToolCallingRetrievalOrchestrator:
                     reason_codes.append("timeout_exceeded")
                     break
                 if not planned_calls:
+                    planner_reason_code = getattr(self.planner, "last_reason_code", None)
+                    if isinstance(planner_reason_code, str):
+                        reason_codes.append(planner_reason_code)
                     if search_call_count == 0:
                         planned_calls = [
                             LLMToolCall(
@@ -715,6 +739,8 @@ def create_llm_tool_call_planner(settings: Settings) -> LLMToolCallPlanner:
                 settings.openai_timeout_seconds, settings.llm_orchestrator_timeout_seconds
             ),
             max_output_tokens=settings.generation_max_output_tokens,
+            provider="openai",
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     return DeterministicLLMToolCallPlanner(settings)
 

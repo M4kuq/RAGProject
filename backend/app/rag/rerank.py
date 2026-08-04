@@ -9,6 +9,7 @@ from typing import Any, Protocol, cast
 
 from app.aws.client import aws_error_category, bedrock_model_arn, create_aws_client
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +157,11 @@ class BedrockRerankerClient:
         settings: Settings,
         model_name: str,
         client: Any | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.model_arn = bedrock_model_arn(model_name, settings.aws_region)
         self.client = client or create_aws_client("bedrock-agent-runtime", settings)
+        self.egress_guard = egress_guard
 
     def rerank(
         self,
@@ -170,18 +173,34 @@ class BedrockRerankerClient:
             raise RerankError(error_category="invalid_request")
         if not candidates:
             return []
+        protected_query = query
+        protected_candidate_texts = [candidate.text for candidate in candidates]
+        if self.egress_guard is not None:
+            try:
+                protected = self.egress_guard.protect_texts(
+                    [query, *protected_candidate_texts],
+                    provider="bedrock",
+                    purpose="rerank",
+                )
+            except ModelEgressBlockedError as exc:
+                raise RerankError(
+                    "model_egress_blocked",
+                    error_category=exc.reason_code,
+                ) from exc
+            protected_query = protected.texts[0]
+            protected_candidate_texts = list(protected.texts[1:])
         try:
             payload = self.client.rerank(
-                queries=[{"type": "TEXT", "textQuery": {"text": query}}],
+                queries=[{"type": "TEXT", "textQuery": {"text": protected_query}}],
                 sources=[
                     {
                         "type": "INLINE",
                         "inlineDocumentSource": {
                             "type": "TEXT",
-                            "textDocument": {"text": candidate.text},
+                            "textDocument": {"text": protected_text},
                         },
                     }
-                    for candidate in candidates
+                    for protected_text in protected_candidate_texts
                 ],
                 rerankingConfiguration={
                     "type": "BEDROCK_RERANKING_MODEL",
@@ -244,6 +263,7 @@ def create_reranker(settings: Settings) -> RerankerClient:
         return BedrockRerankerClient(
             settings=settings,
             model_name=settings.bedrock_rerank_model_id,
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     raise RerankError()
 
