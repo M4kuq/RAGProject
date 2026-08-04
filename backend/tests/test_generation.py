@@ -114,6 +114,7 @@ def test_local_model_endpoint_policy_disable_is_local_only() -> None:
         Settings(
             _env_file=None,
             app_env="production",
+            database_url="postgresql://localhost/ragproject_test",
             session_secret="x" * 32,
             session_cookie_secure=True,
             local_model_endpoint_policy_enabled=False,
