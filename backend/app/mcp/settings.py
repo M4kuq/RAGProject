@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import Settings
+from app.core.tool_execution_policy import MCP_READ_TOOL_NAMES
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,9 @@ class McpSettings:
     include_trace_summary_default: bool
     max_answer_chars: int
     allow_evaluation_run_create: bool
+    allowed_tools: tuple[str, ...]
+    tool_policy_mode: str
+    tool_execution_audit_enabled: bool
 
 
 def get_mcp_settings(settings: Settings | None = None) -> McpSettings:
@@ -38,6 +42,9 @@ def get_mcp_settings(settings: Settings | None = None) -> McpSettings:
         include_trace_summary_default=source.mcp_include_trace_summary_default,
         max_answer_chars=source.mcp_max_answer_chars,
         allow_evaluation_run_create=source.mcp_allow_evaluation_run_create,
+        allowed_tools=tuple(source.mcp_allowed_tools),
+        tool_policy_mode=source.agent_tool_policy_mode,
+        tool_execution_audit_enabled=source.agent_tool_execution_audit_enabled,
     )
     validate_mcp_settings(mcp_settings)
     return mcp_settings
@@ -56,6 +63,12 @@ def validate_mcp_settings(settings: McpSettings) -> None:
         raise ValueError("MCP write tools are disabled in Phase1")
     if settings.allow_evaluation_run_create:
         raise ValueError("MCP evaluation run creation is disabled in PR-38")
+    if settings.tool_policy_mode not in {"enforce", "legacy"}:
+        raise ValueError("AGENT_TOOL_POLICY_MODE must be enforce or legacy")
+    if len(settings.allowed_tools) != len(set(settings.allowed_tools)):
+        raise ValueError("MCP_ALLOWED_TOOLS must not contain duplicates")
+    if any(tool_name not in MCP_READ_TOOL_NAMES for tool_name in settings.allowed_tools):
+        raise ValueError("MCP_ALLOWED_TOOLS contains unsupported tools")
     allowed = {
         "dense",
         "sparse",

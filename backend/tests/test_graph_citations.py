@@ -167,6 +167,41 @@ def test_graph_locator_preserves_superseded_version_mappings(
     assert "inactive_source_chunk" not in result.coverage.reason_codes
 
 
+def test_graph_locator_excludes_quarantined_old_version_source(
+    graph_citation_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        version = db.get(DocumentVersion, seed["document_version_id"])
+        assert version is not None
+        version.is_active = False
+        version.security_review_status = "quarantined"
+        version.security_review_reason_code = "operator_quarantine"
+        version.security_reviewed_at = datetime.now(UTC)
+        db.commit()
+        paths = [
+            path
+            for path in db.query(GraphRetrievalPath).all()
+            if path.path_json.get("path_id") == "gp_selected"
+        ]
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+            paths=paths,
+        )
+        validated = GraphPathValidator().validate(paths=paths, located_sources=located)
+        result = GraphCitationBuilder(snippet_max_chars=64).build(
+            validated_paths=validated,
+            located_sources=located,
+        )
+
+    assert result.coverage.valid_path_count == 0
+    assert result.coverage.citable_path_count == 0
+    assert result.coverage.citation_source_count == 0
+    assert result.paths[0].source_mappings == ()
+    assert result.paths[0].reason_codes == ("inactive_source_chunk",)
+
+
 @pytest.mark.parametrize(
     ("version_status", "version_is_active", "document_status"),
     (

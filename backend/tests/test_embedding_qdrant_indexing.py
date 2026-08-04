@@ -140,6 +140,9 @@ def test_qdrant_point_id_and_payload_are_deterministic_and_safe() -> None:
     assert point_id_for_chunk_id(30) == 30
     assert payload["document_chunk_id"] == 30
     assert payload["document_version_status"] == "ready"
+    assert payload["source_provenance"] == "legacy"
+    assert payload["source_trust_level"] == "trusted"
+    assert payload["security_review_status"] == "approved"
     assert "content_text" not in payload
     assert "source_label" not in payload
     assert "file_name" not in payload
@@ -324,6 +327,9 @@ class _Version:
     is_active: bool
     file_name: str
     content_hash: str
+    source_provenance: str = "legacy"
+    source_trust_level: str = "trusted"
+    security_review_status: str = "approved"
 
 
 @dataclass(frozen=True)

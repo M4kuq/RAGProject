@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument, RetrievalRun
 from app.evaluation.metrics import RetrievedEvaluationItem
 from app.ingest.embedding import (
@@ -2064,6 +2065,7 @@ def _eligible_chunks_statement(filters: RetrievalFilters):
             DocumentChunk.modality == filters.modality,
             DocumentVersion.status == "ready",
             DocumentVersion.is_active.is_(True),
+            DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
             LogicalDocument.status == "active",
         )
         .order_by(DocumentChunk.document_chunk_id.asc())

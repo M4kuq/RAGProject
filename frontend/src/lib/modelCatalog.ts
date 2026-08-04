@@ -14,8 +14,11 @@ export const NVIDIA_RECOMMENDED_MODEL_KEY =
 const LEGACY_SLOW_NVIDIA_MODEL_KEY =
   "nvidia:meta/llama-3.3-70b-instruct";
 
-const BASE_MODEL_OPTIONS: ModelOption[] = [
-  { value: DEFAULT_MODEL, label: "Local Qwen3.5" },
+const LOCAL_MODEL_OPTIONS: ModelOption[] = [
+  { value: DEFAULT_MODEL, label: "Local Qwen3.5" }
+];
+
+export const EXTERNAL_MODEL_OPTIONS: ModelOption[] = [
   { value: "openai:gpt-5.5", label: "GPT 5.5" },
   { value: "openai:gpt-5.4", label: "GPT 5.4" },
   { value: "anthropic:claude-sonnet-4-20250514", label: "Claude" },
@@ -39,12 +42,21 @@ export function isNvidiaApiEnabled(
   return value === true || value === "true";
 }
 
+export function isExternalModelSelectionEnabled(
+  value: string | boolean | undefined = import.meta.env.VITE_ENABLE_EXTERNAL_MODEL_SELECTION
+): boolean {
+  return value === true || value === "true";
+}
+
 export function buildChatModelOptions(
-  nvidiaEnabled: boolean = isNvidiaApiEnabled()
+  nvidiaEnabled: boolean = isNvidiaApiEnabled(),
+  externalSelectionEnabled: boolean = isExternalModelSelectionEnabled()
 ): ModelOption[] {
-  return nvidiaEnabled
-    ? [...BASE_MODEL_OPTIONS, ...NVIDIA_MODEL_OPTIONS]
-    : [...BASE_MODEL_OPTIONS];
+  return [
+    ...LOCAL_MODEL_OPTIONS,
+    ...(externalSelectionEnabled ? EXTERNAL_MODEL_OPTIONS : []),
+    ...(nvidiaEnabled ? NVIDIA_MODEL_OPTIONS : [])
+  ];
 }
 
 export function isNvidiaModelKey(modelKey: string): boolean {
@@ -53,9 +65,10 @@ export function isNvidiaModelKey(modelKey: string): boolean {
 
 export function resolveSavedChatModel(
   savedModel: string | null,
-  nvidiaEnabled: boolean = isNvidiaApiEnabled()
+  nvidiaEnabled: boolean = isNvidiaApiEnabled(),
+  externalSelectionEnabled: boolean = isExternalModelSelectionEnabled()
 ): string {
-  const modelOptions = buildChatModelOptions(nvidiaEnabled);
+  const modelOptions = buildChatModelOptions(nvidiaEnabled, externalSelectionEnabled);
   if (modelOptions.some((option) => option.value === savedModel)) {
     return savedModel ?? DEFAULT_MODEL;
   }

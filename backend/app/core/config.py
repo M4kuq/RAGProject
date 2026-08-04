@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.tool_execution_policy import MCP_READ_TOOL_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +21,69 @@ _WEAK_SESSION_SECRETS = {
     "change-me-in-local-env",
     "ci-only-change-me",
 }
+
+_DEFAULT_LOCAL_MODEL_ALLOWED_HOSTS = (
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+    "lmstudio",
+    "ollama",
+)
+_DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _normalize_local_model_allowed_host(value: str) -> str:
+    normalized = value.strip().lower().rstrip(".")
+    error = "LOCAL_MODEL_ALLOWED_HOSTS entries must be exact host names or IP literals"
+    if not normalized or any(character.isspace() for character in normalized):
+        raise ValueError(error)
+    if any(character in normalized for character in ("/", "@", "?", "#", "*")):
+        raise ValueError(error)
+    try:
+        return ip_address(normalized).compressed.lower()
+    except ValueError:
+        pass
+    if len(normalized) > 253 or ":" in normalized:
+        raise ValueError(error)
+    labels = normalized.split(".")
+    if any(not _DNS_LABEL_PATTERN.fullmatch(label) for label in labels):
+        raise ValueError(error)
+    return normalized
+
+
+def _validate_local_model_endpoint(
+    *,
+    setting_name: str,
+    value: str,
+    allowed_hosts: set[str],
+) -> None:
+    error = (
+        f"{setting_name} must target an exact LOCAL_MODEL_ALLOWED_HOSTS entry using "
+        "http/https without userinfo, query, or fragment"
+    )
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        _ = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+    ):
+        raise ValueError(error)
+    try:
+        normalized_host = _normalize_local_model_allowed_host(host)
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    if normalized_host not in allowed_hosts:
+        raise ValueError(error)
 
 
 class Settings(BaseSettings):
@@ -40,6 +108,15 @@ class Settings(BaseSettings):
     login_rate_limit_max_attempts: int = Field(default=5, ge=1)
     login_rate_limit_lock_seconds: int = Field(default=300, ge=1)
     login_rate_limit_max_keys: int = Field(default=10000, ge=100)
+    rag_abuse_control_enabled: bool = True
+    rag_abuse_user_requests_per_minute: int = Field(default=20, ge=1, le=10_000)
+    rag_abuse_global_requests_per_minute: int = Field(default=200, ge=1, le=100_000)
+    rag_abuse_user_concurrent_requests: int = Field(default=2, ge=1, le=100)
+    rag_abuse_global_concurrent_requests: int = Field(default=20, ge=1, le=10_000)
+    rag_abuse_user_daily_work_units: int = Field(default=500, ge=1, le=1_000_000)
+    rag_abuse_global_daily_work_units: int = Field(default=10_000, ge=1, le=100_000_000)
+    rag_abuse_lease_seconds: int = Field(default=900, ge=60, le=7_200)
+    rag_abuse_audit_retention_days: int = Field(default=8, ge=2, le=90)
     trusted_proxy_ips: list[str] = Field(default_factory=list)
     storage_root: Path = Path("storage/uploads")
     storage_backend: str = "local"
@@ -103,6 +180,8 @@ class Settings(BaseSettings):
     citation_source_preview_max_chars: int = Field(default=500, ge=40, le=2000)
     log_level: str = "INFO"
     pii_masking_enabled: bool = True
+    external_model_egress_policy: Literal["deny", "mask", "allow"] = "deny"
+    external_model_egress_allowed_providers: list[str] = Field(default_factory=list)
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection_name: str = "document_chunks"
     qdrant_distance: str = "Cosine"
@@ -110,6 +189,10 @@ class Settings(BaseSettings):
     qdrant_required: bool = False
     qdrant_upsert_batch_size: int = Field(default=64, ge=1)
     qdrant_timeout_seconds: float = Field(default=5.0, gt=0)
+    local_model_endpoint_policy_enabled: bool = True
+    local_model_allowed_hosts: list[str] = Field(
+        default_factory=lambda: list(_DEFAULT_LOCAL_MODEL_ALLOWED_HOSTS)
+    )
     ollama_url: str = "http://ollama:11434"
     ollama_timeout_seconds: float = Field(default=180.0, gt=0)
     use_fake_llm: bool = False
@@ -206,6 +289,8 @@ class Settings(BaseSettings):
     llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     llm_orchestrator_allow_trace_inspection: bool = True
     llm_orchestrator_allow_admin_tools: bool = False
+    agent_tool_policy_mode: Literal["enforce", "legacy"] = "enforce"
+    agent_tool_execution_audit_enabled: bool = True
     langchain_agentic_enabled: bool = True
     langchain_agentic_max_tool_calls: int = Field(default=8, ge=1, le=10)
     langchain_agentic_max_search_calls: int = Field(default=8, ge=1, le=10)
@@ -290,8 +375,15 @@ class Settings(BaseSettings):
     generation_max_context_chars: int = Field(default=6000, ge=100, le=50000)
     generation_max_output_chars: int = Field(default=8000, ge=20, le=20000)
     generation_max_output_tokens: int = Field(default=8192, ge=128, le=8192)
+    rag_user_model_selection_enabled: bool = False
+    rag_user_selectable_model_keys: list[str] = Field(default_factory=list)
     bedrock_generation_model_id: str = "amazon.nova-lite-v1:0"
     generation_retry_on_insufficient_evidence: bool = True
+    rag_injection_policy: Literal[
+        "observe_only",
+        "quarantine_context",
+        "block_user_quarantine_context",
+    ] = "observe_only"
     generation_pricing_overrides: object = Field(default={})
     lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
     lmstudio_api_key: str = "lm-studio"
@@ -334,6 +426,7 @@ class Settings(BaseSettings):
             "langgraph_agentic",
         ]
     )
+    mcp_allowed_tools: list[str] = Field(default_factory=lambda: list(MCP_READ_TOOL_NAMES))
     mcp_include_trace_summary_default: bool = False
     mcp_max_answer_chars: int = Field(default=4000, ge=20, le=8000)
     mcp_allow_evaluation_run_create: bool = False
@@ -351,7 +444,11 @@ class Settings(BaseSettings):
         "trusted_proxy_ips",
         "document_url_fetch_allowed_schemes",
         "document_url_fetch_allowed_content_types",
+        "external_model_egress_allowed_providers",
+        "rag_user_selectable_model_keys",
+        "local_model_allowed_hosts",
         "mcp_allowed_strategies",
+        "mcp_allowed_tools",
         mode="before",
     )
     @classmethod
@@ -379,6 +476,11 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("external_model_egress_policy", mode="before")
+    @classmethod
+    def normalize_external_model_egress_policy(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
     @field_validator("generation_pricing_overrides", mode="before")
     @classmethod
     def parse_generation_pricing_overrides(cls, value: object) -> object:
@@ -405,6 +507,51 @@ class Settings(BaseSettings):
     def validate_security_settings(self) -> Self:
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE=true is required when SameSite=None")
+        normalized_egress_providers = {
+            provider.strip().lower()
+            for provider in self.external_model_egress_allowed_providers
+            if provider.strip()
+        }
+        unsupported_egress_providers = normalized_egress_providers - {
+            "anthropic",
+            "bedrock",
+            "gemini",
+            "nvidia",
+            "openai",
+            "qwen",
+        }
+        if unsupported_egress_providers:
+            raise ValueError(
+                "EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS contains unsupported providers"
+            )
+        self.external_model_egress_allowed_providers = sorted(normalized_egress_providers)
+        if self.rag_abuse_global_requests_per_minute < self.rag_abuse_user_requests_per_minute:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_REQUESTS_PER_MINUTE must be >= RAG_ABUSE_USER_REQUESTS_PER_MINUTE"
+            )
+        if self.rag_abuse_global_concurrent_requests < self.rag_abuse_user_concurrent_requests:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_CONCURRENT_REQUESTS must be >= RAG_ABUSE_USER_CONCURRENT_REQUESTS"
+            )
+        if self.rag_abuse_global_daily_work_units < self.rag_abuse_user_daily_work_units:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_DAILY_WORK_UNITS must be >= RAG_ABUSE_USER_DAILY_WORK_UNITS"
+            )
+        longest_agentic_timeout = max(
+            self.llm_orchestrator_timeout_seconds,
+            self.langchain_agentic_timeout_seconds,
+            self.langgraph_agentic_timeout_seconds,
+        )
+        if self.rag_abuse_lease_seconds < longest_agentic_timeout:
+            raise ValueError("RAG_ABUSE_LEASE_SECONDS must cover every Agentic request timeout")
+        if (
+            self.rag_abuse_control_enabled
+            and self.app_env.lower() not in {"local", "ci", "test"}
+            and not self.database_url.lower().startswith("postgresql")
+        ):
+            raise ValueError(
+                "RAG abuse control requires PostgreSQL outside local/ci/test environments"
+            )
         if self.ingest_chunk_overlap_tokens >= self.ingest_chunk_size_tokens:
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
@@ -640,7 +787,46 @@ class Settings(BaseSettings):
             )
         if self.generation_provider == "bedrock":
             self.generation_model_name = self.bedrock_generation_model_id
+        self.rag_user_selectable_model_keys = sorted(
+            {
+                _normalize_user_selectable_model_key(model_key)
+                for model_key in self.rag_user_selectable_model_keys
+            }
+        )
+        if self.rag_user_selectable_model_keys and not self.rag_user_model_selection_enabled:
+            raise ValueError(
+                "RAG_USER_MODEL_SELECTION_ENABLED=true is required when "
+                "RAG_USER_SELECTABLE_MODEL_KEYS is set"
+            )
+        self.ollama_url = self.ollama_url.rstrip("/")
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
+        normalized_local_hosts: list[str] = []
+        for raw_host in self.local_model_allowed_hosts:
+            normalized_host = _normalize_local_model_allowed_host(raw_host)
+            if normalized_host not in normalized_local_hosts:
+                normalized_local_hosts.append(normalized_host)
+        self.local_model_allowed_hosts = normalized_local_hosts
+        local_environment = self.app_env.lower() in {"local", "ci", "test"}
+        if not self.local_model_endpoint_policy_enabled and not local_environment:
+            raise ValueError(
+                "LOCAL_MODEL_ENDPOINT_POLICY_ENABLED must remain true outside local/ci/test"
+            )
+        if self.local_model_endpoint_policy_enabled:
+            if not self.local_model_allowed_hosts:
+                raise ValueError(
+                    "LOCAL_MODEL_ALLOWED_HOSTS must not be empty while endpoint policy is enabled"
+                )
+            allowed_local_hosts = set(self.local_model_allowed_hosts)
+            _validate_local_model_endpoint(
+                setting_name="OLLAMA_URL",
+                value=self.ollama_url,
+                allowed_hosts=allowed_local_hosts,
+            )
+            _validate_local_model_endpoint(
+                setting_name="LMSTUDIO_BASE_URL",
+                value=self.lmstudio_base_url,
+                allowed_hosts=allowed_local_hosts,
+            )
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
         self.openai_api_key = self.openai_api_key.strip() if self.openai_api_key else None
         self.openai_base_url = self.openai_base_url.rstrip("/")
@@ -680,6 +866,11 @@ class Settings(BaseSettings):
             raise ValueError("MCP_ACTOR_MODE must be mcp_local in Phase1")
         if self.mcp_allow_write_tools:
             raise ValueError("MCP_ALLOW_WRITE_TOOLS must be false in Phase1")
+        self.mcp_allowed_tools = [item.strip() for item in self.mcp_allowed_tools]
+        if len(self.mcp_allowed_tools) != len(set(self.mcp_allowed_tools)):
+            raise ValueError("MCP_ALLOWED_TOOLS must not contain duplicates")
+        if any(item not in MCP_READ_TOOL_NAMES for item in self.mcp_allowed_tools):
+            raise ValueError("MCP_ALLOWED_TOOLS contains unsupported tools")
         self.mcp_allowed_strategies = [item.lower() for item in self.mcp_allowed_strategies]
         allowed_mcp_strategies = {
             "dense",
@@ -731,6 +922,22 @@ class Settings(BaseSettings):
         if self.embedding_provider == "fake":
             return self.embedding_fake_dimension
         return self.embedding_vector_dimension
+
+
+def _normalize_user_selectable_model_key(value: str) -> str:
+    stripped = value.strip()
+    provider, separator, model_name = stripped.partition(":")
+    provider = provider.strip().lower()
+    if provider == "google":
+        provider = "gemini"
+    if (
+        not separator
+        or not model_name.strip()
+        or len(stripped) > 128
+        or provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
+    ):
+        raise ValueError("RAG_USER_SELECTABLE_MODEL_KEYS contains an invalid model key")
+    return f"{provider}:{model_name.strip()}"
 
 
 @lru_cache

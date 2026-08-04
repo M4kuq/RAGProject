@@ -643,6 +643,7 @@ test("can archive instead of hard deleting from the delete dialog", async () => 
 
 test("creates a persisted chat before the first rag ask and keeps csrf", async () => {
   document.cookie = "rag_csrf=csrf-token";
+  vi.stubEnv("VITE_ENABLE_EXTERNAL_MODEL_SELECTION", "true");
   vi.stubGlobal("crypto", { randomUUID: () => "fixed" });
   let resolveAsk: (response: Response) => void = () => undefined;
   const askPromise = new Promise<Response>((resolve) => {

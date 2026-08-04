@@ -38,6 +38,7 @@ def test_settings_rejects_nvidia_provider_outside_local_or_test() -> None:
         Settings(
             _env_file=None,
             app_env="production",
+            database_url="postgresql://localhost/ragproject_test",
             generation_provider="nvidia",
             generation_model_name=NVIDIA_MODEL,
             nvidia_api_key="test-nvidia-key",
@@ -52,6 +53,7 @@ def test_factory_rejects_nvidia_override_outside_local_or_test() -> None:
     settings = Settings(
         _env_file=None,
         app_env="production",
+        database_url="postgresql://localhost/ragproject_test",
         generation_provider="lmstudio",
         nvidia_api_key="test-nvidia-key",
         session_cookie_secure=True,
@@ -103,6 +105,8 @@ def test_nvidia_generator_uses_standard_chat_completions_payload(
         nvidia_api_key="test-nvidia-key",
         nvidia_base_url="https://integrate.api.nvidia.com/v1/",
         nvidia_timeout_seconds=45,
+        external_model_egress_policy="mask",
+        external_model_egress_allowed_providers=["nvidia"],
     )
 
     generator = create_answer_generator(settings)

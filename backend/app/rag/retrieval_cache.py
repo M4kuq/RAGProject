@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.graph_models import GraphIndexRun, GraphRetrievalPath
 from app.db.models import (
     DocumentChunk,
@@ -827,6 +828,7 @@ def _active_document_fingerprint(db: Session, *, filters: RetrievalFilters) -> s
             LogicalDocument.status == "active",
             DocumentVersion.status == "ready",
             DocumentVersion.is_active.is_(True),
+            DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
             DocumentChunk.modality == filters.modality,
         )
         .group_by(
@@ -904,6 +906,7 @@ def _graph_index_fingerprint(db: Session, *, filters: RetrievalFilters) -> str:
             LogicalDocument.status == "active",
             DocumentVersion.status == "ready",
             DocumentVersion.is_active.is_(True),
+            DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
         )
     )
     if filters.logical_document_ids:

@@ -13,6 +13,7 @@ import httpx
 
 from app.aws.client import aws_error_category, create_aws_client
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 
 logger = logging.getLogger(__name__)
 
@@ -236,12 +237,14 @@ class BedrockTitanEmbeddingAdapter:
         model_name: str,
         dimension: int,
         client: Any | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         if dimension not in {256, 512, 1024}:
             raise ValueError("Bedrock Titan V2 dimension must be 256, 512, or 1024")
         self.model_name = model_name
         self._dimension = dimension
         self.client = client or create_aws_client("bedrock-runtime", settings)
+        self.egress_guard = egress_guard
 
     @property
     def dimension(self) -> int:
@@ -249,7 +252,20 @@ class BedrockTitanEmbeddingAdapter:
 
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
         _validate_texts(texts)
-        vectors = [self._embed_text(text) for text in texts]
+        protected_texts = tuple(texts)
+        if self.egress_guard is not None:
+            try:
+                protected_texts = self.egress_guard.protect_texts(
+                    texts,
+                    provider="bedrock",
+                    purpose="embedding",
+                ).texts
+            except ModelEgressBlockedError as exc:
+                raise EmbeddingAdapterError(
+                    "model_egress_blocked",
+                    error_category=exc.reason_code,
+                ) from exc
+        vectors = [self._embed_text(text) for text in protected_texts]
         _validate_vectors(vectors, expected_count=len(texts), dimension=self._dimension)
         return vectors
 
@@ -357,6 +373,7 @@ def create_embedding_adapter(settings: Settings) -> EmbeddingAdapter:
             settings=settings,
             model_name=settings.bedrock_embedding_model_id,
             dimension=dimension,
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     raise EmbeddingAdapterError("embedding_failed")
 
