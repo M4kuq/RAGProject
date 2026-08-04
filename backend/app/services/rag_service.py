@@ -5,6 +5,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -87,8 +88,10 @@ from app.rag.generation import (
 )
 from app.rag.hybrid import HybridRetrievalStrategy
 from app.rag.injection_detection import (
-    INJECTION_PATTERN_REASON_CODE,
-    detect_injection_patterns,
+    INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+    ContextInjectionPolicyDecision,
+    evaluate_context_injection_policy,
+    evaluate_user_injection_policy,
 )
 from app.rag.insufficient import is_insufficient_evidence_answer as _is_insufficient_evidence_answer
 from app.rag.langchain_agentic import (
@@ -743,6 +746,24 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
+            user_decision = evaluate_user_injection_policy(
+                payload.message,
+                policy=self.settings.rag_injection_policy,
+            )
+            self._record_injection_reason_codes(
+                db,
+                retrieval_run_id=run_id,
+                reason_codes=user_decision.reason_codes,
+            )
+            if user_decision.blocked:
+                self._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="injection_user_blocked",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                raise RagAskPipelineError("injection_user_blocked", 422)
 
             def retrieve_uncached() -> RetrievalPipelineResult:
                 retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
@@ -873,11 +894,29 @@ class RagService:
 
             with latency_tracker.span("context_assembly_ms"):
                 context_items = evidence_pack.to_generation_context_items()
-                self._record_injection_patterns(
+                context_decision = self._record_injection_patterns(
                     db,
                     retrieval_run_id=run_id,
                     context_texts=[item.text for item in context_items],
                 )
+                allowed_context_indices = set(context_decision.allowed_indices)
+                context_items = [
+                    item
+                    for index, item in enumerate(context_items)
+                    if index in allowed_context_indices
+                ]
+                if context_decision.all_context_quarantined:
+                    self._mark_failed_safely(
+                        db,
+                        retrieval_run_id=run_id,
+                        error_code=INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+                        latency_tracker=latency_tracker,
+                        rollback=False,
+                    )
+                    raise RagAskPipelineError(
+                        INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+                        422,
+                    )
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
@@ -2050,14 +2089,27 @@ class RagService:
         *,
         retrieval_run_id: int,
         context_texts: list[str],
-    ) -> None:
-        """Observability only: flag prompt-injection patterns in selected chunks.
+    ) -> ContextInjectionPolicyDecision:
+        """Record injection signals and return the configured context policy decision."""
+        decision = evaluate_context_injection_policy(
+            context_texts,
+            policy=self.settings.rag_injection_policy,
+        )
+        self._record_injection_reason_codes(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            reason_codes=decision.reason_codes,
+        )
+        return decision
 
-        Records ``injection_pattern_detected`` into the retrieval run's strategy
-        decision ``reason_codes`` when any selected chunk text matches a known
-        injection pattern. Does NOT alter retrieval or generation behavior.
-        """
-        if not any(detect_injection_patterns(text) for text in context_texts):
+    def _record_injection_reason_codes(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        reason_codes: Sequence[str],
+    ) -> None:
+        if not reason_codes:
             return
         run = self._require_run(db, retrieval_run_id)
         # Preserve trace suppression per run: router paths with
@@ -2069,12 +2121,13 @@ class RagService:
         decision = dict(run.strategy_decision_json)
         existing_reason_codes = decision.get("reason_codes")
         if isinstance(existing_reason_codes, list):
-            reason_codes = [str(code) for code in existing_reason_codes]
+            combined_reason_codes = [str(code) for code in existing_reason_codes]
         else:
-            reason_codes = []
-        if INJECTION_PATTERN_REASON_CODE not in reason_codes:
-            reason_codes.append(INJECTION_PATTERN_REASON_CODE)
-        decision["reason_codes"] = reason_codes
+            combined_reason_codes = []
+        for reason_code in reason_codes:
+            if reason_code not in combined_reason_codes:
+                combined_reason_codes.append(reason_code)
+        decision["reason_codes"] = combined_reason_codes
         self.repository.update_retrieval_run_trace(
             db,
             run=run,
