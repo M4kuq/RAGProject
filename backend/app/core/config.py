@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     login_rate_limit_max_attempts: int = Field(default=5, ge=1)
     login_rate_limit_lock_seconds: int = Field(default=300, ge=1)
     login_rate_limit_max_keys: int = Field(default=10000, ge=100)
+    rag_abuse_control_enabled: bool = True
+    rag_abuse_user_requests_per_minute: int = Field(default=20, ge=1, le=10_000)
+    rag_abuse_global_requests_per_minute: int = Field(default=200, ge=1, le=100_000)
+    rag_abuse_user_concurrent_requests: int = Field(default=2, ge=1, le=100)
+    rag_abuse_global_concurrent_requests: int = Field(default=20, ge=1, le=10_000)
+    rag_abuse_user_daily_work_units: int = Field(default=500, ge=1, le=1_000_000)
+    rag_abuse_global_daily_work_units: int = Field(default=10_000, ge=1, le=100_000_000)
+    rag_abuse_lease_seconds: int = Field(default=900, ge=60, le=7_200)
+    rag_abuse_audit_retention_days: int = Field(default=8, ge=2, le=90)
     trusted_proxy_ips: list[str] = Field(default_factory=list)
     storage_root: Path = Path("storage/uploads")
     storage_backend: str = "local"
@@ -436,6 +445,33 @@ class Settings(BaseSettings):
                 "EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS contains unsupported providers"
             )
         self.external_model_egress_allowed_providers = sorted(normalized_egress_providers)
+        if self.rag_abuse_global_requests_per_minute < self.rag_abuse_user_requests_per_minute:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_REQUESTS_PER_MINUTE must be >= RAG_ABUSE_USER_REQUESTS_PER_MINUTE"
+            )
+        if self.rag_abuse_global_concurrent_requests < self.rag_abuse_user_concurrent_requests:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_CONCURRENT_REQUESTS must be >= RAG_ABUSE_USER_CONCURRENT_REQUESTS"
+            )
+        if self.rag_abuse_global_daily_work_units < self.rag_abuse_user_daily_work_units:
+            raise ValueError(
+                "RAG_ABUSE_GLOBAL_DAILY_WORK_UNITS must be >= RAG_ABUSE_USER_DAILY_WORK_UNITS"
+            )
+        longest_agentic_timeout = max(
+            self.llm_orchestrator_timeout_seconds,
+            self.langchain_agentic_timeout_seconds,
+            self.langgraph_agentic_timeout_seconds,
+        )
+        if self.rag_abuse_lease_seconds < longest_agentic_timeout:
+            raise ValueError("RAG_ABUSE_LEASE_SECONDS must cover every Agentic request timeout")
+        if (
+            self.rag_abuse_control_enabled
+            and self.app_env.lower() not in {"local", "ci", "test"}
+            and not self.database_url.lower().startswith("postgresql")
+        ):
+            raise ValueError(
+                "RAG abuse control requires PostgreSQL outside local/ci/test environments"
+            )
         if self.ingest_chunk_overlap_tokens >= self.ingest_chunk_size_tokens:
             raise ValueError(
                 "INGEST_CHUNK_OVERLAP_TOKENS must be smaller than INGEST_CHUNK_SIZE_TOKENS"
