@@ -9,6 +9,11 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool, StructuredTool
 
 from app.core.config import Settings
+from app.core.tool_execution_policy import (
+    ToolCapability,
+    emit_tool_execution_audit,
+    evaluate_tool_call,
+)
 from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
@@ -39,6 +44,12 @@ LANGCHAIN_SEARCH_TOOL_NAMES = {"dense_search", "sparse_search", "hybrid_search"}
 LANGCHAIN_ALLOWED_TOOL_NAMES = {
     *LANGCHAIN_SEARCH_TOOL_NAMES,
     "finalize_answer",
+}
+_TOOL_CAPABILITIES = {
+    "dense_search": ToolCapability("dense_search", "read", "search"),
+    "sparse_search": ToolCapability("sparse_search", "read", "search"),
+    "hybrid_search": ToolCapability("hybrid_search", "read", "search"),
+    "finalize_answer": ToolCapability("finalize_answer", "read", "finalize"),
 }
 
 
@@ -314,17 +325,53 @@ class LangChainAgenticRetrievalOrchestrator:
                     tool_call_count += 1
                     tool_call_id = f"lc_{tool_call_count}"
                     tool_name = planned_call.tool_name
-                    if tool_name not in LANGCHAIN_ALLOWED_TOOL_NAMES:
+                    policy_decision = evaluate_tool_call(
+                        capabilities=_TOOL_CAPABILITIES,
+                        tool_name=tool_name,
+                        arguments=planned_call.arguments,
+                        allowed_tools=LANGCHAIN_ALLOWED_TOOL_NAMES,
+                        allow_write_tools=False,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        max_query_chars=max_query_chars,
+                        tool_call_id_prefixes=("lc_",),
+                    )
+                    argument_count = len(planned_call.arguments)
+                    if not policy_decision.allowed:
                         append_error_result(
                             tool_call_id=tool_call_id,
-                            tool_name="unknown",
-                            error_code="tool_not_allowed",
+                            tool_name=policy_decision.stable_tool_name,
+                            error_code=policy_decision.reason_code,
                         )
-                        reason_codes.append("tool_not_allowed")
+                        reason_codes.append(policy_decision.reason_code)
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="langchain_agentic",
+                            decision="denied",
+                            stable_tool_name=policy_decision.stable_tool_name,
+                            effect=policy_decision.effect,
+                            reason_code=policy_decision.reason_code,
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                        )
                         continue
+                    tool_name = policy_decision.stable_tool_name
+                    planned_arguments = policy_decision.arguments
+                    audit_started_at = time.monotonic()
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="langchain_agentic",
+                        decision="allowed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code=policy_decision.reason_code,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                    )
                     if tool_name == "finalize_answer":
                         finalize_called = True
-                        selected_ids = _selected_tool_call_ids(planned_call.arguments)
+                        selected_ids = _selected_tool_call_ids(planned_arguments)
                         selected_tool_call_ids = (
                             selected_ids
                             if selected_ids is not None
@@ -333,6 +380,18 @@ class LangChainAgenticRetrievalOrchestrator:
                         if not selected_tool_call_ids:
                             reason_codes.append("finalize_answer_empty_selection")
                         reason_codes.append("finalize_answer_called")
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="langchain_agentic",
+                            decision="completed",
+                            stable_tool_name=tool_name,
+                            effect=policy_decision.effect,
+                            reason_code="tool_completed",
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                            duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                        )
                         break
 
                     if search_call_count >= max_search_calls:
@@ -352,7 +411,7 @@ class LangChainAgenticRetrievalOrchestrator:
                         )
                         reason_codes.append("strategy_not_enabled")
                         continue
-                    tool_query = _tool_query(planned_call.arguments, fallback=query)
+                    tool_query = _tool_query(planned_arguments, fallback=query)
                     search_key = (tool_name, _normalized_query(tool_query))
                     if search_key in seen_searches:
                         repeated_query_detected = True
@@ -361,6 +420,18 @@ class LangChainAgenticRetrievalOrchestrator:
                     seen_searches.add(search_key)
                     with latency_tracker.span("langchain_tool_execution_ms"):
                         attempt = tool.invoke({"query": tool_query[:max_query_chars]})
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="langchain_agentic",
+                        decision="completed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code="tool_completed",
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                        duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                    )
                     if not isinstance(attempt, RetrievalAttemptResult):
                         append_error_result(
                             tool_call_id=tool_call_id,
