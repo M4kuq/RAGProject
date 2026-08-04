@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +19,69 @@ _WEAK_SESSION_SECRETS = {
     "change-me-in-local-env",
     "ci-only-change-me",
 }
+
+_DEFAULT_LOCAL_MODEL_ALLOWED_HOSTS = (
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+    "lmstudio",
+    "ollama",
+)
+_DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _normalize_local_model_allowed_host(value: str) -> str:
+    normalized = value.strip().lower().rstrip(".")
+    error = "LOCAL_MODEL_ALLOWED_HOSTS entries must be exact host names or IP literals"
+    if not normalized or any(character.isspace() for character in normalized):
+        raise ValueError(error)
+    if any(character in normalized for character in ("/", "@", "?", "#", "*")):
+        raise ValueError(error)
+    try:
+        return ip_address(normalized).compressed.lower()
+    except ValueError:
+        pass
+    if len(normalized) > 253 or ":" in normalized:
+        raise ValueError(error)
+    labels = normalized.split(".")
+    if any(not _DNS_LABEL_PATTERN.fullmatch(label) for label in labels):
+        raise ValueError(error)
+    return normalized
+
+
+def _validate_local_model_endpoint(
+    *,
+    setting_name: str,
+    value: str,
+    allowed_hosts: set[str],
+) -> None:
+    error = (
+        f"{setting_name} must target an exact LOCAL_MODEL_ALLOWED_HOSTS entry using "
+        "http/https without userinfo, query, or fragment"
+    )
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        _ = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+    ):
+        raise ValueError(error)
+    try:
+        normalized_host = _normalize_local_model_allowed_host(host)
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    if normalized_host not in allowed_hosts:
+        raise ValueError(error)
 
 
 class Settings(BaseSettings):
@@ -121,6 +187,10 @@ class Settings(BaseSettings):
     qdrant_required: bool = False
     qdrant_upsert_batch_size: int = Field(default=64, ge=1)
     qdrant_timeout_seconds: float = Field(default=5.0, gt=0)
+    local_model_endpoint_policy_enabled: bool = True
+    local_model_allowed_hosts: list[str] = Field(
+        default_factory=lambda: list(_DEFAULT_LOCAL_MODEL_ALLOWED_HOSTS)
+    )
     ollama_url: str = "http://ollama:11434"
     ollama_timeout_seconds: float = Field(default=180.0, gt=0)
     use_fake_llm: bool = False
@@ -371,6 +441,7 @@ class Settings(BaseSettings):
         "document_url_fetch_allowed_content_types",
         "external_model_egress_allowed_providers",
         "rag_user_selectable_model_keys",
+        "local_model_allowed_hosts",
         "mcp_allowed_strategies",
         mode="before",
     )
@@ -721,7 +792,35 @@ class Settings(BaseSettings):
                 "RAG_USER_MODEL_SELECTION_ENABLED=true is required when "
                 "RAG_USER_SELECTABLE_MODEL_KEYS is set"
             )
+        self.ollama_url = self.ollama_url.rstrip("/")
         self.lmstudio_base_url = self.lmstudio_base_url.rstrip("/")
+        normalized_local_hosts: list[str] = []
+        for raw_host in self.local_model_allowed_hosts:
+            normalized_host = _normalize_local_model_allowed_host(raw_host)
+            if normalized_host not in normalized_local_hosts:
+                normalized_local_hosts.append(normalized_host)
+        self.local_model_allowed_hosts = normalized_local_hosts
+        local_environment = self.app_env.lower() in {"local", "ci", "test"}
+        if not self.local_model_endpoint_policy_enabled and not local_environment:
+            raise ValueError(
+                "LOCAL_MODEL_ENDPOINT_POLICY_ENABLED must remain true outside local/ci/test"
+            )
+        if self.local_model_endpoint_policy_enabled:
+            if not self.local_model_allowed_hosts:
+                raise ValueError(
+                    "LOCAL_MODEL_ALLOWED_HOSTS must not be empty while endpoint policy is enabled"
+                )
+            allowed_local_hosts = set(self.local_model_allowed_hosts)
+            _validate_local_model_endpoint(
+                setting_name="OLLAMA_URL",
+                value=self.ollama_url,
+                allowed_hosts=allowed_local_hosts,
+            )
+            _validate_local_model_endpoint(
+                setting_name="LMSTUDIO_BASE_URL",
+                value=self.lmstudio_base_url,
+                allowed_hosts=allowed_local_hosts,
+            )
         self.lmstudio_api_key = self.lmstudio_api_key.strip() or "lm-studio"
         self.openai_api_key = self.openai_api_key.strip() if self.openai_api_key else None
         self.openai_base_url = self.openai_base_url.rstrip("/")
