@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 
 
@@ -22,6 +23,7 @@ def search_chunks(db: Session, query: str, limit: int = 5) -> list[tuple[Documen
             LogicalDocument.status == "active",
             DocumentVersion.status == "ready",
             DocumentVersion.is_active.is_(True),
+            DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
         )
         .order_by(DocumentChunk.document_chunk_id.asc())
         .limit(200)

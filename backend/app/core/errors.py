@@ -19,6 +19,7 @@ ERROR_MESSAGES: dict[str, str] = {
     "archived_session_readonly": "Archived session is read-only.",
     "document_archived": "Document is archived.",
     "document_version_not_approvable": "Document version is not approvable.",
+    "document_version_quarantined": "Document version is quarantined.",
     "active_version_conflict": "Active version conflict.",
     "job_not_ready": "Job is not ready for this operation.",
     "job_active_retry_exists": "An active retry already exists for this job.",
@@ -166,6 +167,11 @@ class DocumentArchived(ConflictError):
 class DocumentVersionNotApprovable(ConflictError):
     def __init__(self) -> None:
         super().__init__("document_version_not_approvable")
+
+
+class DocumentVersionQuarantined(ConflictError):
+    def __init__(self) -> None:
+        super().__init__("document_version_quarantined")
 
 
 class ActiveVersionConflict(ConflictError):

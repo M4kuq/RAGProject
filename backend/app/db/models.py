@@ -306,6 +306,29 @@ class DocumentVersion(Base, TimestampMixin):
             "is_active = FALSE OR status = 'ready'",
             name="ck_document_versions_active_ready_only",
         ),
+        CheckConstraint(
+            "source_provenance IN ('legacy', 'admin_upload', 'external_url', 'evaluation_fixture')",
+            name="ck_document_versions_source_provenance",
+        ),
+        CheckConstraint(
+            "source_trust_level IN ('trusted', 'external_untrusted')",
+            name="ck_document_versions_source_trust_level",
+        ),
+        CheckConstraint(
+            "security_review_status IN ('pending', 'approved', 'quarantined')",
+            name="ck_document_versions_security_review_status",
+        ),
+        CheckConstraint(
+            "is_active = FALSE OR security_review_status = 'approved'",
+            name="ck_document_versions_active_security_approved_only",
+        ),
+        CheckConstraint(
+            "(security_review_status = 'pending' AND security_review_reason_code IS NULL "
+            "AND security_reviewed_at IS NULL) OR security_review_status = 'approved' OR "
+            "(security_review_status = 'quarantined' AND "
+            "security_review_reason_code IS NOT NULL AND security_reviewed_at IS NOT NULL)",
+            name="ck_document_versions_security_review_state",
+        ),
         pg_check(
             "content_hash ~ '^[0-9a-f]{64}$'",
             "ck_document_versions_content_hash_format",
@@ -339,6 +362,17 @@ class DocumentVersion(Base, TimestampMixin):
     file_size_bytes: Mapped[int] = mapped_column(big_int(), nullable=False)
     storage_key: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(jsonb())
+    source_provenance: Mapped[str] = mapped_column(
+        String(30), server_default=text("'legacy'"), default="legacy", nullable=False
+    )
+    source_trust_level: Mapped[str] = mapped_column(
+        String(30), server_default=text("'trusted'"), default="trusted", nullable=False
+    )
+    security_review_status: Mapped[str] = mapped_column(
+        String(30), server_default=text("'approved'"), default="approved", nullable=False
+    )
+    security_review_reason_code: Mapped[str | None] = mapped_column(String(60))
+    security_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     page_count: Mapped[int | None] = mapped_column(Integer)
     extractor_name: Mapped[str | None] = mapped_column(String(100))
     extractor_version: Mapped[str | None] = mapped_column(String(100))

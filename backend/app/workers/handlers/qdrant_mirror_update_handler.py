@@ -33,6 +33,9 @@ class _VersionMirrorSnapshot:
     logical_document_status: str
     document_version_status: str
     is_active: bool
+    source_provenance: str
+    source_trust_level: str
+    security_review_status: str
     chunk_count: int
 
 
@@ -85,6 +88,9 @@ class QdrantMirrorUpdateHandler:
                     logical_document_status=snapshot.logical_document_status,
                     document_version_status=snapshot.document_version_status,
                     is_active=snapshot.is_active,
+                    source_provenance=snapshot.source_provenance,
+                    source_trust_level=snapshot.source_trust_level,
+                    security_review_status=snapshot.security_review_status,
                 )
                 synced_count += 1
         except QdrantStoreError as exc:
@@ -132,6 +138,9 @@ class QdrantMirrorUpdateHandler:
                     logical_document_status=document.status,
                     document_version_status=version.status,
                     is_active=version.is_active,
+                    source_provenance=version.source_provenance,
+                    source_trust_level=version.source_trust_level,
+                    security_review_status=version.security_review_status,
                     chunk_count=self.repository.count_chunks(
                         db,
                         document_version_id=version.document_version_id,

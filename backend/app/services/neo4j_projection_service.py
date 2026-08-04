@@ -136,6 +136,9 @@ def _load_projection_rows(
                 DocumentVersion.logical_document_id,
                 DocumentVersion.status,
                 DocumentVersion.is_active,
+                DocumentVersion.source_provenance,
+                DocumentVersion.source_trust_level,
+                DocumentVersion.security_review_status,
                 LogicalDocument.status,
             )
             .join(
@@ -160,6 +163,9 @@ def _load_projection_rows(
             _logical_id,
             _version_status,
             _version_is_active,
+            _source_provenance,
+            _source_trust_level,
+            _security_review_status,
             _logical_status,
         ) in chunk_rows
     }
@@ -230,6 +236,9 @@ def _load_projection_rows(
             _logical_id,
             _version_status,
             _version_is_active,
+            _source_provenance,
+            _source_trust_level,
+            _security_review_status,
             _logical_status,
         ) in chunk_rows
     }
@@ -269,6 +278,21 @@ def _load_projection_rows(
                     max_length=40,
                 ),
                 "document_version_is_active": bool(document_version_is_active),
+                "source_provenance": validate_safe_graph_label(
+                    source_provenance,
+                    field_name="source_provenance",
+                    max_length=40,
+                ),
+                "source_trust_level": validate_safe_graph_label(
+                    source_trust_level,
+                    field_name="source_trust_level",
+                    max_length=40,
+                ),
+                "security_review_status": validate_safe_graph_label(
+                    security_review_status,
+                    field_name="security_review_status",
+                    max_length=40,
+                ),
                 "logical_document_status": validate_safe_graph_label(
                     logical_document_status,
                     field_name="logical_document_status",
@@ -284,6 +308,9 @@ def _load_projection_rows(
                 logical_document_id,
                 document_version_status,
                 document_version_is_active,
+                source_provenance,
+                source_trust_level,
+                security_review_status,
                 logical_document_status,
             ) in chunk_rows
         ],
@@ -412,6 +439,9 @@ def _replace_document_version_projection(
                 chunk.modality = row.modality,
                 chunk.document_version_status = row.document_version_status,
                 chunk.document_version_is_active = row.document_version_is_active,
+                chunk.source_provenance = row.source_provenance,
+                chunk.source_trust_level = row.source_trust_level,
+                chunk.security_review_status = row.security_review_status,
                 chunk.logical_document_status = row.logical_document_status,
                 chunk.last_graph_index_run_id = row.graph_index_run_id
             """,

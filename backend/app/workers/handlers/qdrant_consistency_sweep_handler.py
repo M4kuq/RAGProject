@@ -6,6 +6,7 @@ from typing import cast
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.core.job_utils import LeaseLostError
 from app.db.session import SessionLocal
 from app.ingest.qdrant import (
@@ -15,7 +16,11 @@ from app.ingest.qdrant import (
     create_document_indexing_service,
     point_id_for_chunk_id,
 )
-from app.repositories.document_repository import ChunkIndexPayloadRef, DocumentRepository
+from app.repositories.document_repository import (
+    ChunkIndexPayloadRef,
+    DocumentRepository,
+    VersionIndexState,
+)
 from app.repositories.job_repository import JobRepository
 from app.workers.handlers.base import JobExecutionContext, JobHandlerResult
 
@@ -46,7 +51,7 @@ class QdrantConsistencySweepHandler:
 
     The sweep scrolls points in the configured collection and, for each point,
     compares its payload (``document_chunk_id`` / ``document_version_id`` /
-    ``logical_document_id`` / ``modality`` / ``is_active``) against Postgres.
+    ``logical_document_id`` / ``modality`` / visibility and trust fields) against Postgres.
     Points whose chunk row is missing are orphans and get deleted. Points whose
     chunk exists but whose payload version/filter fields disagree with the
     source-of-truth chunk metadata are repaired (set inactive), not deleted.
@@ -211,13 +216,18 @@ class QdrantConsistencySweepHandler:
             if version_state is None:
                 delete_ids.append(point.point_id)
                 continue
-            version_status, is_active, document_status = version_state
             should_be_inactive = (
-                document_status == "archived" or version_status == "archived" or not is_active
+                version_state.document_status == "archived"
+                or version_state.version_status == "archived"
+                or not version_state.is_active
+                or version_state.security_review_status != SECURITY_REVIEW_APPROVED
             )
             point_is_active = bool(point.payload.get("is_active"))
             if should_be_inactive and point_is_active:
                 repair_ids.append(point.point_id)
+                continue
+            if _payload_disagrees_with_version_state(point.payload, version_state):
+                _repair_or_count_inactive_stale(point, repair_ids, counts)
 
         counts.stale_found += len(delete_ids) + len(repair_ids)
         if delete_ids or repair_ids:
@@ -342,6 +352,20 @@ def _payload_disagrees_with_chunk_ref(
         payload_version_id != chunk_version_id
         or payload_logical_document_id != logical_document_id
         or payload_modality != modality
+    )
+
+
+def _payload_disagrees_with_version_state(
+    payload: dict[str, object],
+    version_state: VersionIndexState,
+) -> bool:
+    # Missing values are the pre-migration payload defaults. This keeps legacy
+    # points readable while still detecting drift for newly classified sources.
+    return (
+        payload.get("source_provenance", "legacy") != version_state.source_provenance
+        or payload.get("source_trust_level", "trusted") != version_state.source_trust_level
+        or payload.get("security_review_status", SECURITY_REVIEW_APPROVED)
+        != version_state.security_review_status
     )
 
 

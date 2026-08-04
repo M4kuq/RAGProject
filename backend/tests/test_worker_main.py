@@ -690,6 +690,11 @@ def test_qdrant_mirror_update_handler_syncs_payload_for_document_versions(
     assert result.result_json["synced_version_count"] == 2
     assert qdrant_client.points["document_chunks"][100].payload["is_active"] is False
     assert qdrant_client.points["document_chunks"][200].payload["is_active"] is True
+    assert qdrant_client.points["document_chunks"][100].payload["source_provenance"] == "legacy"
+    assert qdrant_client.points["document_chunks"][100].payload["source_trust_level"] == "trusted"
+    assert (
+        qdrant_client.points["document_chunks"][100].payload["security_review_status"] == "approved"
+    )
     assert (
         qdrant_client.points["document_chunks"][200].payload["logical_document_status"] == "active"
     )

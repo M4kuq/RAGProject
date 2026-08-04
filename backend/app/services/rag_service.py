@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.core.errors import (
     ClientMessageConflict,
     ConflictError,
@@ -2426,6 +2427,7 @@ class RagService:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
         ).all()
