@@ -9,6 +9,11 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.config import Settings
+from app.core.tool_execution_policy import (
+    ToolCapability,
+    emit_tool_execution_audit,
+    evaluate_tool_call,
+)
 from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
@@ -36,6 +41,13 @@ ALLOWED_TOOL_NAMES = {
     *SEARCH_TOOL_NAMES,
     "inspect_retrieval_trace",
     "finalize_answer",
+}
+_TOOL_CAPABILITIES = {
+    "dense_search": ToolCapability("dense_search", "read", "search"),
+    "sparse_search": ToolCapability("sparse_search", "read", "search"),
+    "hybrid_search": ToolCapability("hybrid_search", "read", "search"),
+    "inspect_retrieval_trace": ToolCapability("inspect_retrieval_trace", "read", "trace"),
+    "finalize_answer": ToolCapability("finalize_answer", "read", "finalize"),
 }
 
 
@@ -425,17 +437,53 @@ class LLMToolCallingRetrievalOrchestrator:
                     tool_call_count += 1
                     tool_call_id = f"tc_{tool_call_count}"
                     tool_name = planned_call.tool_name
-                    if tool_name not in ALLOWED_TOOL_NAMES:
+                    policy_decision = evaluate_tool_call(
+                        capabilities=_TOOL_CAPABILITIES,
+                        tool_name=tool_name,
+                        arguments=planned_call.arguments,
+                        allowed_tools=ALLOWED_TOOL_NAMES,
+                        allow_write_tools=False,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        max_query_chars=max_query_chars,
+                        tool_call_id_prefixes=("tc_",),
+                    )
+                    argument_count = len(planned_call.arguments)
+                    if not policy_decision.allowed:
                         append_error_result(
                             tool_call_id=tool_call_id,
-                            tool_name="unknown",
-                            error_code="tool_not_allowed",
+                            tool_name=policy_decision.stable_tool_name,
+                            error_code=policy_decision.reason_code,
                         )
-                        reason_codes.append("tool_not_allowed")
+                        reason_codes.append(policy_decision.reason_code)
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="denied",
+                            stable_tool_name=policy_decision.stable_tool_name,
+                            effect=policy_decision.effect,
+                            reason_code=policy_decision.reason_code,
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                        )
                         continue
+                    tool_name = policy_decision.stable_tool_name
+                    planned_arguments = policy_decision.arguments
+                    audit_started_at = time.monotonic()
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="llm_tool_orchestrator",
+                        decision="allowed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code=policy_decision.reason_code,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                    )
                     if tool_name == "finalize_answer":
                         finalize_called = True
-                        selected_ids = _selected_tool_call_ids(planned_call.arguments)
+                        selected_ids = _selected_tool_call_ids(planned_arguments)
                         if selected_ids is None:
                             selected_tool_call_ids = list(attempts_by_tool_call_id)
                             reason_codes.append("finalize_answer_legacy_all_attempts")
@@ -444,6 +492,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             if not selected_tool_call_ids:
                                 reason_codes.append("finalize_answer_empty_selection")
                         reason_codes.append("finalize_answer_called")
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="completed",
+                            stable_tool_name=tool_name,
+                            effect=policy_decision.effect,
+                            reason_code="tool_completed",
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                            duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                        )
                         break
                     if tool_name == "inspect_retrieval_trace":
                         if not self.settings.llm_orchestrator_allow_trace_inspection:
@@ -454,9 +514,7 @@ class LLMToolCallingRetrievalOrchestrator:
                             )
                             reason_codes.append("trace_inspection_disabled")
                             continue
-                        requested_run_id = _positive_int(
-                            planned_call.arguments.get("retrieval_run_id")
-                        )
+                        requested_run_id = _positive_int(planned_arguments.get("retrieval_run_id"))
                         if requested_run_id is not None and requested_run_id != retrieval_run_id:
                             append_error_result(
                                 tool_call_id=tool_call_id,
@@ -481,6 +539,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             )
                         )
                         reason_codes.append("inspect_retrieval_trace_called")
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="completed",
+                            stable_tool_name=tool_name,
+                            effect=policy_decision.effect,
+                            reason_code="tool_completed",
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                            duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                        )
                         continue
 
                     if search_call_count >= max_search_calls:
@@ -491,7 +561,7 @@ class LLMToolCallingRetrievalOrchestrator:
                         )
                         reason_codes.append("max_search_calls_exhausted")
                         continue
-                    tool_query = _tool_query(planned_call.arguments, fallback=query)
+                    tool_query = _tool_query(planned_arguments, fallback=query)
                     normalized_key = (tool_name, _normalized_query(tool_query))
                     if normalized_key in seen_searches:
                         repeated_query_detected = True
@@ -530,6 +600,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             f"llm_tool:{tool_name}:{tool_call_id}",
                             tool_query[:max_query_chars],
                         )
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="llm_tool_orchestrator",
+                        decision="completed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code="tool_completed",
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                        duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                    )
                     search_call_count += 1
                     if compression_policy.enabled:
                         compressed = compressor.compress(
@@ -732,21 +814,14 @@ def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall
             continue
         tool_name = item.get("tool")
         arguments = item.get("arguments")
-        if not isinstance(tool_name, str) or tool_name not in ALLOWED_TOOL_NAMES:
+        if not isinstance(tool_name, str):
+            continue
+        if tool_name not in ALLOWED_TOOL_NAMES:
+            parsed.append(LLMToolCall(tool_name="unknown", arguments={}))
             continue
         if not isinstance(arguments, dict):
             arguments = {}
-        safe_arguments: dict[str, object] = {}
-        for key, value in arguments.items():
-            if key == "query" and isinstance(value, str):
-                safe_arguments[key] = _bounded_executable_query(value, max_chars=max_query_chars)
-            elif key in {"top_k", "retrieval_run_id"} and isinstance(value, int):
-                safe_arguments[key] = value
-            elif key in {"selected_tool_call_ids"} and isinstance(value, list):
-                safe_arguments[key] = [str(entry)[:40] for entry in value[:10]]
-            elif key == "answer_intent" and isinstance(value, str):
-                safe_arguments[key] = TraceRedactor.safe_string(value, max_length=40)
-        parsed.append(LLMToolCall(tool_name=tool_name, arguments=safe_arguments))
+        parsed.append(LLMToolCall(tool_name=tool_name, arguments=dict(arguments)))
     return parsed
 
 

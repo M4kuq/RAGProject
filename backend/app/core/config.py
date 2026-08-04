@@ -9,6 +9,8 @@ from typing import Literal, Self
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.tool_execution_policy import MCP_READ_TOOL_NAMES
+
 logger = logging.getLogger(__name__)
 
 _WEAK_SESSION_SECRETS = {
@@ -206,6 +208,8 @@ class Settings(BaseSettings):
     llm_orchestrator_max_snippet_chars: int = Field(default=500, ge=20, le=1000)
     llm_orchestrator_allow_trace_inspection: bool = True
     llm_orchestrator_allow_admin_tools: bool = False
+    agent_tool_policy_mode: Literal["enforce", "legacy"] = "enforce"
+    agent_tool_execution_audit_enabled: bool = True
     langchain_agentic_enabled: bool = True
     langchain_agentic_max_tool_calls: int = Field(default=8, ge=1, le=10)
     langchain_agentic_max_search_calls: int = Field(default=8, ge=1, le=10)
@@ -334,6 +338,7 @@ class Settings(BaseSettings):
             "langgraph_agentic",
         ]
     )
+    mcp_allowed_tools: list[str] = Field(default_factory=lambda: list(MCP_READ_TOOL_NAMES))
     mcp_include_trace_summary_default: bool = False
     mcp_max_answer_chars: int = Field(default=4000, ge=20, le=8000)
     mcp_allow_evaluation_run_create: bool = False
@@ -352,6 +357,7 @@ class Settings(BaseSettings):
         "document_url_fetch_allowed_schemes",
         "document_url_fetch_allowed_content_types",
         "mcp_allowed_strategies",
+        "mcp_allowed_tools",
         mode="before",
     )
     @classmethod
@@ -680,6 +686,11 @@ class Settings(BaseSettings):
             raise ValueError("MCP_ACTOR_MODE must be mcp_local in Phase1")
         if self.mcp_allow_write_tools:
             raise ValueError("MCP_ALLOW_WRITE_TOOLS must be false in Phase1")
+        self.mcp_allowed_tools = [item.strip() for item in self.mcp_allowed_tools]
+        if len(self.mcp_allowed_tools) != len(set(self.mcp_allowed_tools)):
+            raise ValueError("MCP_ALLOWED_TOOLS must not contain duplicates")
+        if any(item not in MCP_READ_TOOL_NAMES for item in self.mcp_allowed_tools):
+            raise ValueError("MCP_ALLOWED_TOOLS contains unsupported tools")
         self.mcp_allowed_strategies = [item.lower() for item in self.mcp_allowed_strategies]
         allowed_mcp_strategies = {
             "dense",
