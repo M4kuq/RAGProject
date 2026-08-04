@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import delete, func, null, select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.evaluation_models import (
     EvaluationAuxiliaryJudgment,
     EvaluationCorpusSource,
@@ -406,6 +407,7 @@ class EvaluationRepository:
             .where(
                 DocumentChunk.document_version_id == document_version_id,
                 DocumentVersion.status == "ready",
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
             )
         )
         if require_active:

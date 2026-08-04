@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import String, and_, case, func, or_, select, union_all
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.graph_models import (
     GraphEntity,
     GraphEntityMention,
@@ -103,6 +104,7 @@ class GraphRetrievalRepository:
                     DocumentChunk.modality == filters.modality,
                     DocumentVersion.status == "ready",
                     DocumentVersion.is_active.is_(True),
+                    DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                     LogicalDocument.status == "active",
                 )
             )
@@ -167,6 +169,7 @@ class GraphRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
             .limit(1)
@@ -203,6 +206,7 @@ class GraphRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
             .limit(1)
@@ -271,6 +275,7 @@ class GraphRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
             if filters.logical_document_ids:
@@ -438,6 +443,7 @@ class GraphRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
             .distinct()
@@ -537,6 +543,7 @@ class GraphRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
         )

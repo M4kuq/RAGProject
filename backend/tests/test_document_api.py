@@ -209,6 +209,9 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
     upload_body = upload.json()
     assert upload_body["data"]["version_status"] == "processing"
     assert upload_body["data"]["display_status"] == "processing"
+    assert upload_body["data"]["version"]["source_provenance"] == "admin_upload"
+    assert upload_body["data"]["version"]["source_trust_level"] == "trusted"
+    assert upload_body["data"]["version"]["security_review_status"] == "pending"
     assert upload_body["data"]["document"]["active_version"] is None
     assert_no_sensitive_document_fields(upload_body)
     logical_document_id = int(upload_body["data"]["logical_document_id"])
@@ -223,6 +226,9 @@ def test_document_api_upload_duplicate_approve_archive_and_chunks(
         assert version.version_no == 1
         assert version.status == "processing"
         assert version.is_active is False
+        assert version.source_provenance == "admin_upload"
+        assert version.source_trust_level == "trusted"
+        assert version.security_review_status == "pending"
         assert version.content_hash == hashlib.sha256(content).hexdigest()
         assert version.storage_key is not None
         assert storage_path(storage_root, version.storage_key).read_bytes() == content
@@ -465,6 +471,9 @@ def test_document_api_url_ingest_creates_document_without_raw_body(
     assert response.status_code == 201
     body = response.json()
     assert body["data"]["version_status"] == "processing"
+    assert body["data"]["version"]["source_provenance"] == "external_url"
+    assert body["data"]["version"]["source_trust_level"] == "external_untrusted"
+    assert body["data"]["version"]["security_review_status"] == "pending"
     assert body["data"]["version"]["metadata_json"]["source_url"] == "https://example.com/page"
     assert "token=secret" not in str(body)
     assert "URL ingest alpha beta" not in str(body)
@@ -503,6 +512,9 @@ def test_document_api_url_ingest_creates_document_without_raw_body(
         assert document.title == "URL Page"
         assert version is not None
         assert version.status == "ready"
+        assert version.source_provenance == "external_url"
+        assert version.source_trust_level == "external_untrusted"
+        assert version.security_review_status == "pending"
         assert version.metadata_json is not None
         assert version.metadata_json["source_type"] == "url"
         assert chunk is not None
@@ -554,6 +566,120 @@ def test_document_api_url_ingest_rejects_disabled_generated_extension(
     assert response.json()["error"]["code"] == "unsupported_media_type"
     with session_factory() as db:
         assert db.query(LogicalDocument).count() == 0
+
+
+def test_document_security_review_quarantine_requires_admin_and_two_step_release(
+    document_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, _ = document_client
+    csrf_token = login(client, email="admin@example.com")
+    upload = client.post(
+        "/api/v1/documents",
+        data={"title": "Security review"},
+        files={"file": ("security-review.txt", b"safe fixture", "text/plain")},
+        headers=unsafe_headers(csrf_token),
+    )
+    assert upload.status_code == 201
+    logical_document_id = int(upload.json()["data"]["logical_document_id"])
+    document_version_id = int(upload.json()["data"]["document_version_id"])
+    with session_factory() as db:
+        version = db.get(DocumentVersion, document_version_id)
+        assert version is not None
+        version.status = "ready"
+        db.commit()
+
+    approve = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert approve.status_code == 200
+    assert approve.json()["data"]["active_version"]["security_review_status"] == "approved"
+
+    invalid_reason = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/security-review",
+        json={"status": "approved", "reason_code": "operator_quarantine"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert invalid_reason.status_code == 422
+
+    client.cookies.clear()
+    viewer_csrf = login(client, email="viewer@example.com")
+    forbidden = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/security-review",
+        json={"status": "quarantined", "reason_code": "operator_quarantine"},
+        headers=unsafe_headers(viewer_csrf),
+    )
+    assert forbidden.status_code == 403
+
+    client.cookies.clear()
+    login(client, email="admin@example.com")
+    quarantine = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/security-review",
+        json={"status": "quarantined", "reason_code": "operator_quarantine"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert quarantine.status_code == 200
+    quarantine_data = quarantine.json()["data"]
+    assert quarantine_data["result_code"] == "security_review_updated"
+    assert quarantine_data["is_active"] is False
+    assert quarantine_data["retrieval_eligible"] is False
+    assert quarantine_data["qdrant_mirror_job_id"] is not None
+    with session_factory() as db:
+        version = db.get(DocumentVersion, document_version_id)
+        assert version is not None
+        assert version.security_review_status == "quarantined"
+        assert version.security_review_reason_code == "operator_quarantine"
+        assert version.security_reviewed_at is not None
+        assert version.is_active is False
+        assert (
+            db.query(AuditLog)
+            .filter_by(action_type="document.version_security_review_updated")
+            .count()
+            == 1
+        )
+
+    repeated_quarantine = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/security-review",
+        json={"status": "quarantined", "reason_code": "operator_quarantine"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert repeated_quarantine.status_code == 200
+    repeated_data = repeated_quarantine.json()["data"]
+    assert repeated_data["result_code"] == "already_in_state"
+    assert repeated_data["security_reviewed_at"] == quarantine_data["security_reviewed_at"]
+    assert repeated_data["qdrant_mirror_job_id"] is None
+    assert repeated_data["graph_index_job_id"] is None
+    with session_factory() as db:
+        assert (
+            db.query(AuditLog)
+            .filter_by(action_type="document.version_security_review_updated")
+            .count()
+            == 1
+        )
+
+    direct_approve = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert direct_approve.status_code == 409
+    assert direct_approve.json()["error"]["code"] == "document_version_quarantined"
+
+    release = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/security-review",
+        json={"status": "approved", "reason_code": "admin_review_passed"},
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert release.status_code == 200
+    assert release.json()["data"]["is_active"] is False
+    assert release.json()["data"]["retrieval_eligible"] is False
+
+    reactivate = client.post(
+        f"/api/v1/documents/{logical_document_id}/versions/{document_version_id}/approve",
+        headers=unsafe_headers(issue_csrf(client)),
+    )
+    assert reactivate.status_code == 200
+    assert reactivate.json()["data"]["is_active"] is True
+    assert reactivate.json()["data"]["active_version"]["security_review_status"] == "approved"
 
 
 def test_admin_compares_document_versions_with_bounded_safe_diff(
@@ -637,6 +763,24 @@ def test_citation_source_locator_is_owner_scoped_and_redacted(
     login(client, email="admin@example.com")
     admin_response = client.get(f"/api/v1/rag/citations/{citation_id}/source")
     assert admin_response.status_code == 200
+    assert admin_response.json()["data"]["source_provenance"] == "legacy"
+    assert admin_response.json()["data"]["source_trust_level"] == "trusted"
+
+    with session_factory() as db:
+        citation = db.get(Citation, citation_id)
+        assert citation is not None
+        chunk = db.get(DocumentChunk, citation.document_chunk_id)
+        assert chunk is not None
+        version = db.get(DocumentVersion, chunk.document_version_id)
+        assert version is not None
+        version.security_review_status = "quarantined"
+        version.security_review_reason_code = "operator_quarantine"
+        version.security_reviewed_at = datetime.now(UTC)
+        version.is_active = False
+        db.commit()
+
+    quarantined_source = client.get(f"/api/v1/rag/citations/{citation_id}/source")
+    assert quarantined_source.status_code == 404
 
 
 def _create_versioned_document(

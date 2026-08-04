@@ -812,6 +812,7 @@ def test_neo4j_entity_lookup_applies_filters_before_limit(
 
         entity_query, entity_parameters = fake_driver.calls[0]
         assert "MATCH (entity)-[:MENTIONED_IN]->(chunk:RAGGraphChunk)" in entity_query
+        assert 'coalesce(chunk.security_review_status, "approved") = "approved"' in entity_query
         assert entity_query.index("EXISTS") < entity_query.index("LIMIT $candidate_limit")
         assert entity_parameters["logical_document_ids"] == [seed.logical_document_id]
         assert entity_parameters["modality"] == "text"
