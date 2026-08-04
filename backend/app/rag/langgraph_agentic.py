@@ -8,6 +8,11 @@ from typing import Any, NotRequired, TypedDict, cast
 from langgraph.graph import END, StateGraph
 
 from app.core.config import Settings
+from app.core.tool_execution_policy import (
+    ToolCapability,
+    emit_tool_execution_audit,
+    evaluate_tool_call,
+)
 from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
@@ -46,6 +51,12 @@ LANGGRAPH_SEARCH_TOOL_NAMES = {"dense_search", "sparse_search", "hybrid_search"}
 LANGGRAPH_ALLOWED_TOOL_NAMES = {
     *LANGGRAPH_SEARCH_TOOL_NAMES,
     "finalize_answer",
+}
+_TOOL_CAPABILITIES = {
+    "dense_search": ToolCapability("dense_search", "read", "search"),
+    "sparse_search": ToolCapability("sparse_search", "read", "search"),
+    "hybrid_search": ToolCapability("hybrid_search", "read", "search"),
+    "finalize_answer": ToolCapability("finalize_answer", "read", "finalize"),
 }
 
 
@@ -307,30 +318,78 @@ class LangGraphAgenticRetrievalOrchestrator:
                     "stop_requested": True,
                     "reason_codes": reason_codes,
                 }
-            if tool_name not in LANGGRAPH_ALLOWED_TOOL_NAMES:
+            policy_decision = evaluate_tool_call(
+                capabilities=_TOOL_CAPABILITIES,
+                tool_name=tool_name,
+                arguments=next_call.arguments,
+                allowed_tools=LANGGRAPH_ALLOWED_TOOL_NAMES,
+                allow_write_tools=False,
+                policy_mode=self.settings.agent_tool_policy_mode,
+                max_query_chars=state["max_query_chars"],
+                tool_call_id_prefixes=("lg_",),
+            )
+            argument_count = len(next_call.arguments)
+            if not policy_decision.allowed:
                 compressed = compressor.error_result(
                     policy=compression_policy,
                     budget_manager=budget_manager,
                     tool_call_id=tool_call_id,
-                    tool_name="unknown",
-                    error_code="tool_not_allowed",
+                    tool_name=policy_decision.stable_tool_name,
+                    error_code=policy_decision.reason_code,
                 )
                 tool_results.append(_langchain_tool_result_from_compressed(compressed))
-                reason_codes.append("tool_not_allowed")
+                reason_codes.append(policy_decision.reason_code)
+                emit_tool_execution_audit(
+                    enabled=self.settings.agent_tool_execution_audit_enabled,
+                    surface="langgraph_agentic",
+                    decision="denied",
+                    stable_tool_name=policy_decision.stable_tool_name,
+                    effect=policy_decision.effect,
+                    reason_code=policy_decision.reason_code,
+                    policy_mode=self.settings.agent_tool_policy_mode,
+                    argument_count=argument_count,
+                    call_index=tool_call_count,
+                )
                 return {
                     "tool_call_count": tool_call_count,
                     "tool_results": tool_results,
                     "reason_codes": reason_codes,
                 }
+            tool_name = policy_decision.stable_tool_name
+            planned_arguments = policy_decision.arguments
+            audit_started_at = time.monotonic()
+            emit_tool_execution_audit(
+                enabled=self.settings.agent_tool_execution_audit_enabled,
+                surface="langgraph_agentic",
+                decision="allowed",
+                stable_tool_name=tool_name,
+                effect=policy_decision.effect,
+                reason_code=policy_decision.reason_code,
+                policy_mode=self.settings.agent_tool_policy_mode,
+                argument_count=argument_count,
+                call_index=tool_call_count,
+            )
             if tool_name == "finalize_answer":
                 finalize_called = True
-                selected_ids = _selected_tool_call_ids(next_call.arguments)
+                selected_ids = _selected_tool_call_ids(planned_arguments)
                 selected_tool_call_ids = (
                     selected_ids if selected_ids is not None else list(attempts)
                 )
                 if not selected_tool_call_ids:
                     reason_codes.append("finalize_answer_empty_selection")
                 reason_codes.append("finalize_answer_called")
+                emit_tool_execution_audit(
+                    enabled=self.settings.agent_tool_execution_audit_enabled,
+                    surface="langgraph_agentic",
+                    decision="completed",
+                    stable_tool_name=tool_name,
+                    effect=policy_decision.effect,
+                    reason_code="tool_completed",
+                    policy_mode=self.settings.agent_tool_policy_mode,
+                    argument_count=argument_count,
+                    call_index=tool_call_count,
+                    duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                )
                 stop_requested = True
                 return {
                     "tool_call_count": tool_call_count,
@@ -371,7 +430,7 @@ class LangGraphAgenticRetrievalOrchestrator:
                     "reason_codes": reason_codes,
                 }
 
-            tool_query = _tool_query(next_call.arguments, fallback=state["user_query"])
+            tool_query = _tool_query(planned_arguments, fallback=state["user_query"])
             search_key = (tool_name, _normalized_query(tool_query))
             if search_key in seen_searches:
                 repeated_query_detected = True
@@ -385,6 +444,18 @@ class LangGraphAgenticRetrievalOrchestrator:
             seen_searches.add(search_key)
             with latency_tracker.span("langgraph_tool_execution_ms"):
                 attempt = tool.invoke({"query": tool_query[: state["max_query_chars"]]})
+            emit_tool_execution_audit(
+                enabled=self.settings.agent_tool_execution_audit_enabled,
+                surface="langgraph_agentic",
+                decision="completed",
+                stable_tool_name=tool_name,
+                effect=policy_decision.effect,
+                reason_code="tool_completed",
+                policy_mode=self.settings.agent_tool_policy_mode,
+                argument_count=argument_count,
+                call_index=tool_call_count,
+                duration_ms=(time.monotonic() - audit_started_at) * 1000,
+            )
             if not isinstance(attempt, RetrievalAttemptResult):
                 compressed = compressor.error_result(
                     policy=compression_policy,

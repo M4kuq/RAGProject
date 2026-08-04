@@ -51,6 +51,7 @@ _UNSAFE_REQUEST_ID_PATTERNS = (
 class JsonRpcMcpServer:
     def __init__(self, adapter: McpServiceAdapter | None = None) -> None:
         self.adapter = adapter or McpServiceAdapter()
+        self.settings = get_mcp_settings(self.adapter.settings)
         self.tools = build_tool_registry(self.adapter)
         self.initialized = False
 
@@ -74,7 +75,7 @@ class JsonRpcMcpServer:
         if not isinstance(params, dict):
             return _error_response(request_id, JSONRPC_INVALID_PARAMS, "Invalid params")
         try:
-            if not get_mcp_settings(self.adapter.settings).enabled:
+            if not self.settings.enabled:
                 raise McpInvalidRequest("MCP server is disabled")
             result = self._dispatch(method, params)
         except McpMethodNotFound as exc:
@@ -128,7 +129,13 @@ class JsonRpcMcpServer:
     def _call_tool(self, name: str, arguments: object) -> dict[str, Any]:
         # Phase1 keeps stdio execution synchronous so a timeout response cannot race with
         # a still-running DB-backed tool. Clients may apply their own call timeout.
-        return call_tool(self.tools, name, arguments)
+        return call_tool(
+            self.tools,
+            name,
+            arguments,
+            policy_mode=self.settings.tool_policy_mode,
+            audit_enabled=self.settings.tool_execution_audit_enabled,
+        )
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
@@ -137,8 +144,7 @@ class JsonRpcMcpServer:
         protocol_version = (
             requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
         )
-        settings = get_mcp_settings(self.adapter.settings)
-        if not settings.enabled:
+        if not self.settings.enabled:
             raise McpInvalidRequest("MCP server is disabled")
         return {
             "protocolVersion": protocol_version,
