@@ -108,7 +108,16 @@ def ask(
             )
         outcome = "replayed" if result.replayed else "succeeded"
     except RagAskPipelineError as exc:
-        raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if exc.retry_after_seconds is not None
+            else None
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.error_code},
+            headers=headers,
+        ) from exc
     finally:
         try:
             abuse_control.release(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from decimal import Decimal
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
@@ -171,6 +172,31 @@ def _validate_local_model_endpoint(
     except ValueError as exc:
         raise ValueError(error) from exc
     if normalized_host not in allowed_hosts:
+        raise ValueError(error)
+
+
+def _validate_qwen_endpoint(value: str) -> None:
+    error = (
+        "QWEN_BASE_URL must use the Alibaba Model Studio OpenAI-compatible HTTPS "
+        "endpoint without userinfo, query, or fragment"
+    )
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        _ = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.netloc
+        or host is None
+        or not host.lower().endswith(".maas.aliyuncs.com")
+        or parsed.path.rstrip("/") != "/compatible-mode/v1"
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+    ):
         raise ValueError(error)
 
 
@@ -499,6 +525,34 @@ class Settings(BaseSettings):
     nvidia_api_key: str | None = None
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_timeout_seconds: float = Field(default=60.0, gt=0)
+    qwen_cascade_enabled: bool = False
+    qwen_api_key: str | None = None
+    qwen_base_url: str = ""
+    qwen_region: str = "japan-tokyo"
+    qwen_flash_model_id: str = "qwen3.6-flash-2026-04-16"
+    qwen_plus_model_id: str = "qwen3.7-plus-2026-05-26"
+    qwen_timeout_seconds: float = Field(default=45.0, gt=0, le=180.0)
+    qwen_max_output_tokens: int = Field(default=1024, ge=128, le=8192)
+    qwen_pricing_version: str = "alibaba-2026-07-15-tokyo-tier-1"
+    qwen_currency: Literal["USD"] = "USD"
+    qwen_flash_input_usd_per_million: Decimal = Field(default=Decimal("0.165"), gt=0)
+    qwen_flash_output_usd_per_million: Decimal = Field(default=Decimal("0.99"), gt=0)
+    qwen_plus_input_usd_per_million: Decimal = Field(default=Decimal("0.4"), gt=0)
+    qwen_plus_output_usd_per_million: Decimal = Field(default=Decimal("1.6"), gt=0)
+    qwen_user_daily_input_tokens: int = Field(default=250_000, ge=1)
+    qwen_user_daily_output_tokens: int = Field(default=50_000, ge=1)
+    qwen_user_daily_cost_usd: Decimal = Field(default=Decimal("2.00"), gt=0)
+    qwen_user_daily_escalations: int = Field(default=10, ge=0)
+    qwen_provider_daily_input_tokens: int = Field(default=5_000_000, ge=1)
+    qwen_provider_daily_output_tokens: int = Field(default=1_000_000, ge=1)
+    qwen_provider_daily_cost_usd: Decimal = Field(default=Decimal("40.00"), gt=0)
+    qwen_provider_daily_escalations: int = Field(default=200, ge=0)
+    qwen_provider_requests_per_minute: int = Field(default=30, ge=1, le=600)
+    qwen_provider_concurrent_requests: int = Field(default=4, ge=1, le=100)
+    qwen_reservation_lease_seconds: int = Field(default=90, ge=30, le=600)
+    qwen_circuit_failure_threshold: int = Field(default=3, ge=1, le=100)
+    qwen_circuit_cooldown_seconds: int = Field(default=60, ge=1, le=3600)
+    qwen_ledger_retention_days: int = Field(default=32, ge=2, le=365)
     citation_preview_max_chars: int = Field(default=240, ge=20, le=2000)
     confidence_high_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     confidence_medium_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -943,6 +997,7 @@ class Settings(BaseSettings):
             "anthropic",
             "gemini",
             "nvidia",
+            "qwen",
             "bedrock",
         }
         if self.app_env == "test":
@@ -950,10 +1005,12 @@ class Settings(BaseSettings):
         if self.generation_provider not in allowed_generation_providers:
             raise ValueError(
                 "GENERATION_PROVIDER must be ollama, lmstudio, openai, anthropic, "
-                "gemini, nvidia, or bedrock"
+                "gemini, nvidia, qwen, or bedrock"
             )
         if self.generation_provider == "bedrock":
             self.generation_model_name = self.bedrock_generation_model_id
+        if self.generation_provider == "qwen":
+            self.generation_model_name = self.qwen_flash_model_id
         self.rag_user_selectable_model_keys = sorted(
             {
                 _normalize_user_selectable_model_key(model_key)
@@ -1003,6 +1060,14 @@ class Settings(BaseSettings):
         self.gemini_base_url = self.gemini_base_url.rstrip("/")
         self.nvidia_api_key = self.nvidia_api_key.strip() if self.nvidia_api_key else None
         self.nvidia_base_url = self.nvidia_base_url.rstrip("/")
+        self.qwen_api_key = self.qwen_api_key.strip() if self.qwen_api_key else None
+        self.qwen_base_url = self.qwen_base_url.rstrip("/")
+        self.qwen_region = self.qwen_region.strip().lower()
+        self.qwen_flash_model_id = self.qwen_flash_model_id.strip()
+        self.qwen_plus_model_id = self.qwen_plus_model_id.strip()
+        self.qwen_pricing_version = self.qwen_pricing_version.strip().lower()
+        if self.generation_provider == "qwen":
+            self.generation_model_name = self.qwen_flash_model_id
         if self.generation_provider == "openai" and not self.openai_base_url:
             raise ValueError("OPENAI_BASE_URL is required when GENERATION_PROVIDER=openai")
         if self.generation_provider == "openai" and not self.openai_api_key:
@@ -1021,6 +1086,63 @@ class Settings(BaseSettings):
             raise ValueError("NVIDIA_BASE_URL is required when GENERATION_PROVIDER=nvidia")
         if self.generation_provider == "nvidia" and not self.nvidia_api_key:
             raise ValueError("NVIDIA_API_KEY is required when GENERATION_PROVIDER=nvidia")
+        qwen_active = self.qwen_cascade_enabled or self.generation_provider == "qwen"
+        if self.generation_provider == "qwen" and not self.qwen_cascade_enabled:
+            raise ValueError("QWEN_CASCADE_ENABLED=true is required when GENERATION_PROVIDER=qwen")
+        if qwen_active:
+            if not self.qwen_api_key:
+                raise ValueError("QWEN_API_KEY is required when the Qwen cascade is enabled")
+            _validate_qwen_endpoint(self.qwen_base_url)
+            if not _EGRESS_LABEL_PATTERN.fullmatch(self.qwen_region):
+                raise ValueError("QWEN_REGION must be a safe server-owned label")
+            if not _EGRESS_LABEL_PATTERN.fullmatch(self.qwen_pricing_version):
+                raise ValueError("QWEN_PRICING_VERSION must be a safe immutable label")
+            if (
+                not _MODEL_IDENTIFIER_PATTERN.fullmatch(self.qwen_flash_model_id)
+                or not _MODEL_IDENTIFIER_PATTERN.fullmatch(self.qwen_plus_model_id)
+                or self.qwen_flash_model_id == self.qwen_plus_model_id
+            ):
+                raise ValueError("Qwen model IDs must be distinct exact server-owned identifiers")
+            if not self.external_model_egress_governance_enabled:
+                raise ValueError("Qwen requires external model egress governance")
+            if self.external_model_egress_policy != "mask":
+                raise ValueError("Qwen requires EXTERNAL_MODEL_EGRESS_POLICY=mask")
+            if "qwen" not in self.external_model_egress_allowed_providers:
+                raise ValueError("Qwen must be explicitly allowed for external model egress")
+            if self.external_model_egress_provider_regions.get("qwen") != self.qwen_region:
+                raise ValueError("Qwen egress region must exactly match QWEN_REGION")
+            qwen_rules = {
+                (rule.model, rule.purpose): rule
+                for rule in self.external_model_egress_rules
+                if rule.provider == "qwen"
+            }
+            required_classes = {"retrieved_context", "system_instruction", "user_question"}
+            for model_id in (self.qwen_flash_model_id, self.qwen_plus_model_id):
+                qwen_rule = qwen_rules.get((model_id, "generation"))
+                if (
+                    qwen_rule is None
+                    or not required_classes.issubset(qwen_rule.allowed_data_classes)
+                    or self.qwen_region not in qwen_rule.allowed_regions
+                    or qwen_rule.retention_days > self.external_model_egress_max_retention_days
+                    or qwen_rule.training_allowed
+                    or not qwen_rule.user_consent_required
+                ):
+                    raise ValueError("Qwen requires compatible exact generation egress rules")
+            if (
+                self.qwen_user_daily_input_tokens > self.qwen_provider_daily_input_tokens
+                or self.qwen_user_daily_output_tokens > self.qwen_provider_daily_output_tokens
+                or self.qwen_user_daily_cost_usd > self.qwen_provider_daily_cost_usd
+                or self.qwen_user_daily_escalations > self.qwen_provider_daily_escalations
+            ):
+                raise ValueError(
+                    "Qwen provider budgets must be greater than or equal to user budgets"
+                )
+            if self.app_env.lower() not in {
+                "local",
+                "ci",
+                "test",
+            } and not self.database_url.lower().startswith("postgresql"):
+                raise ValueError("Qwen cost controls require PostgreSQL outside local/ci/test")
         self.mcp_transport = self.mcp_transport.strip().lower()
         self.mcp_http_api_key = self.mcp_http_api_key.strip() if self.mcp_http_api_key else None
         if self.mcp_transport not in {"stdio", "http"}:
