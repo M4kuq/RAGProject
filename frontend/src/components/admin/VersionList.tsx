@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { formatBytes, formatDate, truncateText } from "../../lib/format";
 import type { DocumentVersionSummary } from "../../features/documents/documentTypes";
 import { StatusBadge } from "./StatusBadge";

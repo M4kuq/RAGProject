@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { AdminIcon, type AdminIconName } from "../components/admin/AdminIcon";
 import { StatusBadge } from "../components/admin/StatusBadge";
 import { formatCount } from "../components/admin/adminLabels";

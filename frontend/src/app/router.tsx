@@ -1,4 +1,4 @@
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteErrorBoundary } from "../components/common/ErrorBoundary";
 import { useCurrentUser } from "../features/auth/authHooks";
 import { ChatPage } from "../routes/ChatPage";
