@@ -257,6 +257,7 @@ def prepare_security_generation_request(
             max_output_chars=max_output_chars,
             temperature=0.0,
             reasoning="off",
+            egress_purpose="security_evaluation",
         ),
         user_decision=user_decision,
         context_decision=context_decision,

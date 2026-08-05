@@ -37,6 +37,7 @@ from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
     create_embedding_adapter,
+    embedding_query_egress_scope,
 )
 from app.observability.trace_export import TraceExportService
 from app.rag.agentic import (
@@ -2375,7 +2376,8 @@ class RagService:
 
     def _embed_query(self, query: str) -> list[float]:
         try:
-            vectors = self.embedding_adapter.embed_texts([query])
+            with embedding_query_egress_scope():
+                vectors = self.embedding_adapter.embed_texts([query])
         except EmbeddingAdapterError:
             raise
         except Exception as exc:
@@ -2923,15 +2925,17 @@ class RagService:
         latency_ms: int,
     ) -> RagAskGeneration:
         usage = generation.usage
+        effective_provider = generation.provider or selection.provider
+        effective_model_name = generation.model_name or selection.model_name
         return RagAskGeneration(
-            provider=_safe_generation_label(selection.provider, max_length=100),
-            model=_safe_generation_label(selection.model_name, max_length=128),
+            provider=_safe_generation_label(effective_provider, max_length=100),
+            model=_safe_generation_label(effective_model_name, max_length=128),
             input_tokens=usage.input_tokens if usage is not None else None,
             output_tokens=usage.output_tokens if usage is not None else None,
             total_tokens=usage.total_tokens if usage is not None else None,
             estimated_cost_usd=estimate_cost_usd(
-                selection.provider,
-                selection.model_name,
+                effective_provider,
+                effective_model_name,
                 usage,
                 pricing_overrides=cast(
                     "dict[str, Any]",
@@ -4579,6 +4583,8 @@ def _generate_with_insufficient_evidence_retry(
         generation=GenerationResult(
             content=retry_generation.content,
             usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+            provider=retry_generation.provider or generation.provider,
+            model_name=retry_generation.model_name or generation.model_name,
         ),
         allow_validation_error_fallback=True,
     )
@@ -4606,6 +4612,7 @@ def _supported_answer_retry_request(request: GenerationRequest) -> GenerationReq
         system_instructions=RAG_GENERATION_SUPPORTED_ANSWER_RETRY_INSTRUCTIONS,
         temperature=0.0,
         response_format=request.response_format,
+        egress_purpose=request.egress_purpose,
     )
 
 

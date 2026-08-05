@@ -2701,6 +2701,20 @@ textarea {
   margin: 0;
 }
 
+.external-data-consent {
+  align-items: flex-start;
+  color: var(--chat-muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.external-data-consent input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 @media (max-width: 860px) {
   .chatgpt-layout {
     grid-template-columns: 1fr;

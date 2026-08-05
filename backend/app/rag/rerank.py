@@ -159,6 +159,7 @@ class BedrockRerankerClient:
         client: Any | None = None,
         egress_guard: ModelEgressGuard | None = None,
     ) -> None:
+        self.model_name = model_name
         self.model_arn = bedrock_model_arn(model_name, settings.aws_region)
         self.client = client or create_aws_client("bedrock-agent-runtime", settings)
         self.egress_guard = egress_guard
@@ -180,7 +181,9 @@ class BedrockRerankerClient:
                 protected = self.egress_guard.protect_texts(
                     [query, *protected_candidate_texts],
                     provider="bedrock",
+                    model=self.model_name,
                     purpose="rerank",
+                    data_classes=("retrieved_context", "user_question"),
                 )
             except ModelEgressBlockedError as exc:
                 raise RerankError(

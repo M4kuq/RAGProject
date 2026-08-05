@@ -25,7 +25,8 @@ RAG-61 implements the following decisions:
 6. Audit records contain provider, purpose, action, PII types/counts, and reason codes only. They
    do not contain request text, detected values, placeholders-to-values mappings, or provider
    response bodies.
-7. Raw egress is retained only as an explicit emergency rollback setting. It is never the default.
+7. RAG-71 governance blocks raw `allow` whenever governance is enabled. Disabling governance is
+   limited to local/CI/test diagnostics and is rejected by production settings.
 
 ## Configuration
 
@@ -34,6 +35,8 @@ RAG-61 implements the following decisions:
 | `EXTERNAL_MODEL_EGRESS_POLICY` | `deny` | `deny`, `mask`, or explicit raw `allow` |
 | `EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS` | empty | Comma list or JSON list of approved providers |
 | `PII_MASKING_ENABLED` | `true` | Must remain true when policy is `mask` |
+| `EXTERNAL_MODEL_EGRESS_GOVERNANCE_ENABLED` | `true` | Exact contract gate; production cannot disable it |
+| `EXTERNAL_MODEL_EGRESS_RULES` | `[]` | Provider/model/purpose/data/region/retention/training rules |
 
 Recognized external providers are `openai`, `anthropic`, `gemini`, `nvidia`, `bedrock`, and the
 reserved future `qwen` provider. Recognized local providers are `fake`, `local`, `lmstudio`, and
@@ -49,8 +52,11 @@ EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS=openai,bedrock
 PII_MASKING_ENABLED=true
 ```
 
-Keep the allowlist limited to providers that are approved for the deployment. A provider omitted
-from the list is blocked even if API credentials and its generation setting are present.
+The allowlist alone no longer authorizes a transfer. Add an exact governance rule and region only
+after the operator has verified the provider contract. Interactive RAG requests must also carry
+authenticated structured consent. See
+[`docs/security/external_model_egress_governance.md`](../security/external_model_egress_governance.md)
+for the full contract and rollback procedure.
 
 ### Immediate stop and recovery
 
@@ -64,27 +70,28 @@ EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS=
 Restart the backend with those settings. No database, Qdrant collection, Docker volume, or model
 cache reset is required.
 
-### Explicit raw rollback
+### Local/test diagnostic rollback
 
-The previous unmasked provider behavior can be restored only with both settings:
+Raw behavior can be reached only in local/CI/test by explicitly disabling governance:
 
 ```text
 EXTERNAL_MODEL_EGRESS_POLICY=allow
 EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS=openai
+EXTERNAL_MODEL_EGRESS_GOVERNANCE_ENABLED=false
 ```
 
-`allow` is a high-risk diagnostic rollback. It can transmit raw user and document content and
-must not be the standing internet-facing configuration. Restore `deny` or `mask` immediately after
-the diagnostic window. The provider API key by itself never enables this rollback.
+Production settings reject disabled governance, and enabled governance rejects raw `allow` before
+transport. The provider API key by itself never authorizes egress.
 
 ## Protected paths
 
 | Path | External provider | Purpose label | Failure behavior |
 | --- | --- | --- | --- |
-| Answer generation, Graph extraction, auxiliary Judge | OpenAI, Anthropic, Gemini, NVIDIA, Bedrock | `generation` | `model_egress_blocked` |
+| Answer generation | OpenAI, Anthropic, Gemini, NVIDIA, Bedrock | `generation` | `model_egress_blocked` or configured local fallback |
+| Graph extraction, evaluation, auxiliary Judge | OpenAI, Anthropic, Gemini, NVIDIA, Bedrock | exact workload purpose | `model_egress_blocked` |
 | Agentic strategy planner | OpenAI | `agentic_strategy_planner` | planner fallback with safe reason |
 | LLM tool-call planner, including retrieved snippets | OpenAI | `llm_tool_planner` | deterministic bounded fallback with safe reason |
-| Embedding | Bedrock Titan | `embedding` | `model_egress_blocked` |
+| Embedding | Bedrock Titan | `embedding_query` or `embedding_document` | `model_egress_blocked` |
 | Reranking | Bedrock | `rerank` | `model_egress_blocked` |
 
 Production code constructs these adapters through their existing factories. Direct constructor
@@ -131,7 +138,9 @@ The structured log event name is `model egress policy decision`. Its allowed fie
 - `model_egress_provider`
 - `model_egress_purpose`
 - `model_egress_policy`
+- `model_egress_policy_version`
 - `model_egress_action`
+- `model_egress_data_classes`
 - `model_egress_entity_types`
 - `model_egress_entity_counts`
 - `model_egress_masked_count`
@@ -171,9 +180,10 @@ artifacts; publish only test status, counts, hashes, and safe reason codes.
 ## Known limits and next hardening step
 
 Rule-based PII recognition cannot guarantee detection of every contextual name, address, locale,
-free-form identifier, OCR error, obfuscation, or encoded value. This gate therefore complements,
-rather than replaces, data classification, tenant access control, provider retention controls,
-encryption, and incident monitoring.
+free-form identifier, OCR error, obfuscation, or encoded value. Provider retention/training/region
+facts are operator attestations rather than facts discoverable from model responses. This gate
+therefore complements, rather than replaces, contract review, tenant access control, encryption,
+and incident monitoring.
 
 The next safe extension is a locally hosted NER detector in shadow mode. Compare its findings with
 the deterministic gate on synthetic tune/confirm sets, record type/count disagreements only, and

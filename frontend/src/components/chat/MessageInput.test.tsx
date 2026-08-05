@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import { NVIDIA_EXTERNAL_DATA_WARNING } from "../../lib/modelCatalog";
 import { MessageInput } from "./MessageInput";
@@ -6,6 +6,8 @@ import { MessageInput } from "./MessageInput";
 const baseProps = {
   disabled: false,
   disabledReason: null,
+  externalDataConsent: false,
+  externalDataConsentRequired: true,
   isSending: false,
   modelOptions: [
     {
@@ -14,6 +16,7 @@ const baseProps = {
     }
   ],
   onChange: vi.fn(),
+  onExternalDataConsentChange: vi.fn(),
   onModelChange: vi.fn(),
   onStrategyChange: vi.fn(),
   onSubmit: vi.fn(),
@@ -39,10 +42,30 @@ test("does not render an external data warning for local models", () => {
   render(
     <MessageInput
       {...baseProps}
+      externalDataConsentRequired={false}
       externalDataWarning={null}
       selectedModel="lmstudio:qwen3.5-9b"
     />
   );
 
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(
+    screen.queryByLabelText("allow external model transfer for this request")
+  ).not.toBeInTheDocument();
+});
+
+test("requires an explicit checkbox for an external request", () => {
+  const onExternalDataConsentChange = vi.fn();
+  render(
+    <MessageInput
+      {...baseProps}
+      externalDataWarning={NVIDIA_EXTERNAL_DATA_WARNING}
+      onExternalDataConsentChange={onExternalDataConsentChange}
+      value="What is RAG?"
+    />
+  );
+
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("allow external model transfer for this request"));
+  expect(onExternalDataConsentChange).toHaveBeenCalledWith(true);
 });

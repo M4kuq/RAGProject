@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.tool_execution_policy import MCP_READ_TOOL_NAMES
@@ -31,6 +39,86 @@ _DEFAULT_LOCAL_MODEL_ALLOWED_HOSTS = (
     "ollama",
 )
 _DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_EGRESS_LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_MODEL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
+_EXTERNAL_MODEL_PROVIDERS = {
+    "anthropic",
+    "bedrock",
+    "gemini",
+    "nvidia",
+    "openai",
+    "qwen",
+}
+_MODEL_EGRESS_DATA_CLASSES = {
+    "document_content",
+    "masked_personal_data",
+    "response_schema",
+    "retrieval_metadata",
+    "retrieved_context",
+    "system_instruction",
+    "task_instruction",
+    "tool_result",
+    "user_question",
+}
+_USER_CONSENT_REQUIRED_EGRESS_PURPOSES = {
+    "agentic_strategy_planner",
+    "embedding_query",
+    "generation",
+    "llm_tool_planner",
+    "rerank",
+}
+
+
+class ExternalModelEgressRule(BaseModel):
+    """Operator-approved, exact external model egress contract."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["anthropic", "bedrock", "gemini", "nvidia", "openai", "qwen"]
+    model: str = Field(min_length=1, max_length=256)
+    purpose: str = Field(min_length=1, max_length=64)
+    allowed_data_classes: list[str] = Field(min_length=1)
+    allowed_regions: list[str] = Field(min_length=1)
+    retention_days: int = Field(ge=0, le=365)
+    training_allowed: bool = False
+    user_consent_required: bool = True
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("model")
+    @classmethod
+    def normalize_exact_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not _MODEL_IDENTIFIER_PATTERN.fullmatch(normalized):
+            raise ValueError("external egress model must be an exact safe identifier")
+        return normalized
+
+    @field_validator("purpose")
+    @classmethod
+    def normalize_purpose(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not _EGRESS_LABEL_PATTERN.fullmatch(normalized):
+            raise ValueError("external egress purpose must be an exact safe label")
+        return normalized
+
+    @field_validator("allowed_data_classes")
+    @classmethod
+    def normalize_data_classes(cls, value: list[str]) -> list[str]:
+        normalized = sorted({item.strip().lower() for item in value if item.strip()})
+        if not normalized or set(normalized) - _MODEL_EGRESS_DATA_CLASSES:
+            raise ValueError("external egress rule contains unsupported data classes")
+        return normalized
+
+    @field_validator("allowed_regions")
+    @classmethod
+    def normalize_regions(cls, value: list[str]) -> list[str]:
+        normalized = sorted({item.strip().lower() for item in value if item.strip()})
+        if not normalized or any(not _EGRESS_LABEL_PATTERN.fullmatch(item) for item in normalized):
+            raise ValueError("external egress rule contains invalid regions")
+        return normalized
 
 
 def _normalize_local_model_allowed_host(value: str) -> str:
@@ -182,6 +270,16 @@ class Settings(BaseSettings):
     pii_masking_enabled: bool = True
     external_model_egress_policy: Literal["deny", "mask", "allow"] = "deny"
     external_model_egress_allowed_providers: list[str] = Field(default_factory=list)
+    external_model_egress_governance_enabled: bool = True
+    external_model_egress_governance_policy_version: str = "egress-v1"
+    external_model_egress_rules: list[ExternalModelEgressRule] = Field(default_factory=list)
+    external_model_egress_provider_regions: dict[str, str] = Field(default_factory=dict)
+    external_model_egress_max_retention_days: int = Field(default=0, ge=0, le=365)
+    external_model_egress_local_fallback_enabled: bool = False
+    external_model_egress_local_fallback_provider: Literal["fake", "lmstudio", "ollama"] = (
+        "lmstudio"
+    )
+    external_model_egress_local_fallback_model: str | None = None
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection_name: str = "document_chunks"
     qdrant_distance: str = "Cosine"
@@ -468,6 +566,7 @@ class Settings(BaseSettings):
         "neo4j_password",
         "graph_extraction_provider",
         "graph_extraction_model_name",
+        "external_model_egress_local_fallback_model",
         mode="before",
     )
     @classmethod
@@ -480,6 +579,25 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_external_model_egress_policy(cls, value: object) -> object:
         return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator(
+        "external_model_egress_rules",
+        "external_model_egress_provider_regions",
+        mode="before",
+    )
+    @classmethod
+    def parse_external_model_egress_json(cls, value: object, info: ValidationInfo) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return [] if info.field_name == "external_model_egress_rules" else {}
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "external model egress governance settings must be valid JSON"
+            ) from exc
 
     @field_validator("generation_pricing_overrides", mode="before")
     @classmethod
@@ -512,19 +630,73 @@ class Settings(BaseSettings):
             for provider in self.external_model_egress_allowed_providers
             if provider.strip()
         }
-        unsupported_egress_providers = normalized_egress_providers - {
-            "anthropic",
-            "bedrock",
-            "gemini",
-            "nvidia",
-            "openai",
-            "qwen",
-        }
+        unsupported_egress_providers = normalized_egress_providers - _EXTERNAL_MODEL_PROVIDERS
         if unsupported_egress_providers:
             raise ValueError(
                 "EXTERNAL_MODEL_EGRESS_ALLOWED_PROVIDERS contains unsupported providers"
             )
         self.external_model_egress_allowed_providers = sorted(normalized_egress_providers)
+        self.external_model_egress_governance_policy_version = (
+            self.external_model_egress_governance_policy_version.strip().lower()
+        )
+        if not _EGRESS_LABEL_PATTERN.fullmatch(
+            self.external_model_egress_governance_policy_version
+        ):
+            raise ValueError(
+                "EXTERNAL_MODEL_EGRESS_GOVERNANCE_POLICY_VERSION must be a safe label"
+            )
+        local_environment = self.app_env.lower() in {"local", "ci", "test"}
+        if not self.external_model_egress_governance_enabled and not local_environment:
+            raise ValueError(
+                "EXTERNAL_MODEL_EGRESS_GOVERNANCE_ENABLED must remain true outside "
+                "local/ci/test"
+            )
+        normalized_regions: dict[str, str] = {}
+        for provider, region in self.external_model_egress_provider_regions.items():
+            normalized_provider = provider.strip().lower()
+            normalized_region = region.strip().lower()
+            if (
+                normalized_provider not in _EXTERNAL_MODEL_PROVIDERS
+                or not _EGRESS_LABEL_PATTERN.fullmatch(normalized_region)
+            ):
+                raise ValueError(
+                    "EXTERNAL_MODEL_EGRESS_PROVIDER_REGIONS contains an invalid entry"
+                )
+            normalized_regions[normalized_provider] = normalized_region
+        normalized_regions.setdefault("bedrock", self.aws_region.strip().lower())
+        self.external_model_egress_provider_regions = normalized_regions
+        seen_rules: set[tuple[str, str, str]] = set()
+        for rule in self.external_model_egress_rules:
+            key = (rule.provider, rule.model, rule.purpose)
+            if key in seen_rules:
+                raise ValueError("EXTERNAL_MODEL_EGRESS_RULES contains duplicate exact rules")
+            seen_rules.add(key)
+            if rule.provider not in normalized_egress_providers:
+                raise ValueError(
+                    "EXTERNAL_MODEL_EGRESS_RULES provider must also be explicitly allowed"
+                )
+            if (
+                rule.purpose in _USER_CONSENT_REQUIRED_EGRESS_PURPOSES
+                and not rule.user_consent_required
+            ):
+                raise ValueError(
+                    "interactive external model egress rules must require user consent"
+                )
+        fallback_model = self.external_model_egress_local_fallback_model
+        self.external_model_egress_local_fallback_model = (
+            fallback_model.strip() if fallback_model else None
+        )
+        if self.external_model_egress_local_fallback_enabled:
+            if not self.external_model_egress_local_fallback_model:
+                raise ValueError(
+                    "EXTERNAL_MODEL_EGRESS_LOCAL_FALLBACK_MODEL is required when "
+                    "fallback is enabled"
+                )
+            if (
+                self.external_model_egress_local_fallback_provider == "fake"
+                and self.app_env.lower() != "test"
+            ):
+                raise ValueError("fake external egress fallback is test-only")
         if self.rag_abuse_global_requests_per_minute < self.rag_abuse_user_requests_per_minute:
             raise ValueError(
                 "RAG_ABUSE_GLOBAL_REQUESTS_PER_MINUTE must be >= RAG_ABUSE_USER_REQUESTS_PER_MINUTE"
