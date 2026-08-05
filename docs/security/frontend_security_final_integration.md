@@ -81,6 +81,29 @@ The Node built-in test suite verifies:
 5. malformed and unavailable audit responses fail closed;
 6. formatted output contains no dependency path or raw audit field.
 
+## Combined verification
+
+The pre-push combined gate on the integration tree produced the following raw-free
+results. GitHub CI remains a separate required gate.
+
+| Gate | Result |
+| --- | --- |
+| Clean Node/npm install | Node 22.22.3 / npm 10.9.8; `npm ci` pass |
+| Dependency policy | 19/19 negative controls pass; production and full audit all severities 0; dependency-tree problems 0 |
+| Route/auth regression | 4 files / 67 tests, 3/3 repeats pass |
+| Full frontend regression | 17 files / 111 tests, 3/3 repeats pass |
+| Frontend static/build | lint, typecheck, Vite production build pass; 197 modules transformed |
+| Docker/Compose | Node 22.22 frontend test/build images and no-dependency Compose smoke pass; Compose config valid |
+| Backend fixture regression | focused 33 tests pass; full 972 pass / 19 skip; Ruff format/check and mypy 272 files pass |
+| Secret scan | current/history unignored 0; mutation controls 3/3; output redaction 100% |
+| Source manifest | sources 3; union 41; intersection 0; missing 0; integration-only files 8 |
+
+The host Docker daemon could not allocate another default-network subnet during the
+first Compose run. The frontend-only smoke was repeated on an existing user-defined
+Docker network without dependencies; no service or volume was created, reset, or
+deleted. The source RAG-75 document remains an immutable snapshot of PR #147; this
+integration record supersedes its prior Babel Low and unconfigured-scan observations.
+
 ## CI and merge order
 
 Frontend CI uses Node 22.22+ and npm 10, performs a clean `npm ci`, verifies the

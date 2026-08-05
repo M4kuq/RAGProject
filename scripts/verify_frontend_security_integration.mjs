@@ -135,7 +135,11 @@ function verify() {
   const nodeVersion = parseVersion(process.version);
   const minimumNode = parseVersion(manifest.runtime.nodeMinimum);
   if (!atLeast(nodeVersion, minimumNode)) fail("node_runtime_too_old");
-  const npmResult = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["--version"], {
+  const npmCommand = process.env.npm_execpath ? process.execPath : "npm";
+  const npmArgs = process.env.npm_execpath
+    ? [process.env.npm_execpath, "--version"]
+    : ["--version"];
+  const npmResult = spawnSync(npmCommand, npmArgs, {
     cwd: REPOSITORY_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"]
