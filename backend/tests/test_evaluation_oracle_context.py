@@ -36,6 +36,7 @@ from app.services.evaluation_oracle_context_service import (
     EvaluationOracleContextError,
     EvaluationOracleContextService,
     OracleGenerationObservation,
+    _evidence_group_id,
 )
 
 
@@ -243,6 +244,114 @@ def test_oracle_context_rejects_unknown_prompt_profile() -> None:
         EvaluationOracleContextService(
             Settings(app_env="test"),
             generation_prompt_profile="unknown",
+        )
+
+
+def test_oracle_context_rejects_unknown_grouping_profile() -> None:
+    with pytest.raises(
+        EvaluationOracleContextError,
+        match="oracle_context_grouping_profile_invalid",
+    ):
+        EvaluationOracleContextService(
+            Settings(app_env="test"),
+            context_grouping_profile="unknown",
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "answerable", "required_fact_count", "expected"),
+    [
+        ("separate_sources", True, 2, None),
+        ("multi_fact_evidence_group_v1", True, 1, None),
+        ("multi_fact_evidence_group_v1", False, 2, None),
+        ("multi_fact_evidence_group_v1", True, 2, "required-facts"),
+    ],
+)
+def test_evidence_grouping_is_limited_to_multi_fact_answerable_cases(
+    profile: str,
+    answerable: bool,
+    required_fact_count: int,
+    expected: str | None,
+) -> None:
+    assert (
+        _evidence_group_id(
+            context_grouping_profile=profile,
+            answerable=answerable,
+            required_fact_count=required_fact_count,
+        )
+        == expected
+    )
+
+
+def test_oracle_context_case_subset_keeps_full_source_validation(
+    database: tuple[Session, User],
+) -> None:
+    db, user = database
+    run = _seed_oracle_source_run(db, created_by=user.user_id)
+    replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
+    answer_generator = SequencedGenerator(["Fictional facility 01 has evaluation code L01. [1]"])
+    judge_generator = SequencedGenerator([json.dumps(_answerable_judge_output())])
+    service = EvaluationOracleContextService(
+        Settings(app_env="test"),
+        generator_factory=lambda *args, **kwargs: answer_generator,
+        judge_factory=lambda settings: EvaluationClaimJudgeService(
+            settings,
+            generator=judge_generator,
+        ),
+        context_grouping_profile="multi_fact_evidence_group_v1",
+        case_ids=frozenset({"local_dev_answerable_01"}),
+    )
+
+    summary = service.run(
+        db,
+        evaluation_run_id=run.evaluation_run_id,
+        expected_case_count=2,
+        r_judge_replay=replay,
+    )
+
+    assert summary.expected_case_count == 1
+    assert summary.comparable_case_count == 1
+    assert summary.gate_passed is True
+    assert tuple(case.case_id for case in summary.cases) == ("local_dev_answerable_01",)
+    assert answer_generator.requests[0].context_items[0].evidence_group_id is None
+
+
+@pytest.mark.parametrize("case_ids", [frozenset(), frozenset({"unknown-case"})])
+def test_oracle_context_rejects_invalid_case_subset(
+    database: tuple[Session, User],
+    case_ids: frozenset[str],
+) -> None:
+    db, user = database
+    run = _seed_oracle_source_run(db, created_by=user.user_id)
+    replay = _stable_r_judge_replay(
+        db,
+        run=run,
+        passes={
+            "local_dev_answerable_01": False,
+            "local_dev_unanswerable_25": True,
+        },
+    )
+    service = EvaluationOracleContextService(
+        Settings(app_env="test"),
+        case_ids=case_ids,
+    )
+
+    with pytest.raises(
+        EvaluationOracleContextError,
+        match="oracle_selected_case_set_invalid",
+    ):
+        service.run(
+            db,
+            evaluation_run_id=run.evaluation_run_id,
+            expected_case_count=2,
+            r_judge_replay=replay,
         )
 
 

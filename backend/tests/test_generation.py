@@ -12,10 +12,59 @@ from app.rag.generation import (
     OllamaAnswerGenerator,
     OpenAICompatibleChatAnswerGenerator,
     TokenUsage,
+    _context_block,
     _openai_input,
     check_lmstudio_model_readiness,
     create_answer_generator,
 )
+
+
+def test_context_block_preserves_default_rendering_and_groups_without_rewriting_sources() -> None:
+    items = [
+        GenerationContextItem(
+            document_chunk_id=1,
+            source_label="source-a",
+            text="First exact source text.",
+            local_citation_id=1,
+        ),
+        GenerationContextItem(
+            document_chunk_id=2,
+            source_label="source-b",
+            text="Second exact source text.",
+            local_citation_id=2,
+        ),
+    ]
+    baseline = _context_block(
+        GenerationRequest(message="fixed", context_items=items, max_output_chars=100)
+    )
+
+    assert baseline == (
+        "Citation [1] source=source-a chunk:1\nFirst exact source text.\n\n"
+        "Citation [2] source=source-b chunk:2\nSecond exact source text."
+    )
+
+    grouped = _context_block(
+        GenerationRequest(
+            message="fixed",
+            context_items=[
+                GenerationContextItem(
+                    **{
+                        **item.__dict__,
+                        "evidence_group_id": "required-facts",
+                    }
+                )
+                for item in items
+            ],
+            max_output_chars=100,
+        )
+    )
+
+    assert grouped.startswith("Evidence group required-facts:\n\n")
+    assert grouped.count("Evidence group required-facts:") == 1
+    for marker, text in (("[1]", items[0].text), ("[2]", items[1].text)):
+        assert grouped.count(marker) == 1
+        assert grouped.count(text) == 1
+    assert grouped.index("[1]") < grouped.index("[2]")
 
 
 def test_generation_defaults_to_lmstudio_qwen_9b() -> None:

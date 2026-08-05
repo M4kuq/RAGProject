@@ -122,6 +122,7 @@ class GenerationContextItem:
     local_citation_id: int | None = None
     page_from: int | None = None
     page_to: int | None = None
+    evidence_group_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -863,11 +864,17 @@ def _gemini_temperature_payload(request: GenerationRequest) -> dict[str, float]:
 
 
 def _context_block(request: GenerationRequest) -> str:
-    context_lines = [
-        f"Citation [{_citation_id(item, fallback=index)}] source={_context_label(item)}\n"
-        f"{item.text}"
-        for index, item in enumerate(request.context_items, start=1)
-    ]
+    context_lines: list[str] = []
+    active_group: str | None = None
+    for index, item in enumerate(request.context_items, start=1):
+        if item.evidence_group_id != active_group:
+            active_group = item.evidence_group_id
+            if active_group is not None:
+                context_lines.append(f"Evidence group {_safe_label(active_group)}:")
+        context_lines.append(
+            f"Citation [{_citation_id(item, fallback=index)}] source={_context_label(item)}\n"
+            f"{item.text}"
+        )
     return "\n\n".join(context_lines)
 
 

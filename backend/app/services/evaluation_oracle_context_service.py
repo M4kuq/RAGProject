@@ -47,6 +47,10 @@ from app.services.rag_service import (
 _ALLOWED_DATASET = "local_accuracy_dev_v1"
 _EXPECTED_GENERATION_MODEL = "qwen/qwen3.5-9b"
 _EXPECTED_SCOPE = "end_to_end"
+_CONTEXT_GROUPING_PROFILES = {
+    "separate_sources",
+    "multi_fact_evidence_group_v1",
+}
 
 
 class EvaluationOracleContextError(RuntimeError):
@@ -194,6 +198,8 @@ class EvaluationOracleContextService:
         generator_factory: Callable[..., AnswerGenerator] | None = None,
         judge_factory: Callable[[Settings], EvaluationClaimJudgeService] | None = None,
         generation_prompt_profile: str = "baseline",
+        context_grouping_profile: str = "separate_sources",
+        case_ids: frozenset[str] | None = None,
         observation_callback: Callable[[OracleGenerationObservation], None] | None = None,
     ) -> None:
         self.settings = settings
@@ -205,6 +211,10 @@ class EvaluationOracleContextService:
             )
         except ValueError as exc:
             raise EvaluationOracleContextError("oracle_generation_prompt_profile_invalid") from exc
+        if context_grouping_profile not in _CONTEXT_GROUPING_PROFILES:
+            raise EvaluationOracleContextError("oracle_context_grouping_profile_invalid")
+        self.context_grouping_profile = context_grouping_profile
+        self.case_ids = case_ids
         self.observation_callback = observation_callback
 
     def run(
@@ -234,7 +244,8 @@ class EvaluationOracleContextService:
             inputs=inputs,
             expected_case_count=expected_case_count,
         )
-        sources = self._load_sources(db, dataset=dataset, inputs=inputs)
+        selected_inputs = self._select_inputs(inputs)
+        sources = self._load_sources(db, dataset=dataset, inputs=selected_inputs)
         generation_settings = _generation_settings(self.settings, retrieval)
         generator = self.generator_factory(
             generation_settings,
@@ -252,9 +263,10 @@ class EvaluationOracleContextService:
                 judge=judge,
                 r_judgment=stable_r_replay.judgments[oracle_input.case.case_key],
             )
-            for oracle_input in inputs
+            for oracle_input in selected_inputs
         )
-        case_set_fingerprint = _case_set_fingerprint(inputs)
+        result_case_count = len(selected_inputs)
+        case_set_fingerprint = _case_set_fingerprint(selected_inputs)
         generation_config_fingerprint = _generation_config_fingerprint(generation_settings)
         pipeline_failure_count = sum(
             outcome.pipeline_failure_code is not None for outcome in outcomes
@@ -322,19 +334,16 @@ class EvaluationOracleContextService:
             generation_max_context_chars=generation_settings.generation_max_context_chars,
             generation_max_output_chars=generation_settings.generation_max_output_chars,
             generation_max_output_tokens=generation_settings.generation_max_output_tokens,
-            expected_case_count=expected_case_count,
+            expected_case_count=result_case_count,
             comparable_case_count=len(outcomes) - pipeline_failure_count,
             comparability_status="comparable",
             r_auxiliary_pass_count=r_pass_count,
             o_auxiliary_pass_count=o_pass_count,
-            r_auxiliary_pass_rate=_rate(r_pass_count, expected_case_count),
-            o_auxiliary_pass_rate=_rate(o_pass_count, expected_case_count),
+            r_auxiliary_pass_rate=_rate(r_pass_count, result_case_count),
+            o_auxiliary_pass_rate=_rate(o_pass_count, result_case_count),
             absolute_percentage_point_delta=round(
                 100.0
-                * (
-                    _rate(o_pass_count, expected_case_count)
-                    - _rate(r_pass_count, expected_case_count)
-                ),
+                * (_rate(o_pass_count, result_case_count) - _rate(r_pass_count, result_case_count)),
                 3,
             ),
             answerable_retrieval_missing_gap_count=retrieval_missing,
@@ -350,8 +359,18 @@ class EvaluationOracleContextService:
             o_mean_context_utilization=o_context_utilization,
             primary_next_target=primary_next_target,
             pipeline_failure_count=pipeline_failure_count,
-            gate_passed=pipeline_failure_count == 0 and len(outcomes) == expected_case_count,
+            gate_passed=pipeline_failure_count == 0 and len(outcomes) == result_case_count,
             cases=outcomes,
+        )
+
+    def _select_inputs(self, inputs: tuple[_OracleInput, ...]) -> tuple[_OracleInput, ...]:
+        if self.case_ids is None:
+            return inputs
+        available = {oracle_input.case.case_key for oracle_input in inputs}
+        if not self.case_ids or not self.case_ids.issubset(available):
+            raise EvaluationOracleContextError("oracle_selected_case_set_invalid")
+        return tuple(
+            oracle_input for oracle_input in inputs if oracle_input.case.case_key in self.case_ids
         )
 
     def _require_source_run(
@@ -524,12 +543,21 @@ class EvaluationOracleContextService:
         r_judgment: _StableRJudgment,
     ) -> OracleContextCaseOutcome:
         selected_sources = tuple(sources[key] for key in oracle_input.source_keys)
+        evidence_group_id = _evidence_group_id(
+            context_grouping_profile=self.context_grouping_profile,
+            answerable=oracle_input.answerable,
+            required_fact_count=len(oracle_input.required_facts),
+        )
         context_items, citation_sources = _oracle_context_items(
             selected_sources,
             max_context_chars=settings.generation_max_context_chars,
+            evidence_group_id=evidence_group_id,
         )
         context = tuple(item.text for item in context_items)
-        o_context_hash = _sha256("\x00".join(context))
+        o_context_hash = _sha256(
+            (f"{self.context_grouping_profile}\x00" if evidence_group_id is not None else "")
+            + "\x00".join(context)
+        )
         r_context = _string_tuple(oracle_input.payload.context_json)
         required_fact_count = len(oracle_input.required_facts)
         r_retrieved = _fact_count(r_context, oracle_input.required_facts)
@@ -761,6 +789,7 @@ def _oracle_context_items(
     sources: Sequence[EvaluationCorpusSource],
     *,
     max_context_chars: int,
+    evidence_group_id: str | None = None,
 ) -> tuple[tuple[GenerationContextItem, ...], tuple[CitationSource, ...]]:
     remaining = max_context_chars
     context_items: list[GenerationContextItem] = []
@@ -779,6 +808,7 @@ def _oracle_context_items(
                 source_label=source.source_key,
                 text=clipped,
                 local_citation_id=index,
+                evidence_group_id=evidence_group_id,
             )
         )
         citation_sources.append(
@@ -796,6 +826,21 @@ def _oracle_context_items(
     if len(context_items) != len(sources):
         raise EvaluationOracleContextError("oracle_context_budget_exhausted")
     return tuple(context_items), tuple(citation_sources)
+
+
+def _evidence_group_id(
+    *,
+    context_grouping_profile: str,
+    answerable: bool,
+    required_fact_count: int,
+) -> str | None:
+    if (
+        context_grouping_profile == "multi_fact_evidence_group_v1"
+        and answerable
+        and required_fact_count > 1
+    ):
+        return "required-facts"
+    return None
 
 
 def _generation_settings(settings: Settings, retrieval: dict[str, object]) -> Settings:
