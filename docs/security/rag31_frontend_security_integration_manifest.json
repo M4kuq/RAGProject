@@ -142,7 +142,9 @@
     "postgresqlUpgradeRequired": true
   },
   "runtime": {
-    "nodeMinimum": "22.22",
+    "nodeMinimum": "22.22.0",
+    "nodeImageTag": "22.22",
+    "nodeCiVersion": "22.22",
     "npmPackageManager": "npm@10.9.8",
     "react": "^19.2.7",
     "reactRouter": "^8.3.0",

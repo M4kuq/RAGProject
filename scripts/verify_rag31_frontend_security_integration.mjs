@@ -142,10 +142,10 @@ function verifyRuntimePins(manifest) {
   if (packageJson.packageManager !== manifest.runtime.npmPackageManager) {
     fail("npm_contract_drift");
   }
-  if (!dockerfile.includes(`FROM node:${manifest.runtime.nodeMinimum}-alpine`)) {
+  if (!dockerfile.includes(`FROM node:${manifest.runtime.nodeImageTag}-alpine`)) {
     fail("docker_node_contract_drift");
   }
-  if (!frontendWorkflow.includes(`node-version: "${manifest.runtime.nodeMinimum}"`)) {
+  if (!frontendWorkflow.includes(`node-version: "${manifest.runtime.nodeCiVersion}"`)) {
     fail("ci_node_contract_drift");
   }
   if (!frontendWorkflow.includes("verify_rag31_frontend_security_integration.mjs")) {
