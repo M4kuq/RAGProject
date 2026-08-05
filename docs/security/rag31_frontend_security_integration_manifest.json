@@ -167,6 +167,44 @@
       "pipeline_failure"
     ]
   },
+  "localVerification": {
+    "crossCanonicalManifest": "pass",
+    "frontend": {
+      "node": "22.22.3",
+      "npm": "10.9.8",
+      "productionAuditFindings": 0,
+      "fullAuditFindings": 0,
+      "dependencyTreeProblems": 0,
+      "dependencyPolicyNegativeControls": "19/19",
+      "routeAuthPerRepeat": 67,
+      "routeAuthRepeats": 3,
+      "fullPerRepeat": 115,
+      "fullRepeats": 3,
+      "lintTypecheckBuild": "pass",
+      "oldRouterBundleMarkers": 0
+    },
+    "backend": {
+      "focusedPassed": 106,
+      "focusedSkipped": 2,
+      "fullPassed": 1135,
+      "fullSkipped": 24,
+      "activeSessionExpiryRepeats": "10/10",
+      "ruffAndMypy": "pass"
+    },
+    "postgresql": {
+      "migrationHead": "0025_qwen_cost_controls",
+      "focusedPassed": 13
+    },
+    "secretGate": {
+      "currentUnignored": 0,
+      "historyUnignored": 0,
+      "negativeDetection": "3/3",
+      "outputRedactedPercent": 100
+    },
+    "docker": "frontend_test_build_and_backend_test_pass",
+    "composeConfig": "pass",
+    "githubFinalHeadContract": "All required checks, including Compose smoke, must pass on the final Draft PR head."
+  },
   "rollback": {
     "codeSha": "9baf1c7d90683463c475abe3eecf11ebe4e92781",
     "primaryAction": "Do not merge the canonical Draft PR.",

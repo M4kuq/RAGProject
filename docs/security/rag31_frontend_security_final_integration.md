@@ -36,6 +36,24 @@ The first local backend full run exposed a pre-existing nondeterministic test se
 
 Only aggregate counts, hashes, versions, and reason codes are recorded. Evaluation payloads, model output, matched secret values, and raw dependency-audit responses are not retained.
 
+## Local verification snapshot
+
+All results below were produced from the final integration tree without a live model/provider call.
+
+- cross-canonical manifest: pass; source union 102, intersection 2, missing 0, integration-only 77, Alembic heads 1
+- frontend runtime: Node 22.22.3 / npm 10.9.8
+- dependency audit: production and full audit both Low/Moderate/High/Critical 0; dependency-tree problems 0; policy negative controls 19/19
+- route/auth focus: 67 passed per repeat, three repeats
+- frontend full: 115 passed per repeat, three repeats; lint, typecheck, build, and old Router bundle marker check passed
+- backend focus: 106 passed / 2 environment-gated skipped; composite injection/egress/cascade/cost controls passed
+- backend full after the test-only selector fix: 1135 passed / 24 environment-gated skipped; Ruff format/lint and mypy passed
+- active-session expiry regression: 10/10 repeats passed
+- PostgreSQL: upgrade reached single head `0025_qwen_cost_controls`; schema and atomic ledger focus 13 passed
+- repository secret gate: current/history unignored 0; mutation detection 3/3; matched output redaction 100%
+- Docker: Node 22 frontend test/build images and backend test image passed; Compose CI configuration parsed successfully
+
+The full Compose service smoke and all GitHub checks remain external final-head authorities. They must pass on the Draft PR head before the closure decision is recorded as ready.
+
 ## Merge and rollback
 
 No merge or deploy is authorized by this work. If explicitly approved later, the canonical PR can be reviewed as the single source-containing change against main; PR #141/#145/#149 and source PRs should not be merged ahead of it. Re-fetch main and all checks immediately before any merge decision.
