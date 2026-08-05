@@ -1,0 +1,7 @@
+services:
+  backend:
+    environment:
+      RAG_INJECTION_POLICY: observe_only
+  worker:
+    environment:
+      RAG_INJECTION_POLICY: observe_only

@@ -4,8 +4,10 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NoReturn
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -28,6 +30,28 @@ EXTERNAL_MODEL_PROVIDERS = frozenset(
 LOCAL_MODEL_PROVIDERS = frozenset({"fake", "lmstudio", "local", "ollama"})
 MAX_MODEL_EGRESS_FIELD_CHARS = 1_000_000
 MAX_MODEL_EGRESS_PAYLOAD_CHARS = 2_000_000
+MODEL_EGRESS_DATA_CLASSES = frozenset(
+    {
+        "document_content",
+        "masked_personal_data",
+        "response_schema",
+        "retrieval_metadata",
+        "retrieved_context",
+        "system_instruction",
+        "task_instruction",
+        "tool_result",
+        "user_question",
+    }
+)
+USER_CONSENT_REQUIRED_EGRESS_PURPOSES = frozenset(
+    {
+        "agentic_strategy_planner",
+        "embedding_query",
+        "generation",
+        "llm_tool_planner",
+        "rerank",
+    }
+)
 
 _UNMASKABLE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -127,11 +151,57 @@ class ModelEgressBlockedError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ModelEgressGovernanceRule:
+    provider: str
+    model: str
+    purpose: str
+    allowed_data_classes: frozenset[str]
+    allowed_regions: frozenset[str]
+    retention_days: int
+    training_allowed: bool
+    user_consent_required: bool
+
+
+@dataclass(frozen=True)
+class ModelEgressRequestContext:
+    authenticated_user: bool = False
+    user_consent_granted: bool = False
+
+
+_MODEL_EGRESS_REQUEST_CONTEXT: ContextVar[ModelEgressRequestContext | None] = ContextVar(
+    "model_egress_request_context",
+    default=None,
+)
+
+
+@contextmanager
+def model_egress_request_scope(
+    *,
+    authenticated_user: bool,
+    user_consent_granted: bool,
+) -> Iterator[None]:
+    """Bind non-content authorization facts to the current request only."""
+
+    token = _MODEL_EGRESS_REQUEST_CONTEXT.set(
+        ModelEgressRequestContext(
+            authenticated_user=authenticated_user,
+            user_consent_granted=user_consent_granted,
+        )
+    )
+    try:
+        yield
+    finally:
+        _MODEL_EGRESS_REQUEST_CONTEXT.reset(token)
+
+
+@dataclass(frozen=True)
 class ModelEgressAudit:
     provider: str
     purpose: str
     policy: EgressPolicy
     action: EgressAction
+    policy_version: str = "pii-v1"
+    data_classes: tuple[str, ...] = ()
     entity_counts: tuple[tuple[str, int], ...] = ()
     reason_codes: tuple[str, ...] = ()
 
@@ -144,7 +214,9 @@ class ModelEgressAudit:
             "model_egress_provider": self.provider,
             "model_egress_purpose": self.purpose,
             "model_egress_policy": self.policy,
+            "model_egress_policy_version": self.policy_version,
             "model_egress_action": self.action,
+            "model_egress_data_classes": list(self.data_classes),
             "model_egress_entity_types": [name for name, _ in self.entity_counts],
             "model_egress_entity_counts": dict(self.entity_counts),
             "model_egress_masked_count": self.masked_count,
@@ -186,12 +258,30 @@ class ModelEgressGuard:
         policy: EgressPolicy,
         allowed_providers: Sequence[str],
         pii_masking_enabled: bool,
+        governance_enabled: bool = False,
+        governance_policy_version: str = "pii-v1",
+        governance_rules: Sequence[ModelEgressGovernanceRule] = (),
+        provider_regions: Mapping[str, str] | None = None,
+        max_retention_days: int = 0,
     ) -> None:
         self.policy = policy
         self.allowed_providers = frozenset(
             provider.strip().lower() for provider in allowed_providers
         )
         self.pii_masking_enabled = pii_masking_enabled
+        self.governance_enabled = governance_enabled
+        self.governance_policy_version = governance_policy_version.strip().lower()
+        self.provider_regions = {
+            provider.strip().lower(): region.strip().lower()
+            for provider, region in (provider_regions or {}).items()
+        }
+        self.max_retention_days = max_retention_days
+        self.governance_rules: dict[tuple[str, str, str], ModelEgressGovernanceRule] = {}
+        for rule in governance_rules:
+            key = (rule.provider.strip().lower(), rule.model.strip(), rule.purpose.strip())
+            if key in self.governance_rules:
+                raise ValueError("duplicate external model egress governance rule")
+            self.governance_rules[key] = rule
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelEgressGuard:
@@ -199,6 +289,23 @@ class ModelEgressGuard:
             policy=settings.external_model_egress_policy,
             allowed_providers=settings.external_model_egress_allowed_providers,
             pii_masking_enabled=settings.pii_masking_enabled,
+            governance_enabled=settings.external_model_egress_governance_enabled,
+            governance_policy_version=(settings.external_model_egress_governance_policy_version),
+            governance_rules=[
+                ModelEgressGovernanceRule(
+                    provider=rule.provider,
+                    model=rule.model,
+                    purpose=rule.purpose,
+                    allowed_data_classes=frozenset(rule.allowed_data_classes),
+                    allowed_regions=frozenset(rule.allowed_regions),
+                    retention_days=rule.retention_days,
+                    training_allowed=rule.training_allowed,
+                    user_consent_required=rule.user_consent_required,
+                )
+                for rule in settings.external_model_egress_rules
+            ],
+            provider_regions=settings.external_model_egress_provider_regions,
+            max_retention_days=settings.external_model_egress_max_retention_days,
         )
 
     def protect_texts(
@@ -207,8 +314,11 @@ class ModelEgressGuard:
         *,
         provider: str,
         purpose: str,
+        model: str | None = None,
+        data_classes: Sequence[str] = (),
     ) -> ProtectedTexts:
         normalized_provider = provider.strip().lower()
+        normalized_classes = tuple(sorted({item.strip().lower() for item in data_classes}))
         original = tuple(texts)
         if normalized_provider in LOCAL_MODEL_PROVIDERS:
             audit = ModelEgressAudit(
@@ -216,41 +326,98 @@ class ModelEgressGuard:
                 purpose=purpose,
                 policy=self.policy,
                 action="local_bypass",
+                policy_version=self._audit_policy_version,
+                data_classes=normalized_classes,
                 reason_codes=("local_provider",),
             )
             return ProtectedTexts(original, audit)
         if normalized_provider not in EXTERNAL_MODEL_PROVIDERS:
-            self._block(normalized_provider, purpose, "unknown_provider")
+            self._block(
+                normalized_provider,
+                purpose,
+                "unknown_provider",
+                data_classes=normalized_classes,
+            )
         if self.policy == "deny":
-            self._block(normalized_provider, purpose, "egress_policy_denied")
+            self._block(
+                normalized_provider,
+                purpose,
+                "egress_policy_denied",
+                data_classes=normalized_classes,
+            )
         if normalized_provider not in self.allowed_providers:
-            self._block(normalized_provider, purpose, "provider_not_allowed")
+            self._block(
+                normalized_provider,
+                purpose,
+                "provider_not_allowed",
+                data_classes=normalized_classes,
+            )
+        governance_rule = self._authorize_governance(
+            provider=normalized_provider,
+            model=model,
+            purpose=purpose,
+            data_classes=normalized_classes,
+        )
         if self.policy == "allow":
+            if self.governance_enabled:
+                self._block(
+                    normalized_provider,
+                    purpose,
+                    "unmasked_external_egress_disallowed",
+                    data_classes=normalized_classes,
+                )
             audit = ModelEgressAudit(
                 provider=normalized_provider,
                 purpose=purpose,
                 policy=self.policy,
                 action="allowed",
+                policy_version=self._audit_policy_version,
+                data_classes=normalized_classes,
                 reason_codes=("explicit_unmasked_allow",),
             )
             self._log(audit)
             return ProtectedTexts(original, audit)
         if not self.pii_masking_enabled:
-            self._block(normalized_provider, purpose, "pii_masking_disabled")
+            self._block(
+                normalized_provider,
+                purpose,
+                "pii_masking_disabled",
+                data_classes=normalized_classes,
+            )
 
         if (
             any(len(text) > MAX_MODEL_EGRESS_FIELD_CHARS for text in original)
             or sum(map(len, original)) > MAX_MODEL_EGRESS_PAYLOAD_CHARS
         ):
-            self._block(normalized_provider, purpose, "payload_too_large")
+            self._block(
+                normalized_provider,
+                purpose,
+                "payload_too_large",
+                data_classes=normalized_classes,
+            )
         for text in original:
             if _contains_unsupported_control(text):
-                self._block(normalized_provider, purpose, "unsupported_control_content")
+                self._block(
+                    normalized_provider,
+                    purpose,
+                    "unsupported_control_content",
+                    data_classes=normalized_classes,
+                )
             if _RESERVED_PLACEHOLDER_PATTERN.search(text):
-                self._block(normalized_provider, purpose, "reserved_placeholder_collision")
+                self._block(
+                    normalized_provider,
+                    purpose,
+                    "reserved_placeholder_collision",
+                    data_classes=normalized_classes,
+                )
             for reason_code, pattern in _UNMASKABLE_PATTERNS:
                 if pattern.search(text):
-                    self._block(normalized_provider, purpose, reason_code)
+                    self._block(
+                        normalized_provider,
+                        purpose,
+                        reason_code,
+                        data_classes=normalized_classes,
+                    )
 
         all_spans = [_find_entity_spans(text) for text in original]
         placeholders: dict[tuple[str, str], str] = {}
@@ -267,13 +434,44 @@ class ModelEgressGuard:
             protected.append(_replace_spans(text, spans, placeholders))
 
         sorted_counts = tuple(sorted(entity_counts.items()))
+        if governance_rule is not None and sorted_counts:
+            governed_classes = set(normalized_classes)
+            governed_classes.add("masked_personal_data")
+            if "masked_personal_data" not in governance_rule.allowed_data_classes:
+                self._block(
+                    normalized_provider,
+                    purpose,
+                    "masked_personal_data_not_allowed",
+                    data_classes=tuple(sorted(governed_classes)),
+                    entity_counts=sorted_counts,
+                )
+            reidentification_reason = _reidentification_risk_reason(entity_counts)
+            if reidentification_reason is not None:
+                self._block(
+                    normalized_provider,
+                    purpose,
+                    reidentification_reason,
+                    data_classes=tuple(sorted(governed_classes)),
+                    entity_counts=sorted_counts,
+                )
+            normalized_classes = tuple(sorted(governed_classes))
         audit = ModelEgressAudit(
             provider=normalized_provider,
             purpose=purpose,
             policy=self.policy,
             action="masked" if sorted_counts else "allowed",
+            policy_version=self._audit_policy_version,
+            data_classes=normalized_classes,
             entity_counts=sorted_counts,
-            reason_codes=("pii_masked",) if sorted_counts else ("clean_payload",),
+            reason_codes=(
+                ("governance_approved", "pii_masked")
+                if governance_rule is not None and sorted_counts
+                else ("governance_approved", "clean_payload")
+                if governance_rule is not None
+                else ("pii_masked",)
+                if sorted_counts
+                else ("clean_payload",)
+            ),
         )
         self._log(audit)
         return ProtectedTexts(tuple(protected), audit)
@@ -284,20 +482,134 @@ class ModelEgressGuard:
         *,
         provider: str,
         purpose: str,
+        model: str | None = None,
+        data_classes: Sequence[str] = (),
     ) -> ProtectedPayload:
         leaves: list[str] = []
         _collect_string_values(payload, leaves)
-        protected = self.protect_texts(leaves, provider=provider, purpose=purpose)
+        protected = self.protect_texts(
+            leaves,
+            provider=provider,
+            purpose=purpose,
+            model=model,
+            data_classes=data_classes,
+        )
         iterator = iter(protected.texts)
         rebuilt = _replace_string_values(payload, iterator)
         return ProtectedPayload(payload=rebuilt, audit=protected.audit)
 
-    def _block(self, provider: str, purpose: str, reason_code: str) -> None:
+    def _authorize_governance(
+        self,
+        *,
+        provider: str,
+        model: str | None,
+        purpose: str,
+        data_classes: tuple[str, ...],
+    ) -> ModelEgressGovernanceRule | None:
+        if not self.governance_enabled:
+            return None
+        if model is None or not model.strip():
+            self._block(provider, purpose, "model_identity_missing", data_classes=data_classes)
+        if not data_classes:
+            self._block(provider, purpose, "data_classification_missing")
+        if set(data_classes) - MODEL_EGRESS_DATA_CLASSES:
+            self._block(
+                provider,
+                purpose,
+                "data_classification_unknown",
+                data_classes=data_classes,
+            )
+        assert model is not None
+        rule = self.governance_rules.get((provider, model.strip(), purpose))
+        if rule is None:
+            self._block(
+                provider,
+                purpose,
+                "governance_rule_missing",
+                data_classes=data_classes,
+            )
+        assert rule is not None
+        if not set(data_classes).issubset(rule.allowed_data_classes):
+            self._block(
+                provider,
+                purpose,
+                "data_class_not_allowed",
+                data_classes=data_classes,
+            )
+        region = self.provider_regions.get(provider)
+        if region is None:
+            self._block(
+                provider,
+                purpose,
+                "provider_region_unknown",
+                data_classes=data_classes,
+            )
+        if region not in rule.allowed_regions:
+            self._block(
+                provider,
+                purpose,
+                "provider_region_not_allowed",
+                data_classes=data_classes,
+            )
+        if rule.retention_days > self.max_retention_days:
+            self._block(
+                provider,
+                purpose,
+                "retention_policy_incompatible",
+                data_classes=data_classes,
+            )
+        if rule.training_allowed:
+            self._block(
+                provider,
+                purpose,
+                "training_policy_incompatible",
+                data_classes=data_classes,
+            )
+        if purpose in USER_CONSENT_REQUIRED_EGRESS_PURPOSES and not rule.user_consent_required:
+            self._block(
+                provider,
+                purpose,
+                "consent_policy_incompatible",
+                data_classes=data_classes,
+            )
+        request_context = _MODEL_EGRESS_REQUEST_CONTEXT.get() or ModelEgressRequestContext()
+        if rule.user_consent_required and not request_context.authenticated_user:
+            self._block(
+                provider,
+                purpose,
+                "authenticated_user_required",
+                data_classes=data_classes,
+            )
+        if rule.user_consent_required and not request_context.user_consent_granted:
+            self._block(
+                provider,
+                purpose,
+                "user_consent_required",
+                data_classes=data_classes,
+            )
+        return rule
+
+    @property
+    def _audit_policy_version(self) -> str:
+        return self.governance_policy_version if self.governance_enabled else "pii-v1"
+
+    def _block(
+        self,
+        provider: str,
+        purpose: str,
+        reason_code: str,
+        *,
+        data_classes: Sequence[str] = (),
+        entity_counts: tuple[tuple[str, int], ...] = (),
+    ) -> NoReturn:
         audit = ModelEgressAudit(
             provider=provider,
             purpose=purpose,
             policy=self.policy,
             action="blocked",
+            policy_version=self._audit_policy_version,
+            data_classes=tuple(data_classes),
+            entity_counts=entity_counts,
             reason_codes=(reason_code,),
         )
         self._log(audit)
@@ -306,6 +618,17 @@ class ModelEgressGuard:
     @staticmethod
     def _log(audit: ModelEgressAudit) -> None:
         logger.info("model egress policy decision", extra=audit.log_fields())
+
+
+def _reidentification_risk_reason(entity_counts: Mapping[str, int]) -> str | None:
+    entity_types = set(entity_counts)
+    if entity_types & {"GOVERNMENT_ID", "PAYMENT_CARD"}:
+        return "unsupported_sensitive_identifier"
+    if "PERSON_NAME" in entity_types and "ADDRESS" in entity_types:
+        return "reidentification_risk"
+    if len(entity_types) >= 3:
+        return "reidentification_risk"
+    return None
 
 
 def _find_entity_spans(text: str) -> list[_EntitySpan]:

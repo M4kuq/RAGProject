@@ -15,6 +15,7 @@ from app.core.model_egress import (
     MAX_MODEL_EGRESS_FIELD_CHARS,
     ModelEgressBlockedError,
     ModelEgressGuard,
+    model_egress_request_scope,
 )
 from app.ingest.embedding import create_embedding_adapter
 from app.rag.agentic_planner import (
@@ -160,6 +161,7 @@ def test_policy_deny_allowlist_masking_disabled_and_unknown_provider_block() -> 
         ("sk-" + "a" * 24, "provider_token"),
         ("x" * (MAX_MODEL_EGRESS_FIELD_CHARS + 1), "payload_too_large"),
     ],
+    ids=("placeholder-collision", "provider-token", "oversized-payload"),
 )
 def test_collision_tokens_and_oversized_payload_fail_closed(
     value: str,
@@ -251,6 +253,7 @@ def test_generation_factory_masks_every_prompt_field_before_transport(
             openai_api_key="synthetic-test-key",
             external_model_egress_policy="mask",
             external_model_egress_allowed_providers=["openai"],
+            external_model_egress_governance_enabled=False,
         )
     )
     result = generator.generate(_generation_request())
@@ -352,18 +355,45 @@ def test_bedrock_embedding_and_rerank_mask_before_client(
         rerank_provider="bedrock",
         external_model_egress_policy="mask",
         external_model_egress_allowed_providers=["bedrock"],
-    )
-    create_embedding_adapter(settings).embed_texts(["demo.user@example.test"])
-    create_reranker(settings).rerank(
-        query="owner demo.user@example.test",
-        candidates=[
-            RerankCandidate(
-                document_chunk_id=1,
-                text="Contact demo.user@example.test",
-                retrieval_score=0.8,
-            )
+        external_model_egress_rules=[
+            {
+                "provider": "bedrock",
+                "model": "amazon.titan-embed-text-v2:0",
+                "purpose": "embedding_document",
+                "allowed_data_classes": ["document_content", "masked_personal_data"],
+                "allowed_regions": ["ap-northeast-1"],
+                "retention_days": 0,
+                "training_allowed": False,
+                "user_consent_required": False,
+            },
+            {
+                "provider": "bedrock",
+                "model": "amazon.rerank-v1:0",
+                "purpose": "rerank",
+                "allowed_data_classes": [
+                    "masked_personal_data",
+                    "retrieved_context",
+                    "user_question",
+                ],
+                "allowed_regions": ["ap-northeast-1"],
+                "retention_days": 0,
+                "training_allowed": False,
+                "user_consent_required": True,
+            },
         ],
     )
+    with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
+        create_embedding_adapter(settings).embed_texts(["demo.user@example.test"])
+        create_reranker(settings).rerank(
+            query="owner demo.user@example.test",
+            candidates=[
+                RerankCandidate(
+                    document_chunk_id=1,
+                    text="Contact demo.user@example.test",
+                    retrieval_score=0.8,
+                )
+            ],
+        )
 
     embedding_body = cast(str, runtime.calls[0]["body"])
     rerank_payload = json.dumps(rerank_client.calls[0], ensure_ascii=False)

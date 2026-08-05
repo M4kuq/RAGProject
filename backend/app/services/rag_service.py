@@ -37,6 +37,7 @@ from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
     create_embedding_adapter,
+    embedding_query_egress_scope,
 )
 from app.observability.trace_export import TraceExportService
 from app.rag.agentic import (
@@ -109,6 +110,7 @@ from app.rag.llm_orchestrator import (
 )
 from app.rag.pricing import estimate_cost_usd
 from app.rag.query_planner import QueryPlanBuilder
+from app.rag.qwen_cascade import QwenCascadeControlError
 from app.rag.rerank import (
     RerankCandidate,
     RerankerClient,
@@ -211,10 +213,17 @@ class _GenerationAttempt:
 
 
 class RagPipelineError(RuntimeError):
-    def __init__(self, error_code: str, status_code: int) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        status_code: int,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(error_code)
         self.error_code = error_code
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class RagSearchPipelineError(RagPipelineError):
@@ -944,6 +953,10 @@ class RagService:
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.settings.generation_max_output_chars,
+                        trusted_user_id=user.user_id,
+                        trusted_request_id=request_id or f"retrieval-run-{run_id}",
+                        trusted_strategy=execution_strategy.value,
+                        trusted_retrieval_sufficient=has_high_retrieval_support(final_summary),
                     ),
                     retrieval_score_summary=final_summary,
                     settings=self.settings,
@@ -1067,6 +1080,19 @@ class RagService:
                 latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("rerank_failed", 503) from None
+        except QwenCascadeControlError as exc:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code=exc.reason_code,
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            raise RagAskPipelineError(
+                exc.reason_code,
+                exc.status_code,
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from None
         except AnswerGenerationError:
             self._mark_failed_safely(
                 db,
@@ -2375,7 +2401,8 @@ class RagService:
 
     def _embed_query(self, query: str) -> list[float]:
         try:
-            vectors = self.embedding_adapter.embed_texts([query])
+            with embedding_query_egress_scope():
+                vectors = self.embedding_adapter.embed_texts([query])
         except EmbeddingAdapterError:
             raise
         except Exception as exc:
@@ -2923,15 +2950,17 @@ class RagService:
         latency_ms: int,
     ) -> RagAskGeneration:
         usage = generation.usage
+        effective_provider = generation.provider or selection.provider
+        effective_model_name = generation.model_name or selection.model_name
         return RagAskGeneration(
-            provider=_safe_generation_label(selection.provider, max_length=100),
-            model=_safe_generation_label(selection.model_name, max_length=128),
+            provider=_safe_generation_label(effective_provider, max_length=100),
+            model=_safe_generation_label(effective_model_name, max_length=128),
             input_tokens=usage.input_tokens if usage is not None else None,
             output_tokens=usage.output_tokens if usage is not None else None,
             total_tokens=usage.total_tokens if usage is not None else None,
             estimated_cost_usd=estimate_cost_usd(
-                selection.provider,
-                selection.model_name,
+                effective_provider,
+                effective_model_name,
                 usage,
                 pricing_overrides=cast(
                     "dict[str, Any]",
@@ -4579,6 +4608,8 @@ def _generate_with_insufficient_evidence_retry(
         generation=GenerationResult(
             content=retry_generation.content,
             usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+            provider=retry_generation.provider or generation.provider,
+            model_name=retry_generation.model_name or generation.model_name,
         ),
         allow_validation_error_fallback=True,
     )
@@ -4606,6 +4637,12 @@ def _supported_answer_retry_request(request: GenerationRequest) -> GenerationReq
         system_instructions=RAG_GENERATION_SUPPORTED_ANSWER_RETRY_INSTRUCTIONS,
         temperature=0.0,
         response_format=request.response_format,
+        egress_purpose=request.egress_purpose,
+        trusted_user_id=request.trusted_user_id,
+        trusted_request_id=request.trusted_request_id,
+        trusted_strategy=request.trusted_strategy,
+        trusted_retrieval_sufficient=request.trusted_retrieval_sufficient,
+        trusted_generation_attempt=request.trusted_generation_attempt + 1,
     )
 
 

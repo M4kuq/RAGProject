@@ -309,6 +309,7 @@ class LLMGraphExtractor:
             max_output_chars=self.settings.graph_extraction_max_output_chars,
             system_instructions=GRAPH_EXTRACTION_SYSTEM_INSTRUCTIONS,
             task_instructions=task_instructions,
+            egress_purpose="graph_extraction",
             temperature=0.0,
             response_format=_graph_response_format_schema(),
         )

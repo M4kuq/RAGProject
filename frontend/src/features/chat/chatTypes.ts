@@ -94,6 +94,7 @@ export type RagAskRequest = {
   client_message_id: string;
   message: string;
   model_key?: string;
+  external_model_egress_consent?: boolean;
   top_k?: number;
   rerank_top_n?: number;
   strategy?: RagStrategy;

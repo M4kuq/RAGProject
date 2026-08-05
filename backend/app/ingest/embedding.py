@@ -5,7 +5,9 @@ import json
 import logging
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -16,6 +18,21 @@ from app.core.config import Settings
 from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 
 logger = logging.getLogger(__name__)
+
+_EMBEDDING_EGRESS_CLASSIFICATION: ContextVar[tuple[str, str] | None] = ContextVar(
+    "embedding_egress_classification",
+    default=None,
+)
+
+
+@contextmanager
+def embedding_query_egress_scope() -> Iterator[None]:
+    token = _EMBEDDING_EGRESS_CLASSIFICATION.set(("embedding_query", "user_question"))
+    try:
+        yield
+    finally:
+        _EMBEDDING_EGRESS_CLASSIFICATION.reset(token)
+
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 STOPWORDS = {
@@ -255,10 +272,16 @@ class BedrockTitanEmbeddingAdapter:
         protected_texts = tuple(texts)
         if self.egress_guard is not None:
             try:
+                purpose, data_class = _EMBEDDING_EGRESS_CLASSIFICATION.get() or (
+                    "embedding_document",
+                    "document_content",
+                )
                 protected_texts = self.egress_guard.protect_texts(
                     texts,
                     provider="bedrock",
-                    purpose="embedding",
+                    model=self.model_name,
+                    purpose=purpose,
+                    data_classes=(data_class,),
                 ).texts
             except ModelEgressBlockedError as exc:
                 raise EmbeddingAdapterError(

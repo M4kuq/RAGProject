@@ -36,6 +36,9 @@ export const NVIDIA_MODEL_OPTIONS: ModelOption[] = [
 export const NVIDIA_EXTERNAL_DATA_WARNING =
   "NVIDIA\u5916\u90e8API\u3078\u8cea\u554f\u6587\u3068\u53d6\u5f97\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u304c\u9001\u4fe1\u3055\u308c\u307e\u3059\u3002\u516c\u958b\u30fb\u30c7\u30e2\u6587\u66f8\u3060\u3051\u3092\u4f7f\u7528\u3057\u3066\u304f\u3060\u3055\u3044\u3002";
 
+export const EXTERNAL_MODEL_DATA_WARNING =
+  "External model APIs may receive the question and retrieved context after local masking. Confirm this transfer for each request.";
+
 export function isNvidiaApiEnabled(
   value: string | boolean | undefined = import.meta.env.VITE_ENABLE_NVIDIA_API
 ): boolean {
@@ -61,6 +64,11 @@ export function buildChatModelOptions(
 
 export function isNvidiaModelKey(modelKey: string): boolean {
   return modelKey.startsWith("nvidia:");
+}
+
+export function isExternalModelKey(modelKey: string): boolean {
+  const provider = modelKey.split(":", 1)[0]?.trim().toLowerCase();
+  return !["fake", "lmstudio", "local", "ollama"].includes(provider);
 }
 
 export function resolveSavedChatModel(

@@ -145,7 +145,13 @@ class OpenAICompatibleAgenticStrategyPlanner:
                 protected = self.egress_guard.protect_payload(
                     {"system_instruction": system_instruction, "payload": payload},
                     provider=self.provider,
+                    model=self.model_name,
                     purpose="agentic_strategy_planner",
+                    data_classes=(
+                        "retrieval_metadata",
+                        "system_instruction",
+                        "user_question",
+                    ),
                 )
             except ModelEgressBlockedError as exc:
                 return AgenticPlannerResult(

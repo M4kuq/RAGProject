@@ -22,6 +22,8 @@ import { ApiError } from "../lib/apiClient";
 import {
   buildChatModelOptions,
   DEFAULT_MODEL,
+  EXTERNAL_MODEL_DATA_WARNING,
+  isExternalModelKey,
   isNvidiaModelKey,
   NVIDIA_EXTERNAL_DATA_WARNING,
   resolveSavedChatModel
@@ -485,6 +487,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
   const [localMessages, setLocalMessages] = useState<UiMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(readInitialModel);
+  const [externalDataConsent, setExternalDataConsent] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<RagStrategy>("llm_tool_orchestrator");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
@@ -550,6 +553,11 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
     if (!message || inputDisabledReason || isSending) {
       return;
     }
+    const externalDataConsentRequired = isExternalModelKey(selectedModel);
+    if (externalDataConsentRequired && !externalDataConsent) {
+      setNotice("Confirm the external model transfer before sending this request.");
+      return;
+    }
 
     setNotice(null);
     setQuestion("");
@@ -586,11 +594,14 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
 
       setLocalMessages((current) => [...current, optimisticUser, loadingAssistant]);
 
+      const consentForRequest = externalDataConsentRequired && externalDataConsent;
+      setExternalDataConsent(false);
       const result = await askMutation.mutateAsync({
         chat_session_id: targetSession.chat_session_id,
         client_message_id: clientMessageId,
         message,
         model_key: selectedModel,
+        external_model_egress_consent: consentForRequest,
         top_k: DEFAULT_TOP_K,
         rerank_top_n: DEFAULT_RERANK_TOP_N,
         strategy: selectedStrategy
@@ -705,6 +716,7 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
 
   function changeModel(value: string) {
     setSelectedModel(value);
+    setExternalDataConsent(false);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(MODEL_STORAGE_KEY, value);
     }
@@ -793,14 +805,21 @@ export function ChatPage({ mode }: { mode: "active" | "temporary" }) {
         {chatHistory.isError ? <p className="notice">Chat history could not be loaded.</p> : null}
         <div className="composer-shell">
           <MessageInput
+            externalDataConsent={externalDataConsent}
+            externalDataConsentRequired={isExternalModelKey(selectedModel)}
             externalDataWarning={
-              isNvidiaModelKey(selectedModel) ? NVIDIA_EXTERNAL_DATA_WARNING : null
+              isNvidiaModelKey(selectedModel)
+                ? NVIDIA_EXTERNAL_DATA_WARNING
+                : isExternalModelKey(selectedModel)
+                  ? EXTERNAL_MODEL_DATA_WARNING
+                  : null
             }
             disabled={Boolean(inputDisabledReason) || currentUser.isLoading || currentUser.isError}
             disabledReason={inputDisabledReason}
             isSending={isSending}
             modelOptions={modelOptions}
             onChange={setQuestion}
+            onExternalDataConsentChange={setExternalDataConsent}
             onModelChange={changeModel}
             onStrategyChange={setSelectedStrategy}
             onSubmit={submitQuestion}

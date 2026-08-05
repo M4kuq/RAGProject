@@ -11,6 +11,7 @@ from app.api.deps import current_user, require_admin, require_authenticated_sess
 from app.api.responses import get_request_id, success_response
 from app.core.config import get_settings
 from app.core.errors import ValidationFailed
+from app.core.model_egress import model_egress_request_scope
 from app.core.sessions import SessionContext
 from app.db.models import User
 from app.db.session import get_db
@@ -95,15 +96,28 @@ def ask(
     outcome = "failed"
     try:
         active_service = _graph_capable_service(service, ask_payload.strategy.value)
-        result = active_service.ask(
-            db,
-            payload=ask_payload,
-            user=user,
-            request_id=get_request_id(request),
-        )
+        with model_egress_request_scope(
+            authenticated_user=True,
+            user_consent_granted=ask_payload.external_model_egress_consent,
+        ):
+            result = active_service.ask(
+                db,
+                payload=ask_payload,
+                user=user,
+                request_id=get_request_id(request),
+            )
         outcome = "replayed" if result.replayed else "succeeded"
     except RagAskPipelineError as exc:
-        raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if exc.retry_after_seconds is not None
+            else None
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.error_code},
+            headers=headers,
+        ) from exc
     finally:
         try:
             abuse_control.release(
@@ -132,7 +146,11 @@ def search(
 ) -> dict[str, object]:
     try:
         active_service = _graph_capable_service(service, payload.strategy.value)
-        result = active_service.search(db, payload=payload, request_id=get_request_id(request))
+        with model_egress_request_scope(
+            authenticated_user=True,
+            user_consent_granted=payload.external_model_egress_consent,
+        ):
+            result = active_service.search(db, payload=payload, request_id=get_request_id(request))
     except RagSearchPipelineError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
     return success_response(result.model_dump(mode="json"), request)
