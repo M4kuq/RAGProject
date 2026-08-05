@@ -54,7 +54,7 @@ direct user-message attackも止める必要があるため、Qwen end-to-end確
 
 ## Evidence hygiene and correction
 
-初期Draft commitに含まれたsynthetic raw fixtureはmetadata-only recipeへ置換し、そのcommit自体も専用branch履歴から除去した。PR #142はbase `c2ff8bf`から1 clean commit、head `2bd5cf0`、mergeable cleanであり、初期raw fixture commitはPR履歴に存在しない。PRはstacked reviewとmerge順序のためDraftを維持するが、promotion gateの保留を意味しない。
+初期Draft commitに含まれたsynthetic raw fixtureはmetadata-only recipeへ置換し、そのcommit自体も専用branch履歴から除去した。評価実装のclean commit `2bd5cf0`と結果文書commit `81ca0ed`はbase `c2ff8bf`へ通常fast-forwardで積まれており、初期raw fixture commitはPR履歴に存在しない。PRはstacked reviewとmerge順序のためDraftを維持するが、promotion gateの保留を意味しない。
 
 最終raw-free scanでは、runtime生成したraw値95件をartifact 9ファイルとbase-to-working-tree差分へ照合し、完全一致はartifact / PR差分とも0件だった。JSON / JSONL 371文書に対するraw-key schema errorも0件だった。
 
