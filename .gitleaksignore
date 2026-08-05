@@ -1,0 +1,6 @@
+# Historical synthetic graph-redaction fixture; current-tree source is generated at runtime.
+8c5c8473f8068436ec3b58d636ef3f9223afc797:backend/tests/test_graph_citations.py:generic-api-key:114
+# Historical documentation wording; current-tree text uses a non-secret placeholder.
+d4c80c6597e71692b176451bafe4560dadafd0d8:docs/phase2/README.md:generic-api-key:283
+# Earlier historical documentation wording; current-tree text uses a non-secret placeholder.
+9a2db9dcffc0f08561b1cffe869ee71c709483c4:docs/phase2/README.md:generic-api-key:206

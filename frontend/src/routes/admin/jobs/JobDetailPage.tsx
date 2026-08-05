@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { JobPayloadView } from "../../../components/admin/JobPayloadView";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";
