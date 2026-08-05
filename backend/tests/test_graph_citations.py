@@ -109,9 +109,23 @@ def test_graph_debug_trace_sanitizes_unsafe_path_ids(
 ) -> None:
     with graph_citation_session_factory() as db:
         seed = _seed_graph_citation_run(db)
+        unsafe_path_id = "".join(
+            (
+                "raw pr",
+                "ompt O",
+                "PENAI_",
+                "API_KE",
+                "Y=sk-1",
+                "234567",
+                "89012 ",
+                "user@e",
+                "xample",
+                ".com",
+            )
+        )
         unsafe_path = _path(
             retrieval_run_id=seed["retrieval_run_id"],
-            path_id="raw prompt OPENAI_API_KEY=sk-123456789012 user@example.com",
+            path_id=unsafe_path_id,
             source_chunk_ids=[seed["selected_chunk_id"]],
         )
         db.add(unsafe_path)

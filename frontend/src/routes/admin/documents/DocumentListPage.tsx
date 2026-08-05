@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { DocumentUploadForm, DocumentUrlIngestForm } from "../../../components/admin/DocumentUploadForm";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, LoadingState, EmptyState, InlineAlert } from "../../../components/common/States";

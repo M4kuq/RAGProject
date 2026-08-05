@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { metricDefinitionMap } from "../../../components/admin/EvaluationMetricOverview";
 import {
   HelpTooltip,

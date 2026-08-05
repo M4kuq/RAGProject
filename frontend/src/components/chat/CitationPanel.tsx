@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useCurrentUser } from "../../features/auth/authHooks";
 import { fetchCitationSource } from "../../features/chat/chatApi";
 import { RagAskCitation } from "../../features/chat/chatTypes";

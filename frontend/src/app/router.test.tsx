@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 import { AppProviders } from "./providers";
 import { AppRouter } from "./router";
@@ -125,4 +125,41 @@ test("keeps admin navigation in the chat sidebar for admin users", async () => {
   const topNav = rendered.container.querySelector(".topnav");
   expect(topNav).toBeInTheDocument();
   expect(within(topNav as HTMLElement).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
+});
+
+test("preserves query and hash across browser back and forward navigation", async () => {
+  window.history.pushState({}, "", "/chat?mode=compact#composer");
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  fireEvent.click(await screen.findByRole("link", { name: "User settings" }));
+  await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+  expect(await screen.findByRole("heading", { name: "設定" })).toBeInTheDocument();
+
+  window.history.back();
+  await waitFor(() => expect(window.location.pathname).toBe("/chat"));
+  expect(window.location.search).toBe("?mode=compact");
+  expect(window.location.hash).toBe("#composer");
+
+  window.history.forward();
+  await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+  expect(await screen.findByRole("heading", { name: "設定" })).toBeInTheDocument();
+});
+
+test("leaves an unknown route unmatched without redirecting it", async () => {
+  window.history.pushState({}, "", "/missing?source=route-test#not-found");
+  render(
+    <AppProviders>
+      <AppRouter />
+    </AppProviders>
+  );
+
+  expect(await screen.findByRole("link", { name: "User settings" })).toBeInTheDocument();
+  expect(window.location.pathname).toBe("/missing");
+  expect(window.location.search).toBe("?source=route-test");
+  expect(window.location.hash).toBe("#not-found");
+  expect(screen.queryByRole("main")).not.toBeInTheDocument();
 });

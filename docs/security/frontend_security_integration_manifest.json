@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "mainBase": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+  "sources": {
+    "pr146": "d3386e37f0e2849e7ab446b61e31f8794674b384",
+    "pr147": "b957462237650330ea0ccc86dc1e469fd58ddf83",
+    "pr148": "49fd24c5bbb2b4b0a6e25ef87b821d4209b1871b"
+  },
+  "sourceTrees": {
+    "pr147": "f9f3e3967c801322e598d8485df731a80f369b43",
+    "pr148": "81e7a76fe6d4d787ee4dea8628bfdf77ba65c6f1"
+  },
+  "integrationMerge": "18384b3d623a900e597b2b30305ff1e03e763453",
+  "integrationMergeTree": "6bf1067db0e0d6144b3321f7939954736e5ec765",
+  "mergeParents": [
+    "b957462237650330ea0ccc86dc1e469fd58ddf83",
+    "49fd24c5bbb2b4b0a6e25ef87b821d4209b1871b"
+  ],
+  "sourceUnion": {
+    "count": 41,
+    "sha256": "891ef11a75be4b6af4598ee6f0cb4d8cfbd1251a9031d1012e7da8ea5271ab6b"
+  },
+  "sourceIntersection": 0,
+  "rollbackSha": "b957462237650330ea0ccc86dc1e469fd58ddf83",
+  "runtime": {
+    "nodeMinimum": "22.22.0",
+    "npmPackageManager": "npm@10.9.8",
+    "npmMajor": 10,
+    "babelCoreOverride": "7.29.6",
+    "gitleaks": "8.30.1",
+    "gitleaksImageDigest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+  },
+  "dependencyDebtReviewDeadline": "2026-09-04"
+}

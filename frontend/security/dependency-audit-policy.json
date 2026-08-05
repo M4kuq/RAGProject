@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "reviewDeadline": "2026-09-04",
+  "knownDebt": {
+    "advisoryId": "GHSA-4x5r-pxfx-6jf8",
+    "package": "@babel/core",
+    "severity": "low",
+    "dependencyClass": "dev",
+    "fixAvailable": false
+  }
+}

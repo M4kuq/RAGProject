@@ -1,5 +1,5 @@
 import { type MouseEvent, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatModeBanner } from "../components/chat/ChatModeBanner";
 import { MessageInput } from "../components/chat/MessageInput";
