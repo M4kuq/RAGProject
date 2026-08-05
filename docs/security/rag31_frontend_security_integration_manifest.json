@@ -48,13 +48,13 @@
   },
   "integrationFiles": {
     "all": {
-      "count": 178,
-      "sha256": "dd67d92adb5a4f5bba8721a93415051f327c765a5c8b1bb013d7648aa43066d2"
+      "count": 179,
+      "sha256": "9913176884bddf74b53b62c22a1e006a60e6190646f39da624fde954a8f7b2ad"
     },
     "missingSourceFiles": [],
     "only": {
-      "count": 76,
-      "sha256": "8fa0ad5a1038138d99718e2dc3bfcea0b1e9d637bac6898a84a43f9ec64b9997",
+      "count": 77,
+      "sha256": "776ba25374b6e62cbfd5f14432562ed6d681621376c733b809959edcbea244be",
       "files": [
         "backend/alembic/versions/0023_corpus_trust_provenance.py",
         "backend/alembic/versions/0023_rag_abuse_controls.py",
@@ -100,6 +100,7 @@
         "backend/app/workers/handlers/qdrant_mirror_update_handler.py",
         "backend/tests/fixtures/pii_egress_dev_v1.json",
         "backend/tests/test_api_foundation.py",
+        "backend/tests/test_auth_security.py",
         "backend/tests/test_corpus_trust_policy.py",
         "backend/tests/test_document_api.py",
         "backend/tests/test_embedding_qdrant_indexing.py",

@@ -32,6 +32,8 @@ The same-origin post-login redirect gate from PR #149 is also preserved. Protoco
 - Chat model selection, request-local consent, Qwen disabled-by-default, auth redirect, and route behavior run on React 19 / Router 8 / Node 22.22.
 - Dependency audit, dependency-tree, repository secret scan, Alembic, backend, frontend, Docker, and Compose gates operate on this single integration head.
 
+The first local backend full run exposed a pre-existing nondeterministic test selector: two sessions with equal expiry timestamps could cause the revoked row to be modified instead of the active row. The integration-only test fix selects the non-revoked session explicitly. The isolated expiry test then passed three repeats and the unchanged application behavior passed the full backend rerun.
+
 Only aggregate counts, hashes, versions, and reason codes are recorded. Evaluation payloads, model output, matched secret values, and raw dependency-audit responses are not retained.
 
 ## Merge and rollback
