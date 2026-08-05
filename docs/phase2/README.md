@@ -281,7 +281,7 @@ PR-31 adds:
 - GitHub step summary output
 - configurable warn/fail threshold checks
 
-The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow does not require GitHub secrets, external LLM/API keys, BAAI/heavyweight model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
+The default strategy set is `dense,hybrid,agentic_router` to keep the smoke short. `sparse` can be included manually. The default workflow uses only repository-provided test configuration; it does not contact external providers or require BAAI/heavyweight model downloads, GPU, LangSmith, online evaluation, Graph-RAG, or OCR.
 The workflow caches a small local embedding model, does not exercise answer generation, and does not fall back to fake embedding, reranker, or evaluator behavior; missing local retrieval prerequisites are reported as a safe `blocked` artifact.
 
 ## PR-32 LangSmith Optional Adapter / Trace Export
