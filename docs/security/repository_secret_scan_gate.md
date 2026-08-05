@@ -52,6 +52,19 @@ expression, entropy relaxation, or stopword.
 Promotion requires configured current-tree and full-history findings to be zero, all
 three negative controls to be detected, and CI to pass.
 
+## Stacked PR compatibility
+
+PR #145, #146, and #147 were checked at their immutable heads. Their reachable history
+has no unignored finding with this policy, but each unchanged head still has the same
+three current-tree synthetic/documentation fixtures that this commit remediates. This is
+expected because the PR heads predate the remediation, and it is not hidden by an ignore.
+
+In separate temporary clones, this commit cherry-picked onto each head without conflict.
+All three resulting integration states passed both current-tree and reachable-history
+scans with zero unignored findings. The source PR branches were not changed. Reviewers
+should apply this remediation after the independent PR stack is merged or otherwise
+include this commit before requiring the new CI gate on those branches.
+
 ## Rollback
 
 Before merge, leave the Draft PR unmerged. After merge, revert the isolated secret-scan
