@@ -110,6 +110,7 @@ from app.rag.llm_orchestrator import (
 )
 from app.rag.pricing import estimate_cost_usd
 from app.rag.query_planner import QueryPlanBuilder
+from app.rag.qwen_cascade import QwenCascadeControlError
 from app.rag.rerank import (
     RerankCandidate,
     RerankerClient,
@@ -212,10 +213,17 @@ class _GenerationAttempt:
 
 
 class RagPipelineError(RuntimeError):
-    def __init__(self, error_code: str, status_code: int) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        status_code: int,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(error_code)
         self.error_code = error_code
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class RagSearchPipelineError(RagPipelineError):
@@ -945,6 +953,10 @@ class RagService:
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.settings.generation_max_output_chars,
+                        trusted_user_id=user.user_id,
+                        trusted_request_id=request_id or f"retrieval-run-{run_id}",
+                        trusted_strategy=execution_strategy.value,
+                        trusted_retrieval_sufficient=has_high_retrieval_support(final_summary),
                     ),
                     retrieval_score_summary=final_summary,
                     settings=self.settings,
@@ -1068,6 +1080,19 @@ class RagService:
                 latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("rerank_failed", 503) from None
+        except QwenCascadeControlError as exc:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code=exc.reason_code,
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            raise RagAskPipelineError(
+                exc.reason_code,
+                exc.status_code,
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from None
         except AnswerGenerationError:
             self._mark_failed_safely(
                 db,
@@ -4613,6 +4638,11 @@ def _supported_answer_retry_request(request: GenerationRequest) -> GenerationReq
         temperature=0.0,
         response_format=request.response_format,
         egress_purpose=request.egress_purpose,
+        trusted_user_id=request.trusted_user_id,
+        trusted_request_id=request.trusted_request_id,
+        trusted_strategy=request.trusted_strategy,
+        trusted_retrieval_sufficient=request.trusted_retrieval_sufficient,
+        trusted_generation_attempt=request.trusted_generation_attempt + 1,
     )
 
 

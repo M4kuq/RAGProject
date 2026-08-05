@@ -24,6 +24,7 @@ from app.rag.graph_retrieval import (
     GraphStoreProvider,
     graph_query_signal_score,
 )
+from app.rag.qwen_cascade import QwenCascadeControlError
 from app.rag.rerank import RerankError
 from app.rag.retrieval import RetrievalError, RetrievalFilters
 from app.rag.strategy import RetrievalSource, RetrievalStrategy
@@ -69,6 +70,7 @@ from app.services.rag_service import (
     _selected_context_refs,
     _summary_with_final_context_refs,
     _validated_generation_or_fallback,
+    has_high_retrieval_support,
 )
 
 GRAPH_NO_EVIDENCE_FALLBACK_REASON_CODE = "graph_no_evidence_fallback"
@@ -497,6 +499,10 @@ class GraphRagService:
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.base.settings.generation_max_output_chars,
+                        trusted_user_id=user.user_id,
+                        trusted_request_id=request_id or f"retrieval-run-{run_id}",
+                        trusted_strategy=_trusted_graph_execution_strategy(final_summary),
+                        trusted_retrieval_sufficient=has_high_retrieval_support(final_summary),
                     ),
                     retrieval_score_summary=final_summary,
                     settings=self.base.settings,
@@ -624,6 +630,19 @@ class GraphRagService:
                 latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("rerank_failed", 503) from None
+        except QwenCascadeControlError as exc:
+            self.base._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code=exc.reason_code,
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            raise RagAskPipelineError(
+                exc.reason_code,
+                exc.status_code,
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from None
         except AnswerGenerationError:
             self.base._mark_failed_safely(
                 db,
@@ -1233,6 +1252,21 @@ def _base_fallback_strategy_from_summary(summary: RetrievalScoreSummary) -> str 
         payload.get("fallback_strategy")
     )
     return strategy if strategy in {"dense", "hybrid"} else None
+
+
+def _trusted_graph_execution_strategy(summary: RetrievalScoreSummary) -> str:
+    payload = summary.model_dump(mode="json")
+    execution_strategy = _safe_optional_string(payload.get("execution_strategy"))
+    if execution_strategy in {"dense", "hybrid", "graph"}:
+        return execution_strategy
+    graph_executed = (
+        payload.get("graph_fallback_used") is False
+        and isinstance(payload.get("graph_path_count"), int)
+        and int(payload["graph_path_count"]) > 0
+        and isinstance(payload.get("graph_source_candidate_count"), int)
+        and int(payload["graph_source_candidate_count"]) > 0
+    )
+    return "graph" if graph_executed else "dense"
 
 
 def _graph_retrieval_settings(

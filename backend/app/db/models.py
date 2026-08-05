@@ -1146,6 +1146,98 @@ class RagAbuseDenialBucket(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class QwenCostReservation(Base):
+    __tablename__ = "qwen_cost_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_hash",
+            "provider",
+            "call_index",
+            name="uq_qwen_cost_reservations_request_call",
+        ),
+        pg_check("subject_hash ~ '^[0-9a-f]{64}$'", "ck_qwen_cost_reservations_subject_hash"),
+        pg_check("request_hash ~ '^[0-9a-f]{64}$'", "ck_qwen_cost_reservations_request_hash"),
+        CheckConstraint("provider = 'qwen'", name="ck_qwen_cost_reservations_provider"),
+        CheckConstraint("tier IN ('flash', 'plus')", name="ck_qwen_cost_reservations_tier"),
+        CheckConstraint("call_index > 0", name="ck_qwen_cost_reservations_call_index"),
+        CheckConstraint(
+            "status IN ('reserved', 'finalized', 'failed', 'cancelled')",
+            name="ck_qwen_cost_reservations_status",
+        ),
+        CheckConstraint(
+            "reserved_input_tokens >= 0 AND reserved_output_tokens > 0",
+            name="ck_qwen_cost_reservations_reserved_tokens",
+        ),
+        CheckConstraint(
+            "reserved_cost >= 0 AND input_price_per_million > 0 AND output_price_per_million > 0",
+            name="ck_qwen_cost_reservations_prices",
+        ),
+        CheckConstraint(
+            "lease_expires_at > reserved_at",
+            name="ck_qwen_cost_reservations_lease",
+        ),
+    )
+
+    reservation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subject_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="qwen")
+    model_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    call_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    pricing_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    input_price_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 9), nullable=False)
+    output_price_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 9), nullable=False)
+    reserved_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_cost: Mapped[Decimal] = mapped_column(Numeric(18, 9), nullable=False)
+    actual_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    actual_output_tokens: Mapped[int | None] = mapped_column(Integer)
+    actual_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 9))
+    is_escalation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(
+        String(20), server_default=text("'reserved'"), default="reserved", nullable=False
+    )
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QwenCircuitBreaker(Base):
+    __tablename__ = "qwen_circuit_breakers"
+    __table_args__ = (
+        CheckConstraint("provider = 'qwen'", name="ck_qwen_circuit_breakers_provider"),
+        CheckConstraint(
+            "state IN ('closed', 'open', 'half_open')",
+            name="ck_qwen_circuit_breakers_state",
+        ),
+        CheckConstraint(
+            "consecutive_failures >= 0",
+            name="ck_qwen_circuit_breakers_failure_count",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(String(20), primary_key=True, default="qwen")
+    state: Mapped[str] = mapped_column(
+        String(20), server_default=text("'closed'"), default="closed", nullable=False
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), default=0, nullable=False
+    )
+    opened_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    probe_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reason_code: Mapped[str | None] = mapped_column(String(100))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SystemSetting(Base, TimestampMixin):
     __tablename__ = "system_settings"
     __table_args__ = (
@@ -1335,3 +1427,15 @@ Index(
     sqlite_where=RagRequestAdmission.released_at.is_(None),
 )
 Index("ix_rag_abuse_denial_buckets_window", RagAbuseDenialBucket.window_started_at.desc())
+Index(
+    "ix_qwen_cost_reservations_subject_reserved",
+    QwenCostReservation.subject_hash,
+    QwenCostReservation.reserved_at.desc(),
+)
+Index("ix_qwen_cost_reservations_reserved", QwenCostReservation.reserved_at.desc())
+Index(
+    "ix_qwen_cost_reservations_active_lease",
+    QwenCostReservation.lease_expires_at,
+    postgresql_where=QwenCostReservation.status == "reserved",
+    sqlite_where=QwenCostReservation.status == "reserved",
+)

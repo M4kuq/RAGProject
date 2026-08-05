@@ -136,6 +136,11 @@ class GenerationRequest:
     response_format: dict[str, object] | None = None
     reasoning: Literal["off", "low", "medium", "high", "on"] | None = None
     egress_purpose: str = "generation"
+    trusted_user_id: int | None = None
+    trusted_request_id: str | None = None
+    trusted_strategy: str | None = None
+    trusted_retrieval_sufficient: bool = False
+    trusted_generation_attempt: int = 1
 
 
 @dataclass(frozen=True)
@@ -732,6 +737,17 @@ def create_answer_generator(
             ),
             primary_provider=generation_provider,
             fallback_config=fallback_config,
+        )
+    if generation_provider == "qwen":
+        if not settings.qwen_cascade_enabled or not settings.qwen_api_key:
+            raise AnswerGenerationError()
+        from app.db.session import SessionLocal
+        from app.rag.qwen_cascade import QwenCascadeAnswerGenerator
+
+        return QwenCascadeAnswerGenerator(
+            settings=settings,
+            session_factory=SessionLocal,
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     if generation_provider == "openai" and settings.openai_api_key:
         return _with_external_egress_fallback(
