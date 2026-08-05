@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from app.core.tool_execution_policy import (
+    ToolCapability,
+    ToolEffect,
+    emit_tool_execution_audit,
+    evaluate_tool_call,
+)
 
 from .adapters import McpServiceAdapter
 from .errors import McpError, McpInvalidRequest, McpNotFound, McpToolExecutionError
@@ -15,6 +23,7 @@ class McpTool:
     description: str
     input_schema: dict[str, Any]
     handler: Callable[[dict[str, Any]], dict[str, Any]]
+    effect: ToolEffect = "read"
 
     def definition(self) -> dict[str, Any]:
         return {
@@ -360,7 +369,14 @@ def build_tool_registry(adapter: McpServiceAdapter) -> dict[str, McpTool]:
             handler=adapter.get_evaluation_result,
         ),
     ]
-    return {tool.name: tool for tool in tools}
+    registry = {tool.name: tool for tool in tools}
+    settings = adapter.mcp_settings
+    allowed = set(settings.allowed_tools)
+    return {
+        name: tool
+        for name, tool in registry.items()
+        if name in allowed and (tool.effect == "read" or settings.allow_write_tools)
+    }
 
 
 def list_tools(registry: dict[str, McpTool]) -> dict[str, Any]:
@@ -371,19 +387,101 @@ def call_tool(
     registry: dict[str, McpTool],
     name: str,
     arguments: object,
+    *,
+    policy_mode: str = "enforce",
+    audit_enabled: bool = True,
 ) -> dict[str, Any]:
-    if name not in registry:
+    capabilities = {
+        tool_name: ToolCapability(
+            name=tool_name,
+            effect=tool.effect,
+            argument_profile="passthrough",
+        )
+        for tool_name, tool in registry.items()
+    }
+    decision = evaluate_tool_call(
+        capabilities=capabilities,
+        tool_name=name,
+        arguments=arguments,
+        allowed_tools=registry,
+        allow_write_tools=False,
+        policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+    )
+    argument_count = len(arguments) if isinstance(arguments, dict) else 0
+    if not decision.allowed:
+        emit_tool_execution_audit(
+            enabled=audit_enabled,
+            surface="mcp",
+            decision="denied",
+            stable_tool_name=decision.stable_tool_name,
+            effect=decision.effect,
+            reason_code=decision.reason_code,
+            policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+            argument_count=argument_count,
+            call_index=1,
+        )
+    if decision.reason_code == "tool_not_registered":
         raise McpNotFound("tool not found")
-    if isinstance(arguments, dict):
-        parsed_arguments = arguments
-    else:
+    if not decision.allowed:
         raise McpInvalidRequest("tool arguments must be an object")
+    parsed_arguments = decision.arguments
+    started_at = time.monotonic()
     try:
         structured = registry[name].handler(parsed_arguments)
     except McpToolExecutionError as exc:
+        emit_tool_execution_audit(
+            enabled=audit_enabled,
+            surface="mcp",
+            decision="failed",
+            stable_tool_name=decision.stable_tool_name,
+            effect=decision.effect,
+            reason_code=exc.code,
+            policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+            argument_count=argument_count,
+            call_index=1,
+            duration_ms=(time.monotonic() - started_at) * 1000,
+        )
         return _tool_error(exc)
-    except McpError:
+    except McpError as exc:
+        emit_tool_execution_audit(
+            enabled=audit_enabled,
+            surface="mcp",
+            decision="denied",
+            stable_tool_name=decision.stable_tool_name,
+            effect=decision.effect,
+            reason_code=exc.code,
+            policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+            argument_count=argument_count,
+            call_index=1,
+            duration_ms=(time.monotonic() - started_at) * 1000,
+        )
         raise
+    except Exception:
+        emit_tool_execution_audit(
+            enabled=audit_enabled,
+            surface="mcp",
+            decision="failed",
+            stable_tool_name=decision.stable_tool_name,
+            effect=decision.effect,
+            reason_code="internal_error",
+            policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+            argument_count=argument_count,
+            call_index=1,
+            duration_ms=(time.monotonic() - started_at) * 1000,
+        )
+        raise
+    emit_tool_execution_audit(
+        enabled=audit_enabled,
+        surface="mcp",
+        decision="completed",
+        stable_tool_name=decision.stable_tool_name,
+        effect=decision.effect,
+        reason_code="tool_completed",
+        policy_mode="legacy" if policy_mode == "legacy" else "enforce",
+        argument_count=argument_count,
+        call_index=1,
+        duration_ms=(time.monotonic() - started_at) * 1000,
+    )
     is_error = (
         name
         in {

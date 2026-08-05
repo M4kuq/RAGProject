@@ -14,10 +14,23 @@ from sqlalchemy.orm import Session
 
 from app.api.responses import pagination_meta
 from app.core.config import get_settings
+from app.core.corpus_trust import (
+    SECURITY_REVIEW_APPROVED,
+    SECURITY_REVIEW_PENDING,
+    SECURITY_REVIEW_QUARANTINED,
+    SECURITY_REVIEW_REASON_ADMIN_PASSED,
+    SECURITY_REVIEW_REASON_EVALUATION_FIXTURE,
+    SOURCE_PROVENANCE_ADMIN_UPLOAD,
+    SOURCE_PROVENANCE_EVALUATION_FIXTURE,
+    SOURCE_PROVENANCE_EXTERNAL_URL,
+    SOURCE_TRUST_EXTERNAL_UNTRUSTED,
+    SOURCE_TRUST_TRUSTED,
+)
 from app.core.errors import (
     ActiveVersionConflict,
     DocumentArchived,
     DocumentVersionNotApprovable,
+    DocumentVersionQuarantined,
     ResourceNotFound,
     ValidationFailed,
 )
@@ -39,6 +52,8 @@ from app.schemas.documents import (
     DocumentDisplayStatus,
     DocumentItem,
     DocumentMetadataDiffItem,
+    DocumentSecurityReviewRequest,
+    DocumentSecurityReviewResponse,
     DocumentUploadResponse,
     DocumentUrlIngestRequest,
     DocumentVersionCompareResponse,
@@ -183,6 +198,19 @@ class DocumentService:
                 file_size_bytes=upload.file_size_bytes,
                 storage_key=storage_key,
                 created_by=user.user_id,
+                source_provenance=(
+                    SOURCE_PROVENANCE_EVALUATION_FIXTURE
+                    if activate_after_ingest
+                    else SOURCE_PROVENANCE_ADMIN_UPLOAD
+                ),
+                source_trust_level=SOURCE_TRUST_TRUSTED,
+                security_review_status=(
+                    SECURITY_REVIEW_APPROVED if activate_after_ingest else SECURITY_REVIEW_PENDING
+                ),
+                security_review_reason_code=(
+                    SECURITY_REVIEW_REASON_EVALUATION_FIXTURE if activate_after_ingest else None
+                ),
+                security_reviewed_at=self._now() if activate_after_ingest else None,
             )
             storage_version_id = self.storage.save_bytes(
                 storage_key=storage_key,
@@ -282,6 +310,9 @@ class DocumentService:
                 storage_key=storage_key,
                 created_by=user.user_id,
                 metadata_json=version_metadata,
+                source_provenance=SOURCE_PROVENANCE_EXTERNAL_URL,
+                source_trust_level=SOURCE_TRUST_EXTERNAL_UNTRUSTED,
+                security_review_status=SECURITY_REVIEW_PENDING,
             )
             storage_version_id = self.storage.save_bytes(
                 storage_key=storage_key,
@@ -413,6 +444,9 @@ class DocumentService:
                 file_size_bytes=upload.file_size_bytes,
                 storage_key=storage_key,
                 created_by=user.user_id,
+                source_provenance=SOURCE_PROVENANCE_ADMIN_UPLOAD,
+                source_trust_level=SOURCE_TRUST_TRUSTED,
+                security_review_status=SECURITY_REVIEW_PENDING,
             )
             self.repository.touch_document(db, document=document, updated_at=now)
             storage_version_id = self.storage.save_bytes(
@@ -611,6 +645,8 @@ class DocumentService:
             )
             if document.status == "archived":
                 raise DocumentArchived()
+            if version.security_review_status == SECURITY_REVIEW_QUARANTINED:
+                raise DocumentVersionQuarantined()
             if version.is_active:
                 db.commit()
                 return DocumentApproveResponse(
@@ -633,6 +669,14 @@ class DocumentService:
             if version.status != "ready":
                 raise DocumentVersionNotApprovable()
             now = self._now()
+            if version.security_review_status != SECURITY_REVIEW_APPROVED:
+                self.repository.set_version_security_review(
+                    db,
+                    version=version,
+                    status=SECURITY_REVIEW_APPROVED,
+                    reason_code=SECURITY_REVIEW_REASON_ADMIN_PASSED,
+                    reviewed_at=now,
+                )
             previous_active_id = self.repository.set_active_version(
                 db,
                 logical_document_id=logical_document_id,
@@ -701,6 +745,104 @@ class DocumentService:
                 ),
             ),
             qdrant_mirror_job_id=mirror_job.job_id,
+        )
+
+    def update_security_review(
+        self,
+        db: Session,
+        *,
+        user: User,
+        logical_document_id: int,
+        document_version_id: int,
+        payload: DocumentSecurityReviewRequest,
+        request_id: str | None,
+    ) -> DocumentSecurityReviewResponse:
+        mirror_job: Job | None = None
+        graph_job: Job | None = None
+        try:
+            document, version = self._get_document_and_version(
+                db,
+                logical_document_id=logical_document_id,
+                document_version_id=document_version_id,
+                for_update=True,
+            )
+            if document.status == "archived":
+                raise DocumentArchived()
+            reviewed_at = self._now()
+            changed, was_active = self.repository.set_version_security_review(
+                db,
+                version=version,
+                status=payload.status,
+                reason_code=payload.reason_code,
+                reviewed_at=reviewed_at,
+            )
+            if changed:
+                mirror_job = self._create_qdrant_mirror_job(
+                    db,
+                    user=user,
+                    target_type="logical_document",
+                    target_id=logical_document_id,
+                    payload={
+                        "logical_document_id": logical_document_id,
+                        "document_version_id": document_version_id,
+                        "mirror_action": "sync_payload",
+                        "requested_by_user_id": user.user_id,
+                    },
+                )
+                if version.status == "ready":
+                    graph_job = self._create_graph_index_job(
+                        db,
+                        user=user,
+                        document_version_id=document_version_id,
+                    )
+                audit(
+                    db,
+                    action="document.version_security_review_updated",
+                    actor_user_id=user.user_id,
+                    request_id=request_id,
+                    target_type="document_version",
+                    target_id=document_version_id,
+                    metadata={
+                        "logical_document_id": logical_document_id,
+                        "security_review_status": payload.status,
+                        "security_review_reason_code": payload.reason_code,
+                        "was_active": was_active,
+                    },
+                )
+            db.commit()
+            db.refresh(version)
+            if mirror_job is not None:
+                db.refresh(mirror_job)
+            if graph_job is not None:
+                db.refresh(graph_job)
+        except Exception:
+            db.rollback()
+            raise
+        retrieval_eligible = (
+            document.status == "active"
+            and version.status == "ready"
+            and version.is_active
+            and version.security_review_status == SECURITY_REVIEW_APPROVED
+        )
+        return DocumentSecurityReviewResponse(
+            logical_document_id=logical_document_id,
+            document_version_id=document_version_id,
+            security_review_status=payload.status,
+            security_review_reason_code=payload.reason_code,
+            security_reviewed_at=self._aware_utc(version.security_reviewed_at or reviewed_at),
+            is_active=version.is_active,
+            retrieval_eligible=retrieval_eligible,
+            result_code="security_review_updated" if changed else "already_in_state",
+            version=self._version_detail(
+                document,
+                version,
+                chunk_count=self.repository.count_chunks(
+                    db,
+                    document_version_id=document_version_id,
+                ),
+            ),
+            qdrant_mirror_job_id=mirror_job.job_id if mirror_job is not None else None,
+            graph_index_job_id=graph_job.job_id if graph_job is not None else None,
         )
 
     def archive_document(
@@ -919,6 +1061,15 @@ class DocumentService:
             content_hash=version.content_hash,
             error_code=version.error_code,
             metadata_json=_safe_version_metadata(version.metadata_json),
+            source_provenance=version.source_provenance,  # type: ignore[arg-type]
+            source_trust_level=version.source_trust_level,  # type: ignore[arg-type]
+            security_review_status=version.security_review_status,  # type: ignore[arg-type]
+            security_review_reason_code=version.security_review_reason_code,
+            security_reviewed_at=(
+                self._aware_utc(version.security_reviewed_at)
+                if version.security_reviewed_at is not None
+                else None
+            ),
             chunk_count=chunk_count,
             created_at=self._aware_utc(version.created_at),
             updated_at=self._aware_utc(version.updated_at),

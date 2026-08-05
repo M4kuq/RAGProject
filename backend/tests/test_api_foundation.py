@@ -268,10 +268,58 @@ def test_settings_accepts_canonical_and_legacy_env_names(monkeypatch) -> None:
     monkeypatch.setenv("CORS_ORIGINS", '["http://legacy.local"]')
     monkeypatch.setenv("SESSION_SECRET", "x" * 32)
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("RAG_ABUSE_CONTROL_ENABLED", "false")
 
     legacy_settings = Settings()
     assert legacy_settings.app_env == "legacy"
     assert legacy_settings.cors_allowed_origins == ["http://legacy.local"]
+
+
+def test_settings_model_selection_is_fail_closed_and_normalizes_explicit_allowlist() -> None:
+    defaults = Settings(
+        _env_file=None,
+        app_env="test",
+        generation_provider="fake",
+        session_secret="x" * 32,
+    )
+    assert defaults.rag_user_model_selection_enabled is False
+    assert defaults.rag_user_selectable_model_keys == []
+
+    with pytest.raises(ValueError, match="RAG_USER_MODEL_SELECTION_ENABLED=true"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            generation_provider="fake",
+            session_secret="x" * 32,
+            rag_user_selectable_model_keys=["openai:gpt-entry"],
+        )
+
+    explicit = Settings(
+        _env_file=None,
+        app_env="test",
+        generation_provider="fake",
+        session_secret="x" * 32,
+        rag_user_model_selection_enabled=True,
+        rag_user_selectable_model_keys=[
+            " Google:gemini-entry ",
+            "openai:gpt-entry",
+            "openai:gpt-entry",
+        ],
+    )
+    assert explicit.rag_user_selectable_model_keys == [
+        "gemini:gemini-entry",
+        "openai:gpt-entry",
+    ]
+
+    with pytest.raises(ValueError, match="contains an invalid model key"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            generation_provider="fake",
+            session_secret="x" * 32,
+            rag_user_model_selection_enabled=True,
+            rag_user_selectable_model_keys=["openai:"],
+        )
 
 
 def test_cors_uses_formal_allowed_origins_env(monkeypatch) -> None:

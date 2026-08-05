@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import (
     Citation,
     DocumentChunk,
@@ -316,6 +317,7 @@ class RetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
         )
@@ -438,6 +440,7 @@ class RetrievalRepository:
             .where(
                 Citation.retrieval_run_id.in_(run_ids),
                 RetrievalRunItem.selected_flag.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
             )
             .order_by(
                 Citation.retrieval_run_id.asc(),

@@ -43,6 +43,7 @@ class RagSearchRequest(BaseModel):
     strategy: RagSearchRequestStrategy = DEFAULT_RAG_SEARCH_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
     cache_bypass: bool = False
+    external_model_egress_consent: bool = False
 
     @field_validator("query")
     @classmethod
@@ -63,6 +64,7 @@ class RagAskRequest(BaseModel):
     strategy: RagAskRequestStrategy = DEFAULT_RAG_ASK_REQUEST_STRATEGY
     filters: RagSearchFilters | None = None
     cache_bypass: bool = False
+    external_model_egress_consent: bool = False
 
     @field_validator("client_message_id")
     @classmethod

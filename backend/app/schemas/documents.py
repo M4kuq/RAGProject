@@ -3,11 +3,23 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.core.corpus_trust import security_review_reason_is_valid
 
 DocumentStatus = Literal["active", "archived"]
 DocumentVersionStatus = Literal["processing", "ready", "failed", "archived"]
 DocumentDisplayStatus = Literal["active", "pending_review", "processing", "failed", "archived"]
+DocumentSourceProvenance = Literal["legacy", "admin_upload", "external_url", "evaluation_fixture"]
+DocumentSourceTrustLevel = Literal["trusted", "external_untrusted"]
+DocumentSecurityReviewStatus = Literal["pending", "approved", "quarantined"]
+DocumentSecurityReviewReason = Literal[
+    "admin_review_passed",
+    "prompt_injection_detected",
+    "source_integrity_failed",
+    "policy_violation",
+    "operator_quarantine",
+]
 DocumentResultCode = Literal[
     "created",
     "approved",
@@ -62,6 +74,11 @@ class DocumentVersionSummary(BaseModel):
     content_hash: str | None = None
     error_code: str | None = None
     metadata_json: dict[str, object] | None = None
+    source_provenance: DocumentSourceProvenance = "legacy"
+    source_trust_level: DocumentSourceTrustLevel = "trusted"
+    security_review_status: DocumentSecurityReviewStatus = "approved"
+    security_review_reason_code: str | None = None
+    security_reviewed_at: datetime | None = None
     chunk_count: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -130,6 +147,9 @@ class DocumentSourceLocator(BaseModel):
     preview: str
     preview_truncated: bool
     old_version_flag: bool
+    source_provenance: DocumentSourceProvenance = "legacy"
+    source_trust_level: DocumentSourceTrustLevel = "trusted"
+    security_review_status: Literal["approved"] = "approved"
 
 
 class DocumentMetadataDiffItem(BaseModel):
@@ -241,6 +261,34 @@ class DocumentApproveResponse(BaseModel):
     result_code: Literal["approved", "already_active"]
     active_version: DocumentVersionDetail
     qdrant_mirror_job_id: int | None = None
+
+
+class DocumentSecurityReviewRequest(BaseModel):
+    status: Literal["approved", "quarantined"]
+    reason_code: DocumentSecurityReviewReason
+
+    @model_validator(mode="after")
+    def validate_status_reason_pair(self) -> DocumentSecurityReviewRequest:
+        if not security_review_reason_is_valid(
+            status=self.status,
+            reason_code=self.reason_code,
+        ):
+            raise ValueError("reason_code is not valid for the requested status")
+        return self
+
+
+class DocumentSecurityReviewResponse(BaseModel):
+    logical_document_id: int
+    document_version_id: int
+    security_review_status: Literal["approved", "quarantined"]
+    security_review_reason_code: DocumentSecurityReviewReason
+    security_reviewed_at: datetime
+    is_active: bool
+    retrieval_eligible: bool
+    result_code: Literal["security_review_updated", "already_in_state"]
+    version: DocumentVersionDetail
+    qdrant_mirror_job_id: int | None = None
+    graph_index_job_id: int | None = None
 
 
 class DocumentArchiveResponse(BaseModel):

@@ -69,7 +69,7 @@ def assert_rejected(engine: Engine, sql: str, params: dict[str, object] | None =
 def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> None:
     with pg_engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0022_eval_reliability"
+    assert version == "0025_qwen_cost_controls"
 
     expected_tables = {
         "roles",
@@ -95,6 +95,10 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "evaluation_results",
         "audit_logs",
         "system_settings",
+        "rag_request_admissions",
+        "rag_abuse_denial_buckets",
+        "qwen_cost_reservations",
+        "qwen_circuit_breakers",
     }
     actual_tables = scalar_set(
         pg_engine,
@@ -134,6 +138,29 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ck_evaluation_run_items_strategy_type",
         "ck_evaluation_run_items_generation_non_negative",
         "ck_evaluation_results_strategy_type",
+        "ck_rag_request_admissions_subject_hash",
+        "ck_rag_request_admissions_request_hash",
+        "ck_rag_request_admissions_charged_units",
+        "ck_rag_request_admissions_lease_expiry",
+        "ck_rag_request_admissions_outcome",
+        "uq_rag_abuse_denial_bucket",
+        "ck_rag_abuse_denial_buckets_scope",
+        "ck_rag_abuse_denial_buckets_reason",
+        "ck_rag_abuse_denial_buckets_subject_hash",
+        "ck_rag_abuse_denial_buckets_count",
+        "uq_qwen_cost_reservations_request_call",
+        "ck_qwen_cost_reservations_subject_hash",
+        "ck_qwen_cost_reservations_request_hash",
+        "ck_qwen_cost_reservations_provider",
+        "ck_qwen_cost_reservations_tier",
+        "ck_qwen_cost_reservations_call_index",
+        "ck_qwen_cost_reservations_status",
+        "ck_qwen_cost_reservations_reserved_tokens",
+        "ck_qwen_cost_reservations_prices",
+        "ck_qwen_cost_reservations_lease",
+        "ck_qwen_circuit_breakers_provider",
+        "ck_qwen_circuit_breakers_state",
+        "ck_qwen_circuit_breakers_failure_count",
     }
     actual_constraints = scalar_set(
         pg_engine,
@@ -163,6 +190,13 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
         "ix_evaluation_run_items_case",
         "ix_document_chunks_content_fts",
         "ix_document_chunks_content_fts_english",
+        "ix_rag_request_admissions_subject_admitted",
+        "ix_rag_request_admissions_admitted",
+        "ix_rag_request_admissions_active_lease",
+        "ix_rag_abuse_denial_buckets_window",
+        "ix_qwen_cost_reservations_subject_reserved",
+        "ix_qwen_cost_reservations_reserved",
+        "ix_qwen_cost_reservations_active_lease",
     }
     actual_indexes = scalar_set(
         pg_engine,
@@ -191,7 +225,9 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
                         'ix_chat_sessions_user_status_created',
                         'ix_audit_logs_target',
                         'ix_document_chunks_content_fts',
-                        'ix_document_chunks_content_fts_english'
+                        'ix_document_chunks_content_fts_english',
+                        'ix_rag_request_admissions_active_lease',
+                        'ix_qwen_cost_reservations_active_lease'
                       )
                     """
                 )
@@ -208,6 +244,8 @@ def test_migration_head_tables_constraints_and_indexes(pg_engine: Engine) -> Non
     assert "to_tsvector('simple'" in partial_index_defs["ix_document_chunks_content_fts"]
     assert "using gin" in partial_index_defs["ix_document_chunks_content_fts_english"]
     assert "to_tsvector('english'" in partial_index_defs["ix_document_chunks_content_fts_english"]
+    assert "released_at is null" in partial_index_defs["ix_rag_request_admissions_active_lease"]
+    assert "status" in partial_index_defs["ix_qwen_cost_reservations_active_lease"]
 
 
 def test_phase2_retrieval_trace_columns_and_constraints(pg_engine: Engine) -> None:

@@ -11,7 +11,7 @@ from app.core.errors import PayloadTooLarge
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.common import PaginationParams
-from app.schemas.documents import DocumentUrlIngestRequest
+from app.schemas.documents import DocumentSecurityReviewRequest, DocumentUrlIngestRequest
 from app.services.document_service import DocumentService
 
 router = APIRouter()
@@ -220,6 +220,28 @@ def approve_document_version(
         user=user,
         logical_document_id=logical_document_id,
         document_version_id=document_version_id,
+        request_id=get_request_id(request),
+    )
+    return success_response(result.model_dump(mode="json"), request)
+
+
+@router.post("/{logical_document_id}/versions/{document_version_id}/security-review")
+def update_document_version_security_review(
+    logical_document_id: int,
+    document_version_id: int,
+    payload: DocumentSecurityReviewRequest,
+    request: Request,
+    user: User = Depends(require_admin),
+    _: None = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    service: DocumentService = Depends(document_service),
+) -> dict[str, object]:
+    result = service.update_security_review(
+        db,
+        user=user,
+        logical_document_id=logical_document_id,
+        document_version_id=document_version_id,
+        payload=payload,
         request_id=get_request_id(request),
     )
     return success_response(result.model_dump(mode="json"), request)

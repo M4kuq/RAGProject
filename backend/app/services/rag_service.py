@@ -5,6 +5,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -16,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.core.errors import (
     ClientMessageConflict,
     ConflictError,
@@ -35,6 +37,7 @@ from app.ingest.embedding import (
     EmbeddingAdapter,
     EmbeddingAdapterError,
     create_embedding_adapter,
+    embedding_query_egress_scope,
 )
 from app.observability.trace_export import TraceExportService
 from app.rag.agentic import (
@@ -87,8 +90,10 @@ from app.rag.generation import (
 )
 from app.rag.hybrid import HybridRetrievalStrategy
 from app.rag.injection_detection import (
-    INJECTION_PATTERN_REASON_CODE,
-    detect_injection_patterns,
+    INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+    ContextInjectionPolicyDecision,
+    evaluate_context_injection_policy,
+    evaluate_user_injection_policy,
 )
 from app.rag.insufficient import is_insufficient_evidence_answer as _is_insufficient_evidence_answer
 from app.rag.langchain_agentic import (
@@ -105,6 +110,7 @@ from app.rag.llm_orchestrator import (
 )
 from app.rag.pricing import estimate_cost_usd
 from app.rag.query_planner import QueryPlanBuilder
+from app.rag.qwen_cascade import QwenCascadeControlError
 from app.rag.rerank import (
     RerankCandidate,
     RerankerClient,
@@ -207,10 +213,17 @@ class _GenerationAttempt:
 
 
 class RagPipelineError(RuntimeError):
-    def __init__(self, error_code: str, status_code: int) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        status_code: int,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(error_code)
         self.error_code = error_code
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class RagSearchPipelineError(RagPipelineError):
@@ -743,6 +756,24 @@ class RagService:
         run_id = run.retrieval_run_id
 
         try:
+            user_decision = evaluate_user_injection_policy(
+                payload.message,
+                policy=self.settings.rag_injection_policy,
+            )
+            self._record_injection_reason_codes(
+                db,
+                retrieval_run_id=run_id,
+                reason_codes=user_decision.reason_codes,
+            )
+            if user_decision.blocked:
+                self._mark_failed_safely(
+                    db,
+                    retrieval_run_id=run_id,
+                    error_code="injection_user_blocked",
+                    latency_tracker=latency_tracker,
+                    rollback=False,
+                )
+                raise RagAskPipelineError("injection_user_blocked", 422)
 
             def retrieve_uncached() -> RetrievalPipelineResult:
                 retrieval_execution_strategy = _retrieval_execution_strategy(execution_strategy)
@@ -873,11 +904,29 @@ class RagService:
 
             with latency_tracker.span("context_assembly_ms"):
                 context_items = evidence_pack.to_generation_context_items()
-                self._record_injection_patterns(
+                context_decision = self._record_injection_patterns(
                     db,
                     retrieval_run_id=run_id,
                     context_texts=[item.text for item in context_items],
                 )
+                allowed_context_indices = set(context_decision.allowed_indices)
+                context_items = [
+                    item
+                    for index, item in enumerate(context_items)
+                    if index in allowed_context_indices
+                ]
+                if context_decision.all_context_quarantined:
+                    self._mark_failed_safely(
+                        db,
+                        retrieval_run_id=run_id,
+                        error_code=INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+                        latency_tracker=latency_tracker,
+                        rollback=False,
+                    )
+                    raise RagAskPipelineError(
+                        INJECTION_ALL_CONTEXT_QUARANTINED_REASON_CODE,
+                        422,
+                    )
                 prompt_citation_sources = _prompt_citation_sources(
                     context_items=context_items,
                     citation_sources=selected_citation_sources,
@@ -904,6 +953,10 @@ class RagService:
                         message=payload.message,
                         context_items=context_items,
                         max_output_chars=self.settings.generation_max_output_chars,
+                        trusted_user_id=user.user_id,
+                        trusted_request_id=request_id or f"retrieval-run-{run_id}",
+                        trusted_strategy=execution_strategy.value,
+                        trusted_retrieval_sufficient=has_high_retrieval_support(final_summary),
                     ),
                     retrieval_score_summary=final_summary,
                     settings=self.settings,
@@ -1027,6 +1080,19 @@ class RagService:
                 latency_tracker=latency_tracker,
             )
             raise RagAskPipelineError("rerank_failed", 503) from None
+        except QwenCascadeControlError as exc:
+            self._mark_failed_safely(
+                db,
+                retrieval_run_id=run_id,
+                error_code=exc.reason_code,
+                latency_tracker=latency_tracker,
+                rollback=False,
+            )
+            raise RagAskPipelineError(
+                exc.reason_code,
+                exc.status_code,
+                retry_after_seconds=exc.retry_after_seconds,
+            ) from None
         except AnswerGenerationError:
             self._mark_failed_safely(
                 db,
@@ -2050,14 +2116,27 @@ class RagService:
         *,
         retrieval_run_id: int,
         context_texts: list[str],
-    ) -> None:
-        """Observability only: flag prompt-injection patterns in selected chunks.
+    ) -> ContextInjectionPolicyDecision:
+        """Record injection signals and return the configured context policy decision."""
+        decision = evaluate_context_injection_policy(
+            context_texts,
+            policy=self.settings.rag_injection_policy,
+        )
+        self._record_injection_reason_codes(
+            db,
+            retrieval_run_id=retrieval_run_id,
+            reason_codes=decision.reason_codes,
+        )
+        return decision
 
-        Records ``injection_pattern_detected`` into the retrieval run's strategy
-        decision ``reason_codes`` when any selected chunk text matches a known
-        injection pattern. Does NOT alter retrieval or generation behavior.
-        """
-        if not any(detect_injection_patterns(text) for text in context_texts):
+    def _record_injection_reason_codes(
+        self,
+        db: Session,
+        *,
+        retrieval_run_id: int,
+        reason_codes: Sequence[str],
+    ) -> None:
+        if not reason_codes:
             return
         run = self._require_run(db, retrieval_run_id)
         # Preserve trace suppression per run: router paths with
@@ -2069,12 +2148,13 @@ class RagService:
         decision = dict(run.strategy_decision_json)
         existing_reason_codes = decision.get("reason_codes")
         if isinstance(existing_reason_codes, list):
-            reason_codes = [str(code) for code in existing_reason_codes]
+            combined_reason_codes = [str(code) for code in existing_reason_codes]
         else:
-            reason_codes = []
-        if INJECTION_PATTERN_REASON_CODE not in reason_codes:
-            reason_codes.append(INJECTION_PATTERN_REASON_CODE)
-        decision["reason_codes"] = reason_codes
+            combined_reason_codes = []
+        for reason_code in reason_codes:
+            if reason_code not in combined_reason_codes:
+                combined_reason_codes.append(reason_code)
+        decision["reason_codes"] = combined_reason_codes
         self.repository.update_retrieval_run_trace(
             db,
             run=run,
@@ -2321,7 +2401,8 @@ class RagService:
 
     def _embed_query(self, query: str) -> list[float]:
         try:
-            vectors = self.embedding_adapter.embed_texts([query])
+            with embedding_query_egress_scope():
+                vectors = self.embedding_adapter.embed_texts([query])
         except EmbeddingAdapterError:
             raise
         except Exception as exc:
@@ -2426,6 +2507,7 @@ class RagService:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
         ).all()
@@ -2794,47 +2876,58 @@ class RagService:
             return
 
     def _generation_selection_for_request(self, payload: RagAskRequest) -> GenerationSelection:
+        default_selection = self._default_generation_selection()
         if payload.model_key is None:
-            provider = self.settings.generation_provider.lower()
-            return GenerationSelection(
-                provider=provider,
-                model_name=_resolved_generation_model_name(
-                    provider,
-                    self.settings.generation_model_name,
-                ),
-            )
-        provider, separator, model_name = payload.model_key.partition(MODEL_KEY_SEPARATOR)
-        provider = provider.lower()
-        model_name = model_name.strip()
-        if provider == "google":
-            provider = "gemini"
-        if (
-            provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
-            or not separator
-            or not model_name
-        ):
+            return default_selection
+        selection = _generation_selection_from_model_key(payload.model_key)
+        if selection is None:
             raise RagAskPipelineError("unsupported_model", 422)
-        if provider == "lmstudio" and self.settings.generation_provider == "fake":
-            return GenerationSelection(
-                provider=self.settings.generation_provider.lower(),
-                model_name=_resolved_generation_model_name(
-                    self.settings.generation_provider,
-                    self.settings.generation_model_name,
-                ),
-            )
+        if selection.provider == "lmstudio" and self.settings.generation_provider == "fake":
+            return default_selection
+        if self._user_generation_selection_allowed(selection, default_selection=default_selection):
+            return selection
+        policy_reason = (
+            "model_not_allowlisted"
+            if self.settings.rag_user_model_selection_enabled
+            else "user_model_selection_disabled"
+        )
+        logger.warning(
+            "RAG user model selection denied",
+            extra={
+                "reason_code": "model_selection_denied",
+                "requested_provider": selection.provider,
+                "policy_reason": policy_reason,
+            },
+        )
+        raise RagAskPipelineError("model_selection_denied", 403)
+
+    def _default_generation_selection(self) -> GenerationSelection:
+        provider = self.settings.generation_provider.lower()
         return GenerationSelection(
             provider=provider,
-            model_name=_resolved_generation_model_name(provider, model_name),
-        )
-
-    def _answer_generator_for_selection(self, selection: GenerationSelection) -> AnswerGenerator:
-        default_selection = GenerationSelection(
-            provider=self.settings.generation_provider.lower(),
             model_name=_resolved_generation_model_name(
-                self.settings.generation_provider,
+                provider,
                 self.settings.generation_model_name,
             ),
         )
+
+    def _user_generation_selection_allowed(
+        self,
+        selection: GenerationSelection,
+        *,
+        default_selection: GenerationSelection,
+    ) -> bool:
+        if selection == default_selection:
+            return True
+        if not self.settings.rag_user_model_selection_enabled:
+            return False
+        return any(
+            _generation_selection_from_model_key(model_key) == selection
+            for model_key in self.settings.rag_user_selectable_model_keys
+        )
+
+    def _answer_generator_for_selection(self, selection: GenerationSelection) -> AnswerGenerator:
+        default_selection = self._default_generation_selection()
         if selection == default_selection:
             return self.answer_generator
         try:
@@ -2857,15 +2950,17 @@ class RagService:
         latency_ms: int,
     ) -> RagAskGeneration:
         usage = generation.usage
+        effective_provider = generation.provider or selection.provider
+        effective_model_name = generation.model_name or selection.model_name
         return RagAskGeneration(
-            provider=_safe_generation_label(selection.provider, max_length=100),
-            model=_safe_generation_label(selection.model_name, max_length=128),
+            provider=_safe_generation_label(effective_provider, max_length=100),
+            model=_safe_generation_label(effective_model_name, max_length=128),
             input_tokens=usage.input_tokens if usage is not None else None,
             output_tokens=usage.output_tokens if usage is not None else None,
             total_tokens=usage.total_tokens if usage is not None else None,
             estimated_cost_usd=estimate_cost_usd(
-                selection.provider,
-                selection.model_name,
+                effective_provider,
+                effective_model_name,
                 usage,
                 pricing_overrides=cast(
                     "dict[str, Any]",
@@ -2903,6 +2998,24 @@ def _resolved_generation_model_name(provider: str, model_name: str) -> str:
     if normalized_provider == "lmstudio":
         return _lmstudio_model_name(model_name)
     return model_name.strip()
+
+
+def _generation_selection_from_model_key(model_key: str) -> GenerationSelection | None:
+    provider, separator, model_name = model_key.partition(MODEL_KEY_SEPARATOR)
+    provider = provider.strip().lower()
+    model_name = model_name.strip()
+    if provider == "google":
+        provider = "gemini"
+    if (
+        provider not in {"lmstudio", "openai", "anthropic", "gemini", "nvidia", "bedrock"}
+        or not separator
+        or not model_name
+    ):
+        return None
+    return GenerationSelection(
+        provider=provider,
+        model_name=_resolved_generation_model_name(provider, model_name),
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -4495,6 +4608,8 @@ def _generate_with_insufficient_evidence_retry(
         generation=GenerationResult(
             content=retry_generation.content,
             usage=_combined_generation_usage(generation.usage, retry_generation.usage),
+            provider=retry_generation.provider or generation.provider,
+            model_name=retry_generation.model_name or generation.model_name,
         ),
         allow_validation_error_fallback=True,
     )
@@ -4522,6 +4637,12 @@ def _supported_answer_retry_request(request: GenerationRequest) -> GenerationReq
         system_instructions=RAG_GENERATION_SUPPORTED_ANSWER_RETRY_INSTRUCTIONS,
         temperature=0.0,
         response_format=request.response_format,
+        egress_purpose=request.egress_purpose,
+        trusted_user_id=request.trusted_user_id,
+        trusted_request_id=request.trusted_request_id,
+        trusted_strategy=request.trusted_strategy,
+        trusted_retrieval_sufficient=request.trusted_retrieval_sufficient,
+        trusted_generation_attempt=request.trusted_generation_attempt + 1,
     )
 
 

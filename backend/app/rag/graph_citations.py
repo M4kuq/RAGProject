@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.graph_models import GraphRetrievalPath
 from app.db.models import (
     Citation,
@@ -160,7 +161,10 @@ class GraphPathSourceLocator:
         citations_by_chunk_id: dict[int, list[Citation]] = {}
         for chunk, version, document, run_item, citation in db.execute(statement).all():
             current_source = (
-                version.status == "ready" and version.is_active and document.status == "active"
+                version.status == "ready"
+                and version.is_active
+                and version.security_review_status == SECURITY_REVIEW_APPROVED
+                and document.status == "active"
             )
             old_version = _old_version_flag(version, document)
             source = located.get(chunk.document_chunk_id)
@@ -168,7 +172,10 @@ class GraphPathSourceLocator:
                 source = LocatedGraphPathSource(
                     source_chunk_id=chunk.document_chunk_id,
                     chunk_exists=True,
-                    active=current_source or old_version,
+                    active=(
+                        version.security_review_status == SECURITY_REVIEW_APPROVED
+                        and (current_source or old_version)
+                    ),
                     retrieval_run_item=run_item,
                     chunk=chunk,
                     document_version=version,

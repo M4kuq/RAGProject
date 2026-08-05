@@ -2,12 +2,15 @@ import { FormEvent, KeyboardEvent } from "react";
 import type { RagStrategy } from "../../features/chat/chatTypes";
 
 export function MessageInput({
+  externalDataConsent,
+  externalDataConsentRequired,
   externalDataWarning,
   disabled,
   disabledReason,
   isSending,
   modelOptions,
   onChange,
+  onExternalDataConsentChange,
   onModelChange,
   onStrategyChange,
   onSubmit,
@@ -16,12 +19,15 @@ export function MessageInput({
   strategyOptions,
   value
 }: {
+  externalDataConsent: boolean;
+  externalDataConsentRequired: boolean;
   externalDataWarning: string | null;
   disabled: boolean;
   disabledReason: string | null;
   isSending: boolean;
   modelOptions: { label: string; value: string }[];
   onChange: (value: string) => void;
+  onExternalDataConsentChange: (value: boolean) => void;
   onModelChange: (value: string) => void;
   onStrategyChange: (value: RagStrategy) => void;
   onSubmit: () => void;
@@ -68,6 +74,18 @@ export function MessageInput({
               {externalDataWarning}
             </p>
           ) : null}
+          {externalDataConsentRequired ? (
+            <label className="external-data-consent">
+              <input
+                aria-label="allow external model transfer for this request"
+                checked={externalDataConsent}
+                disabled={disabled || isSending}
+                onChange={(event) => onExternalDataConsentChange(event.target.checked)}
+                type="checkbox"
+              />
+              <span>I consent to this request&apos;s masked external model transfer.</span>
+            </label>
+          ) : null}
           {selectedStrategyDescription ? (
             <p className="strategy-description">{selectedStrategyDescription}</p>
           ) : null}
@@ -99,7 +117,15 @@ export function MessageInput({
               </option>
             ))}
           </select>
-          <button disabled={disabled || isSending || value.trim().length === 0} type="submit">
+          <button
+            disabled={
+              disabled ||
+              isSending ||
+              value.trim().length === 0 ||
+              (externalDataConsentRequired && !externalDataConsent)
+            }
+            type="submit"
+          >
             {isSending ? "Sending..." : "Send"}
           </button>
         </div>

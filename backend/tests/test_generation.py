@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -19,10 +20,105 @@ from app.rag.generation import (
 
 
 def test_generation_defaults_to_lmstudio_qwen_9b() -> None:
-    settings = Settings(app_env="test")
+    settings = Settings(_env_file=None, app_env="test")
 
     assert settings.generation_provider == "lmstudio"
     assert settings.generation_model_name == "qwen3.5-9b"
+    assert settings.local_model_endpoint_policy_enabled is True
+    assert settings.local_model_allowed_hosts == [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "host.docker.internal",
+        "lmstudio",
+        "ollama",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("setting_name", "endpoint"),
+    [
+        ("lmstudio_base_url", "https://models.example.invalid/v1"),
+        ("ollama_url", "http://127.0.0.1.example.invalid:11434"),
+        ("lmstudio_base_url", "file:///tmp/model"),
+        ("lmstudio_base_url", "http://localhost:1234/v1?redirect=external"),
+        ("ollama_url", "http://localhost:11434/#external"),
+    ],
+)
+def test_local_model_endpoint_policy_rejects_untrusted_endpoints(
+    setting_name: str,
+    endpoint: str,
+) -> None:
+    with pytest.raises(ValueError, match=setting_name.upper()):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            **cast(Any, {setting_name: endpoint}),
+        )
+
+
+def test_local_model_endpoint_policy_does_not_echo_sensitive_url() -> None:
+    sensitive_url = "https://private-user:private-password@models.example.invalid/v1"
+
+    with pytest.raises(ValueError) as exc_info:
+        Settings(_env_file=None, app_env="test", lmstudio_base_url=sensitive_url)
+
+    error = str(exc_info.value)
+    assert "private-user" not in error
+    assert "private-password" not in error
+    assert "models.example.invalid" not in error
+
+
+def test_local_model_endpoint_policy_accepts_exact_custom_host_and_ipv6() -> None:
+    custom = Settings(
+        _env_file=None,
+        app_env="test",
+        local_model_allowed_hosts=["MODEL.INTERNAL.", "model.internal"],
+        lmstudio_base_url="https://model.internal:1234/v1",
+        ollama_url="http://model.internal:11434",
+    )
+    ipv6 = Settings(
+        _env_file=None,
+        app_env="test",
+        local_model_allowed_hosts=["::1"],
+        lmstudio_base_url="http://[::1]:1234/v1",
+        ollama_url="http://[::1]:11434",
+    )
+
+    assert custom.local_model_allowed_hosts == ["model.internal"]
+    assert ipv6.local_model_allowed_hosts == ["::1"]
+
+
+@pytest.mark.parametrize(
+    "host", ["*.internal", ".internal", "model.internal:1234", "https://model.internal"]
+)
+def test_local_model_endpoint_policy_rejects_non_exact_allowlist_entries(host: str) -> None:
+    with pytest.raises(ValueError, match="LOCAL_MODEL_ALLOWED_HOSTS"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            local_model_allowed_hosts=[host],
+        )
+
+
+def test_local_model_endpoint_policy_disable_is_local_only() -> None:
+    local = Settings(
+        _env_file=None,
+        app_env="local",
+        local_model_endpoint_policy_enabled=False,
+        lmstudio_base_url="https://models.example.invalid/v1",
+    )
+
+    assert local.local_model_endpoint_policy_enabled is False
+    with pytest.raises(ValueError, match="must remain true"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            database_url="postgresql://localhost/ragproject_test",
+            session_secret="x" * 32,
+            session_cookie_secure=True,
+            local_model_endpoint_policy_enabled=False,
+        )
 
 
 def test_fake_generation_provider_is_test_only() -> None:

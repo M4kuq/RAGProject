@@ -214,7 +214,7 @@ Claude Desktop / Cursor / Codex などの stdio local MCP client には、secret
 - Git
 - Windows: Windows 11 + Docker Desktop Linux containers
 - Ubuntu: Ubuntu 24.04.4 LTS + Docker Engine
-- Optional local development: Python 3.11、uv、Node.js 20
+- Optional local development: Python 3.11、uv、Node.js 22.22+（npm 10.9.8）
 
 ## Windows Docker Desktop
 

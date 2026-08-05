@@ -1,0 +1,71 @@
+{
+  "schema_version": "pii_egress_dev_v1",
+  "description": "Synthetic-only development fixture for deterministic model egress checks.",
+  "cases": [
+    {
+      "id": "clean_english",
+      "inputs": ["Summarize the alpha policy and cite the relevant section."],
+      "expected_action": "allowed",
+      "expected_types": [],
+      "pii_values": []
+    },
+    {
+      "id": "clean_japanese",
+      "inputs": ["アルファ方針の承認条件を根拠付きで説明してください。"],
+      "expected_action": "allowed",
+      "expected_types": [],
+      "pii_values": []
+    },
+    {
+      "id": "email_and_phone",
+      "inputs": ["Contact demo.user@example.test or +81 90-1234-5678."],
+      "expected_action": "masked",
+      "expected_types": ["EMAIL", "PHONE"],
+      "pii_values": ["demo.user@example.test", "+81 90-1234-5678"]
+    },
+    {
+      "id": "japanese_address",
+      "inputs": ["住所: 東京都新宿区西新宿1-2-3", "郵便番号は〒160-0023です。"],
+      "expected_action": "masked",
+      "expected_types": ["ADDRESS", "POSTAL_CODE"],
+      "pii_values": ["東京都新宿区西新宿1-2-3", "〒160-0023"]
+    },
+    {
+      "id": "english_name_and_address",
+      "inputs": ["Full name: Alice Example; Address: 123 Example Street, Unit 4"],
+      "expected_action": "masked",
+      "expected_types": ["ADDRESS", "PERSON_NAME"],
+      "pii_values": ["Alice Example", "123 Example Street, Unit 4"]
+    },
+    {
+      "id": "personal_identifiers",
+      "inputs": ["Employee ID: EMP-001; IP 192.0.2.10; card 4242 4242 4242 4242"],
+      "expected_action": "masked",
+      "expected_types": ["GOVERNMENT_ID", "IP_ADDRESS", "PAYMENT_CARD"],
+      "pii_values": ["EMP-001", "192.0.2.10", "4242 4242 4242 4242"]
+    },
+    {
+      "id": "stable_cross_field_reference",
+      "inputs": ["Requester: same.person@example.test", "Owner: same.person@example.test"],
+      "expected_action": "masked",
+      "expected_types": ["EMAIL"],
+      "pii_values": ["same.person@example.test"]
+    },
+    {
+      "id": "bearer_token_block",
+      "inputs": ["Authorization: Bearer synthetic-token-value-12345"],
+      "expected_action": "blocked",
+      "expected_reason": "bearer_token",
+      "expected_types": [],
+      "pii_values": ["synthetic-token-value-12345"]
+    },
+    {
+      "id": "credential_assignment_block",
+      "inputs": ["api_key=synthetic-not-a-real-key"],
+      "expected_action": "blocked",
+      "expected_reason": "credential_assignment",
+      "expected_types": [],
+      "pii_values": ["synthetic-not-a-real-key"]
+    }
+  ]
+}

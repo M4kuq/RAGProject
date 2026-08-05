@@ -401,7 +401,7 @@ def test_me_logout_revoked_and_expired_sessions(
 
     login_as(client)
     with session_factory() as db:
-        session = db.scalars(select(UserSession).order_by(UserSession.expires_at.desc())).first()
+        session = db.scalar(select(UserSession).where(UserSession.revoked_at.is_(None)))
         assert session is not None
         session.created_at = now_utc() - timedelta(hours=2)
         session.expires_at = now_utc() - timedelta(hours=1)

@@ -80,6 +80,9 @@ class _VersionSnapshot:
     file_size_bytes: int
     content_hash: str
     is_active: bool
+    source_provenance: str
+    source_trust_level: str
+    security_review_status: str
     storage_key: str | None
     metadata_json: dict[str, object] | None
     status: str
@@ -252,6 +255,9 @@ class DocumentIngestHandler:
                 file_size_bytes=version.file_size_bytes,
                 content_hash=version.content_hash,
                 is_active=(version.is_active or _evaluation_activation_requested(context.payload)),
+                source_provenance=version.source_provenance,
+                source_trust_level=version.source_trust_level,
+                security_review_status=version.security_review_status,
                 storage_key=version.storage_key,
                 metadata_json=version.metadata_json,
                 status=version.status,

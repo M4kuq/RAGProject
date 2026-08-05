@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,6 +11,7 @@ from app.api.deps import current_user, require_admin, require_authenticated_sess
 from app.api.responses import get_request_id, success_response
 from app.core.config import get_settings
 from app.core.errors import ValidationFailed
+from app.core.model_egress import model_egress_request_scope
 from app.core.sessions import SessionContext
 from app.db.models import User
 from app.db.session import get_db
@@ -17,6 +19,11 @@ from app.rag.strategy import RetrievalStrategy
 from app.schemas.rag import RagAskRequest, RagSearchRequest
 from app.services.graph_debug_service import GraphDebugTraceService
 from app.services.graph_rag_service import GraphRagService
+from app.services.rag_abuse_control_service import (
+    RagAbuseControlService,
+    RagAdmissionDenied,
+    RagAdmissionUnavailable,
+)
 from app.services.rag_service import (
     RagAskPipelineError,
     RagSearchPipelineError,
@@ -26,10 +33,15 @@ from app.services.rag_service import (
 from app.services.source_locator_service import SourceLocatorService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def rag_search_service() -> RagService:
     return create_rag_service(get_settings())
+
+
+def rag_abuse_control_service() -> RagAbuseControlService:
+    return RagAbuseControlService(get_settings())
 
 
 def source_locator_service() -> SourceLocatorService:
@@ -47,6 +59,7 @@ def ask(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
     service: RagService = Depends(rag_search_service),
+    abuse_control: RagAbuseControlService = Depends(rag_abuse_control_service),
 ) -> dict[str, object]:
     chat_session_id = _chat_session_id_from_payload(payload)
     if chat_session_id is not None:
@@ -68,15 +81,55 @@ def ask(
             ]
         ) from exc
     try:
-        active_service = _graph_capable_service(service, ask_payload.strategy.value)
-        result = active_service.ask(
+        permit = abuse_control.admit(
             db,
-            payload=ask_payload,
-            user=user,
-            request_id=get_request_id(request),
+            user_id=user.user_id,
+            request_id=get_request_id(request) or "unknown",
+            strategy_type=ask_payload.strategy.value,
         )
+    except (RagAdmissionDenied, RagAdmissionUnavailable) as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.reason_code},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    outcome = "failed"
+    try:
+        active_service = _graph_capable_service(service, ask_payload.strategy.value)
+        with model_egress_request_scope(
+            authenticated_user=True,
+            user_consent_granted=ask_payload.external_model_egress_consent,
+        ):
+            result = active_service.ask(
+                db,
+                payload=ask_payload,
+                user=user,
+                request_id=get_request_id(request),
+            )
+        outcome = "replayed" if result.replayed else "succeeded"
     except RagAskPipelineError as exc:
-        raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if exc.retry_after_seconds is not None
+            else None
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.error_code},
+            headers=headers,
+        ) from exc
+    finally:
+        try:
+            abuse_control.release(
+                db,
+                admission_id=permit.admission_id,
+                outcome=outcome,
+            )
+        except RagAdmissionUnavailable:
+            logger.exception(
+                "RAG admission lease release failed",
+                extra={"reason_code": RagAdmissionUnavailable.reason_code},
+            )
     return {
         "data": result.model_dump(mode="json", exclude={"replayed"}),
         "meta": {"request_id": get_request_id(request), "replayed": result.replayed},
@@ -93,7 +146,11 @@ def search(
 ) -> dict[str, object]:
     try:
         active_service = _graph_capable_service(service, payload.strategy.value)
-        result = active_service.search(db, payload=payload, request_id=get_request_id(request))
+        with model_egress_request_scope(
+            authenticated_user=True,
+            user_consent_granted=payload.external_model_egress_consent,
+        ):
+            result = active_service.search(db, payload=payload, request_id=get_request_id(request))
     except RagSearchPipelineError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.error_code}) from exc
     return success_response(result.model_dump(mode="json"), request)

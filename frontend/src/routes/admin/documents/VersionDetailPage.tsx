@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { ChunkPreviewTable } from "../../../components/admin/ChunkPreviewTable";
 import { StatusBadge } from "../../../components/admin/StatusBadge";
 import { ErrorState, InlineAlert, LoadingState } from "../../../components/common/States";

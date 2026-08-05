@@ -199,6 +199,32 @@ def test_all_consistent_repairs_nothing(session_factory: sessionmaker[Session]) 
     assert 100 in qdrant_client.points[_COLLECTION]
 
 
+def test_trust_payload_drift_is_repaired_inactive(
+    session_factory: sessionmaker[Session],
+) -> None:
+    qdrant_client = InMemoryQdrantClient()
+    qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))
+    _seed_document(
+        session_factory, document_status="active", version_status="ready", is_active=True
+    )
+    payload = _healthy_payload()
+    payload.update(
+        {
+            "source_provenance": "external_url",
+            "source_trust_level": "external_untrusted",
+            "security_review_status": "pending",
+        }
+    )
+    _seed_point(qdrant_client, point_id=100, payload=payload)
+
+    result = _handler(session_factory, qdrant_client).handle(_context())
+
+    assert result.status == "succeeded"
+    assert result.result_json["stale_found_count"] == 1
+    assert result.result_json["repaired_count"] == 1
+    assert qdrant_client.points[_COLLECTION][100].payload["is_active"] is False
+
+
 def test_orphaned_point_is_deleted(session_factory: sessionmaker[Session]) -> None:
     qdrant_client = InMemoryQdrantClient()
     qdrant_client.create_collection(QdrantCollectionConfig(name=_COLLECTION, vector_dimension=4))

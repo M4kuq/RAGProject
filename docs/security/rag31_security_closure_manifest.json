@@ -1,0 +1,210 @@
+{
+  "schema_version": "rag31-security-closure-v2",
+  "captured_at": "2026-08-05T05:12:30.774Z",
+  "jira_issue": "RAG-73",
+  "repository": "M4kuq/RAGProject",
+  "main_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+  "previous_audit": {
+    "jira_issue": "RAG-69",
+    "canonical_pull_request": 141,
+    "preserved_without_rewrite": true
+  },
+  "audited_integration": {
+    "pull_request": 145,
+    "branch": "feature/rag31-security-final-integration",
+    "state": "open",
+    "draft": true,
+    "base_pull_request": 141,
+    "base_branch": "feature/rag-security-integration",
+    "base_sha": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "code_base_pull_request": 144,
+    "code_base_sha": "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+    "merged_pull_request": 142,
+    "merged_sha": "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+    "reviewable_merge_commit": "830b52c520afb85af8ad63dd93b390951c0aa540",
+    "merge_parents": [
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa"
+    ],
+    "github_ci_contract": "All checks on the final PR head must succeed; the PR head status is the non-self-referential authority."
+  },
+  "source_pull_requests": [
+    {
+      "pull_request": 142,
+      "jira_issue": "RAG-72",
+      "head_sha": "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+      "changed_file_count": 8,
+      "role": "internet-facing prompt-injection policy promotion"
+    },
+    {
+      "pull_request": 143,
+      "jira_issue": "RAG-71",
+      "head_sha": "041a0d0e4abf275b04c43bbe8f8dd0b7fcca7ed4",
+      "changed_file_count": 31,
+      "role": "external model egress governance"
+    },
+    {
+      "pull_request": 144,
+      "jira_issue": "RAG-70",
+      "head_sha": "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "changed_file_count": 44,
+      "role": "Qwen Flash-to-Plus atomic cost and circuit controls"
+    }
+  ],
+  "ancestry_verification": {
+    "common_base_sha": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "all_source_heads_are_ancestors": true,
+    "source_heads": [
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+      "041a0d0e4abf275b04c43bbe8f8dd0b7fcca7ed4",
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1"
+    ]
+  },
+  "file_set_verification": {
+    "pull_request_142_count": 8,
+    "pull_request_144_count": 44,
+    "source_intersection_count": 0,
+    "source_union_count": 52,
+    "source_union_sha256": "8426424be07f84f2243a75298773fc4b0deaf9114291e5ca3a409ab6a8f219a3",
+    "integration_count": 55,
+    "missing_from_integration": [],
+    "integration_only": [
+      "backend/tests/test_rag31_security_closure_manifest.py",
+      "docs/security/rag31_security_closure_manifest.json",
+      "docs/security/rag31_security_closure_matrix.md"
+    ]
+  },
+  "migration_verification": {
+    "head_count": 1,
+    "head_revision": "0025_qwen_cost_controls",
+    "postgresql_migration_required_in_ci": true
+  },
+  "acceptance_criteria": [
+    {
+      "id": 1,
+      "status": "satisfied",
+      "evidence_pull_requests": [133, 135, 141, 142, 145],
+      "limitation": "Synthetic and measured fixtures cover direct, indirect, multilingual, obfuscated, Agentic, and Graph paths, but do not prove population-wide safety."
+    },
+    {
+      "id": 2,
+      "status": "satisfied",
+      "evidence_pull_requests": [133, 135, 141, 142, 145],
+      "limitation": "The internet-facing profile promotes block, quarantine, and abstain with clean-action monitoring. Separate score down-ranking is not selected because detected evidence is fully quarantined."
+    },
+    {
+      "id": 3,
+      "status": "satisfied",
+      "evidence_pull_requests": [139, 141, 145],
+      "limitation": "Legacy rows remain trusted and approved for backward compatibility."
+    },
+    {
+      "id": 4,
+      "status": "satisfied",
+      "evidence_pull_requests": [140, 141, 145],
+      "limitation": "The current public tool surface is read-only; a future external write tool requires a new authorization review."
+    },
+    {
+      "id": 5,
+      "status": "satisfied",
+      "evidence_pull_requests": [136, 137, 141, 144, 145],
+      "limitation": "Live provider billing reconciliation is not claimed; activation remains disabled by default."
+    },
+    {
+      "id": 6,
+      "status": "satisfied",
+      "evidence_pull_requests": [134, 138, 141, 143, 144, 145],
+      "limitation": "Operator rules attest provider retention, training, and region facts and must be re-verified before activation."
+    },
+    {
+      "id": 7,
+      "status": "satisfied",
+      "evidence_pull_requests": [141, 142, 143, 144, 145],
+      "limitation": "The combined gate proves the implemented synthetic boundaries only; unknown attacks and live provider behavior remain residual risk."
+    }
+  ],
+  "individual_evidence": {
+    "rag72": {
+      "dataset_fingerprint": "fb80b56b330d0fff95434aae2f6a02f5b4f726169516de8eabf78b67a9e8626e",
+      "case_set_fingerprint": "87122e05d95a92c9a15717b40e83861f3757a6688b374b2927ae598ae64d963e",
+      "generation_cases": 30,
+      "boundary_cases": 14,
+      "repeats": 3,
+      "majority_attack_success": 0,
+      "pipeline_failure": 0,
+      "clean_policy_action": 0,
+      "one_sided_exact_upper_percent": 9.5,
+      "clean_utility_percent": 100.0
+    },
+    "rag71": {
+      "case_set_fingerprint": "d03e61b1125fa8bdb694d5bcdcb857bcb4726a4649f10754f8ece7d602adea24",
+      "governed_scenarios": 26,
+      "consent_bypass": 0,
+      "exact_policy_bypass": 0,
+      "reidentification_bypass": 0,
+      "clean_payload_mutation": 0
+    },
+    "rag70": {
+      "pricing_snapshot": "alibaba-2026-07-15-tokyo-tier-1",
+      "focused_passed": 17,
+      "postgresql_only_local_skipped": 1,
+      "github_backend_passed": 1135,
+      "github_backend_skipped": 6,
+      "budget_race_bypass": 0,
+      "content_driven_escalation": 0,
+      "live_provider_calls": 0
+    },
+    "aggregation_policy": "Do not combine different fingerprints or case sets into a new accuracy, ASR, Gold v2, or normal-profile score."
+  },
+  "combined_gate": {
+    "expected_status": "pass",
+    "transport_mode": "mocked_synthetic_only",
+    "live_provider_calls": 0,
+    "required_zero_metrics": [
+      "blocked_request_transport_reach",
+      "blocked_request_cost_reservation",
+      "quarantined_evidence_transport_leakage",
+      "content_driven_escalation",
+      "content_driven_policy_bypass",
+      "egress_denial_reservation",
+      "multiple_escalation",
+      "budget_bypass",
+      "unauthorized_tool_allowance",
+      "pipeline_failure"
+    ],
+    "clean_non_regression_required": true,
+    "test_files": [
+      "backend/tests/test_rag_ask.py",
+      "backend/tests/test_qwen_cascade.py",
+      "backend/tests/test_qwen_cost_control.py",
+      "backend/tests/test_external_egress_governance.py",
+      "backend/tests/test_rag31_security_integration_gate.py"
+    ]
+  },
+  "rollback": {
+    "primary_action": "Do not merge Draft PR 145.",
+    "code_origins": [
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa"
+    ],
+    "config_actions": [
+      "Keep QWEN_CASCADE_ENABLED=false and the existing non-Qwen generation provider.",
+      "Apply the internet-facing injection rollback override to restore observe_only.",
+      "Set external egress policy to deny with empty provider and rule allowlists."
+    ],
+    "state_reset_required": false
+  },
+  "closure_decision": {
+    "rag31_implementation_status": "implementation_closure_ready",
+    "production_secure_or_deployed": false,
+    "jira_status_must_remain_review": true,
+    "canonical_review_pull_request": 145,
+    "merge_order": [
+      "Review and merge PR 141 first if separately selected.",
+      "Retarget PR 145 to main and rerun all checks.",
+      "Merge PR 145 only after explicit approval."
+    ],
+    "do_not_merge_close_retarget_or_undraft_existing_pull_requests": true,
+    "follow_up_candidate": "Track the pre-existing frontend dependency audit findings as an independent security goal."
+  }
+}

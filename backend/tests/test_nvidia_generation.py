@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.core.model_egress import model_egress_request_scope
 from app.rag.generation import (
     AnswerGenerationError,
     GenerationContextItem,
@@ -38,6 +39,7 @@ def test_settings_rejects_nvidia_provider_outside_local_or_test() -> None:
         Settings(
             _env_file=None,
             app_env="production",
+            database_url="postgresql://localhost/ragproject_test",
             generation_provider="nvidia",
             generation_model_name=NVIDIA_MODEL,
             nvidia_api_key="test-nvidia-key",
@@ -52,6 +54,7 @@ def test_factory_rejects_nvidia_override_outside_local_or_test() -> None:
     settings = Settings(
         _env_file=None,
         app_env="production",
+        database_url="postgresql://localhost/ragproject_test",
         generation_provider="lmstudio",
         nvidia_api_key="test-nvidia-key",
         session_cookie_secure=True,
@@ -103,10 +106,30 @@ def test_nvidia_generator_uses_standard_chat_completions_payload(
         nvidia_api_key="test-nvidia-key",
         nvidia_base_url="https://integrate.api.nvidia.com/v1/",
         nvidia_timeout_seconds=45,
+        external_model_egress_policy="mask",
+        external_model_egress_allowed_providers=["nvidia"],
+        external_model_egress_provider_regions={"nvidia": "us"},
+        external_model_egress_rules=[
+            {
+                "provider": "nvidia",
+                "model": NVIDIA_MODEL,
+                "purpose": "generation",
+                "allowed_data_classes": [
+                    "retrieved_context",
+                    "system_instruction",
+                    "user_question",
+                ],
+                "allowed_regions": ["us"],
+                "retention_days": 0,
+                "training_allowed": False,
+                "user_consent_required": True,
+            }
+        ],
     )
 
     generator = create_answer_generator(settings)
-    result = generator.generate(_request())
+    with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
+        result = generator.generate(_request())
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
     assert generator.native_lmstudio_api is False

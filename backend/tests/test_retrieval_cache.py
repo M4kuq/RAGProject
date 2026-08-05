@@ -525,6 +525,72 @@ def test_document_repository_bumps_corpus_marker_on_active_archive(
     }
 
 
+def test_quarantine_invalidates_cache_and_blocks_stale_vector_candidate(
+    session_factory: sessionmaker[Session],
+) -> None:
+    store = InMemoryCacheStore()
+    vector_client = _CountingVectorClient([_candidate(100, 0.91, 1)])
+    service = _service(
+        store=store,
+        vector_client=vector_client,
+        settings=_settings(retrieval_cache_enabled=True),
+    )
+    repository = DocumentRepository()
+    reviewed_at = datetime(2026, 6, 18, 12, 3, tzinfo=UTC)
+
+    with session_factory() as db:
+        first = service.search(
+            db,
+            payload=RagSearchRequest(query="quarantine cache boundary", top_k=1),
+            request_id="req-quarantine-cache-1",
+        )
+        assert [item.document_chunk_id for item in first.items] == [100]
+        assert len(vector_client.query_vectors) == 1
+
+        version = db.get(DocumentVersion, 10)
+        marker = db.get(SystemSetting, RETRIEVAL_CACHE_CORPUS_MARKER_SETTING)
+        assert version is not None
+        assert marker is not None
+        marker_before = dict(marker.setting_value)
+        changed, was_active = repository.set_version_security_review(
+            db,
+            version=version,
+            status="quarantined",
+            reason_code="operator_quarantine",
+            reviewed_at=reviewed_at,
+        )
+        db.commit()
+        assert changed is True
+        assert was_active is True
+        assert version.is_active is False
+        assert version.security_reviewed_at is not None
+        assert version.security_reviewed_at.replace(tzinfo=UTC) == reviewed_at
+        assert marker.setting_value != marker_before
+        marker_after_quarantine = dict(marker.setting_value)
+
+        changed_again, was_active_again = repository.set_version_security_review(
+            db,
+            version=version,
+            status="quarantined",
+            reason_code="operator_quarantine",
+            reviewed_at=reviewed_at + timedelta(minutes=1),
+        )
+        db.commit()
+        assert changed_again is False
+        assert was_active_again is False
+        assert version.security_reviewed_at is not None
+        assert version.security_reviewed_at.replace(tzinfo=UTC) == reviewed_at
+        assert marker.setting_value == marker_after_quarantine
+
+        second = service.search(
+            db,
+            payload=RagSearchRequest(query="quarantine cache boundary", top_k=1),
+            request_id="req-quarantine-cache-2",
+        )
+        assert second.items == []
+        assert len(vector_client.query_vectors) == 2
+
+
 def test_graph_fingerprint_only_affects_graph_cache_keys(
     session_factory: sessionmaker[Session],
 ) -> None:

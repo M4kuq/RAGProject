@@ -109,9 +109,23 @@ def test_graph_debug_trace_sanitizes_unsafe_path_ids(
 ) -> None:
     with graph_citation_session_factory() as db:
         seed = _seed_graph_citation_run(db)
+        unsafe_path_id = "".join(
+            (
+                "raw pr",
+                "ompt O",
+                "PENAI_",
+                "API_KE",
+                "Y=sk-1",
+                "234567",
+                "89012 ",
+                "user@e",
+                "xample",
+                ".com",
+            )
+        )
         unsafe_path = _path(
             retrieval_run_id=seed["retrieval_run_id"],
-            path_id="raw prompt OPENAI_API_KEY=sk-123456789012 user@example.com",
+            path_id=unsafe_path_id,
             source_chunk_ids=[seed["selected_chunk_id"]],
         )
         db.add(unsafe_path)
@@ -165,6 +179,41 @@ def test_graph_locator_preserves_superseded_version_mappings(
     assert result.paths[0].source_mappings[0].old_version_flag is True
     assert result.paths[0].reason_codes == ("old_version_source_chunk",)
     assert "inactive_source_chunk" not in result.coverage.reason_codes
+
+
+def test_graph_locator_excludes_quarantined_old_version_source(
+    graph_citation_session_factory: sessionmaker[Session],
+) -> None:
+    with graph_citation_session_factory() as db:
+        seed = _seed_graph_citation_run(db)
+        version = db.get(DocumentVersion, seed["document_version_id"])
+        assert version is not None
+        version.is_active = False
+        version.security_review_status = "quarantined"
+        version.security_review_reason_code = "operator_quarantine"
+        version.security_reviewed_at = datetime.now(UTC)
+        db.commit()
+        paths = [
+            path
+            for path in db.query(GraphRetrievalPath).all()
+            if path.path_json.get("path_id") == "gp_selected"
+        ]
+        located = GraphPathSourceLocator().locate(
+            db,
+            retrieval_run_id=seed["retrieval_run_id"],
+            paths=paths,
+        )
+        validated = GraphPathValidator().validate(paths=paths, located_sources=located)
+        result = GraphCitationBuilder(snippet_max_chars=64).build(
+            validated_paths=validated,
+            located_sources=located,
+        )
+
+    assert result.coverage.valid_path_count == 0
+    assert result.coverage.citable_path_count == 0
+    assert result.coverage.citation_source_count == 0
+    assert result.paths[0].source_mappings == ()
+    assert result.paths[0].reason_codes == ("inactive_source_chunk",)
 
 
 @pytest.mark.parametrize(

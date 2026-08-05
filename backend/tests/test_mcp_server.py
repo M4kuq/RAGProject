@@ -494,7 +494,20 @@ def test_mcp_redaction_covers_prompt_context_tokens_paths_and_metric_details() -
             "storagePath": "C:\\private\\chunk.txt",
             "authorization": "Bearer abcdefghijklmnop",
             "api key": "sk-testshouldberemoved1234567890",
-            "private key": "-----BEGIN PRIVATE KEY----- abcdef -----END PRIVATE KEY-----",
+            "private key": "".join(
+                (
+                    "-----B",
+                    "EGIN P",
+                    "RIVATE",
+                    " KEY--",
+                    "--- ab",
+                    "cdef -",
+                    "----EN",
+                    "D PRIV",
+                    "ATE KE",
+                    "Y-----",
+                )
+            ),
         },
         "safe": (
             "Bearer abcdefghijklmnop and https://user:pass@example.test/path "

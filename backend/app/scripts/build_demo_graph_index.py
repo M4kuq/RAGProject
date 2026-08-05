@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import DocumentVersion, LogicalDocument
 from app.db.session import SessionLocal
 from app.services.graph_index_service import GraphIndexService
@@ -113,6 +114,7 @@ def _active_ready_document_version_ids(db: Session, *, limit: int | None) -> lis
             LogicalDocument.status == "active",
             DocumentVersion.status == "ready",
             DocumentVersion.is_active.is_(True),
+            DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
         )
         .order_by(DocumentVersion.document_version_id.asc())
     )

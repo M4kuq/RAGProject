@@ -4,17 +4,28 @@ import json
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
+from app.core.tool_execution_policy import (
+    ToolCapability,
+    emit_tool_execution_audit,
+    evaluate_tool_call,
+)
 from app.rag.agentic import (
     AgenticRetrievalResult,
     RetrievalAttemptResult,
     merge_dedupe_candidates,
 )
 from app.rag.generation import _lmstudio_model_name
+from app.rag.injection_detection import (
+    INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE,
+    InjectionPolicyName,
+    evaluate_context_injection_policy,
+)
 from app.rag.strategy import RetrievalStrategy
 from app.rag.tool_result_compression import (
     CompressedToolResult,
@@ -36,6 +47,13 @@ ALLOWED_TOOL_NAMES = {
     *SEARCH_TOOL_NAMES,
     "inspect_retrieval_trace",
     "finalize_answer",
+}
+_TOOL_CAPABILITIES = {
+    "dense_search": ToolCapability("dense_search", "read", "search"),
+    "sparse_search": ToolCapability("sparse_search", "read", "search"),
+    "hybrid_search": ToolCapability("hybrid_search", "read", "search"),
+    "inspect_retrieval_trace": ToolCapability("inspect_retrieval_trace", "read", "trace"),
+    "finalize_answer": ToolCapability("finalize_answer", "read", "finalize"),
 }
 
 
@@ -60,7 +78,22 @@ class LLMToolResult:
     def truncated(self) -> bool:
         return self.dropped_item_count > 0
 
-    def to_planner_payload(self) -> dict[str, object]:
+    def to_planner_payload(
+        self,
+        *,
+        injection_policy: InjectionPolicyName = "observe_only",
+    ) -> dict[str, object]:
+        decision = evaluate_context_injection_policy(
+            [_planner_item_injection_text(item) for item in self.items],
+            policy=injection_policy,
+        )
+        allowed = set(decision.allowed_indices)
+        planner_items = [
+            item.to_planner_payload() for index, item in enumerate(self.items) if index in allowed
+        ]
+        planner_reason_codes = list(decision.reason_codes)
+        if decision.quarantined_indices:
+            planner_reason_codes.append(INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE)
         return TraceRedactor.safe_dict(
             {
                 "tool_call_id": self.tool_call_id,
@@ -71,7 +104,9 @@ class LLMToolResult:
                 # are a truncated subset of what the tool actually retrieved.
                 "dropped_item_count": self.dropped_item_count,
                 "truncated": self.truncated,
-                "items": [item.to_planner_payload() for item in self.items],
+                "items": planner_items,
+                "planner_quarantined_item_count": len(decision.quarantined_indices),
+                "planner_security_reason_codes": planner_reason_codes,
                 "error_code": self.error_code,
                 "trace_summary": self.trace_summary,
             }
@@ -100,6 +135,7 @@ class LLMToolPlanningRequest:
     remaining_search_calls: int
     available_tools: Sequence[str]
     tool_results: Sequence[LLMToolResult]
+    injection_policy: InjectionPolicyName = "observe_only"
 
 
 class LLMToolCallPlanner(Protocol):
@@ -156,15 +192,42 @@ class OpenAICompatibleJSONToolPlanner:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int,
+        provider: str = "lmstudio",
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.provider = provider
+        self.egress_guard = egress_guard
+        self.last_reason_code: str | None = None
 
     def plan(self, request: LLMToolPlanningRequest) -> list[LLMToolCall]:
+        self.last_reason_code = None
         payload = _planner_input_payload(request)
+        system_instruction = _planner_system_instruction()
+        if self.egress_guard is not None:
+            try:
+                protected = self.egress_guard.protect_payload(
+                    {"system_instruction": system_instruction, "payload": payload},
+                    provider=self.provider,
+                    model=self.model_name,
+                    purpose="llm_tool_planner",
+                    data_classes=(
+                        "retrieval_metadata",
+                        "system_instruction",
+                        "tool_result",
+                        "user_question",
+                    ),
+                )
+            except ModelEgressBlockedError as exc:
+                self.last_reason_code = f"planner_egress_{exc.reason_code}"
+                return []
+            protected_payload = cast(dict[str, Any], protected.payload)
+            system_instruction = cast(str, protected_payload["system_instruction"])
+            payload = cast(dict[str, object], protected_payload["payload"])
         try:
             response = httpx.post(
                 f"{self.base_url}/chat/completions",
@@ -175,7 +238,7 @@ class OpenAICompatibleJSONToolPlanner:
                 json={
                     "model": self.model_name,
                     "messages": [
-                        {"role": "system", "content": _planner_system_instruction()},
+                        {"role": "system", "content": system_instruction},
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
                     "temperature": 0.0,
@@ -370,6 +433,12 @@ class LLMToolCallingRetrievalOrchestrator:
                     timeout_exceeded = True
                     reason_codes.append("timeout_exceeded")
                     break
+                reason_codes.extend(
+                    _planner_security_reason_codes(
+                        tool_results,
+                        policy=self.settings.rag_injection_policy,
+                    )
+                )
                 with latency_tracker.span("llm_tool_planning_ms"):
                     planned_calls = self.planner.plan(
                         LLMToolPlanningRequest(
@@ -381,6 +450,7 @@ class LLMToolCallingRetrievalOrchestrator:
                             remaining_search_calls=max_search_calls - search_call_count,
                             available_tools=available_tools,
                             tool_results=tool_results,
+                            injection_policy=self.settings.rag_injection_policy,
                         )
                     )
                 if self._remaining_seconds(deadline) <= 0:
@@ -388,6 +458,9 @@ class LLMToolCallingRetrievalOrchestrator:
                     reason_codes.append("timeout_exceeded")
                     break
                 if not planned_calls:
+                    planner_reason_code = getattr(self.planner, "last_reason_code", None)
+                    if isinstance(planner_reason_code, str):
+                        reason_codes.append(planner_reason_code)
                     if search_call_count == 0:
                         planned_calls = [
                             LLMToolCall(
@@ -425,17 +498,53 @@ class LLMToolCallingRetrievalOrchestrator:
                     tool_call_count += 1
                     tool_call_id = f"tc_{tool_call_count}"
                     tool_name = planned_call.tool_name
-                    if tool_name not in ALLOWED_TOOL_NAMES:
+                    policy_decision = evaluate_tool_call(
+                        capabilities=_TOOL_CAPABILITIES,
+                        tool_name=tool_name,
+                        arguments=planned_call.arguments,
+                        allowed_tools=ALLOWED_TOOL_NAMES,
+                        allow_write_tools=False,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        max_query_chars=max_query_chars,
+                        tool_call_id_prefixes=("tc_",),
+                    )
+                    argument_count = len(planned_call.arguments)
+                    if not policy_decision.allowed:
                         append_error_result(
                             tool_call_id=tool_call_id,
-                            tool_name="unknown",
-                            error_code="tool_not_allowed",
+                            tool_name=policy_decision.stable_tool_name,
+                            error_code=policy_decision.reason_code,
                         )
-                        reason_codes.append("tool_not_allowed")
+                        reason_codes.append(policy_decision.reason_code)
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="denied",
+                            stable_tool_name=policy_decision.stable_tool_name,
+                            effect=policy_decision.effect,
+                            reason_code=policy_decision.reason_code,
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                        )
                         continue
+                    tool_name = policy_decision.stable_tool_name
+                    planned_arguments = policy_decision.arguments
+                    audit_started_at = time.monotonic()
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="llm_tool_orchestrator",
+                        decision="allowed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code=policy_decision.reason_code,
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                    )
                     if tool_name == "finalize_answer":
                         finalize_called = True
-                        selected_ids = _selected_tool_call_ids(planned_call.arguments)
+                        selected_ids = _selected_tool_call_ids(planned_arguments)
                         if selected_ids is None:
                             selected_tool_call_ids = list(attempts_by_tool_call_id)
                             reason_codes.append("finalize_answer_legacy_all_attempts")
@@ -444,6 +553,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             if not selected_tool_call_ids:
                                 reason_codes.append("finalize_answer_empty_selection")
                         reason_codes.append("finalize_answer_called")
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="completed",
+                            stable_tool_name=tool_name,
+                            effect=policy_decision.effect,
+                            reason_code="tool_completed",
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                            duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                        )
                         break
                     if tool_name == "inspect_retrieval_trace":
                         if not self.settings.llm_orchestrator_allow_trace_inspection:
@@ -454,9 +575,7 @@ class LLMToolCallingRetrievalOrchestrator:
                             )
                             reason_codes.append("trace_inspection_disabled")
                             continue
-                        requested_run_id = _positive_int(
-                            planned_call.arguments.get("retrieval_run_id")
-                        )
+                        requested_run_id = _positive_int(planned_arguments.get("retrieval_run_id"))
                         if requested_run_id is not None and requested_run_id != retrieval_run_id:
                             append_error_result(
                                 tool_call_id=tool_call_id,
@@ -481,6 +600,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             )
                         )
                         reason_codes.append("inspect_retrieval_trace_called")
+                        emit_tool_execution_audit(
+                            enabled=self.settings.agent_tool_execution_audit_enabled,
+                            surface="llm_tool_orchestrator",
+                            decision="completed",
+                            stable_tool_name=tool_name,
+                            effect=policy_decision.effect,
+                            reason_code="tool_completed",
+                            policy_mode=self.settings.agent_tool_policy_mode,
+                            argument_count=argument_count,
+                            call_index=tool_call_count,
+                            duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                        )
                         continue
 
                     if search_call_count >= max_search_calls:
@@ -491,7 +622,7 @@ class LLMToolCallingRetrievalOrchestrator:
                         )
                         reason_codes.append("max_search_calls_exhausted")
                         continue
-                    tool_query = _tool_query(planned_call.arguments, fallback=query)
+                    tool_query = _tool_query(planned_arguments, fallback=query)
                     normalized_key = (tool_name, _normalized_query(tool_query))
                     if normalized_key in seen_searches:
                         repeated_query_detected = True
@@ -530,6 +661,18 @@ class LLMToolCallingRetrievalOrchestrator:
                             f"llm_tool:{tool_name}:{tool_call_id}",
                             tool_query[:max_query_chars],
                         )
+                    emit_tool_execution_audit(
+                        enabled=self.settings.agent_tool_execution_audit_enabled,
+                        surface="llm_tool_orchestrator",
+                        decision="completed",
+                        stable_tool_name=tool_name,
+                        effect=policy_decision.effect,
+                        reason_code="tool_completed",
+                        policy_mode=self.settings.agent_tool_policy_mode,
+                        argument_count=argument_count,
+                        call_index=tool_call_count,
+                        duration_ms=(time.monotonic() - audit_started_at) * 1000,
+                    )
                     search_call_count += 1
                     if compression_policy.enabled:
                         compressed = compressor.compress(
@@ -685,6 +828,8 @@ def create_llm_tool_call_planner(settings: Settings) -> LLMToolCallPlanner:
                 settings.openai_timeout_seconds, settings.llm_orchestrator_timeout_seconds
             ),
             max_output_tokens=settings.generation_max_output_tokens,
+            provider="openai",
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     return DeterministicLLMToolCallPlanner(settings)
 
@@ -707,7 +852,10 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
             "remaining_search_calls": request.remaining_search_calls,
             "remaining_timeout_seconds": round(max(0.0, request.remaining_timeout_seconds), 3),
             "available_tools": sorted(request.available_tools),
-            "tool_results": [result.to_planner_payload() for result in request.tool_results],
+            "tool_results": [
+                result.to_planner_payload(injection_policy=request.injection_policy)
+                for result in request.tool_results
+            ],
             "instruction": (
                 "Choose one retrieval tool if more evidence is needed, otherwise call "
                 "finalize_answer with selected_tool_call_ids."
@@ -721,6 +869,31 @@ def _planner_input_payload(request: LLMToolPlanningRequest) -> dict[str, object]
     return payload
 
 
+def _planner_security_reason_codes(
+    tool_results: Sequence[LLMToolResult],
+    *,
+    policy: InjectionPolicyName,
+) -> list[str]:
+    if policy == "observe_only":
+        return []
+    for result in tool_results:
+        decision = evaluate_context_injection_policy(
+            [_planner_item_injection_text(item) for item in result.items],
+            policy=policy,
+        )
+        if decision.quarantined_indices:
+            return [INJECTION_TOOL_RESULT_QUARANTINED_REASON_CODE]
+    return []
+
+
+def _planner_item_injection_text(item: ToolResultItem) -> str:
+    return "\n".join(
+        value
+        for value in (item.source_label, item.section_title, item.source_group_key, item.snippet)
+        if value
+    )
+
+
 def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall]:
     payload = _json_payload(content)
     calls = payload.get("tool_calls")
@@ -732,21 +905,14 @@ def _parse_tool_calls(content: str, *, max_query_chars: int) -> list[LLMToolCall
             continue
         tool_name = item.get("tool")
         arguments = item.get("arguments")
-        if not isinstance(tool_name, str) or tool_name not in ALLOWED_TOOL_NAMES:
+        if not isinstance(tool_name, str):
+            continue
+        if tool_name not in ALLOWED_TOOL_NAMES:
+            parsed.append(LLMToolCall(tool_name="unknown", arguments={}))
             continue
         if not isinstance(arguments, dict):
             arguments = {}
-        safe_arguments: dict[str, object] = {}
-        for key, value in arguments.items():
-            if key == "query" and isinstance(value, str):
-                safe_arguments[key] = _bounded_executable_query(value, max_chars=max_query_chars)
-            elif key in {"top_k", "retrieval_run_id"} and isinstance(value, int):
-                safe_arguments[key] = value
-            elif key in {"selected_tool_call_ids"} and isinstance(value, list):
-                safe_arguments[key] = [str(entry)[:40] for entry in value[:10]]
-            elif key == "answer_intent" and isinstance(value, str):
-                safe_arguments[key] = TraceRedactor.safe_string(value, max_length=40)
-        parsed.append(LLMToolCall(tool_name=tool_name, arguments=safe_arguments))
+        parsed.append(LLMToolCall(tool_name=tool_name, arguments=dict(arguments)))
     return parsed
 
 

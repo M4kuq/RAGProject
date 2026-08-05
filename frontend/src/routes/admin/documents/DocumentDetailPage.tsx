@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import { ChunkPreviewTable } from "../../../components/admin/ChunkPreviewTable";
 import { validateDocumentFile } from "../../../components/admin/DocumentUploadForm";
 import { StatusBadge } from "../../../components/admin/StatusBadge";

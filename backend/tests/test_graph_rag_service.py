@@ -45,7 +45,7 @@ from app.rag.strategy import (
     RagSearchRequestStrategy,
     RetrievalStrategy,
 )
-from app.schemas.rag import RagAskRequest, RagSearchRequest
+from app.schemas.rag import RagAskRequest, RagSearchRequest, RetrievalScoreSummary
 from app.services.graph_rag_service import (
     GRAPH_FALLBACK_DENSE_REASON_CODE,
     GRAPH_FALLBACK_HYBRID_DISABLED_REASON_CODE,
@@ -54,6 +54,7 @@ from app.services.graph_rag_service import (
     GraphRagService,
     _build_graph_strategy_decision,
     _graph_settings_snapshot,
+    _trusted_graph_execution_strategy,
 )
 from app.services.rag_service import RagAskPipelineError, RagSearchPipelineError, RagService
 
@@ -228,6 +229,28 @@ def _vector_candidate(chunk_id: int) -> VectorSearchCandidate:
 def test_graph_strategy_decision_suppressed_when_trace_storage_disabled() -> None:
     # 2-4: graph decision builder mirrors the base router and persists None.
     assert _build_graph_strategy_decision(store_decision_trace=False) is None
+
+
+def test_qwen_trusted_graph_signal_requires_executed_graph_evidence() -> None:
+    common = {
+        "requested_top_k": 5,
+        "qdrant_candidate_count": 0,
+        "post_filter_candidate_count": 2,
+        "selected_count": 2,
+        "excluded_by_rdb_check_count": 0,
+    }
+    executed = RetrievalScoreSummary(
+        **common,
+        graph_fallback_used=False,
+        graph_path_count=2,
+        graph_source_candidate_count=2,
+    )
+    fallback = RetrievalScoreSummary(**common, execution_strategy="dense")
+    missing = RetrievalScoreSummary(**common)
+
+    assert _trusted_graph_execution_strategy(executed) == "graph"
+    assert _trusted_graph_execution_strategy(fallback) == "dense"
+    assert _trusted_graph_execution_strategy(missing) == "dense"
     assert _build_graph_strategy_decision(store_decision_trace=True) is not None
 
 

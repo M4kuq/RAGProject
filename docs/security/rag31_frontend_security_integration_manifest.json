@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-05T08:56:15.870Z",
+  "jiraIssue": "RAG-78",
+  "repository": "M4kuq/RAGProject",
+  "mainBase": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+  "sources": {
+    "pr141": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "pr145": "9baf1c7d90683463c475abe3eecf11ebe4e92781",
+    "pr149": "4bda9661e4372247616e1419144a65848aa39f9f"
+  },
+  "sourceBases": {
+    "pr145": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "pr149": "96e5fc82ad2c253d000633ff9e9431e88998f74a"
+  },
+  "sourceTrees": {
+    "pr141": "e4b07c463d2bd0d5ef25d035d0415261c475f09d",
+    "pr145": "737109b1ed97061b7bce085604167eb12ff2020f",
+    "pr149": "07b2c9f859568398c99425ecad7643b2b39039fe"
+  },
+  "integrationMerge": "d3ca21db877d62253ab651257f7a4e4a991ff770",
+  "mergeParents": [
+    "9baf1c7d90683463c475abe3eecf11ebe4e92781",
+    "4bda9661e4372247616e1419144a65848aa39f9f"
+  ],
+  "integrationMergeTree": "0e47eb090bfba88b96be9fa7af3fc6a74abb4959",
+  "sourceFiles": {
+    "pr145": {
+      "count": 55,
+      "sha256": "f0bce44615b459c88d6664104ad4aa93245460499ecbfdde3a7ec6db37800003"
+    },
+    "pr149": {
+      "count": 49,
+      "sha256": "a416aa879e2d94fced519d1b1c993f3a7aa01a7239319584f2e8ae9cb49aeeda"
+    },
+    "intersection": {
+      "count": 2,
+      "sha256": "a8080a1bf47c7fc6f52fbe519ba9c718274004a5be890c56e78fd1a2eab6980b",
+      "files": [
+        "frontend/src/routes/ChatPage.test.tsx",
+        "frontend/src/routes/ChatPage.tsx"
+      ]
+    },
+    "union": {
+      "count": 102,
+      "sha256": "e14e0340b5ab842a0436c378e7717fcfcb8862f4a00750a73861394f6345dbdc"
+    }
+  },
+  "integrationFiles": {
+    "all": {
+      "count": 179,
+      "sha256": "9913176884bddf74b53b62c22a1e006a60e6190646f39da624fde954a8f7b2ad"
+    },
+    "missingSourceFiles": [],
+    "only": {
+      "count": 77,
+      "sha256": "776ba25374b6e62cbfd5f14432562ed6d681621376c733b809959edcbea244be",
+      "files": [
+        "backend/alembic/versions/0023_corpus_trust_provenance.py",
+        "backend/alembic/versions/0023_rag_abuse_controls.py",
+        "backend/alembic/versions/0024_security_integration_merge.py",
+        "backend/app/api/routers/documents.py",
+        "backend/app/core/corpus_trust.py",
+        "backend/app/core/errors.py",
+        "backend/app/core/tool_execution_policy.py",
+        "backend/app/evaluation/fixtures/prompt_injection_security_dev_v1.json",
+        "backend/app/evaluation/fixtures/prompt_injection_security_dev_v2.json",
+        "backend/app/evaluation/security_gate_phase2.py",
+        "backend/app/ingest/qdrant.py",
+        "backend/app/mcp/server.py",
+        "backend/app/mcp/settings.py",
+        "backend/app/mcp/tools.py",
+        "backend/app/rag/fake_pipeline.py",
+        "backend/app/rag/graph_citations.py",
+        "backend/app/rag/graph_retrieval.py",
+        "backend/app/rag/injection_detection.py",
+        "backend/app/rag/langchain_agentic.py",
+        "backend/app/rag/langgraph_agentic.py",
+        "backend/app/rag/model_cascade_guard.py",
+        "backend/app/rag/retrieval.py",
+        "backend/app/rag/retrieval_cache.py",
+        "backend/app/repositories/document_repository.py",
+        "backend/app/repositories/evaluation_repository.py",
+        "backend/app/repositories/graph_retrieval_repository.py",
+        "backend/app/repositories/rag_abuse_control_repository.py",
+        "backend/app/repositories/retrieval_repository.py",
+        "backend/app/repositories/sparse_retrieval_repository.py",
+        "backend/app/schemas/documents.py",
+        "backend/app/scripts/build_demo_graph_index.py",
+        "backend/app/scripts/queue_graph_index_builds.py",
+        "backend/app/scripts/run_prompt_injection_security_gate.py",
+        "backend/app/scripts/run_prompt_injection_security_gate_phase2.py",
+        "backend/app/scripts/run_prompt_injection_security_qwen_phase2.py",
+        "backend/app/services/document_service.py",
+        "backend/app/services/neo4j_projection_service.py",
+        "backend/app/services/rag_abuse_control_service.py",
+        "backend/app/services/source_locator_service.py",
+        "backend/app/workers/handlers/document_ingest_handler.py",
+        "backend/app/workers/handlers/qdrant_consistency_sweep_handler.py",
+        "backend/app/workers/handlers/qdrant_mirror_update_handler.py",
+        "backend/tests/fixtures/pii_egress_dev_v1.json",
+        "backend/tests/test_api_foundation.py",
+        "backend/tests/test_auth_security.py",
+        "backend/tests/test_corpus_trust_policy.py",
+        "backend/tests/test_document_api.py",
+        "backend/tests/test_embedding_qdrant_indexing.py",
+        "backend/tests/test_generation.py",
+        "backend/tests/test_graph_entity_relation_extraction_pipeline.py",
+        "backend/tests/test_graph_retrieval_strategy.py",
+        "backend/tests/test_injection_detection.py",
+        "backend/tests/test_injection_detection_phase2.py",
+        "backend/tests/test_llm_orchestrator_injection.py",
+        "backend/tests/test_lmstudio_generation.py",
+        "backend/tests/test_model_cascade_guard.py",
+        "backend/tests/test_qdrant_consistency_sweep.py",
+        "backend/tests/test_rag31_security_integration_gate.py",
+        "backend/tests/test_rag_abuse_control.py",
+        "backend/tests/test_retrieval_cache.py",
+        "backend/tests/test_security_gate.py",
+        "backend/tests/test_security_gate_phase2.py",
+        "backend/tests/test_tool_execution_policy.py",
+        "backend/tests/test_worker_main.py",
+        "docs/corpus_trust_quarantine_runbook.md",
+        "docs/phase3/security_redaction_policy.md",
+        "docs/phase4/server_owned_model_selection.md",
+        "docs/security/RAGProject-threat-model.md",
+        "docs/security/agentic_mcp_tool_execution_policy.md",
+        "docs/security/local_model_endpoint_policy.md",
+        "docs/security/prompt_injection_security_gate.md",
+        "docs/security/prompt_injection_security_phase2.md",
+        "docs/security/rag31_frontend_security_final_integration.md",
+        "docs/security/rag31_frontend_security_integration_manifest.json",
+        "docs/security/rag31_security_integration_gate.md",
+        "docs/security/rag_public_abuse_controls.md",
+        "scripts/verify_rag31_frontend_security_integration.mjs"
+      ]
+    }
+  },
+  "migration": {
+    "heads": [
+      "0025_qwen_cost_controls"
+    ],
+    "postgresqlUpgradeRequired": true
+  },
+  "runtime": {
+    "nodeMinimum": "22.22.0",
+    "nodeImageTag": "22.22",
+    "nodeCiVersion": "22.22",
+    "npmPackageManager": "npm@10.9.8",
+    "react": "^19.2.7",
+    "reactRouter": "^8.3.0",
+    "gitleaks": "8.30.1",
+    "gitleaksImageDigest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+  },
+  "combinedGate": {
+    "transportMode": "mocked_synthetic_only",
+    "liveProviderCalls": 0,
+    "rawPayloadRetention": false,
+    "requiredZeroReasonCategories": [
+      "blocked_or_quarantined_pipeline_reach",
+      "egress_policy_bypass",
+      "untrusted_plus_escalation",
+      "budget_bypass",
+      "multiple_escalation",
+      "secret_scan_unignored",
+      "dependency_audit_finding",
+      "pipeline_failure"
+    ]
+  },
+  "localVerification": {
+    "crossCanonicalManifest": "pass",
+    "frontend": {
+      "node": "22.22.3",
+      "npm": "10.9.8",
+      "productionAuditFindings": 0,
+      "fullAuditFindings": 0,
+      "dependencyTreeProblems": 0,
+      "dependencyPolicyNegativeControls": "19/19",
+      "routeAuthPerRepeat": 67,
+      "routeAuthRepeats": 3,
+      "fullPerRepeat": 115,
+      "fullRepeats": 3,
+      "lintTypecheckBuild": "pass",
+      "oldRouterBundleMarkers": 0
+    },
+    "backend": {
+      "focusedPassed": 106,
+      "focusedSkipped": 2,
+      "fullPassed": 1135,
+      "fullSkipped": 24,
+      "activeSessionExpiryRepeats": "10/10",
+      "ruffAndMypy": "pass"
+    },
+    "postgresql": {
+      "migrationHead": "0025_qwen_cost_controls",
+      "focusedPassed": 13
+    },
+    "secretGate": {
+      "currentUnignored": 0,
+      "historyUnignored": 0,
+      "negativeDetection": "3/3",
+      "outputRedactedPercent": 100
+    },
+    "docker": "frontend_test_build_and_backend_test_pass",
+    "composeConfig": "pass",
+    "githubFinalHeadContract": "All required checks, including Compose smoke, must pass on the final Draft PR head."
+  },
+  "rollback": {
+    "codeSha": "9baf1c7d90683463c475abe3eecf11ebe4e92781",
+    "primaryAction": "Do not merge the canonical Draft PR.",
+    "runtimeActions": [
+      "Keep QWEN_CASCADE_ENABLED=false.",
+      "Keep user model selection disabled and external egress denied with empty allowlists.",
+      "Use the internet-facing injection rollback override if policy rollback is required."
+    ],
+    "stateResetRequired": false
+  },
+  "closure": {
+    "expectedDecisionAfterAllChecks": "combined_security_implementation_closure_ready",
+    "productionSecureOrDeployed": false,
+    "mergeDeployOrUndraftAuthorized": false,
+    "sourcePullRequestsRemainUnchanged": true
+  }
+}

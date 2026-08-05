@@ -5,14 +5,15 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import quote
 
 import httpx
 
 from app.aws.client import aws_error_category, create_aws_client
 from app.core.config import Settings
+from app.core.model_egress import ModelEgressBlockedError, ModelEgressGuard
 from app.rag.insufficient import is_insufficient_evidence_answer
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,13 @@ class GenerationRequest:
     task_instructions: str | None = None
     temperature: float | None = None
     response_format: dict[str, object] | None = None
+    reasoning: Literal["off", "low", "medium", "high", "on"] | None = None
+    egress_purpose: str = "generation"
+    trusted_user_id: int | None = None
+    trusted_request_id: str | None = None
+    trusted_strategy: str | None = None
+    trusted_retrieval_sufficient: bool = False
+    trusted_generation_attempt: int = 1
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,8 @@ class TokenUsage:
 class GenerationResult:
     content: str
     usage: TokenUsage | None = None
+    provider: str | None = None
+    model_name: str | None = None
 
 
 class AnswerGenerator(Protocol):
@@ -170,6 +180,43 @@ class FakeAnswerGenerator:
         return GenerationResult(
             content=final_content,
             usage=_synthetic_usage(request, final_content),
+        )
+
+
+class EgressFallbackAnswerGenerator:
+    """Fallback locally only when the primary was denied before external transport."""
+
+    def __init__(
+        self,
+        *,
+        primary: AnswerGenerator,
+        fallback: AnswerGenerator,
+        fallback_provider: str,
+        fallback_model_name: str,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.fallback_provider = fallback_provider
+        self.fallback_model_name = fallback_model_name
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        try:
+            return self.primary.generate(request)
+        except AnswerGenerationError as exc:
+            if exc.error_code != "model_egress_blocked":
+                raise
+            logger.info(
+                "external model egress denied; using configured local fallback",
+                extra={
+                    "model_egress_action": "local_fallback",
+                    "model_egress_reason_codes": [exc.error_category or "policy_blocked"],
+                },
+            )
+        result = self.fallback.generate(request)
+        return replace(
+            result,
+            provider=self.fallback_provider,
+            model_name=self.fallback_model_name,
         )
 
 
@@ -231,16 +278,24 @@ class OpenAIResponsesAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.egress_guard = egress_guard
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        request = _protect_generation_request(
+            request,
+            self.egress_guard,
+            provider="openai",
+            model=self.model_name,
+        )
         try:
             response = httpx.post(
                 f"{self.base_url}/responses",
@@ -291,6 +346,8 @@ class OpenAICompatibleChatAnswerGenerator:
         timeout_seconds: float,
         max_output_tokens: int = 8192,
         native_lmstudio_api: bool = True,
+        egress_guard: ModelEgressGuard | None = None,
+        egress_provider: str = "lmstudio",
     ) -> None:
         self.api_key = api_key
         self.base_url = (
@@ -300,10 +357,18 @@ class OpenAICompatibleChatAnswerGenerator:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
         self.native_lmstudio_api = native_lmstudio_api
+        self.egress_guard = egress_guard
+        self.egress_provider = egress_provider
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        request = _protect_generation_request(
+            request,
+            self.egress_guard,
+            provider=self.egress_provider,
+            model=self.model_name,
+        )
         if self.native_lmstudio_api and request.response_format is None:
             endpoint = f"{self.base_url}/api/v1/chat"
             request_payload: dict[str, object] = {
@@ -314,6 +379,7 @@ class OpenAICompatibleChatAnswerGenerator:
                 "temperature": request.temperature if request.temperature is not None else 0.2,
                 "stream": False,
                 "store": False,
+                **({"reasoning": request.reasoning} if request.reasoning is not None else {}),
             }
         else:
             chat_completions_base_url = (
@@ -385,6 +451,7 @@ class AnthropicMessagesAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -392,10 +459,17 @@ class AnthropicMessagesAnswerGenerator:
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.egress_guard = egress_guard
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        request = _protect_generation_request(
+            request,
+            self.egress_guard,
+            provider="anthropic",
+            model=self.model_name,
+        )
         try:
             response = httpx.post(
                 f"{self.base_url}/v1/messages",
@@ -441,16 +515,24 @@ class GeminiAnswerGenerator:
         model_name: str,
         timeout_seconds: float,
         max_output_tokens: int | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
+        self.egress_guard = egress_guard
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        request = _protect_generation_request(
+            request,
+            self.egress_guard,
+            provider="gemini",
+            model=self.model_name,
+        )
         model_name = quote(self.model_name, safe="")
         try:
             response = httpx.post(
@@ -507,12 +589,14 @@ class BedrockConverseAnswerGenerator:
         max_output_tokens: int,
         timeout_seconds: float | None = None,
         client: Any | None = None,
+        egress_guard: ModelEgressGuard | None = None,
     ) -> None:
         self.model_name = model_name
         self.max_output_tokens = _bedrock_max_output_tokens(
             model_name,
             max_output_tokens,
         )
+        self.egress_guard = egress_guard
         if client is not None:
             self.client = client
         elif timeout_seconds is None:
@@ -527,6 +611,12 @@ class BedrockConverseAnswerGenerator:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.context_items:
             raise AnswerGenerationError()
+        request = _protect_generation_request(
+            request,
+            self.egress_guard,
+            provider="bedrock",
+            model=self.model_name,
+        )
         inference_config: dict[str, float | int] = {
             "maxTokens": _request_max_output_tokens(request, self.max_output_tokens)
         }
@@ -567,12 +657,48 @@ def create_answer_generator(
 ) -> AnswerGenerator:
     generation_provider = (provider or settings.generation_provider).lower()
     generation_model_name = model_name or settings.generation_model_name
+    fallback_config: tuple[AnswerGenerator, str, str] | None = None
+    if settings.external_model_egress_local_fallback_enabled and generation_provider in {
+        "anthropic",
+        "bedrock",
+        "gemini",
+        "nvidia",
+        "openai",
+    }:
+        fallback_provider = settings.external_model_egress_local_fallback_provider
+        fallback_model_name = settings.external_model_egress_local_fallback_model
+        assert fallback_model_name is not None
+        if fallback_provider == "fake":
+            fallback: AnswerGenerator = FakeAnswerGenerator()
+        elif fallback_provider == "ollama":
+            fallback = OllamaAnswerGenerator(
+                url=settings.ollama_url,
+                model_name=fallback_model_name,
+                timeout_seconds=settings.ollama_timeout_seconds,
+                max_output_tokens=settings.generation_max_output_tokens,
+            )
+        else:
+            fallback_model_name = _lmstudio_native_model_name(fallback_model_name)
+            fallback = OpenAICompatibleChatAnswerGenerator(
+                api_key=settings.lmstudio_api_key,
+                base_url=settings.lmstudio_base_url,
+                model_name=fallback_model_name,
+                timeout_seconds=settings.lmstudio_timeout_seconds,
+                max_output_tokens=settings.generation_max_output_tokens,
+            )
+        fallback_config = (fallback, fallback_provider, fallback_model_name)
     if generation_provider == "bedrock":
-        return BedrockConverseAnswerGenerator(
-            settings=settings,
-            model_name=model_name or settings.bedrock_generation_model_id,
-            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
-            timeout_seconds=timeout_seconds,
+        bedrock_model_name = model_name or settings.bedrock_generation_model_id
+        return _with_external_egress_fallback(
+            primary=BedrockConverseAnswerGenerator(
+                settings=settings,
+                model_name=bedrock_model_name,
+                max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+                timeout_seconds=timeout_seconds,
+                egress_guard=ModelEgressGuard.from_settings(settings),
+            ),
+            primary_provider=generation_provider,
+            fallback_config=fallback_config,
         )
     if generation_provider == "fake":
         return FakeAnswerGenerator()
@@ -598,40 +724,160 @@ def create_answer_generator(
             or not settings.nvidia_base_url
         ):
             raise AnswerGenerationError()
-        return OpenAICompatibleChatAnswerGenerator(
-            api_key=settings.nvidia_api_key,
-            base_url=settings.nvidia_base_url,
-            model_name=generation_model_name,
-            timeout_seconds=timeout_seconds or settings.nvidia_timeout_seconds,
-            max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
-            native_lmstudio_api=False,
+        return _with_external_egress_fallback(
+            primary=OpenAICompatibleChatAnswerGenerator(
+                api_key=settings.nvidia_api_key,
+                base_url=settings.nvidia_base_url,
+                model_name=generation_model_name,
+                timeout_seconds=timeout_seconds or settings.nvidia_timeout_seconds,
+                max_output_tokens=max_output_tokens or settings.generation_max_output_tokens,
+                native_lmstudio_api=False,
+                egress_guard=ModelEgressGuard.from_settings(settings),
+                egress_provider="nvidia",
+            ),
+            primary_provider=generation_provider,
+            fallback_config=fallback_config,
+        )
+    if generation_provider == "qwen":
+        if not settings.qwen_cascade_enabled or not settings.qwen_api_key:
+            raise AnswerGenerationError()
+        from app.db.session import SessionLocal
+        from app.rag.qwen_cascade import QwenCascadeAnswerGenerator
+
+        return QwenCascadeAnswerGenerator(
+            settings=settings,
+            session_factory=SessionLocal,
+            egress_guard=ModelEgressGuard.from_settings(settings),
         )
     if generation_provider == "openai" and settings.openai_api_key:
-        return OpenAIResponsesAnswerGenerator(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            model_name=generation_model_name,
-            timeout_seconds=timeout_seconds or settings.openai_timeout_seconds,
-            max_output_tokens=max_output_tokens,
+        return _with_external_egress_fallback(
+            primary=OpenAIResponsesAnswerGenerator(
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+                model_name=generation_model_name,
+                timeout_seconds=timeout_seconds or settings.openai_timeout_seconds,
+                max_output_tokens=max_output_tokens,
+                egress_guard=ModelEgressGuard.from_settings(settings),
+            ),
+            primary_provider=generation_provider,
+            fallback_config=fallback_config,
         )
     if generation_provider == "anthropic" and settings.anthropic_api_key:
-        return AnthropicMessagesAnswerGenerator(
-            api_key=settings.anthropic_api_key,
-            base_url=settings.anthropic_base_url,
-            api_version=settings.anthropic_version,
-            model_name=generation_model_name,
-            timeout_seconds=timeout_seconds or settings.anthropic_timeout_seconds,
-            max_output_tokens=max_output_tokens,
+        return _with_external_egress_fallback(
+            primary=AnthropicMessagesAnswerGenerator(
+                api_key=settings.anthropic_api_key,
+                base_url=settings.anthropic_base_url,
+                api_version=settings.anthropic_version,
+                model_name=generation_model_name,
+                timeout_seconds=timeout_seconds or settings.anthropic_timeout_seconds,
+                max_output_tokens=max_output_tokens,
+                egress_guard=ModelEgressGuard.from_settings(settings),
+            ),
+            primary_provider=generation_provider,
+            fallback_config=fallback_config,
         )
     if generation_provider == "gemini" and settings.gemini_api_key:
-        return GeminiAnswerGenerator(
-            api_key=settings.gemini_api_key,
-            base_url=settings.gemini_base_url,
-            model_name=generation_model_name,
-            timeout_seconds=timeout_seconds or settings.gemini_timeout_seconds,
-            max_output_tokens=max_output_tokens,
+        return _with_external_egress_fallback(
+            primary=GeminiAnswerGenerator(
+                api_key=settings.gemini_api_key,
+                base_url=settings.gemini_base_url,
+                model_name=generation_model_name,
+                timeout_seconds=timeout_seconds or settings.gemini_timeout_seconds,
+                max_output_tokens=max_output_tokens,
+                egress_guard=ModelEgressGuard.from_settings(settings),
+            ),
+            primary_provider=generation_provider,
+            fallback_config=fallback_config,
         )
     raise AnswerGenerationError()
+
+
+def _with_external_egress_fallback(
+    *,
+    primary: AnswerGenerator,
+    primary_provider: str,
+    fallback_config: tuple[AnswerGenerator, str, str] | None,
+) -> AnswerGenerator:
+    if fallback_config is None:
+        return primary
+    fallback, fallback_provider, fallback_model_name = fallback_config
+    logger.info(
+        "external model egress local fallback configured",
+        extra={
+            "model_egress_provider": primary_provider,
+            "model_egress_action": "fallback_ready",
+            "model_egress_reason_codes": ["operator_configured"],
+        },
+    )
+    return EgressFallbackAnswerGenerator(
+        primary=primary,
+        fallback=fallback,
+        fallback_provider=fallback_provider,
+        fallback_model_name=fallback_model_name,
+    )
+
+
+def _protect_generation_request(
+    request: GenerationRequest,
+    guard: ModelEgressGuard | None,
+    *,
+    provider: str,
+    model: str,
+) -> GenerationRequest:
+    if guard is None:
+        return request
+    payload = {
+        "message": request.message,
+        "context_items": [
+            {
+                "document_chunk_id": item.document_chunk_id,
+                "source_label": item.source_label,
+                "text": item.text,
+                "local_citation_id": item.local_citation_id,
+                "page_from": item.page_from,
+                "page_to": item.page_to,
+            }
+            for item in request.context_items
+        ],
+        "system_instructions": request.system_instructions,
+        "task_instructions": request.task_instructions,
+        "response_format": request.response_format,
+    }
+    try:
+        protected = guard.protect_payload(
+            payload,
+            provider=provider,
+            model=model,
+            purpose=request.egress_purpose,
+            data_classes=_generation_data_classes(request),
+        )
+    except ModelEgressBlockedError as exc:
+        raise AnswerGenerationError(
+            "model_egress_blocked",
+            error_category=exc.reason_code,
+        ) from exc
+    protected_payload = cast(dict[str, Any], protected.payload)
+    protected_contexts = cast(list[dict[str, Any]], protected_payload["context_items"])
+    return replace(
+        request,
+        message=cast(str, protected_payload["message"]),
+        context_items=[GenerationContextItem(**item) for item in protected_contexts],
+        system_instructions=cast(str | None, protected_payload["system_instructions"]),
+        task_instructions=cast(str | None, protected_payload["task_instructions"]),
+        response_format=cast(dict[str, object] | None, protected_payload["response_format"]),
+    )
+
+
+def _generation_data_classes(request: GenerationRequest) -> tuple[str, ...]:
+    if request.egress_purpose == "graph_extraction":
+        classes = {"document_content", "system_instruction"}
+    else:
+        classes = {"retrieved_context", "system_instruction", "user_question"}
+    if request.task_instructions is not None:
+        classes.add("task_instruction")
+    if request.response_format is not None:
+        classes.add("response_schema")
+    return tuple(sorted(classes))
 
 
 def _answer_digest(request: GenerationRequest) -> str:

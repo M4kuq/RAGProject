@@ -8,6 +8,7 @@ from typing import Protocol
 from sqlalchemy import desc, func, literal_column, select
 from sqlalchemy.orm import Session
 
+from app.core.corpus_trust import SECURITY_REVIEW_APPROVED
 from app.db.models import DocumentChunk, DocumentVersion, LogicalDocument
 from app.rag.retrieval import RetrievalFilters
 
@@ -84,6 +85,7 @@ class SparseRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
                 vector.op("@@")(query),
             )
@@ -122,6 +124,7 @@ class SparseRetrievalRepository:
                 DocumentChunk.modality == filters.modality,
                 DocumentVersion.status == "ready",
                 DocumentVersion.is_active.is_(True),
+                DocumentVersion.security_review_status == SECURITY_REVIEW_APPROVED,
                 LogicalDocument.status == "active",
             )
         )
