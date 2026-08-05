@@ -1,230 +1,210 @@
 {
-  "schema_version": "rag31-security-closure-v1",
-  "captured_at": "2026-08-04T11:19:25.065Z",
-  "jira_issue": "RAG-69",
+  "schema_version": "rag31-security-closure-v2",
+  "captured_at": "2026-08-05T05:12:30.774Z",
+  "jira_issue": "RAG-73",
   "repository": "M4kuq/RAGProject",
   "main_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
+  "previous_audit": {
+    "jira_issue": "RAG-69",
+    "canonical_pull_request": 141,
+    "preserved_without_rewrite": true
+  },
   "audited_integration": {
-    "pull_request": 141,
-    "head_sha": "8de37d299940bd29d8971af5b9e8c28c776e8bc5",
+    "pull_request": 145,
+    "branch": "feature/rag31-security-final-integration",
     "state": "open",
     "draft": true,
-    "mergeable_state": "clean",
-    "commit_count": 21,
-    "changed_file_count": 96,
-    "checks": [
-      {
-        "name": "Ruff / mypy / pytest",
-        "conclusion": "success",
-        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362668/job/91972620644"
-      },
-      {
-        "name": "lint / typecheck / test / build",
-        "conclusion": "success",
-        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362607/job/91972620597"
-      },
-      {
-        "name": "docker compose smoke",
-        "conclusion": "success",
-        "url": "https://github.com/M4kuq/RAGProject/actions/runs/30903362481/job/91972620012"
-      }
-    ]
+    "base_pull_request": 141,
+    "base_branch": "feature/rag-security-integration",
+    "base_sha": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "code_base_pull_request": 144,
+    "code_base_sha": "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+    "merged_pull_request": 142,
+    "merged_sha": "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+    "reviewable_merge_commit": "830b52c520afb85af8ad63dd93b390951c0aa540",
+    "merge_parents": [
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa"
+    ],
+    "github_ci_contract": "All checks on the final PR head must succeed; the PR head status is the non-self-referential authority."
   },
   "source_pull_requests": [
     {
-      "pull_request": 133,
-      "jira_issue": "RAG-31",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "6e88b6ebb7750d769c1fd8e19c9751c09376d088",
-      "changed_file_count": 13,
-      "check_count": 2,
-      "all_checks_success": true
-    },
-    {
-      "pull_request": 134,
-      "jira_issue": "RAG-61",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "076aceabaff80871ca3f61aa9aace301b7072d5b",
-      "changed_file_count": 12,
-      "check_count": 2,
-      "all_checks_success": true
-    },
-    {
-      "pull_request": 135,
-      "jira_issue": "RAG-62",
-      "base_sha": "6e88b6ebb7750d769c1fd8e19c9751c09376d088",
-      "head_sha": "a72fac96fb897dbe9aaad0c0241d83981b2a7982",
-      "changed_file_count": 16,
-      "check_count": 2,
-      "all_checks_success": true
-    },
-    {
-      "pull_request": 136,
-      "jira_issue": "RAG-63",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "6e0b5032b0fe75f405e16a5331d1e7b44487df0b",
-      "changed_file_count": 15,
-      "check_count": 2,
-      "all_checks_success": true
-    },
-    {
-      "pull_request": 137,
-      "jira_issue": "RAG-64",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "c9d548fc499cf216d1538f9aec05a65081bfba09",
+      "pull_request": 142,
+      "jira_issue": "RAG-72",
+      "head_sha": "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
       "changed_file_count": 8,
-      "check_count": 3,
-      "all_checks_success": true
+      "role": "internet-facing prompt-injection policy promotion"
     },
     {
-      "pull_request": 138,
-      "jira_issue": "RAG-65",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "dbcb139392930bf9819d6a214dc1335b932994c3",
-      "changed_file_count": 3,
-      "check_count": 2,
-      "all_checks_success": true
+      "pull_request": 143,
+      "jira_issue": "RAG-71",
+      "head_sha": "041a0d0e4abf275b04c43bbe8f8dd0b7fcca7ed4",
+      "changed_file_count": 31,
+      "role": "external model egress governance"
     },
     {
-      "pull_request": 139,
-      "jira_issue": "RAG-66",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "4c7db1cee7dbbfcda150403a9f997879d635bf3c",
-      "changed_file_count": 40,
-      "check_count": 2,
-      "all_checks_success": true
-    },
-    {
-      "pull_request": 140,
-      "jira_issue": "RAG-67",
-      "base_sha": "96e5fc82ad2c253d000633ff9e9431e88998f74a",
-      "head_sha": "db39cce9daff9236b845cab2fa5a4dd98ed37c81",
-      "changed_file_count": 10,
-      "check_count": 2,
-      "all_checks_success": true
+      "pull_request": 144,
+      "jira_issue": "RAG-70",
+      "head_sha": "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "changed_file_count": 44,
+      "role": "Qwen Flash-to-Plus atomic cost and circuit controls"
     }
   ],
   "ancestry_verification": {
-    "stacked_relation": {
-      "base_pull_request": 133,
-      "head_pull_request": 135,
-      "ahead_by": 1,
-      "behind_by": 0,
-      "base_is_merge_base": true
-    },
-    "source_heads_to_integration": [
-      {
-        "pull_request": 133,
-        "ahead_by": 19,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 134,
-        "ahead_by": 20,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 135,
-        "ahead_by": 18,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 136,
-        "ahead_by": 18,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 137,
-        "ahead_by": 20,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 138,
-        "ahead_by": 20,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 139,
-        "ahead_by": 19,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      },
-      {
-        "pull_request": 140,
-        "ahead_by": 20,
-        "behind_by": 0,
-        "base_is_merge_base": true
-      }
+    "common_base_sha": "c2ff8bf57a674e881efc4741d32eb440d87c2bfe",
+    "all_source_heads_are_ancestors": true,
+    "source_heads": [
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+      "041a0d0e4abf275b04c43bbe8f8dd0b7fcca7ed4",
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1"
     ]
   },
   "file_set_verification": {
-    "source_union_count": 93,
-    "integration_count": 96,
+    "pull_request_142_count": 8,
+    "pull_request_144_count": 44,
+    "source_intersection_count": 0,
+    "source_union_count": 52,
+    "source_union_sha256": "8426424be07f84f2243a75298773fc4b0deaf9114291e5ca3a409ab6a8f219a3",
+    "integration_count": 55,
     "missing_from_integration": [],
     "integration_only": [
-      "backend/alembic/versions/0024_security_integration_merge.py",
-      "backend/tests/test_rag31_security_integration_gate.py",
-      "docs/security/rag31_security_integration_gate.md"
+      "backend/tests/test_rag31_security_closure_manifest.py",
+      "docs/security/rag31_security_closure_manifest.json",
+      "docs/security/rag31_security_closure_matrix.md"
     ]
+  },
+  "migration_verification": {
+    "head_count": 1,
+    "head_revision": "0025_qwen_cost_controls",
+    "postgresql_migration_required_in_ci": true
   },
   "acceptance_criteria": [
     {
       "id": 1,
       "status": "satisfied",
-      "evidence_pull_requests": [133, 135, 141],
-      "limitation": "The attack fixtures are synthetic and small; zero observed failures are not a population-wide safety guarantee."
+      "evidence_pull_requests": [133, 135, 141, 142, 145],
+      "limitation": "Synthetic and measured fixtures cover direct, indirect, multilingual, obfuscated, Agentic, and Graph paths, but do not prove population-wide safety."
     },
     {
       "id": 2,
-      "status": "partial",
-      "evidence_pull_requests": [133, 135, 141],
-      "follow_up": "RAG-72",
-      "limitation": "Block, quarantine, abstain, and false-action metrics exist, but observe_only remains the default and no separate down-rank action is promoted."
+      "status": "satisfied",
+      "evidence_pull_requests": [133, 135, 141, 142, 145],
+      "limitation": "The internet-facing profile promotes block, quarantine, and abstain with clean-action monitoring. Separate score down-ranking is not selected because detected evidence is fully quarantined."
     },
     {
       "id": 3,
       "status": "satisfied",
-      "evidence_pull_requests": [139, 141],
-      "limitation": "Legacy rows are intentionally treated as trusted and approved for backward compatibility."
+      "evidence_pull_requests": [139, 141, 145],
+      "limitation": "Legacy rows remain trusted and approved for backward compatibility."
     },
     {
       "id": 4,
       "status": "satisfied",
-      "evidence_pull_requests": [140, 141],
-      "limitation": "The current public surface is read-only; future external write tools require a new authorization review."
+      "evidence_pull_requests": [140, 141, 145],
+      "limitation": "The current public tool surface is read-only; a future external write tool requires a new authorization review."
     },
     {
       "id": 5,
-      "status": "partial",
-      "evidence_pull_requests": [135, 136, 137, 141],
-      "follow_up": "RAG-70",
-      "limitation": "Atomic rate, concurrency, work-unit budgets, model allowlisting, and a provider-independent cascade guard exist, but real Qwen token/currency accounting and a provider circuit breaker are not wired."
+      "status": "satisfied",
+      "evidence_pull_requests": [136, 137, 141, 144, 145],
+      "limitation": "Live provider billing reconciliation is not claimed; activation remains disabled by default."
     },
     {
       "id": 6,
-      "status": "partial",
-      "evidence_pull_requests": [134, 138, 141],
-      "follow_up": "RAG-71",
-      "limitation": "Deny-by-default egress, provider allowlisting, masking, and raw-free audit exist; data classification, explicit consent state, and provider retention enforcement do not."
+      "status": "satisfied",
+      "evidence_pull_requests": [134, 138, 141, 143, 144, 145],
+      "limitation": "Operator rules attest provider retention, training, and region facts and must be re-verified before activation."
     },
     {
       "id": 7,
       "status": "satisfied",
-      "evidence_pull_requests": [133, 135, 136, 139, 140, 141],
-      "limitation": "The zero-bypass composite gate covers implemented local and provider-independent boundaries; RAG-70 and RAG-71 must extend it before external cascade closure."
+      "evidence_pull_requests": [141, 142, 143, 144, 145],
+      "limitation": "The combined gate proves the implemented synthetic boundaries only; unknown attacks and live provider behavior remain residual risk."
     }
   ],
+  "individual_evidence": {
+    "rag72": {
+      "dataset_fingerprint": "fb80b56b330d0fff95434aae2f6a02f5b4f726169516de8eabf78b67a9e8626e",
+      "case_set_fingerprint": "87122e05d95a92c9a15717b40e83861f3757a6688b374b2927ae598ae64d963e",
+      "generation_cases": 30,
+      "boundary_cases": 14,
+      "repeats": 3,
+      "majority_attack_success": 0,
+      "pipeline_failure": 0,
+      "clean_policy_action": 0,
+      "one_sided_exact_upper_percent": 9.5,
+      "clean_utility_percent": 100.0
+    },
+    "rag71": {
+      "case_set_fingerprint": "d03e61b1125fa8bdb694d5bcdcb857bcb4726a4649f10754f8ece7d602adea24",
+      "governed_scenarios": 26,
+      "consent_bypass": 0,
+      "exact_policy_bypass": 0,
+      "reidentification_bypass": 0,
+      "clean_payload_mutation": 0
+    },
+    "rag70": {
+      "pricing_snapshot": "alibaba-2026-07-15-tokyo-tier-1",
+      "focused_passed": 17,
+      "postgresql_only_local_skipped": 1,
+      "github_backend_passed": 1135,
+      "github_backend_skipped": 6,
+      "budget_race_bypass": 0,
+      "content_driven_escalation": 0,
+      "live_provider_calls": 0
+    },
+    "aggregation_policy": "Do not combine different fingerprints or case sets into a new accuracy, ASR, Gold v2, or normal-profile score."
+  },
+  "combined_gate": {
+    "expected_status": "pass",
+    "transport_mode": "mocked_synthetic_only",
+    "live_provider_calls": 0,
+    "required_zero_metrics": [
+      "blocked_request_transport_reach",
+      "blocked_request_cost_reservation",
+      "quarantined_evidence_transport_leakage",
+      "content_driven_escalation",
+      "content_driven_policy_bypass",
+      "egress_denial_reservation",
+      "multiple_escalation",
+      "budget_bypass",
+      "unauthorized_tool_allowance",
+      "pipeline_failure"
+    ],
+    "clean_non_regression_required": true,
+    "test_files": [
+      "backend/tests/test_rag_ask.py",
+      "backend/tests/test_qwen_cascade.py",
+      "backend/tests/test_qwen_cost_control.py",
+      "backend/tests/test_external_egress_governance.py",
+      "backend/tests/test_rag31_security_integration_gate.py"
+    ]
+  },
+  "rollback": {
+    "primary_action": "Do not merge Draft PR 145.",
+    "code_origins": [
+      "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+      "6f430554aee08d7070ed04bc3a6e65cdb159a4aa"
+    ],
+    "config_actions": [
+      "Keep QWEN_CASCADE_ENABLED=false and the existing non-Qwen generation provider.",
+      "Apply the internet-facing injection rollback override to restore observe_only.",
+      "Set external egress policy to deny with empty provider and rule allowlists."
+    ],
+    "state_reset_required": false
+  },
   "closure_decision": {
-    "rag31_status": "not_closed",
-    "canonical_review_pull_request": 141,
-    "do_not_merge_source_pull_requests_separately_if_141_is_selected": true,
-    "do_not_close_source_pull_requests_before_141_is_on_main": true,
-    "follow_up_issues": ["RAG-70", "RAG-71", "RAG-72"]
+    "rag31_implementation_status": "implementation_closure_ready",
+    "production_secure_or_deployed": false,
+    "jira_status_must_remain_review": true,
+    "canonical_review_pull_request": 145,
+    "merge_order": [
+      "Review and merge PR 141 first if separately selected.",
+      "Retarget PR 145 to main and rerun all checks.",
+      "Merge PR 145 only after explicit approval."
+    ],
+    "do_not_merge_close_retarget_or_undraft_existing_pull_requests": true,
+    "follow_up_candidate": "Track the pre-existing frontend dependency audit findings as an independent security goal."
   }
 }

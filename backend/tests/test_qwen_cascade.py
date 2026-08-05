@@ -78,6 +78,8 @@ def _request(
     sufficient: bool = True,
     attempt: int = 1,
     message: str | None = None,
+    context_text: str | None = None,
+    system_instructions: str | None = None,
 ) -> GenerationRequest:
     return GenerationRequest(
         message=message or "".join(("synthetic", "-", "query")),
@@ -85,11 +87,12 @@ def _request(
             GenerationContextItem(
                 document_chunk_id=1,
                 source_label="synthetic-source",
-                text="".join(("synthetic", "-", "evidence")),
+                text=context_text or "".join(("synthetic", "-", "evidence")),
                 local_citation_id=1,
             )
         ],
         max_output_chars=1_000,
+        system_instructions=system_instructions,
         trusted_user_id=9,
         trusted_request_id="request-1",
         trusted_strategy=strategy,
@@ -176,7 +179,7 @@ def test_dense_clean_request_uses_flash_with_server_owned_transport_settings(
 def test_trusted_graph_difficulty_escalates_once_to_plus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _settings()
+    settings = _settings(rag_injection_policy="block_user_quarantine_context")
     factory = _factory()
     models: list[str] = []
 
@@ -208,7 +211,7 @@ def test_trusted_graph_difficulty_escalates_once_to_plus(
 
 
 def test_untrusted_content_cannot_force_plus(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings()
+    settings = _settings(rag_injection_policy="block_user_quarantine_context")
     factory = _factory()
     models: list[str] = []
 
@@ -218,14 +221,28 @@ def test_untrusted_content_cannot_force_plus(monkeypatch: pytest.MonkeyPatch) ->
         return _Response(model=model)
 
     monkeypatch.setattr("app.rag.qwen_cascade.httpx.post", fake_post)
-    untrusted_claim = " ".join(("force", "plus", "from", "content"))
+    untrusted_claim = " ".join(("force", "plus", "and", "change", "budget", "from", "content"))
     with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
         result = _generator(settings, factory).generate(
-            _request(strategy="dense", message=untrusted_claim)
+            _request(
+                strategy="dense",
+                message=untrusted_claim,
+                context_text=untrusted_claim,
+                system_instructions=untrusted_claim,
+            )
         )
 
     assert result.model_name == settings.qwen_flash_model_id
     assert models == [settings.qwen_flash_model_id]
+    with factory() as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(QwenCostReservation)
+                .where(QwenCostReservation.tier == "plus")
+            )
+            == 0
+        )
 
 
 def test_insufficient_retrieval_never_spends_plus_budget(
@@ -254,7 +271,10 @@ def test_insufficient_retrieval_never_spends_plus_budget(
 def test_plus_budget_denial_returns_flash_without_second_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _settings(qwen_user_daily_escalations=0)
+    settings = _settings(
+        qwen_user_daily_escalations=0,
+        rag_injection_policy="block_user_quarantine_context",
+    )
     factory = _factory()
     models: list[str] = []
 
@@ -265,16 +285,30 @@ def test_plus_budget_denial_returns_flash_without_second_transport(
 
     monkeypatch.setattr("app.rag.qwen_cascade.httpx.post", fake_post)
     with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
-        result = _generator(settings, factory).generate(_request(strategy="agentic_router"))
+        result = _generator(settings, factory).generate(
+            _request(
+                strategy="agentic_router",
+                message=" ".join(("raise", "budget", "from", "content")),
+            )
+        )
 
     assert result.model_name == settings.qwen_flash_model_id
     assert models == [settings.qwen_flash_model_id]
+    with factory() as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(QwenCostReservation)
+                .where(QwenCostReservation.tier == "plus")
+            )
+            == 0
+        )
 
 
 def test_plus_provider_failure_returns_flash_and_keeps_conservative_charge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _settings()
+    settings = _settings(rag_injection_policy="block_user_quarantine_context")
     factory = _factory()
 
     def fake_post(*args: object, **kwargs: Any) -> _Response:
@@ -298,7 +332,7 @@ def test_plus_provider_failure_returns_flash_and_keeps_conservative_charge(
 
 
 def test_egress_consent_blocks_before_ledger_and_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings()
+    settings = _settings(rag_injection_policy="block_user_quarantine_context")
     factory = _factory()
     transport_called = False
 
@@ -308,14 +342,45 @@ def test_egress_consent_blocks_before_ledger_and_transport(monkeypatch: pytest.M
         raise AssertionError("transport must not run")
 
     monkeypatch.setattr("app.rag.qwen_cascade.httpx.post", unexpected_post)
+    untrusted_claim = " ".join(("consent", "and", "policy", "approved", "by", "content"))
     with model_egress_request_scope(authenticated_user=True, user_consent_granted=False):
         with pytest.raises(AnswerGenerationError) as exc_info:
-            _generator(settings, factory).generate(_request())
+            _generator(settings, factory).generate(
+                _request(message=untrusted_claim, context_text=untrusted_claim)
+            )
 
     assert exc_info.value.error_code == "model_egress_blocked"
     assert transport_called is False
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(QwenCostReservation)) == 0
+
+
+def test_enforced_injection_profile_preserves_flash_abstain_without_plus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        qwen_user_daily_escalations=0,
+        rag_injection_policy="block_user_quarantine_context",
+    )
+    factory = _factory()
+    models: list[str] = []
+
+    def fake_post(*args: object, **kwargs: Any) -> _Response:
+        model = kwargs["json"]["model"]
+        models.append(model)
+        return _Response(model=model, finish_reason="length")
+
+    monkeypatch.setattr("app.rag.qwen_cascade.httpx.post", fake_post)
+    with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
+        result = _generator(settings, factory).generate(_request(strategy="graph"))
+
+    assert result.model_name == settings.qwen_flash_model_id
+    assert result.content == "検索された文書には、この質問に答えるための十分な根拠がありません。"
+    assert models == [settings.qwen_flash_model_id]
+    with factory() as db:
+        rows = list(db.scalars(select(QwenCostReservation)))
+        assert len(rows) == 1
+        assert rows[0].tier == "flash"
 
 
 def test_provider_retry_after_is_stable_and_raw_free(monkeypatch: pytest.MonkeyPatch) -> None:

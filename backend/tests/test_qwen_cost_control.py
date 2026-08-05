@@ -200,7 +200,9 @@ def test_postgres_atomic_budget_race_uses_shared_transaction_lock() -> None:
 
 def test_one_escalation_per_request_is_atomic(tmp_path) -> None:
     factory = _factory(f"sqlite:///{tmp_path / 'escalation.db'}")
-    service = QwenCostControlService(_settings())
+    service = QwenCostControlService(
+        _settings(rag_injection_policy="block_user_quarantine_context")
+    )
     _reserve(service, factory, request_id="same-request", tier="plus", call_index=2)
 
     with pytest.raises(QwenCostControlDenied) as exc_info:
@@ -231,7 +233,11 @@ def test_provider_failures_open_shared_circuit_and_publish_retry_after(tmp_path)
     factory = _factory(f"sqlite:///{tmp_path / 'circuit.db'}")
     now = datetime(2026, 8, 5, 4, 0, tzinfo=UTC)
     service = QwenCostControlService(
-        _settings(qwen_circuit_failure_threshold=2, qwen_circuit_cooldown_seconds=30)
+        _settings(
+            qwen_circuit_failure_threshold=2,
+            qwen_circuit_cooldown_seconds=30,
+            rag_injection_policy="block_user_quarantine_context",
+        )
     )
     for index in (1, 2):
         permit = _reserve(

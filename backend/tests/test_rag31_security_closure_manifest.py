@@ -11,77 +11,96 @@ def _load_manifest() -> dict[str, Any]:
     return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def test_rag31_closure_manifest_preserves_remote_evidence() -> None:
+def test_rag31_final_manifest_preserves_reviewable_history_and_file_union() -> None:
     manifest = _load_manifest()
 
-    assert manifest["schema_version"] == "rag31-security-closure-v1"
+    assert manifest["schema_version"] == "rag31-security-closure-v2"
+    assert manifest["jira_issue"] == "RAG-73"
     assert manifest["main_sha"] == "96e5fc82ad2c253d000633ff9e9431e88998f74a"
+    assert manifest["previous_audit"] == {
+        "jira_issue": "RAG-69",
+        "canonical_pull_request": 141,
+        "preserved_without_rewrite": True,
+    }
 
     integration = manifest["audited_integration"]
-    assert integration["pull_request"] == 141
-    assert integration["state"] == "open"
+    assert integration["pull_request"] == 145
     assert integration["draft"] is True
-    assert integration["mergeable_state"] == "clean"
-    assert integration["changed_file_count"] == 96
-    assert {check["conclusion"] for check in integration["checks"]} == {"success"}
-
-    sources = manifest["source_pull_requests"]
-    assert [source["pull_request"] for source in sources] == list(range(133, 141))
-    assert all(source["all_checks_success"] for source in sources)
-    assert (
-        next(source for source in sources if source["pull_request"] == 135)["base_sha"]
-        == (next(source for source in sources if source["pull_request"] == 133)["head_sha"])
-    )
+    assert integration["base_pull_request"] == 141
+    assert integration["base_sha"] == "c2ff8bf57a674e881efc4741d32eb440d87c2bfe"
+    assert integration["merge_parents"] == [
+        "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+        "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+    ]
 
     ancestry = manifest["ancestry_verification"]
-    assert ancestry["stacked_relation"] == {
-        "base_pull_request": 133,
-        "head_pull_request": 135,
-        "ahead_by": 1,
-        "behind_by": 0,
-        "base_is_merge_base": True,
-    }
-    source_ancestry = ancestry["source_heads_to_integration"]
-    assert {entry["pull_request"] for entry in source_ancestry} == set(range(133, 141))
-    assert all(entry["behind_by"] == 0 for entry in source_ancestry)
-    assert all(entry["base_is_merge_base"] for entry in source_ancestry)
-
-    file_sets = manifest["file_set_verification"]
-    assert file_sets["source_union_count"] == 93
-    assert file_sets["integration_count"] == 96
-    assert file_sets["missing_from_integration"] == []
-    assert set(file_sets["integration_only"]) == {
-        "backend/alembic/versions/0024_security_integration_merge.py",
-        "backend/tests/test_rag31_security_integration_gate.py",
-        "docs/security/rag31_security_integration_gate.md",
+    assert ancestry["all_source_heads_are_ancestors"] is True
+    assert set(ancestry["source_heads"]) == {
+        "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+        "041a0d0e4abf275b04c43bbe8f8dd0b7fcca7ed4",
+        "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
     }
 
+    files = manifest["file_set_verification"]
+    assert files["pull_request_142_count"] == 8
+    assert files["pull_request_144_count"] == 44
+    assert files["source_intersection_count"] == 0
+    assert files["source_union_count"] == 52
+    assert files["integration_count"] == 55
+    assert files["missing_from_integration"] == []
+    assert set(files["integration_only"]) == {
+        "backend/tests/test_rag31_security_closure_manifest.py",
+        "docs/security/rag31_security_closure_manifest.json",
+        "docs/security/rag31_security_closure_matrix.md",
+    }
 
-def test_rag31_closure_manifest_does_not_overclaim_completion() -> None:
+    migration = manifest["migration_verification"]
+    assert migration["head_count"] == 1
+    assert migration["head_revision"] == "0025_qwen_cost_controls"
+
+
+def test_rag31_final_manifest_maps_all_acceptance_criteria_without_score_mixing() -> None:
     manifest = _load_manifest()
     criteria = {entry["id"]: entry for entry in manifest["acceptance_criteria"]}
 
     assert set(criteria) == set(range(1, 8))
-    assert {
-        criterion_id for criterion_id, entry in criteria.items() if entry["status"] == "partial"
-    } == {
-        2,
-        5,
-        6,
+    assert {entry["status"] for entry in criteria.values()} == {"satisfied"}
+    assert set(manifest["individual_evidence"]) == {
+        "rag70",
+        "rag71",
+        "rag72",
+        "aggregation_policy",
     }
-    assert criteria[2]["follow_up"] == "RAG-72"
-    assert criteria[5]["follow_up"] == "RAG-70"
-    assert criteria[6]["follow_up"] == "RAG-71"
+    assert "Do not combine" in manifest["individual_evidence"]["aggregation_policy"]
+
+    combined = manifest["combined_gate"]
+    assert combined["expected_status"] == "pass"
+    assert combined["transport_mode"] == "mocked_synthetic_only"
+    assert combined["live_provider_calls"] == 0
+    assert combined["clean_non_regression_required"] is True
+    assert "pipeline_failure" in combined["required_zero_metrics"]
 
     decision = manifest["closure_decision"]
-    assert decision["rag31_status"] == "not_closed"
-    assert decision["canonical_review_pull_request"] == 141
-    assert decision["do_not_merge_source_pull_requests_separately_if_141_is_selected"] is True
-    assert decision["do_not_close_source_pull_requests_before_141_is_on_main"] is True
-    assert set(decision["follow_up_issues"]) == {"RAG-70", "RAG-71", "RAG-72"}
+    assert decision["rag31_implementation_status"] == "implementation_closure_ready"
+    assert decision["production_secure_or_deployed"] is False
+    assert decision["jira_status_must_remain_review"] is True
+    assert decision["canonical_review_pull_request"] == 145
+    assert decision["do_not_merge_close_retarget_or_undraft_existing_pull_requests"] is True
 
 
-def test_rag31_closure_manifest_contains_no_raw_payload_fields() -> None:
+def test_rag31_final_manifest_has_explicit_non_destructive_rollback() -> None:
+    rollback = _load_manifest()["rollback"]
+
+    assert rollback["primary_action"] == "Do not merge Draft PR 145."
+    assert rollback["code_origins"] == [
+        "fb4b47f3a7d8d58c055399a82b26d8ea961a49b1",
+        "6f430554aee08d7070ed04bc3a6e65cdb159a4aa",
+    ]
+    assert rollback["state_reset_required"] is False
+    assert len(rollback["config_actions"]) == 3
+
+
+def test_rag31_final_manifest_contains_no_raw_payload_fields() -> None:
     prohibited_keys = {
         "answer",
         "canary",
