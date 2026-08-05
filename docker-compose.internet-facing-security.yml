@@ -1,0 +1,11 @@
+services:
+  backend:
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      RAG_INJECTION_POLICY: block_user_quarantine_context
+  worker:
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      RAG_INJECTION_POLICY: block_user_quarantine_context
