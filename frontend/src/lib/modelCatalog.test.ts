@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   buildChatModelOptions,
+  EXTERNAL_MODEL_DATA_WARNING,
   EXTERNAL_MODEL_OPTIONS,
+  isExternalModelKey,
   isExternalModelSelectionEnabled,
   isNvidiaApiEnabled,
   isNvidiaModelKey,
@@ -68,5 +70,13 @@ describe("NVIDIA local model catalog", () => {
     expect(NVIDIA_EXTERNAL_DATA_WARNING).toContain("NVIDIA");
     expect(NVIDIA_EXTERNAL_DATA_WARNING).toContain("\u53d6\u5f97\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8");
     expect(NVIDIA_EXTERNAL_DATA_WARNING).toContain("\u516c\u958b\u30fb\u30c7\u30e2\u6587\u66f8");
+  });
+
+  test("classifies model keys for request-local external consent", () => {
+    expect(isExternalModelKey("openai:gpt-5.5")).toBe(true);
+    expect(isExternalModelKey(NVIDIA_RECOMMENDED_MODEL_KEY)).toBe(true);
+    expect(isExternalModelKey("lmstudio:qwen3.5-9b")).toBe(false);
+    expect(isExternalModelKey("ollama:llama3.1")).toBe(false);
+    expect(EXTERNAL_MODEL_DATA_WARNING).toContain("each request");
   });
 });

@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.core.model_egress import model_egress_request_scope
 from app.rag.generation import (
     AnswerGenerationError,
     GenerationContextItem,
@@ -107,10 +108,28 @@ def test_nvidia_generator_uses_standard_chat_completions_payload(
         nvidia_timeout_seconds=45,
         external_model_egress_policy="mask",
         external_model_egress_allowed_providers=["nvidia"],
+        external_model_egress_provider_regions={"nvidia": "us"},
+        external_model_egress_rules=[
+            {
+                "provider": "nvidia",
+                "model": NVIDIA_MODEL,
+                "purpose": "generation",
+                "allowed_data_classes": [
+                    "retrieved_context",
+                    "system_instruction",
+                    "user_question",
+                ],
+                "allowed_regions": ["us"],
+                "retention_days": 0,
+                "training_allowed": False,
+                "user_consent_required": True,
+            }
+        ],
     )
 
     generator = create_answer_generator(settings)
-    result = generator.generate(_request())
+    with model_egress_request_scope(authenticated_user=True, user_consent_granted=True):
+        result = generator.generate(_request())
 
     assert isinstance(generator, OpenAICompatibleChatAnswerGenerator)
     assert generator.native_lmstudio_api is False

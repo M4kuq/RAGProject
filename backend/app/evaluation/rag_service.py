@@ -258,6 +258,8 @@ class EvaluationRagQuestionService:
                 generation = GenerationResult(
                     content=retry_generation.content,
                     usage=_combined_token_usage(generation.usage, retry_generation.usage),
+                    provider=retry_generation.provider or generation.provider,
+                    model_name=retry_generation.model_name or generation.model_name,
                 )
         latency_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
         return generation, self._generation_metadata(generation, latency_ms=latency_ms)
@@ -268,8 +270,8 @@ class EvaluationRagQuestionService:
         *,
         latency_ms: int,
     ) -> EvaluationGenerationMetadata:
-        provider = self.service.settings.generation_provider.lower()
-        model = _resolved_generation_model_name(
+        provider = generation.provider or self.service.settings.generation_provider.lower()
+        model = generation.model_name or _resolved_generation_model_name(
             provider,
             self.service.settings.generation_model_name,
         )
@@ -468,6 +470,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    egress_purpose="evaluation_generation",
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -687,6 +690,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    egress_purpose="evaluation_generation",
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -858,6 +862,7 @@ class EvaluationRagQuestionService:
                     message=question,
                     context_items=context_items,
                     max_output_chars=self.service.settings.generation_max_output_chars,
+                    egress_purpose="evaluation_generation",
                 )
             )
             parsed_generation = parse_generation_output(generation.content)
@@ -1081,6 +1086,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        egress_purpose="evaluation_generation",
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)
@@ -1379,6 +1385,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        egress_purpose="evaluation_generation",
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)
@@ -1635,6 +1642,7 @@ class EvaluationRagQuestionService:
                         message=question,
                         context_items=context_items,
                         max_output_chars=self.service.settings.generation_max_output_chars,
+                        egress_purpose="evaluation_generation",
                     )
                 )
             parsed_generation = parse_generation_output(generation.content)

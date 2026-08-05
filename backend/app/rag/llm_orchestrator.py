@@ -213,7 +213,14 @@ class OpenAICompatibleJSONToolPlanner:
                 protected = self.egress_guard.protect_payload(
                     {"system_instruction": system_instruction, "payload": payload},
                     provider=self.provider,
+                    model=self.model_name,
                     purpose="llm_tool_planner",
+                    data_classes=(
+                        "retrieval_metadata",
+                        "system_instruction",
+                        "tool_result",
+                        "user_question",
+                    ),
                 )
             except ModelEgressBlockedError as exc:
                 self.last_reason_code = f"planner_egress_{exc.reason_code}"

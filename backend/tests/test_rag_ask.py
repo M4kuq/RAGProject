@@ -1067,6 +1067,8 @@ def test_rag_ask_retries_once_on_insufficient_answer_when_support_is_high(
     assert data["assistant_message"]["content"] != INSUFFICIENT_EVIDENCE_FALLBACK_ANSWER
     assert data["confidence"]["confidence_label"] != "Low"
     assert data["generation"]["total_tokens"] == 40
+    assert data["generation"]["provider"] == "fake"
+    assert data["generation"]["model"] == "fallback-local-v1"
     assert answer_generator.call_count == 2
     assert answer_generator.requests[0].system_instructions is None
     retry_instructions = answer_generator.requests[1].system_instructions
@@ -3889,6 +3891,8 @@ class _HedgeThenCitationAnswerGenerator:
         return GenerationResult(
             content=content,
             usage=TokenUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+            provider="fake",
+            model_name="fallback-local-v1",
         )
 
 

@@ -195,6 +195,7 @@ class EvaluationClaimJudgeService:
                 if text.strip()
             ],
             max_output_chars=4_000,
+            egress_purpose="evaluation_judge",
             system_instructions=_JUDGE_SYSTEM_INSTRUCTIONS,
             task_instructions=(
                 "Evaluate the following JSON payload. Split an answered response into "

@@ -666,6 +666,7 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
   await waitFor(() => expect(screen.getByLabelText("message")).not.toBeDisabled());
   fireEvent.change(screen.getByLabelText("model"), { target: { value: "openai:gpt-5.5" } });
   expect(screen.getByLabelText("model")).toHaveValue("openai:gpt-5.5");
+  fireEvent.click(screen.getByLabelText("allow external model transfer for this request"));
   fireEvent.change(screen.getByLabelText("message"), { target: { value: "What is RAG?" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -692,6 +693,7 @@ test("creates a persisted chat before the first rag ask and keeps csrf", async (
     client_message_id: "msg_fixed",
     message: "What is RAG?",
     model_key: "openai:gpt-5.5",
+    external_model_egress_consent: true,
     top_k: 20,
     rerank_top_n: 5,
     strategy: "llm_tool_orchestrator"
@@ -1109,6 +1111,7 @@ test("sends an enabled NVIDIA model key and shows the external data warning", as
     target: { value: nvidiaModelKey }
   });
   expect(screen.getByRole("status")).toHaveTextContent("NVIDIA");
+  fireEvent.click(screen.getByLabelText("allow external model transfer for this request"));
   fireEvent.change(screen.getByLabelText("message"), {
     target: { value: "What is RAG?" }
   });
@@ -1122,6 +1125,7 @@ test("sends an enabled NVIDIA model key and shows the external data warning", as
     return call as [string, RequestInit];
   });
   expect(JSON.parse(String(askCall[1].body))).toMatchObject({
-    model_key: nvidiaModelKey
+    model_key: nvidiaModelKey,
+    external_model_egress_consent: true
   });
 });
