@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router";
 import { apiFetch } from "../lib/apiClient";
 import { useCurrentUser, useSetCurrentUser } from "../features/auth/authHooks";
 import type { CurrentUser } from "../features/auth/authTypes";
