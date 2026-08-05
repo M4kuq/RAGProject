@@ -9,12 +9,24 @@ import type { ApiResponse } from "../types/api";
 type LoginForm = { email: string; password: string };
 type LoginLocationState = { from?: { pathname?: string; search?: string; hash?: string } };
 
-function getRedirectTarget(state: unknown): string {
+function isSafeLocalPathname(pathname: string): boolean {
+  if (!pathname.startsWith("/") || pathname.startsWith("//") || pathname.includes("\\")) {
+    return false;
+  }
+  return !Array.from(pathname).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+}
+
+export function getRedirectTarget(state: unknown): string {
   const from = (state as LoginLocationState | null)?.from;
-  if (!from?.pathname?.startsWith("/")) {
+  if (typeof from?.pathname !== "string" || !isSafeLocalPathname(from.pathname)) {
     return "/chat";
   }
-  return `${from.pathname}${from.search ?? ""}${from.hash ?? ""}`;
+  const search = typeof from.search === "string" && from.search.startsWith("?") ? from.search : "";
+  const hash = typeof from.hash === "string" && from.hash.startsWith("#") ? from.hash : "";
+  return `${from.pathname}${search}${hash}`;
 }
 
 export function LoginPage() {
