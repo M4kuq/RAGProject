@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +24,12 @@ from app.rag.generation import (
     create_answer_generator,
 )
 from app.schemas.rag import RagAskRequest, RagSearchRequest
+
+
+class _ScenarioRequest(TypedDict):
+    model: str
+    purpose: str
+    classes: tuple[str, ...]
 
 
 def _sentence(*parts: str) -> str:
@@ -212,7 +218,7 @@ def test_governance_rejects_unmasked_external_rollback() -> None:
 
 
 def test_unknown_or_incompatible_governance_facts_fail_closed() -> None:
-    scenarios = [
+    scenarios: list[tuple[ModelEgressGuard, _ScenarioRequest, str]] = [
         (
             _guard(),
             {"model": "other-model", "purpose": "generation", "classes": ("user_question",)},
