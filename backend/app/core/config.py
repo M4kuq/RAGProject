@@ -642,14 +642,11 @@ class Settings(BaseSettings):
         if not _EGRESS_LABEL_PATTERN.fullmatch(
             self.external_model_egress_governance_policy_version
         ):
-            raise ValueError(
-                "EXTERNAL_MODEL_EGRESS_GOVERNANCE_POLICY_VERSION must be a safe label"
-            )
+            raise ValueError("EXTERNAL_MODEL_EGRESS_GOVERNANCE_POLICY_VERSION must be a safe label")
         local_environment = self.app_env.lower() in {"local", "ci", "test"}
         if not self.external_model_egress_governance_enabled and not local_environment:
             raise ValueError(
-                "EXTERNAL_MODEL_EGRESS_GOVERNANCE_ENABLED must remain true outside "
-                "local/ci/test"
+                "EXTERNAL_MODEL_EGRESS_GOVERNANCE_ENABLED must remain true outside local/ci/test"
             )
         normalized_regions: dict[str, str] = {}
         for provider, region in self.external_model_egress_provider_regions.items():
@@ -659,9 +656,7 @@ class Settings(BaseSettings):
                 normalized_provider not in _EXTERNAL_MODEL_PROVIDERS
                 or not _EGRESS_LABEL_PATTERN.fullmatch(normalized_region)
             ):
-                raise ValueError(
-                    "EXTERNAL_MODEL_EGRESS_PROVIDER_REGIONS contains an invalid entry"
-                )
+                raise ValueError("EXTERNAL_MODEL_EGRESS_PROVIDER_REGIONS contains an invalid entry")
             normalized_regions[normalized_provider] = normalized_region
         normalized_regions.setdefault("bedrock", self.aws_region.strip().lower())
         self.external_model_egress_provider_regions = normalized_regions

@@ -33,6 +33,7 @@ def embedding_query_egress_scope() -> Iterator[None]:
     finally:
         _EMBEDDING_EGRESS_CLASSIFICATION.reset(token)
 
+
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 STOPWORDS = {
     "a",

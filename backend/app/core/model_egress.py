@@ -290,9 +290,7 @@ class ModelEgressGuard:
             allowed_providers=settings.external_model_egress_allowed_providers,
             pii_masking_enabled=settings.pii_masking_enabled,
             governance_enabled=settings.external_model_egress_governance_enabled,
-            governance_policy_version=(
-                settings.external_model_egress_governance_policy_version
-            ),
+            governance_policy_version=(settings.external_model_egress_governance_policy_version),
             governance_rules=[
                 ModelEgressGovernanceRule(
                     provider=rule.provider,
