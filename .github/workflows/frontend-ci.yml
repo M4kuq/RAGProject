@@ -5,7 +5,9 @@ on:
     paths:
       - "frontend/**"
       - "scripts/verify_frontend_security_integration.mjs"
+      - "scripts/verify_rag31_frontend_security_integration.mjs"
       - "docs/security/frontend_security_*"
+      - "docs/security/rag31_frontend_security_*"
       - ".github/workflows/frontend-ci.yml"
   push:
     branches:
@@ -13,7 +15,9 @@ on:
     paths:
       - "frontend/**"
       - "scripts/verify_frontend_security_integration.mjs"
+      - "scripts/verify_rag31_frontend_security_integration.mjs"
       - "docs/security/frontend_security_*"
+      - "docs/security/rag31_frontend_security_*"
       - ".github/workflows/frontend-ci.yml"
   workflow_dispatch:
 
@@ -51,6 +55,10 @@ jobs:
       - name: Verify canonical security integration
         working-directory: .
         run: node scripts/verify_frontend_security_integration.mjs
+
+      - name: Verify RAG-31 and frontend canonical integration
+        working-directory: .
+        run: node scripts/verify_rag31_frontend_security_integration.mjs
 
       - name: Dependency audit policy negative controls
         run: npm run security:audit:test
