@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Annotated, Literal, Self, cast
 
@@ -29,7 +30,7 @@ class _StrictModel(BaseModel):
 
 
 class AtomicClaimSourceContract(_StrictModel):
-    source_evaluation_run_id: int = Field(ge=1)
+    source_evaluation_run_id: Literal[112]
     dataset_name: Literal["local_accuracy_dev_v1"]
     dataset_content_fingerprint: Sha256
     case_set_fingerprint: Sha256
@@ -38,10 +39,16 @@ class AtomicClaimSourceContract(_StrictModel):
     generation_prompt_fingerprint: Sha256
     generation_budget_fingerprint: Sha256
     resolved_generation_model: Literal["qwen/qwen3.5-9b"]
-    generation_temperature: Literal[0.0]
-    generation_max_context_chars: int = Field(ge=1)
-    generation_max_output_chars: int = Field(ge=1)
-    generation_max_output_tokens: int = Field(ge=1)
+    generation_temperature: float
+    generation_max_context_chars: Literal[6000]
+    generation_max_output_chars: Literal[12000]
+    generation_max_output_tokens: Literal[8192]
+
+    @model_validator(mode="after")
+    def validate_frozen_temperature(self) -> Self:
+        if self.generation_temperature != 0.0:
+            raise ValueError("atomic_claim_generation_temperature_drift")
+        return self
 
 
 class AtomicClaimReferenceDecision(_StrictModel):
@@ -218,7 +225,12 @@ def inspect_reference_payload(
     if schema_version == _LEGACY_REVIEW_SCHEMA:
         provenance = payload.get("reviewer_type")
         review_status = payload.get("review_status")
-        safe_provenance = provenance if isinstance(provenance, str) else None
+        safe_provenance = (
+            provenance
+            if isinstance(provenance, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}", provenance)
+            else None
+        )
         requires_signoff = review_status != "human_signed_off"
         return None, _LEGACY_REVIEW_SCHEMA, safe_provenance, requires_signoff
     raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_schema_unsupported")

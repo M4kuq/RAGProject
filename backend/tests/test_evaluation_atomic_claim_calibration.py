@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -83,6 +85,14 @@ def test_candidate_is_rejected_when_false_positive_increases() -> None:
     assert result.false_positive_delta_count == 1
     assert result.candidate_selected is False
     assert "atomic_equivalence_fp_increased" in result.reason_codes
+
+
+def test_generation_temperature_drift_is_rejected() -> None:
+    candidate_payload = _candidate_payload()
+    candidate_payload["source"]["generation_temperature"] = 0.1
+
+    with pytest.raises(ValidationError, match="atomic_claim_generation_temperature_drift"):
+        AtomicClaimCandidateManifest.model_validate(candidate_payload)
 
 
 def test_source_fingerprint_drift_is_rejected() -> None:

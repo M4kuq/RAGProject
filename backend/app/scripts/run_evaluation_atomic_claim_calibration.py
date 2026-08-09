@@ -57,6 +57,8 @@ def main() -> int:
         return _blocked("atomic_claim_input_unreadable")
     except ValidationError:
         return _blocked("atomic_claim_input_schema_invalid")
+    except ValueError:
+        return _blocked("atomic_claim_input_not_object")
     except EvaluationAtomicClaimCalibrationError as exc:
         return _blocked(str(exc))
 
