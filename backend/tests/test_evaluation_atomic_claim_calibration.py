@@ -154,7 +154,7 @@ def test_output_contract_is_raw_free() -> None:
 
 
 def test_cli_classifies_legacy_manifest_without_printing_input(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -192,7 +192,7 @@ def test_cli_classifies_legacy_manifest_without_printing_input(
 
 
 def test_cli_fails_closed_with_stable_reason_for_malformed_schema(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -211,7 +211,7 @@ def test_cli_fails_closed_with_stable_reason_for_malformed_schema(
     }
 
 
-def _source_payload() -> dict[str, object]:
+def _source_payload() -> dict[str, Any]:
     return {
         "source_evaluation_run_id": 112,
         "dataset_name": "local_accuracy_dev_v1",
@@ -229,7 +229,7 @@ def _source_payload() -> dict[str, object]:
     }
 
 
-def _reference_payload() -> dict[str, object]:
+def _reference_payload() -> dict[str, Any]:
     return {
         "schema_version": "phase3.oracle_atomic_claim_review.v1",
         "source": _source_payload(),
@@ -259,7 +259,7 @@ def _reference_payload() -> dict[str, object]:
     }
 
 
-def _candidate_payload() -> dict[str, object]:
+def _candidate_payload() -> dict[str, Any]:
     return {
         "schema_version": "phase3.oracle_atomic_claim_candidate.v1",
         "source": deepcopy(_source_payload()),
