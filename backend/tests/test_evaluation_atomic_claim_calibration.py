@@ -66,7 +66,9 @@ def test_hash_bound_reference_can_select_equivalence_only_screening_candidate() 
     assert result.candidate_selected is True
     assert result.decision == "screening_candidate_selected"
     assert result.screening_only is True
-    assert result.primary_metric_status == "calibrated_grounded_answer_pass_rate_unchanged"
+    assert (
+        result.primary_metric_status == "calibrated_grounded_answer_pass_rate_unchanged"
+    )
 
 
 def test_candidate_is_rejected_when_false_positive_increases() -> None:
@@ -197,7 +199,9 @@ def test_cli_fails_closed_with_stable_reason_for_malformed_schema(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     candidate_path = tmp_path / "candidate.json"
-    candidate_path.write_text(json.dumps({"schema_version": "unexpected"}), encoding="utf-8")
+    candidate_path.write_text(
+        json.dumps({"schema_version": "unexpected"}), encoding="utf-8"
+    )
     monkeypatch.setattr(
         sys,
         "argv",
