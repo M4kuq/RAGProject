@@ -75,6 +75,7 @@ def test_candidate_is_rejected_when_false_positive_increases() -> None:
     reference_payload = _reference_payload()
     reference_payload["decisions"][1]["reference_supported"] = False
     candidate_payload = _candidate_payload()
+    candidate_payload["observations"][1]["whole_statement_exact_match"] = False
     candidate_payload["observations"][1]["atomic_equivalence_match"] = True
     reference = AtomicClaimReviewManifest.model_validate(reference_payload)
     candidate = AtomicClaimCandidateManifest.model_validate(candidate_payload)
