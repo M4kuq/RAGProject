@@ -9,7 +9,7 @@ output budget, Judge rubric, and the existing Calibrated Grounded Answer Pass Ra
 remain unchanged. The whole-statement exact matcher remains the primary diagnostic;
 the new semantic-equivalence dimension cannot replace or rewrite it.
 
-Rollback is to leave the RAG-81 Draft PR unmerged or revert its isolated commit.
+Rollback is to leave the RAG-81 Draft PR unmerged or revert its eventual PR merge commit (or the complete RAG-81-only commit range).
 PR #151/#152, PR #128/#130/#131, Gold v2, runtime profiles, LM Studio, databases,
 Qdrant, Neo4j, and Docker volumes are unchanged.
 
