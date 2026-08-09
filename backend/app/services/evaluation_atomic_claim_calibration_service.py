@@ -85,10 +85,7 @@ class AtomicClaimReviewManifest(_StrictModel):
         hash_bound = [decision.hash_bound_identity for decision in self.decisions]
         if len(hash_bound) != len(set(hash_bound)):
             raise ValueError("atomic_claim_reference_hash_binding_duplicate")
-        if (
-            self.review_status == "requires_human_signoff"
-            and not self.requires_human_signoff
-        ):
+        if self.review_status == "requires_human_signoff" and not self.requires_human_signoff:
             raise ValueError("atomic_claim_human_signoff_state_invalid")
         if self.review_status == "human_signed_off" and self.requires_human_signoff:
             raise ValueError("atomic_claim_human_signoff_state_invalid")
@@ -147,14 +144,11 @@ class AtomicClaimCandidateManifest(_StrictModel):
         identities = [observation.identity for observation in self.observations]
         if len(identities) != len(set(identities)):
             raise ValueError("atomic_claim_candidate_identity_duplicate")
-        hash_bound = [
-            observation.hash_bound_identity for observation in self.observations
-        ]
+        hash_bound = [observation.hash_bound_identity for observation in self.observations]
         if len(hash_bound) != len(set(hash_bound)):
             raise ValueError("atomic_claim_candidate_hash_binding_duplicate")
         not_applicable = [
-            observation.observation_identity
-            for observation in self.not_applicable_observations
+            observation.observation_identity for observation in self.not_applicable_observations
         ]
         if len(not_applicable) != len(set(not_applicable)):
             raise ValueError("atomic_claim_not_applicable_identity_duplicate")
@@ -227,9 +221,7 @@ def inspect_reference_payload(
         safe_provenance = provenance if isinstance(provenance, str) else None
         requires_signoff = review_status != "human_signed_off"
         return None, _LEGACY_REVIEW_SCHEMA, safe_provenance, requires_signoff
-    raise EvaluationAtomicClaimCalibrationError(
-        "atomic_claim_reference_schema_unsupported"
-    )
+    raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_schema_unsupported")
 
 
 def evaluate_atomic_claim_candidate(
@@ -291,21 +283,15 @@ def evaluate_atomic_claim_candidate(
         )
 
     if candidate.source != reference.source:
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_source_fingerprint_drift"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_source_fingerprint_drift")
 
-    reference_by_identity = {
-        decision.identity: decision for decision in reference.decisions
-    }
+    reference_by_identity = {decision.identity: decision for decision in reference.decisions}
     candidate_by_identity = {
         observation.identity: observation for observation in candidate.observations
     }
     unknown_identities = set(candidate_by_identity).difference(reference_by_identity)
     if unknown_identities:
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_candidate_identity_unbound"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_candidate_identity_unbound")
 
     for identity in set(candidate_by_identity).intersection(reference_by_identity):
         decision = reference_by_identity[identity]
@@ -314,14 +300,10 @@ def evaluate_atomic_claim_candidate(
             observation.answer_hash != decision.answer_hash
             or observation.context_hash != decision.context_hash
         ):
-            raise EvaluationAtomicClaimCalibrationError(
-                "atomic_claim_answer_context_hash_drift"
-            )
+            raise EvaluationAtomicClaimCalibrationError("atomic_claim_answer_context_hash_drift")
 
     matched_identities = tuple(
-        identity
-        for identity in reference_by_identity
-        if identity in candidate_by_identity
+        identity for identity in reference_by_identity if identity in candidate_by_identity
     )
     matched_pairs = tuple(
         (reference_by_identity[identity], candidate_by_identity[identity])
@@ -392,9 +374,7 @@ def evaluate_atomic_claim_candidate(
         reference_provenance=reference.reviewer_provenance,
         requires_human_signoff=reference.requires_human_signoff,
         calibration_status=(
-            "complete_hash_bound_claim_labels"
-            if complete
-            else "partial_hash_bound_claim_labels"
+            "complete_hash_bound_claim_labels" if complete else "partial_hash_bound_claim_labels"
         ),
         calibration_coverage=coverage,
         reference_claim_count=reference_count,
@@ -410,9 +390,7 @@ def evaluate_atomic_claim_candidate(
         pipeline_failure_count=candidate.pipeline_failure_count,
         candidate_selected=candidate_selected,
         decision=(
-            "screening_candidate_selected"
-            if candidate_selected
-            else "screening_candidate_rejected"
+            "screening_candidate_selected" if candidate_selected else "screening_candidate_rejected"
         ),
         screening_only=True,
         primary_metric_status="calibrated_grounded_answer_pass_rate_unchanged",
