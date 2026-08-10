@@ -94,18 +94,12 @@ class AtomicClaimBlindReviewManifest(_StrictModel):
         if self.review_status == "requires_human_signoff":
             if not self.requires_human_signoff:
                 raise ValueError("blind_review_signoff_state_invalid")
-            if (
-                self.human_signoff_provenance is not None
-                or self.human_signoff_at_utc is not None
-            ):
+            if self.human_signoff_provenance is not None or self.human_signoff_at_utc is not None:
                 raise ValueError("blind_review_signoff_state_invalid")
         else:
             if self.requires_human_signoff:
                 raise ValueError("blind_review_signoff_state_invalid")
-            if (
-                self.human_signoff_provenance is None
-                or self.human_signoff_at_utc is None
-            ):
+            if self.human_signoff_provenance is None or self.human_signoff_at_utc is None:
                 raise ValueError("blind_review_signoff_evidence_missing")
             if not _is_utc_aware(self.human_signoff_at_utc):
                 raise ValueError("blind_review_signoff_timestamp_not_utc_aware")
@@ -135,16 +129,11 @@ class AtomicClaimBlindReviewCommitment(_StrictModel):
 
     @model_validator(mode="after")
     def validate_commitment_timestamp(self) -> Self:
-        if not _is_utc_aware(self.reviewed_at_utc) or not _is_utc_aware(
-            self.committed_at_utc
-        ):
+        if not _is_utc_aware(self.reviewed_at_utc) or not _is_utc_aware(self.committed_at_utc):
             raise ValueError("blind_review_commitment_timestamp_not_utc_aware")
         if self.committed_at_utc < self.reviewed_at_utc:
             raise ValueError("blind_review_commitment_precedes_review")
-        if (
-            self.review_status == "requires_human_signoff"
-            and not self.requires_human_signoff
-        ):
+        if self.review_status == "requires_human_signoff" and not self.requires_human_signoff:
             raise ValueError("blind_review_signoff_state_invalid")
         if self.review_status == "human_signed_off" and self.requires_human_signoff:
             raise ValueError("blind_review_signoff_state_invalid")
@@ -194,9 +183,7 @@ class AtomicClaimBlindCandidateManifest(_StrictModel):
     raw_content_persisted: Literal[False] = False
     pipeline_failure_count: int = Field(ge=0)
     observations: tuple[AtomicClaimBlindCandidateObservation, ...] = ()
-    not_applicable_observations: tuple[
-        AtomicClaimBlindNotApplicableObservation, ...
-    ] = ()
+    not_applicable_observations: tuple[AtomicClaimBlindNotApplicableObservation, ...] = ()
 
     @model_validator(mode="after")
     def validate_candidate_uniqueness_and_applicability(self) -> Self:
@@ -204,8 +191,7 @@ class AtomicClaimBlindCandidateManifest(_StrictModel):
         if len(identities) != len(set(identities)):
             raise ValueError("blind_candidate_claim_identity_duplicate")
         not_applicable = [
-            observation.observation_identity
-            for observation in self.not_applicable_observations
+            observation.observation_identity for observation in self.not_applicable_observations
         ]
         if len(not_applicable) != len(set(not_applicable)):
             raise ValueError("blind_candidate_not_applicable_identity_duplicate")
@@ -232,9 +218,7 @@ class AtomicClaimBlindPhaseBResult(_StrictModel):
     reviewed_at_utc: datetime
     review_status: str
     requires_human_signoff: bool
-    reference_label_authority: Literal[
-        "human_calibrated", "auxiliary_requires_human_signoff"
-    ]
+    reference_label_authority: Literal["human_calibrated", "auxiliary_requires_human_signoff"]
     calibration: AtomicClaimCalibrationSummary
     candidate_selected: bool
     screening_only: Literal[True]
@@ -317,9 +301,7 @@ def evaluate_phase_b(
             "atomic_claim_phase_a_reference_manifest_hash_mismatch"
         )
     if reference.source != commitment.source or candidate.source != reference.source:
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_source_fingerprint_drift"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_source_fingerprint_drift")
     if (
         reference.review_scope_id != commitment.review_scope_id
         or candidate.review_scope_id != reference.review_scope_id
@@ -328,13 +310,9 @@ def evaluate_phase_b(
     ):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_review_scope_drift")
     if candidate.phase_a_reference_manifest_sha256 != reference_hash:
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_candidate_not_bound_to_phase_a"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_candidate_not_bound_to_phase_a")
     if commitment.reference_claim_count != len(reference.decisions):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_phase_a_claim_count_drift"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_phase_a_claim_count_drift")
     if (
         commitment.reviewer_provenance != reference.reviewer_provenance
         or commitment.reviewer_type != reference.reviewer_type
@@ -344,20 +322,14 @@ def evaluate_phase_b(
         or commitment.review_status != reference.review_status
         or commitment.requires_human_signoff != reference.requires_human_signoff
     ):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_phase_a_provenance_drift"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_phase_a_provenance_drift")
 
-    reference_by_identity = {
-        decision.identity: decision for decision in reference.decisions
-    }
+    reference_by_identity = {decision.identity: decision for decision in reference.decisions}
     candidate_by_identity = {
         observation.identity: observation for observation in candidate.observations
     }
     if set(reference_by_identity) != set(candidate_by_identity):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_phase_b_coverage_incomplete"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_phase_b_coverage_incomplete")
 
     for identity, decision in reference_by_identity.items():
         observation = candidate_by_identity[identity]
@@ -368,9 +340,7 @@ def evaluate_phase_b(
             or observation.context_hash != decision.context_hash
             or observation.required_fact_hash != decision.required_fact_hash
         ):
-            raise EvaluationAtomicClaimCalibrationError(
-                "atomic_claim_phase_b_hash_binding_drift"
-            )
+            raise EvaluationAtomicClaimCalibrationError("atomic_claim_phase_b_hash_binding_drift")
 
     rag81_reference = AtomicClaimReviewManifest(
         schema_version="phase3.oracle_atomic_claim_review.v1",

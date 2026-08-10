@@ -33,9 +33,7 @@ def test_phase_a_commits_exact_reference_bytes_before_candidate() -> None:
         committed_at_utc=datetime.fromisoformat("2026-08-10T00:01:00+00:00"),
     )
 
-    assert commitment.reference_manifest_sha256 == hashlib.sha256(
-        reference_bytes
-    ).hexdigest()
+    assert commitment.reference_manifest_sha256 == hashlib.sha256(reference_bytes).hexdigest()
     assert commitment.reference_claim_count == 2
     assert commitment.candidate_results_observed is False
     assert commitment.candidate_identifiers_present is False
@@ -63,9 +61,7 @@ def test_review_schema_rejects_duplicate_claim_and_scope_drift() -> None:
 
     payload = _reference_payload()
     payload["review_scope_fingerprint"] = "f" * 64
-    with pytest.raises(
-        ValidationError, match="blind_review_scope_fingerprint_mismatch"
-    ):
+    with pytest.raises(ValidationError, match="blind_review_scope_fingerprint_mismatch"):
         AtomicClaimBlindReviewManifest.model_validate(payload)
 
 
@@ -363,8 +359,7 @@ def _reference_payload(*, human_signed_off: bool = False) -> dict[str, Any]:
     source = AtomicClaimSourceContract.model_validate(source_payload)
     decisions_payload = _decisions_payload()
     decisions = tuple(
-        AtomicClaimBlindReferenceDecision.model_validate(item)
-        for item in decisions_payload
+        AtomicClaimBlindReferenceDecision.model_validate(item) for item in decisions_payload
     )
     payload: dict[str, Any] = {
         "schema_version": "phase3.oracle_atomic_claim_blind_review.v1",
@@ -393,9 +388,7 @@ def _reference_payload(*, human_signed_off: bool = False) -> dict[str, Any]:
     return payload
 
 
-def _reference(
-    *, human_signed_off: bool = False
-) -> tuple[bytes, AtomicClaimBlindReviewManifest]:
+def _reference(*, human_signed_off: bool = False) -> tuple[bytes, AtomicClaimBlindReviewManifest]:
     payload = _reference_payload(human_signed_off=human_signed_off)
     reference_bytes = _canonical_bytes(payload)
     return reference_bytes, AtomicClaimBlindReviewManifest.model_validate(payload)
