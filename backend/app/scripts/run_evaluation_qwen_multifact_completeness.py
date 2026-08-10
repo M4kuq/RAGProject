@@ -88,12 +88,8 @@ def main() -> int:
                 "gate_passed": result.gate_passed,
                 "decision": result.decision,
                 "case_observation_count": len(result.observations),
-                "baseline_atomic_required_fact_recall": (
-                    baseline.atomic_required_fact_recall
-                ),
-                "candidate_atomic_required_fact_recall": (
-                    candidate.atomic_required_fact_recall
-                ),
+                "baseline_atomic_required_fact_recall": (baseline.atomic_required_fact_recall),
+                "candidate_atomic_required_fact_recall": (candidate.atomic_required_fact_recall),
                 "baseline_pipeline_failure_count": baseline.pipeline_failure_count,
                 "candidate_pipeline_failure_count": candidate.pipeline_failure_count,
                 "artifact_sha256": artifact_sha256,
@@ -112,9 +108,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _validate_output_path(path: Path) -> None:
     if _path_inside_git_checkout(path):
-        raise EvaluationQwenMultifactCompletenessError(
-            "rag84_repository_output_rejected"
-        )
+        raise EvaluationQwenMultifactCompletenessError("rag84_repository_output_rejected")
     if path.exists() or path.is_symlink():
         raise EvaluationQwenMultifactCompletenessError("rag84_output_already_exists")
     if _path_has_symlink_component(path):
@@ -125,9 +119,7 @@ def _load_tune_result(path: Path) -> Rag84ExperimentResult:
     payload_bytes, payload = read_json_object(path)
     result = Rag84ExperimentResult.model_validate(payload)
     if not model_bytes_match(payload_bytes, result):
-        raise EvaluationQwenMultifactCompletenessError(
-            "rag84_tune_result_bytes_model_mismatch"
-        )
+        raise EvaluationQwenMultifactCompletenessError("rag84_tune_result_bytes_model_mismatch")
     return result
 
 

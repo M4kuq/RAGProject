@@ -817,9 +817,7 @@ def _review_case_generation_worker(
                     {
                         citation_id
                         for citation in generation.citations
-                        if isinstance(
-                            (citation_id := citation.get("local_citation_id")), int
-                        )
+                        if isinstance((citation_id := citation.get("local_citation_id")), int)
                     }
                 )
             ),

@@ -46,9 +46,7 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
 from app.services.rag_service import _is_insufficient_evidence_answer
 
 _BASELINE_PROFILE: Literal["baseline"] = "baseline"
-_CANDIDATE_PROFILE: Literal["multi_fact_evidence_ledger_v1"] = (
-    "multi_fact_evidence_ledger_v1"
-)
+_CANDIDATE_PROFILE: Literal["multi_fact_evidence_ledger_v1"] = "multi_fact_evidence_ledger_v1"
 _TUNE_DATASET = "local_accuracy_dev_v1"
 _CONFIRM_DATASET = "rag84_qwen_multifact_confirm_v1"
 _MODEL: Literal["qwen/qwen3.5-9b"] = "qwen/qwen3.5-9b"
@@ -316,9 +314,7 @@ class Rag84ExperimentResult(StrictRawFreeModel):
     decision: Literal["advance_to_confirm", "adopt_candidate", "retain_baseline"]
     reason_codes: tuple[str, ...]
     evaluator: Literal["deterministic_identifier_equivalence_v1"]
-    evaluator_calibration_provenance: Literal[
-        "rag83_mixed_user_codex_with_final_human_acceptance"
-    ]
+    evaluator_calibration_provenance: Literal["rag83_mixed_user_codex_with_final_human_acceptance"]
     independent_human_only_calibration: Literal[False]
     claim_level_metrics: Literal[True]
     case_level_public_accuracy: Literal[False]
@@ -418,12 +414,8 @@ def build_rag84_experiment_lock(
         experiment_manifest_sha256=_manifest_sha256(manifest),
         tune_binding_sha256=_sha256_bytes(canonical_json_bytes(manifest.tune)),
         confirm_binding_sha256=_sha256_bytes(canonical_json_bytes(manifest.confirm)),
-        independence_proof_sha256=_sha256_bytes(
-            canonical_json_bytes(manifest.independence)
-        ),
-        generation_contract_sha256=_sha256_bytes(
-            canonical_json_bytes(manifest.generation)
-        ),
+        independence_proof_sha256=_sha256_bytes(canonical_json_bytes(manifest.independence)),
+        generation_contract_sha256=_sha256_bytes(canonical_json_bytes(manifest.generation)),
         decision_rule_sha256=_sha256_bytes(canonical_json_bytes(manifest.decision_rule)),
         tune_dataset_content_fingerprint=manifest.tune.dataset_content_fingerprint,
         tune_case_set_fingerprint=manifest.tune.case_set_fingerprint,
@@ -597,9 +589,7 @@ def _run_rag84_experiment(
         decision=decision,
         reason_codes=reason_codes,
         evaluator="deterministic_identifier_equivalence_v1",
-        evaluator_calibration_provenance=(
-            "rag83_mixed_user_codex_with_final_human_acceptance"
-        ),
+        evaluator_calibration_provenance=("rag83_mixed_user_codex_with_final_human_acceptance"),
         independent_human_only_calibration=False,
         claim_level_metrics=True,
         case_level_public_accuracy=False,
@@ -659,9 +649,7 @@ def _run_case(
                     {
                         citation_id
                         for citation in generation.citations
-                        if isinstance(
-                            (citation_id := citation.get("local_citation_id")), int
-                        )
+                        if isinstance((citation_id := citation.get("local_citation_id")), int)
                     }
                 )
             )
@@ -757,11 +745,7 @@ def _summarize_profile(
     grounded_count = sum(sum(item.citation_grounded_fact_matches) for item in selected)
     repeat_recalls = tuple(
         round(
-            sum(
-                sum(item.atomic_fact_matches)
-                for item in selected
-                if item.repeat == repeat
-            )
+            sum(sum(item.atomic_fact_matches) for item in selected if item.repeat == repeat)
             / (case_count * _EXPECTED_FACTS_PER_CASE),
             6,
         )
@@ -794,9 +778,7 @@ def _summarize_profile(
         }
         majority_atomic_count = sum(sum(values) for values in majority_fact_matches.values())
         majority_whole_count = sum(all(values) for values in majority_fact_matches.values())
-        majority_grounded_count = sum(
-            sum(values) for values in majority_grounded_matches.values()
-        )
+        majority_grounded_count = sum(sum(values) for values in majority_grounded_matches.values())
         majority_atomic_recall = round(
             majority_atomic_count / (case_count * _EXPECTED_FACTS_PER_CASE), 6
         )
@@ -967,8 +949,8 @@ def _build_dataset_binding(
     for case in cases:
         if len(case.required_facts) != _EXPECTED_FACTS_PER_CASE:
             raise EvaluationQwenMultifactCompletenessError("rag84_case_fact_count_drift")
-        _context_items, _citation_sources, context, source_keys = (
-            _prepare_fixture_oracle_material(case, documents, document_ids)
+        _context_items, _citation_sources, context, source_keys = _prepare_fixture_oracle_material(
+            case, documents, document_ids
         )
         if len(source_keys) != _EXPECTED_FACTS_PER_CASE:
             raise EvaluationQwenMultifactCompletenessError("rag84_case_source_count_drift")
@@ -1088,11 +1070,7 @@ def _build_independence_proof(
 def _selected_cases(manifest: EvaluationDatasetManifestV2) -> tuple[EvaluationCaseV2Spec, ...]:
     return tuple(
         sorted(
-            (
-                case
-                for case in manifest.cases
-                if case.answerable and "multi_hop" in case.tags
-            ),
+            (case for case in manifest.cases if case.answerable and "multi_hop" in case.tags),
             key=lambda item: item.case_key,
         )
     )

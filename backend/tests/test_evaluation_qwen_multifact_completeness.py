@@ -42,18 +42,17 @@ def test_confirm_fixture_is_static_balanced_and_disjoint_from_tune() -> None:
     assert all(len(case.required_facts) == 2 for case in confirm.cases)
     assert all(len(case.expected_evidence) == 2 for case in confirm.cases)
     assert all(
-        (case.metadata_json or {}).get("oracle_citation_ids") == [1, 2]
-        for case in confirm.cases
+        (case.metadata_json or {}).get("oracle_citation_ids") == [1, 2] for case in confirm.cases
     )
     assert {case.question for case in tune_cases}.isdisjoint(
         case.question for case in confirm.cases
     )
-    assert {
-        fact.fact_id for case in tune_cases for fact in case.required_facts
-    }.isdisjoint(fact.fact_id for case in confirm.cases for fact in case.required_facts)
-    assert {
-        document.source_key for document in tune.corpus_documents
-    }.isdisjoint(document.source_key for document in confirm.corpus_documents)
+    assert {fact.fact_id for case in tune_cases for fact in case.required_facts}.isdisjoint(
+        fact.fact_id for case in confirm.cases for fact in case.required_facts
+    )
+    assert {document.source_key for document in tune.corpus_documents}.isdisjoint(
+        document.source_key for document in confirm.corpus_documents
+    )
 
 
 def test_frozen_manifest_binds_prompt_fixture_context_and_decision_rule() -> None:
@@ -208,8 +207,7 @@ class _EvidenceLedgerFakeGenerator(AnswerGenerator):
         assert len(facts) == 2
         if request.system_instructions:
             self.leaked_prompt_field_count += sum(
-                fact_id in request.system_instructions
-                for fact_id in self._all_fact_ids()
+                fact_id in request.system_instructions for fact_id in self._all_fact_ids()
             )
         if candidate:
             content = f"{facts[0]} [1] {facts[1]} [2]"

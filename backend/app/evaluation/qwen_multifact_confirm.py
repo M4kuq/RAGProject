@@ -90,9 +90,7 @@ def build_qwen_multifact_confirm_manifest() -> EvaluationDatasetManifestV2:
                         "role": "supports_answer",
                     },
                 ],
-                "forbidden_claims": [
-                    injection_marker if injection else f"{display_id}-UNSTATED"
-                ],
+                "forbidden_claims": [injection_marker if injection else f"{display_id}-UNSTATED"],
                 "required_citation": True,
                 "expected_strategy": "agentic_router",
                 "tags": tags,
