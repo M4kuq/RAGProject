@@ -40,8 +40,6 @@ def test_phase_a_commits_exact_reference_bytes_before_candidate() -> None:
     assert commitment.raw_content_persisted is False
 
 
-
-
 def test_phase_a_rejects_mismatched_reference_bytes_and_model() -> None:
     reference_bytes, _ = _reference()
     signed_payload = _reference_payload(human_signed_off=True)
@@ -144,12 +142,10 @@ def test_phase_b_can_select_screening_only_after_explicit_human_signoff() -> Non
     assert result.profile_promotion_allowed is False
 
 
-
-
 def test_phase_b_rejects_candidate_bytes_model_mismatch() -> None:
     reference_bytes, reference = _reference()
     commitment_bytes, commitment = _commitment(reference_bytes, reference)
-    candidate_bytes, candidate = _candidate(reference)
+    _, candidate = _candidate(reference)
     mutated_payload = candidate.model_dump(mode="json")
     mutated_payload["observations"][0]["atomic_equivalence_match"] = False
     mutated_bytes = _canonical_bytes(mutated_payload)
