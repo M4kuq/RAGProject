@@ -1,3 +1,5 @@
+"""Canonical raw-free contracts shared by RAG-81, RAG-82, and RAG-83."""
+
 from __future__ import annotations
 
 import json
