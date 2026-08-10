@@ -64,7 +64,9 @@ def test_private_input_is_exactly_bound_and_candidate_fields_are_rejected(
     ready = validate_review_input(files["scope"], files["private"])
 
     assert ready["status"] == "review_ready"
-    assert ready["claim_count"] >= 1
+    claim_count = ready["claim_count"]
+    assert isinstance(claim_count, int)
+    assert claim_count >= 1
     payload = json.loads(files["private"].read_text(encoding="utf-8"))
     payload["candidate_id"] = "must-not-enter-phase-a"
     with pytest.raises(ValidationError):
