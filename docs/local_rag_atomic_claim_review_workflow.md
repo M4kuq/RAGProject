@@ -27,7 +27,7 @@ boundary is `atomic_claim_review_legacy_manifest_unreadable` or
 
 | Module | Canonical responsibility |
 |---|---|
-| `evaluation_atomic_claim_contracts.py` | strict raw-free base, fixed source contract, ID/hash bindings, JSON read/write, exact bytes/model comparison, atomic safe output, stable blocked response |
+| `evaluation_atomic_claim_contracts.py` | strict raw-free base, fixed source contract, ID/hash bindings, JSON read/write, model/payload equivalence, atomic safe output, stable blocked response |
 | `evaluation_atomic_claim_calibration_service.py` | RAG-81 legacy review compatibility and additive calibration calculator |
 | `evaluation_atomic_claim_blind_review_service.py` | RAG-82 blind Phase A commitment and Phase B validation |
 | `evaluation_atomic_claim_review_workflow_service.py` | RAG-83 scope stripping, private input adapter, progress, human signoff, localhost HTTP/UI security |
@@ -41,15 +41,15 @@ reason codes, safe outputs, not-applicable behavior, and the
 
 | Metric | Before | After |
 |---|---:|---:|
-| original four service/CLI lines | 1,105 | 923 |
-| common canonical module lines | 0 | 158 |
-| total including common module | 1,105 | 1,081 |
+| original four service/CLI lines | 1,101 | 924 |
+| common canonical module lines | 0 | 157 |
+| total including common module | 1,101 | 1,081 |
 | shared non-trivial service lines | 90 | 67 |
 | shared non-trivial CLI lines | 31 | 26 |
 | canonical shared definitions | 0 | 14 |
 
-The original four modules dropped 182 lines while the five-module total dropped
-24 lines. The purpose is one source of truth, not line-count minimization.
+The original four modules dropped 177 lines while the five-module total dropped
+20 lines. The purpose is one source of truth, not line-count minimization.
 
 ## Candidate-blind preparation
 
@@ -57,7 +57,7 @@ The legacy review manifest contains prior Codex-assisted decisions. It is never
 passed to the browser review process. Preparation strips it to a raw-free scope
 containing only case ID and answer hash:
 
-    python -m app.scripts.run_evaluation_atomic_claim_review_workflow prepare-scope \
+    uv run --frozen python -m app.scripts.run_evaluation_atomic_claim_review_workflow prepare-scope \
       --source-contract <fixed-raw-free-source-contract.json> \
       --run112-summary <oracle-context-confirm-run112.json> \
       --legacy-review-manifest <exact-rag79-review-manifest.json> \
@@ -74,15 +74,15 @@ Preparation verifies:
 
 Validate the private adapter without printing raw content:
 
-    python -m app.scripts.run_evaluation_atomic_claim_review_workflow validate-input \
+    uv run --frozen python -m app.scripts.run_evaluation_atomic_claim_review_workflow validate-input \
       --scope-manifest <rag83-scope.json> \
       --private-input <private-answer-context-input.json>
 
 The private input schema is
 `phase3.oracle_atomic_claim_private_review_input.v1`. It contains the scope
 SHA-256, export provenance/tool/version/time, and exact answer/context values with
-their hashes. Unknown fields and candidate fields are rejected. The values are
-read into process memory and never copied to the raw-free progress or final files.
+their hashes. Unknown fields and candidate fields are rejected. JSON whitespace is not
+canonicalized; the exact supplied bytes are hashed before values are read into process memory and never copied to the raw-free progress or final files.
 
 Question, source evidence, and required facts are loaded from the committed
 `local_accuracy_dev_v1` fixture. Answer hashes must be present in the stripped
