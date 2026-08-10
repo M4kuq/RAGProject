@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimCalibrationSummary,
@@ -261,6 +261,10 @@ def build_phase_a_commitment(
     *,
     committed_at_utc: datetime | None = None,
 ) -> AtomicClaimBlindReviewCommitment:
+    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_reference_bytes_model_mismatch"
+        )
     committed_at = committed_at_utc or datetime.now(UTC)
     return AtomicClaimBlindReviewCommitment(
         schema_version="phase3.oracle_atomic_claim_blind_commitment.v1",
@@ -296,6 +300,18 @@ def evaluate_phase_b(
     commitment_hash = hashlib.sha256(commitment_bytes).hexdigest()
     candidate_hash = hashlib.sha256(candidate_manifest_bytes).hexdigest()
 
+    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_reference_bytes_model_mismatch"
+        )
+    if not _commitment_bytes_match_model(commitment_bytes, commitment):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_commitment_bytes_model_mismatch"
+        )
+    if not _candidate_bytes_match_model(candidate_manifest_bytes, candidate):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_candidate_bytes_model_mismatch"
+        )
     if reference_hash != commitment.reference_manifest_sha256:
         raise EvaluationAtomicClaimCalibrationError(
             "atomic_claim_phase_a_reference_manifest_hash_mismatch"
@@ -453,5 +469,38 @@ def evaluate_phase_b(
     )
 
 
+def _reference_bytes_match_model(
+    payload_bytes: bytes,
+    expected: AtomicClaimBlindReviewManifest,
+) -> bool:
+    try:
+        parsed = AtomicClaimBlindReviewManifest.model_validate_json(payload_bytes)
+    except ValidationError:
+        return False
+    return parsed == expected
+
+
+def _commitment_bytes_match_model(
+    payload_bytes: bytes,
+    expected: AtomicClaimBlindReviewCommitment,
+) -> bool:
+    try:
+        parsed = AtomicClaimBlindReviewCommitment.model_validate_json(payload_bytes)
+    except ValidationError:
+        return False
+    return parsed == expected
+
+
+def _candidate_bytes_match_model(
+    payload_bytes: bytes,
+    expected: AtomicClaimBlindCandidateManifest,
+) -> bool:
+    try:
+        parsed = AtomicClaimBlindCandidateManifest.model_validate_json(payload_bytes)
+    except ValidationError:
+        return False
+    return parsed == expected
+
+
 def _is_utc_aware(value: datetime) -> bool:
-    return value.tzinfo is not None and value.utcoffset() is not None
+    return value.tzinfo is not None and value.utcoffset() == timedelta(0)

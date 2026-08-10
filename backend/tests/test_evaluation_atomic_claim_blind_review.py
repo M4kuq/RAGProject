@@ -40,6 +40,28 @@ def test_phase_a_commits_exact_reference_bytes_before_candidate() -> None:
     assert commitment.raw_content_persisted is False
 
 
+
+
+def test_phase_a_rejects_mismatched_reference_bytes_and_model() -> None:
+    reference_bytes, _ = _reference()
+    signed_payload = _reference_payload(human_signed_off=True)
+    signed_reference = AtomicClaimBlindReviewManifest.model_validate(signed_payload)
+
+    with pytest.raises(
+        EvaluationAtomicClaimCalibrationError,
+        match="atomic_claim_reference_bytes_model_mismatch",
+    ):
+        build_phase_a_commitment(reference_bytes, signed_reference)
+
+
+def test_review_timestamp_must_be_utc_offset_zero() -> None:
+    payload = _reference_payload()
+    payload["reviewed_at_utc"] = "2026-08-10T09:00:00+09:00"
+
+    with pytest.raises(ValidationError, match="blind_review_timestamp_not_utc_aware"):
+        AtomicClaimBlindReviewManifest.model_validate(payload)
+
+
 def test_review_schema_rejects_candidate_contamination_and_raw_fields() -> None:
     payload = _reference_payload()
     payload["candidate_id"] = "contaminating-candidate"
@@ -120,6 +142,30 @@ def test_phase_b_can_select_screening_only_after_explicit_human_signoff() -> Non
     assert result.screening_only is True
     assert result.public_accuracy_claim_allowed is False
     assert result.profile_promotion_allowed is False
+
+
+
+
+def test_phase_b_rejects_candidate_bytes_model_mismatch() -> None:
+    reference_bytes, reference = _reference()
+    commitment_bytes, commitment = _commitment(reference_bytes, reference)
+    candidate_bytes, candidate = _candidate(reference)
+    mutated_payload = candidate.model_dump(mode="json")
+    mutated_payload["observations"][0]["atomic_equivalence_match"] = False
+    mutated_bytes = _canonical_bytes(mutated_payload)
+
+    with pytest.raises(
+        EvaluationAtomicClaimCalibrationError,
+        match="atomic_claim_candidate_bytes_model_mismatch",
+    ):
+        evaluate_phase_b(
+            reference_manifest_bytes=reference_bytes,
+            reference=reference,
+            commitment_bytes=commitment_bytes,
+            commitment=commitment,
+            candidate_manifest_bytes=mutated_bytes,
+            candidate=candidate,
+        )
 
 
 def test_phase_b_rejects_reference_mutation_after_commitment() -> None:
