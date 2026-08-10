@@ -19,6 +19,11 @@ _ALLOWED_DATASET = "local_accuracy_dev_v1"
 _EXPECTED_MODEL = "qwen/qwen3.5-9b"
 _LEGACY_REVIEW_SCHEMA = "phase3.oracle_codex_assisted_review.v1"
 
+
+class EvaluationAtomicClaimCalibrationError(RuntimeError):
+    """Stable fail-closed error for raw-free atomic-claim calibration."""
+
+
 _StrictModel = StrictRawFreeModel
 
 
