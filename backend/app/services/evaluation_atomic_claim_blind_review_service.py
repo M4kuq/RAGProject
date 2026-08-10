@@ -5,16 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Self, cast
 
-from pydantic import Field, ValidationError, model_validator
-
-from app.services.evaluation_atomic_claim_contracts import (
-    AtomicClaimFullHashBinding,
-    AtomicClaimFullNotApplicableBinding,
-    SafeId,
-    Sha256,
-    StrictRawFreeModel,
-    model_bytes_match,
-)
+from pydantic import Field, model_validator
 
 from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimCalibrationSummary,
@@ -26,6 +17,14 @@ from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimSourceContract,
     EvaluationAtomicClaimCalibrationError,
     evaluate_atomic_claim_candidate,
+)
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimFullHashBinding,
+    AtomicClaimFullNotApplicableBinding,
+    SafeId,
+    Sha256,
+    StrictRawFreeModel,
+    model_bytes_match,
 )
 
 _StrictModel = StrictRawFreeModel
