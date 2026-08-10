@@ -24,14 +24,12 @@ class EvaluationAtomicClaimCalibrationError(RuntimeError):
     """Stable fail-closed error for raw-free atomic-claim calibration."""
 
 
-_StrictModel = StrictRawFreeModel
-
 
 class AtomicClaimReferenceDecision(AtomicClaimLegacyHashBinding):
     reference_supported: bool
 
 
-class AtomicClaimReviewManifest(_StrictModel):
+class AtomicClaimReviewManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_review.v1"]
     source: AtomicClaimSourceContract
     reviewer_provenance: SafeId
@@ -66,7 +64,7 @@ class AtomicClaimNotApplicableObservation(AtomicClaimLegacyNotApplicableBinding)
     reason: Literal["unanswerable", "abstention"]
 
 
-class AtomicClaimCandidateManifest(_StrictModel):
+class AtomicClaimCandidateManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_candidate.v1"]
     source: AtomicClaimSourceContract
     candidate_id: SafeId
@@ -99,7 +97,7 @@ class AtomicClaimCandidateManifest(_StrictModel):
         return self
 
 
-class AtomicClaimCalibrationSummary(_StrictModel):
+class AtomicClaimCalibrationSummary(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_calibration.v1"]
     source_evaluation_run_id: int
     dataset_name: str
