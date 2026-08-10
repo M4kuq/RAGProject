@@ -578,9 +578,7 @@ def load_review_input(
             raise EvaluationAtomicClaimReviewWorkflowError(
                 "atomic_claim_review_source_evidence_unbound"
             ) from exc
-        source_hash = _sha256(
-            "\x00".join(f"{key}\x1f{documents[key].body}" for key in source_keys)
-        )
+        source_hash = _sha256("\x00".join(f"{key}\x1f{documents[key].body}" for key in source_keys))
         observation_ordinal = targets_by_case[target.case_id].index(target)
         facts = tuple(case.required_facts)
         for fact_index, fact in enumerate(facts):
@@ -690,7 +688,9 @@ class AtomicClaimReviewSession:
                 )
             claim = self._loaded.claims[index]
             progress = self._progress.decisions[index]
-            completed = sum(item.reference_supported is not None for item in self._progress.decisions)
+            completed = sum(
+                item.reference_supported is not None for item in self._progress.decisions
+            )
             return {
                 "status": "reviewing",
                 "index": index,
@@ -711,8 +711,7 @@ class AtomicClaimReviewSession:
                     "claim_ordinal": claim.binding.claim_ordinal,
                     "question": claim.question,
                     "source_evidence": [
-                        {"title": title, "body": body}
-                        for title, body in claim.source_evidence
+                        {"title": title, "body": body} for title, body in claim.source_evidence
                     ],
                     "answer": claim.answer,
                     "context_items": list(claim.context_items),
@@ -732,9 +731,7 @@ class AtomicClaimReviewSession:
                 )
             value = None if decision == "pending" else decision == "supported"
             decisions = list(self._progress.decisions)
-            decisions[index] = decisions[index].model_copy(
-                update={"reference_supported": value}
-            )
+            decisions[index] = decisions[index].model_copy(update={"reference_supported": value})
             self._progress = self._progress.model_copy(update={"decisions": tuple(decisions)})
             write_model_json(self._progress_path, self._progress)
             return {
@@ -825,8 +822,7 @@ class AtomicClaimReviewSession:
                     "atomic_claim_review_progress_bytes_model_mismatch"
                 )
             expected_bindings = [
-                item.model_dump(mode="json", exclude={"reference_supported"})
-                for item in bindings
+                item.model_dump(mode="json", exclude={"reference_supported"}) for item in bindings
             ]
             actual_bindings = [
                 item.model_dump(mode="json", exclude={"reference_supported"})
@@ -834,10 +830,8 @@ class AtomicClaimReviewSession:
             ]
             if (
                 progress.source != self._loaded.source
-                or progress.review_scope_fingerprint
-                != self._loaded.review_scope_fingerprint
-                or progress.scope_manifest_sha256
-                != self._loaded.scope_manifest_sha256
+                or progress.review_scope_fingerprint != self._loaded.review_scope_fingerprint
+                or progress.scope_manifest_sha256 != self._loaded.scope_manifest_sha256
                 or progress.private_input_sha256 != self._loaded.private_input_sha256
                 or progress.reviewer_provenance != self._reviewer_provenance
                 or actual_bindings != expected_bindings
@@ -962,8 +956,10 @@ class AtomicClaimReviewRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/vote":
                 index = payload.get("index")
                 decision = payload.get("decision")
-                if not isinstance(index, int) or isinstance(index, bool) or not isinstance(
-                    decision, str
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or not isinstance(decision, str)
                 ):
                     raise EvaluationAtomicClaimReviewWorkflowError(
                         "atomic_claim_review_vote_schema_invalid"
@@ -977,9 +973,7 @@ class AtomicClaimReviewRequestHandler(BaseHTTPRequestHandler):
                     raise EvaluationAtomicClaimReviewWorkflowError(
                         "atomic_claim_review_finalize_schema_invalid"
                     )
-                result = self.server.review_session.finalize(
-                    confirm_human_signoff=confirm
-                )
+                result = self.server.review_session.finalize(confirm_human_signoff=confirm)
                 self._send_json(result)
                 return
         except EvaluationAtomicClaimReviewWorkflowError as exc:
@@ -1125,9 +1119,7 @@ def create_review_server(
             "atomic_claim_review_non_loopback_bind_rejected"
         )
     if port < 0 or port > 65_535:
-        raise EvaluationAtomicClaimReviewWorkflowError(
-            "atomic_claim_review_port_invalid"
-        )
+        raise EvaluationAtomicClaimReviewWorkflowError("atomic_claim_review_port_invalid")
     return AtomicClaimReviewHTTPServer((host, port), session)
 
 
@@ -1171,9 +1163,7 @@ def _validate_source_against_authority(
         authority.generation_max_output_tokens,
     )
     if expected != actual:
-        raise EvaluationAtomicClaimReviewWorkflowError(
-            "atomic_claim_review_source_authority_drift"
-        )
+        raise EvaluationAtomicClaimReviewWorkflowError("atomic_claim_review_source_authority_drift")
     if (
         build_local_accuracy_dev_manifest().content_fingerprint()
         != source.dataset_content_fingerprint
@@ -1202,8 +1192,7 @@ def _contains_forbidden_raw_key(payload: object) -> bool:
         return any(_contains_forbidden_raw_key(item) for item in payload)
     if isinstance(payload, dict):
         return any(
-            str(key).casefold() in _RAW_FIELD_NAMES
-            or _contains_forbidden_raw_key(value)
+            str(key).casefold() in _RAW_FIELD_NAMES or _contains_forbidden_raw_key(value)
             for key, value in payload.items()
         )
     return False
