@@ -779,6 +779,7 @@ class AtomicClaimGeneratedReviewRun:
 class _ReviewCaseGeneration:
     answer_text: str | None = None
     answer_outcome: Literal["answered", "abstained"] | None = None
+    citation_ids: tuple[int, ...] = ()
     reason_code: str | None = None
 
 
@@ -811,6 +812,17 @@ def _review_case_generation_worker(
         result = _ReviewCaseGeneration(
             answer_text=generation.answer_text,
             answer_outcome=generation.answer_outcome,
+            citation_ids=tuple(
+                sorted(
+                    {
+                        citation_id
+                        for citation in generation.citations
+                        if isinstance(
+                            (citation_id := citation.get("local_citation_id")), int
+                        )
+                    }
+                )
+            ),
         )
     except AnswerGenerationError as exc:
         result = _ReviewCaseGeneration(
