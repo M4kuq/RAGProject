@@ -24,7 +24,6 @@ class EvaluationAtomicClaimCalibrationError(RuntimeError):
     """Stable fail-closed error for raw-free atomic-claim calibration."""
 
 
-
 class AtomicClaimReferenceDecision(AtomicClaimLegacyHashBinding):
     reference_supported: bool
 
