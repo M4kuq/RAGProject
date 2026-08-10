@@ -44,14 +44,22 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
 
 _DOM_BINDING_HARNESS = r"""
 const baseUrl = process.argv[1];
+const mode = process.argv[2] || "render";
 const nativeFetch = globalThis.fetch;
+let activeCookie = "";
+let postCount = 0;
+let successfulPostCount = 0;
+let sameOriginPostCount = 0;
 
 function createElement() {
+  const listeners = new Map();
+  const attributes = new Map();
   return {
     textContent: "",
     children: [],
     disabled: false,
     checked: false,
+    clickCount: 0,
     replaceChildren() {
       this.children = [];
       this.textContent = "";
@@ -60,18 +68,29 @@ function createElement() {
       this.children.push(child);
       this.textContent = this.children.map((item) => item.textContent).join("");
     },
-    addEventListener() {},
-    setAttribute() {},
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    setAttribute(name, value) {
+      attributes.set(name, value);
+    },
+    getAttribute(name) {
+      return attributes.get(name) ?? null;
+    },
+    async click() {
+      const handler = listeners.get("click");
+      if (!handler) return false;
+      this.clickCount += 1;
+      await handler();
+      return true;
+    },
+    hasListener(type) {
+      return listeners.has(type);
+    },
   };
 }
 
-async function main() {
-  const rootResponse = await nativeFetch(baseUrl + "/");
-  const html = await rootResponse.text();
-  const cookie = (rootResponse.headers.get("set-cookie") || "").split(";", 1)[0];
-  const csp = rootResponse.headers.get("content-security-policy") || "";
-  const scriptResponse = await nativeFetch(baseUrl + "/app.js");
-  const script = await scriptResponse.text();
+function createDom() {
   const ids = [
     "progress", "question", "source", "answer", "context", "fact", "status",
     "previous", "next", "supported", "unsupported", "pending", "finalize", "confirm",
@@ -81,11 +100,37 @@ async function main() {
     getElementById: (id) => elements.get(id),
     createElement,
   };
-  globalThis.fetch = (path, options = {}) => {
-    const headers = new Headers(options.headers || {});
-    headers.set("Cookie", cookie);
-    return nativeFetch(new URL(path, baseUrl), {...options, headers});
-  };
+  return elements;
+}
+
+async function browserFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("Cookie", activeCookie);
+  const target = new URL(path, baseUrl);
+  const method = (options.method || "GET").toUpperCase();
+  if (method === "POST") {
+    headers.set("Origin", new URL(baseUrl).origin);
+    postCount += 1;
+    if (target.origin === new URL(baseUrl).origin) sameOriginPostCount += 1;
+  }
+  const response = await nativeFetch(target, {...options, headers});
+  if (method === "POST" && response.ok) successfulPostCount += 1;
+  return response;
+}
+
+async function bootstrap() {
+  const rootHeaders = activeCookie ? {Cookie: activeCookie} : {};
+  const rootResponse = await nativeFetch(baseUrl + "/", {headers: rootHeaders});
+  const html = await rootResponse.text();
+  const issuedCookie = (rootResponse.headers.get("set-cookie") || "").split(";", 1)[0];
+  if (issuedCookie) activeCookie = issuedCookie;
+  const csp = rootResponse.headers.get("content-security-policy") || "";
+  const scriptResponse = await nativeFetch(baseUrl + "/app.js");
+  const script = await scriptResponse.text();
+  const cssResponse = await nativeFetch(baseUrl + "/app.css");
+  const css = await cssResponse.text();
+  const elements = createDom();
+  globalThis.fetch = browserFetch;
 
   try {
     Function(script)();
@@ -94,19 +139,35 @@ async function main() {
       status: "error",
       error_code: "review_script_parse_failed",
     }));
-    return;
+    return null;
   }
   for (let attempt = 0; attempt < 100 && !elements.get("progress").textContent; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  const stateResponse = await nativeFetch(baseUrl + "/api/state?index=0", {
-    headers: {Cookie: cookie},
+  return {
+    csp,
+    css,
+    cssCache: cssResponse.headers.get("cache-control") || "",
+    elements,
+    html,
+    scriptCache: scriptResponse.headers.get("cache-control") || "",
+  };
+}
+
+async function readState(index = 0) {
+  const stateResponse = await nativeFetch(baseUrl + "/api/state?index=" + String(index), {
+    headers: {Cookie: activeCookie},
   });
-  const state = await stateResponse.json();
+  if (!stateResponse.ok) throw new Error("review_state_request_failed");
+  return stateResponse.json();
+}
+
+async function verifyRender(page) {
+  const state = await readState();
   const fieldLengths = Object.fromEntries(
     ["question", "source", "answer", "context", "fact"].map((id) => [
       id,
-      elements.get(id).textContent.length,
+      page.elements.get(id).textContent.length,
     ]),
   );
   const allFieldsPopulated = Object.values(fieldLengths).every((length) => length > 0);
@@ -116,12 +177,90 @@ async function main() {
     total: state.total,
     pending: state.pending,
     field_lengths: fieldLengths,
-    script_linked: html.includes('src="/app.js"'),
-    csp_default_none: csp.includes("default-src 'none'"),
-    csp_script_self: csp.includes("script-src 'self'"),
-    csp_connect_self: csp.includes("connect-src 'self'"),
-    csp_unsafe_inline: csp.includes("'unsafe-inline'"),
+    script_linked: page.html.includes('src="/app.js"'),
+    csp_default_none: page.csp.includes("default-src 'none'"),
+    csp_script_self: page.csp.includes("script-src 'self'"),
+    csp_connect_self: page.csp.includes("connect-src 'self'"),
+    csp_unsafe_inline: page.csp.includes("'unsafe-inline'"),
   }));
+}
+
+async function verifyInteractions(page) {
+  const elements = page.elements;
+  const initial = await readState();
+  const total = initial.total;
+  const handlersBound = ["pending", "supported", "unsupported"].every(
+    (id) => elements.get(id).hasListener("click"),
+  );
+  const supportedInvoked = await elements.get("supported").click();
+  const supported = await readState();
+  const counterUpdated = supported.completed === 1 && supported.pending === total - 1;
+  const supportedSelected = elements.get("supported").getAttribute("aria-pressed") === "true";
+  const unsupportedInvoked = await elements.get("unsupported").click();
+  const unsupportedSelected = (
+    elements.get("unsupported").getAttribute("aria-pressed") === "true"
+  );
+  const pendingInvoked = await elements.get("pending").click();
+  const pending = await readState();
+  const pendingSelected = elements.get("pending").getAttribute("aria-pressed") === "true";
+  await elements.get("supported").click();
+  const nextInvoked = await elements.get("next").click();
+  const nextMoved = elements.get("progress").textContent.startsWith("2 /");
+  const previousInvoked = await elements.get("previous").click();
+  const previousMoved = elements.get("progress").textContent.startsWith("1 /");
+
+  const reloaded = await bootstrap();
+  if (!reloaded) throw new Error("review_reload_failed");
+  const reloadedState = await readState();
+  const reloadPreserved = (
+    reloadedState.completed === 1 &&
+    reloadedState.pending === total - 1 &&
+    reloaded.elements.get("supported").getAttribute("aria-pressed") === "true"
+  );
+  await reloaded.elements.get("pending").click();
+  const restored = await readState();
+
+  process.stdout.write(JSON.stringify({
+    status: "ok",
+    error_code: null,
+    total,
+    handlers_bound: handlersBound,
+    pending_handler_invoked: pendingInvoked,
+    supported_handler_invoked: supportedInvoked,
+    unsupported_handler_invoked: unsupportedInvoked,
+    posts_same_origin: postCount === sameOriginPostCount,
+    posts_succeeded: postCount === successfulPostCount,
+    post_count: postCount,
+    supported_selected: supportedSelected,
+    unsupported_selected: unsupportedSelected,
+    pending_selected: pendingSelected,
+    selected_style_present: page.css.includes('button[aria-pressed="true"]'),
+    counter_updated: counterUpdated,
+    pending_restored_before_reload: pending.completed === 0 && pending.pending === total,
+    reload_preserved: reloadPreserved,
+    next_invoked: nextInvoked,
+    next_moved: nextMoved,
+    previous_invoked: previousInvoked,
+    previous_moved: previousMoved,
+    normal_reload_no_store: (
+      page.scriptCache.includes("no-store") &&
+      page.cssCache.includes("no-store") &&
+      reloaded.scriptCache.includes("no-store") &&
+      reloaded.cssCache.includes("no-store")
+    ),
+    final_completed: restored.completed,
+    final_pending: restored.pending,
+  }));
+}
+
+async function main() {
+  const page = await bootstrap();
+  if (!page) return;
+  if (mode === "interactions") {
+    await verifyInteractions(page);
+    return;
+  }
+  await verifyRender(page);
 }
 
 main().catch(() => {
@@ -481,6 +620,77 @@ def test_served_script_populates_all_five_review_fields_by_length(tmp_path: Path
     assert rendered["csp_script_self"] is True
     assert rendered["csp_connect_self"] is True
     assert rendered["csp_unsafe_inline"] is False
+
+
+def test_served_script_buttons_update_and_resume_synthetic_review(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node_runtime_unavailable")
+    generated = generate_review_only_calibration_run(
+        review_run_id="rag83-review-button-test",
+        raw_free_output_dir=tmp_path / "raw-free",
+        private_input_path=tmp_path / "private" / "input.json",
+        generator=_FixedReviewGenerator(),
+        started_at_utc=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    output_dir = tmp_path / "output"
+    session = create_review_session(
+        scope_manifest_path=generated.scope_manifest_path,
+        private_input_path=generated.private_input_path,
+        output_dir=output_dir,
+        reviewer_provenance="human:test-reviewer",
+    )
+    server = create_review_server(session, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        completed = subprocess.run(
+            [node, "-e", _DOM_BINDING_HARNESS, server.local_url, "interactions"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0
+    rendered = json.loads(completed.stdout)
+    assert rendered["status"] == "ok"
+    assert rendered["error_code"] is None
+    assert generated.claim_count == 36
+    assert rendered["total"] == generated.claim_count
+    for field in (
+        "handlers_bound",
+        "pending_handler_invoked",
+        "supported_handler_invoked",
+        "unsupported_handler_invoked",
+        "posts_same_origin",
+        "posts_succeeded",
+        "supported_selected",
+        "unsupported_selected",
+        "pending_selected",
+        "selected_style_present",
+        "counter_updated",
+        "pending_restored_before_reload",
+        "reload_preserved",
+        "next_invoked",
+        "next_moved",
+        "previous_invoked",
+        "previous_moved",
+        "normal_reload_no_store",
+    ):
+        assert rendered[field] is True, field
+    assert rendered["post_count"] == 5
+    assert rendered["final_completed"] == 0
+    assert rendered["final_pending"] == rendered["total"]
+    _assert_outputs_are_raw_free(
+        [output_dir / "rag83-review-progress.json"],
+        _private_runtime_values(generated.private_input_path),
+    )
 
 
 def test_http_host_session_csrf_and_browser_storage_controls(tmp_path: Path) -> None:

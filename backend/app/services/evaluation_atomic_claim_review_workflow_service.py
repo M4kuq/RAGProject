@@ -193,6 +193,10 @@ button {
   cursor: pointer;
 }
 button:disabled { opacity: .45; cursor: not-allowed; }
+button[aria-pressed="true"] {
+  outline: 3px solid #172f2a;
+  outline-offset: 2px;
+}
 #pending { background: #8a6d2f; }
 #unsupported { background: #8b4036; }
 .finalize { background: #ece9df; padding: 16px; border-radius: 10px; }
