@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -261,7 +261,7 @@ def build_phase_a_commitment(
     *,
     committed_at_utc: datetime | None = None,
 ) -> AtomicClaimBlindReviewCommitment:
-    committed_at = committed_at_utc or datetime.now(timezone.utc)
+    committed_at = committed_at_utc or datetime.now(UTC)
     return AtomicClaimBlindReviewCommitment(
         schema_version="phase3.oracle_atomic_claim_blind_commitment.v1",
         source=reference.source,
