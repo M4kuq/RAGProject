@@ -235,10 +235,7 @@ def test_local_http_review_security_and_synthetic_end_to_end(
             payload={"csrf_token": csrf, "confirm_human_signoff": False},
             expected_status=400,
         )
-        assert (
-            unconfirmed["reason_code"]
-            == "atomic_claim_review_explicit_confirmation_required"
-        )
+        assert unconfirmed["reason_code"] == "atomic_claim_review_explicit_confirmation_required"
 
         finalized = _request_json(
             connection,
@@ -262,9 +259,7 @@ def test_local_http_review_security_and_synthetic_end_to_end(
     progress_path = output_dir / "rag83-review-progress.json"
     reference_bytes = reference_path.read_bytes()
     reference = AtomicClaimBlindReviewManifest.model_validate_json(reference_bytes)
-    commitment = AtomicClaimBlindReviewCommitment.model_validate_json(
-        commitment_path.read_bytes()
-    )
+    commitment = AtomicClaimBlindReviewCommitment.model_validate_json(commitment_path.read_bytes())
     assert reference.reviewer_type == "human"
     assert reference.requires_human_signoff is False
     assert reference.candidate_results_observed is False
