@@ -21,6 +21,8 @@ from app.services.evaluation_atomic_claim_calibration_service import (
 from app.services.evaluation_atomic_claim_contracts import (
     AtomicClaimFullHashBinding,
     AtomicClaimFullNotApplicableBinding,
+    AtomicClaimReviewCalibrationSourceContract,
+    AtomicClaimReviewSourceContract,
     SafeId,
     Sha256,
     StrictRawFreeModel,
@@ -34,8 +36,8 @@ class AtomicClaimBlindReferenceDecision(AtomicClaimFullHashBinding):
 
 class AtomicClaimBlindReviewManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_review.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     reviewer_provenance: SafeId
     reviewer_type: Literal["human", "codex_assisted", "automatic"]
@@ -53,6 +55,7 @@ class AtomicClaimBlindReviewManifest(StrictRawFreeModel):
 
     @model_validator(mode="after")
     def validate_blind_reference(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         if not _is_utc_aware(self.reviewed_at_utc):
             raise ValueError("blind_review_timestamp_not_utc_aware")
         identities = [decision.identity for decision in self.decisions]
@@ -80,8 +83,8 @@ class AtomicClaimBlindReviewManifest(StrictRawFreeModel):
 
 class AtomicClaimBlindReviewCommitment(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_commitment.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     reference_manifest_sha256: Sha256
     reference_claim_count: int = Field(gt=0)
@@ -99,6 +102,7 @@ class AtomicClaimBlindReviewCommitment(StrictRawFreeModel):
 
     @model_validator(mode="after")
     def validate_commitment_timestamp(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         if not _is_utc_aware(self.reviewed_at_utc) or not _is_utc_aware(self.committed_at_utc):
             raise ValueError("blind_review_commitment_timestamp_not_utc_aware")
         if self.committed_at_utc < self.reviewed_at_utc:
@@ -180,7 +184,7 @@ class AtomicClaimBlindPhaseBResult(StrictRawFreeModel):
 
 
 def compute_review_scope_fingerprint(
-    source: AtomicClaimSourceContract,
+    source: AtomicClaimReviewSourceContract,
     decisions: tuple[AtomicClaimBlindReferenceDecision, ...],
 ) -> str:
     claims = sorted(
@@ -202,6 +206,19 @@ def compute_review_scope_fingerprint(
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _validate_scope_source_pair(
+    review_scope_id: str,
+    source: AtomicClaimReviewSourceContract,
+) -> None:
+    expected_scope = (
+        "rag83_review_only_calibration_all_answerable_dev_v1"
+        if isinstance(source, AtomicClaimReviewCalibrationSourceContract)
+        else "rag79_run112_existing_review_subset"
+    )
+    if review_scope_id != expected_scope:
+        raise ValueError("blind_review_scope_source_mismatch")
 
 
 def build_phase_a_commitment(

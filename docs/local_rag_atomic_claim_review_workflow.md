@@ -39,6 +39,12 @@ inputs no longer exist, the two honest recovery choices are:
 2. have the user identify an existing repository-external private export and
    validate it by hash before startup.
 
+The `generate-review-only` command implements choice 1 without creating or
+modifying a database evaluation run. It creates a distinct review run ID and
+fingerprint, uses all 24 answerable `local_accuracy_dev_v1` cases selected
+before generation, and records every pipeline failure with a raw-free reason
+code. It must not be described as recovered run112/RAG-79 evidence.
+
 ## Responsibility boundary
 
 | Module | Canonical responsibility |
@@ -117,6 +123,35 @@ Open:
 
 The server refuses any bind other than `127.0.0.1`. It makes no external HTTP,
 provider, or LLM call.
+
+## New review-only calibration input when historical O-side raw is absent
+
+Generate exactly one new private input in an explicit repository-external
+directory:
+
+    uv run --frozen python -m app.scripts.run_evaluation_atomic_claim_review_workflow generate-review-only \
+      --review-run-id <new-review-run-id> \
+      --raw-free-output-dir <repository-external-raw-free-directory> \
+      --private-input-output <repository-external-private-input.json> \
+      --confirm-local-only
+
+The command is fixed to:
+
+- all answerable `local_accuracy_dev_v1` cases (no post-result case search);
+- local LM Studio only, exact `qwen/qwen3.5-9b`, temperature 0, reasoning off;
+- baseline prompt and 6000/12000/8192 context/output/token budgets;
+- an isolated case process with a hard 180-second wall-clock deadline;
+- committed fixture source evidence and deterministic Oracle context;
+- one raw private file plus raw-free run/scope manifests outside the repository.
+
+The run manifest marks the result screening-only and ineligible for accuracy
+metrics, Gold holdout claims, or profile promotion. Failed cases are not retried
+with a substitute case and are not silently removed: their reason codes remain
+in the run manifest. A wall-clock deadline terminates only that case process and
+records `review_generation_case_wall_clock_timeout`; it cannot leave an HTTP
+request waiting indefinitely. Successful cases become the fixed localhost
+review scope. If the whole run must be aborted, preserve its distinct run ID in
+a raw-free abort record and restart, at most once, with a new run ID.
 
 ## Browser operation
 

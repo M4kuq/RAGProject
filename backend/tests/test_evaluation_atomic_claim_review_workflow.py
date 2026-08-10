@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import multiprocessing
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.evaluation.local_accuracy_dev import build_local_accuracy_dev_manifest
+from app.rag.generation import AnswerGenerationError, GenerationRequest, GenerationResult
 from app.scripts.run_evaluation_atomic_claim_review_workflow import main
 from app.services.evaluation_atomic_claim_blind_review_service import (
     AtomicClaimBlindReviewCommitment,
@@ -29,8 +32,10 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
     APP_JS,
     AtomicClaimPrivateReviewBundle,
     EvaluationAtomicClaimReviewWorkflowError,
+    _join_review_case_process,
     create_review_server,
     create_review_session,
+    generate_review_only_calibration_run,
     prepare_review_scope_from_paths,
     validate_review_input,
 )
@@ -55,6 +60,74 @@ def test_prepare_scope_strips_legacy_review_results(tmp_path: Path) -> None:
     assert scope.candidate_identifiers_present is False
     assert "codex_review_pass" not in rendered
     assert "manual_context_utilization" not in rendered
+
+
+def test_generate_review_only_run_uses_all_answerable_cases_and_is_raw_free(
+    tmp_path: Path,
+) -> None:
+    raw_free = tmp_path / "raw-free"
+    private = tmp_path / "private" / "input.json"
+
+    generated = generate_review_only_calibration_run(
+        review_run_id="rag83-review-only-test",
+        raw_free_output_dir=raw_free,
+        private_input_path=private,
+        generator=_FixedReviewGenerator(),
+        started_at_utc=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    expected_cases = sum(case.answerable for case in build_local_accuracy_dev_manifest().cases)
+    assert generated.selected_case_count == expected_cases
+    assert generated.succeeded_case_count == expected_cases
+    assert generated.pipeline_failure_count == 0
+    assert generated.claim_count > expected_cases
+    run_payload = json.loads(generated.run_manifest_path.read_text(encoding="utf-8"))
+    scope_payload = json.loads(generated.scope_manifest_path.read_text(encoding="utf-8"))
+    assert run_payload["source"]["review_run_id"] == "rag83-review-only-test"
+    assert run_payload["source"]["selection_rule"] == "all_answerable_cases"
+    assert run_payload["source"]["accuracy_metric_eligible"] is False
+    assert scope_payload["review_scope_id"] == (
+        "rag83_review_only_calibration_all_answerable_dev_v1"
+    )
+    rendered_raw_free = json.dumps(
+        {"run": run_payload, "scope": scope_payload},
+        sort_keys=True,
+    )
+    assert "answer_text" not in rendered_raw_free
+    assert "context_items" not in rendered_raw_free
+    ready = validate_review_input(generated.scope_manifest_path, private)
+    assert ready["review_run_id"] == "rag83-review-only-test"
+    assert ready["claim_count"] == generated.claim_count
+
+
+def test_generate_review_only_run_retains_pipeline_failure_reason(
+    tmp_path: Path,
+) -> None:
+    generated = generate_review_only_calibration_run(
+        review_run_id="rag83-review-only-failure-test",
+        raw_free_output_dir=tmp_path / "raw-free",
+        private_input_path=tmp_path / "private" / "input.json",
+        generator=_FixedReviewGenerator(fail_first=True),
+        started_at_utc=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    assert generated.pipeline_failure_count == 1
+    assert generated.succeeded_case_count == generated.selected_case_count - 1
+    run_payload = json.loads(generated.run_manifest_path.read_text(encoding="utf-8"))
+    failed = [outcome for outcome in run_payload["outcomes"] if outcome["status"] == "failed"]
+    assert len(failed) == 1
+    assert failed[0]["pipeline_failure_reason_code"] == "review_generation_test_failure"
+
+
+def test_review_case_process_is_terminated_at_wall_clock_deadline() -> None:
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(target=time.sleep, args=(60.0,))
+    process.start()
+
+    completed = _join_review_case_process(process, timeout_seconds=0.05)
+
+    assert completed is False
+    assert process.is_alive() is False
 
 
 def test_private_input_is_exactly_bound_and_candidate_fields_are_rejected(
@@ -334,6 +407,19 @@ def test_http_host_session_csrf_and_browser_storage_controls(tmp_path: Path) -> 
     assert "innerHTML" not in APP_JS
 
 
+class _FixedReviewGenerator:
+    def __init__(self, *, fail_first: bool = False) -> None:
+        self.fail_first = fail_first
+        self.calls = 0
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        del request
+        self.calls += 1
+        if self.fail_first and self.calls == 1:
+            raise AnswerGenerationError(error_category="test_failure")
+        return GenerationResult(content="synthetic fixed answer [1]", usage=None)
+
+
 def _prepare_input_files(tmp_path: Path) -> dict[str, Path]:
     fixture = build_local_accuracy_dev_manifest()
     case = next(item for item in fixture.cases if item.answerable)
@@ -398,7 +484,14 @@ def _prepare_input_files(tmp_path: Path) -> dict[str, Path]:
                 "answer_hash": answer_hash,
                 "codex_review_pass": True,
                 "manual_context_utilization": 1.0,
-            }
+            },
+            {
+                "profile": "non_baseline_candidate",
+                "case_id": unrelated_failure_case.case_key,
+                "answer_hash": "e" * 64,
+                "codex_review_pass": False,
+                "manual_context_utilization": 0.0,
+            },
         ],
     }
     source_path = tmp_path / "source.json"

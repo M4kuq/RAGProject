@@ -47,6 +47,51 @@ class AtomicClaimSourceContract(StrictRawFreeModel):
         return self
 
 
+class AtomicClaimReviewCalibrationSourceContract(StrictRawFreeModel):
+    """Raw-free authority for a new review-only dev calibration run."""
+
+    schema_version: Literal["phase3.oracle_atomic_claim_review_source.v1"]
+    source_kind: Literal["review_only_calibration"]
+    review_run_id: SafeId
+    dataset_name: Literal["local_accuracy_dev_v1"]
+    dataset_content_fingerprint: Sha256
+    selection_rule: Literal["all_answerable_cases"]
+    selected_case_count: int = Field(gt=0)
+    succeeded_case_count: int = Field(ge=0)
+    pipeline_failure_count: int = Field(ge=0)
+    case_set_fingerprint: Sha256
+    source_context_fingerprint: Sha256
+    generation_config_fingerprint: Sha256
+    generation_prompt_profile: Literal["baseline"]
+    generation_prompt_fingerprint: Sha256
+    generation_budget_fingerprint: Sha256
+    generation_provider: Literal["lmstudio"]
+    resolved_generation_model: Literal["qwen/qwen3.5-9b"]
+    generation_temperature: float
+    reasoning_enabled: Literal[False]
+    generation_max_context_chars: Literal[6000]
+    generation_max_output_chars: Literal[12000]
+    generation_max_output_tokens: Literal[8192]
+    generation_case_wall_clock_timeout_seconds: Literal[180]
+    screening_only: Literal[True]
+    accuracy_metric_eligible: Literal[False]
+    gold_holdout_eligible: Literal[False]
+    profile_promotion_eligible: Literal[False]
+
+    @model_validator(mode="after")
+    def validate_review_only_source(self) -> AtomicClaimReviewCalibrationSourceContract:
+        if self.generation_temperature != 0.0:
+            raise ValueError("atomic_claim_review_generation_temperature_drift")
+        if self.succeeded_case_count + self.pipeline_failure_count != self.selected_case_count:
+            raise ValueError("atomic_claim_review_generation_count_drift")
+        return self
+
+
+AtomicClaimReviewSourceContract = (
+    AtomicClaimSourceContract | AtomicClaimReviewCalibrationSourceContract
+)
+
+
 class AtomicClaimIdentityBinding(StrictRawFreeModel):
     case_id: SafeId
     required_fact_id: SafeId
@@ -144,7 +189,11 @@ def write_raw_free_text(path: Path, rendered: str) -> None:
         raise OSError("atomic_claim_output_symlink_rejected")
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     try:
-        temporary.write_text(rendered.rstrip("\n") + "\n", encoding="utf-8")
+        temporary.write_text(
+            rendered.rstrip("\n") + "\n",
+            encoding="utf-8",
+            newline="",
+        )
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

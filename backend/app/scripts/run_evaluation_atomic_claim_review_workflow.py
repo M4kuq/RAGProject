@@ -14,6 +14,7 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
     EvaluationAtomicClaimReviewWorkflowError,
     create_review_server,
     create_review_session,
+    generate_review_only_calibration_run,
     prepare_review_scope_from_paths,
     validate_review_input,
 )
@@ -34,6 +35,12 @@ def main() -> int:
     validate = subparsers.add_parser("validate-input")
     validate.add_argument("--scope-manifest", type=Path, required=True)
     validate.add_argument("--private-input", type=Path, required=True)
+
+    generate = subparsers.add_parser("generate-review-only")
+    generate.add_argument("--review-run-id", required=True)
+    generate.add_argument("--raw-free-output-dir", type=Path, required=True)
+    generate.add_argument("--private-input-output", type=Path, required=True)
+    generate.add_argument("--confirm-local-only", action="store_true")
 
     serve = subparsers.add_parser("serve")
     serve.add_argument("--scope-manifest", type=Path, required=True)
@@ -77,6 +84,46 @@ def main() -> int:
                     ),
                     sort_keys=True,
                 )
+            )
+            return 0
+
+        if args.command == "generate-review-only":
+            if not args.confirm_local_only:
+                raise EvaluationAtomicClaimReviewWorkflowError(
+                    "atomic_claim_review_local_confirmation_required"
+                )
+
+            def progress(payload: dict[str, object]) -> None:
+                print(json.dumps(payload, sort_keys=True), flush=True)
+
+            generated = generate_review_only_calibration_run(
+                review_run_id=args.review_run_id,
+                raw_free_output_dir=args.raw_free_output_dir,
+                private_input_path=args.private_input_output,
+                progress_callback=progress,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "review_only_run_ready",
+                        "review_run_id": generated.review_run_id,
+                        "selected_case_count": generated.selected_case_count,
+                        "succeeded_case_count": generated.succeeded_case_count,
+                        "pipeline_failure_count": generated.pipeline_failure_count,
+                        "claim_count": generated.claim_count,
+                        "review_scope_fingerprint": generated.review_scope_fingerprint,
+                        "run_manifest_path": str(generated.run_manifest_path),
+                        "scope_manifest_path": str(generated.scope_manifest_path),
+                        "private_input_path": str(generated.private_input_path),
+                        "screening_only": True,
+                        "accuracy_metric_eligible": False,
+                        "gold_holdout_eligible": False,
+                        "profile_promotion_eligible": False,
+                        "raw_content_logged": False,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
             )
             return 0
 
