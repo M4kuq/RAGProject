@@ -27,14 +27,12 @@ from app.services.evaluation_atomic_claim_contracts import (
     model_bytes_match,
 )
 
-_StrictModel = StrictRawFreeModel
-
 
 class AtomicClaimBlindReferenceDecision(AtomicClaimFullHashBinding):
     reference_supported: bool
 
 
-class AtomicClaimBlindReviewManifest(_StrictModel):
+class AtomicClaimBlindReviewManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_review.v1"]
     source: AtomicClaimSourceContract
     review_scope_id: Literal["rag79_run112_existing_review_subset"]
@@ -80,7 +78,7 @@ class AtomicClaimBlindReviewManifest(_StrictModel):
         return self
 
 
-class AtomicClaimBlindReviewCommitment(_StrictModel):
+class AtomicClaimBlindReviewCommitment(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_commitment.v1"]
     source: AtomicClaimSourceContract
     review_scope_id: Literal["rag79_run112_existing_review_subset"]
@@ -122,7 +120,7 @@ class AtomicClaimBlindNotApplicableObservation(AtomicClaimFullNotApplicableBindi
     reason: Literal["unanswerable", "abstention"]
 
 
-class AtomicClaimBlindCandidateManifest(_StrictModel):
+class AtomicClaimBlindCandidateManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_candidate.v1"]
     source: AtomicClaimSourceContract
     review_scope_id: Literal["rag79_run112_existing_review_subset"]
@@ -155,7 +153,7 @@ class AtomicClaimBlindCandidateManifest(_StrictModel):
         return self
 
 
-class AtomicClaimBlindPhaseBResult(_StrictModel):
+class AtomicClaimBlindPhaseBResult(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_phase_b.v1"]
     phase_a_commitment_sha256: Sha256
     reference_manifest_sha256: Sha256
