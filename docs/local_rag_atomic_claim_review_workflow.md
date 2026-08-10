@@ -3,25 +3,41 @@
 ## Outcome and current blocker
 
 The review workflow is implemented and synthetic end-to-end testable, but the
-real RAG-79 review cannot start from the files currently present on this machine.
-The authoritative worktree contains only:
+real RAG-79 review has not started. The known raw-free authority is:
 
 - `artifacts/rag32-local/oracle-context-confirm-run112.json`
 - schema `phase3.oracle_context_confirm.v1`
 - 40 case aggregates
-- 39 reviewed hash-matched observations across 13 cases
-- 27 answerable hash-matched observations
-- no question, source, answer, context, chunk, or required-fact text
+- 39 repeat-level hash matches across 13 legacy review decisions
+- 27 answerable repeat-level hash matches
+- no question, source, answer, context, chunk, required-fact text, or per-claim
+  reference decision
 
-The exact legacy review manifest used for those 39 observations and the private
-answer/context export are absent. The workflow does not reconstruct them from
-aggregate counts and does not treat the derived 27 supported-claim count as
-per-claim truth.
+Those aggregate counts are not per-claim truth and are never expanded into
+labels. The 13 legacy decisions are deduplicated case/answer-hash bindings; the
+39 and 27 figures count their matches across three Oracle repeats. Scope
+preparation therefore validates repeat-hash occurrence counts while presenting
+each unique answer binding to the reviewer once. An unrelated failed repeat may
+have a null Oracle answer hash and is accepted only as an authority input, never
+as a review target.
 
-The user-facing server is therefore review-ready after those two local inputs
-and the fixed raw-free source contract are supplied. Until then the stable
-boundary is `atomic_claim_review_legacy_manifest_unreadable` or
-`atomic_claim_review_private_input_unreadable`.
+The repository database is not a substitute for the missing Oracle private
+input. `evaluation_review_payloads` holds the source run's retrieved-context
+answer and context (the R-side input to the Oracle diagnostic). RAG-79 generated
+the Oracle answer (the O-side review target) in process and retained only its
+hash in the raw-free aggregate. Any database or private export adapter must
+prove exact answer/context hash equality and fail closed on a mismatch.
+
+The user-facing server is therefore ready only after an exact legacy manifest
+and matching private Oracle answer/context input are found. Until then the
+stable boundary is `atomic_claim_review_legacy_manifest_unreadable` or
+`atomic_claim_review_private_input_unreadable`. If those historical private
+inputs no longer exist, the two honest recovery choices are:
+
+1. run a new fixed-condition calibration review with a new run ID and
+   fingerprint, never representing it as run112 or RAG-79 evidence; or
+2. have the user identify an existing repository-external private export and
+   validate it by hash before startup.
 
 ## Responsibility boundary
 
