@@ -171,12 +171,17 @@ async function verifyRender(page) {
     ]),
   );
   const allFieldsPopulated = Object.values(fieldLengths).every((length) => length > 0);
+  const sourceTitlesRenderedOnce = state.claim.source_evidence.every((item, index) => {
+    const rendered = page.elements.get("source").children[index].textContent;
+    return rendered.split(item.title).length - 1 === 1;
+  });
   process.stdout.write(JSON.stringify({
     status: allFieldsPopulated ? "ok" : "error",
     error_code: allFieldsPopulated ? null : "review_script_fields_empty",
     total: state.total,
     pending: state.pending,
     field_lengths: fieldLengths,
+    source_titles_rendered_once: sourceTitlesRenderedOnce,
     script_linked: page.html.includes('src="/app.js"'),
     csp_default_none: page.csp.includes("default-src 'none'"),
     csp_script_self: page.csp.includes("script-src 'self'"),
@@ -620,6 +625,7 @@ def test_served_script_populates_all_five_review_fields_by_length(tmp_path: Path
     assert rendered["csp_script_self"] is True
     assert rendered["csp_connect_self"] is True
     assert rendered["csp_unsafe_inline"] is False
+    assert rendered["source_titles_rendered_once"] is True
 
 
 def test_served_script_buttons_update_and_resume_synthetic_review(tmp_path: Path) -> None:
