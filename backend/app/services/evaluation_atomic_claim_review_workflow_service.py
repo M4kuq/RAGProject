@@ -483,9 +483,7 @@ def prepare_review_scope(
 
     decisions = legacy_review.decisions
     calibration = authority_summary.atomic_calibration
-    decision_identities = [
-        (decision.case_id, decision.answer_hash) for decision in decisions
-    ]
+    decision_identities = [(decision.case_id, decision.answer_hash) for decision in decisions]
     if len(decision_identities) != len(set(decision_identities)):
         raise EvaluationAtomicClaimReviewWorkflowError(
             "atomic_claim_review_legacy_decision_duplicate"
@@ -503,8 +501,7 @@ def prepare_review_scope(
                 "atomic_claim_review_legacy_answer_hash_unbound"
             )
         repeat_match_count = sum(
-            answer_hash == decision.answer_hash
-            for answer_hash in authority_case.o_answer_hashes
+            answer_hash == decision.answer_hash for answer_hash in authority_case.o_answer_hashes
         )
         if repeat_match_count == 0:
             raise EvaluationAtomicClaimReviewWorkflowError(
