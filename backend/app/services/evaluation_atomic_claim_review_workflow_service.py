@@ -75,7 +75,9 @@ INDEX_HTML = """<!doctype html>
     <header>
       <p class="eyebrow">RAG-83 / candidate-blind local review</p>
       <h1>1 claimずつ根拠を確認</h1>
-      <p class="warning">表示内容はlocal process memoryだけで扱われます。画面保存・コピー・共有は行わないでください。</p>
+      <p class="warning">
+        表示内容はlocal process memoryだけで扱われます。画面保存・コピー・共有は行わないでください。
+      </p>
       <p id="progress" aria-live="polite"></p>
     </header>
     <section class="card">
@@ -95,7 +97,9 @@ INDEX_HTML = """<!doctype html>
       <button id="next" type="button">次へ</button>
     </section>
     <section class="finalize">
-      <label><input id="confirm" type="checkbox">全claimを自分で確認し、人手signoffとして確定します</label>
+      <label>
+        <input id="confirm" type="checkbox">全claimを自分で確認し、人手signoffとして確定します
+      </label>
       <button id="finalize" type="button">ManifestとPhase A commitmentを生成</button>
       <p id="status" aria-live="assertive"></p>
     </section>
@@ -105,7 +109,63 @@ INDEX_HTML = """<!doctype html>
 </html>
 """
 
-APP_CSS = """*{box-sizing:border-box}body{margin:0;background:#f5f3ee;color:#1d2a2e;font:16px/1.55 system-ui,sans-serif}main{max-width:980px;margin:auto;padding:32px}.eyebrow{font-weight:700;color:#355b52}.warning{border-left:4px solid #b65f32;padding:10px 14px;background:#fff5ec}.card{background:#fff;border:1px solid #d8d4c9;border-radius:12px;padding:24px;box-shadow:0 10px 30px #24332f12}h2{font-size:1rem;margin-top:24px;color:#355b52}pre{white-space:pre-wrap;word-break:break-word;background:#f8f8f5;padding:12px;border-radius:8px}.source-item,.context-item{white-space:pre-wrap;word-break:break-word;background:#f8f8f5;padding:12px;margin:8px 0;border-radius:8px}.actions,.nav,.finalize{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:20px}button{border:0;border-radius:8px;padding:11px 16px;background:#315d53;color:#fff;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}#pending{background:#8a6d2f}#unsupported{background:#8b4036}.finalize{background:#ece9df;padding:16px;border-radius:10px}.finalize label{flex:1 1 100%}#status{font-weight:700}"""
+APP_CSS = """
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #f5f3ee;
+  color: #1d2a2e;
+  font: 16px/1.55 system-ui, sans-serif;
+}
+main { max-width: 980px; margin: auto; padding: 32px; }
+.eyebrow { font-weight: 700; color: #355b52; }
+.warning { border-left: 4px solid #b65f32; padding: 10px 14px; background: #fff5ec; }
+.card {
+  background: #fff;
+  border: 1px solid #d8d4c9;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 10px 30px #24332f12;
+}
+h2 { font-size: 1rem; margin-top: 24px; color: #355b52; }
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8f8f5;
+  padding: 12px;
+  border-radius: 8px;
+}
+.source-item, .context-item {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8f8f5;
+  padding: 12px;
+  margin: 8px 0;
+  border-radius: 8px;
+}
+.actions, .nav, .finalize {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+button {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 16px;
+  background: #315d53;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+button:disabled { opacity: .45; cursor: not-allowed; }
+#pending { background: #8a6d2f; }
+#unsupported { background: #8b4036; }
+.finalize { background: #ece9df; padding: 16px; border-radius: 10px; }
+.finalize label { flex: 1 1 100%; }
+#status { font-weight: 700; }
+"""
 
 APP_JS = """(() => {
   "use strict";
@@ -136,7 +196,11 @@ APP_JS = """(() => {
     const state = await request("/api/state?index=" + encodeURIComponent(index));
     currentIndex = state.index;
     csrfToken = state.csrf_token;
-    setText("progress", String(state.index + 1) + " / " + String(state.total) + " — 完了 " + String(state.completed) + "、保留 " + String(state.pending));
+    setText(
+      "progress",
+      String(state.index + 1) + " / " + String(state.total) +
+        " — 完了 " + String(state.completed) + "、保留 " + String(state.pending)
+    );
     setText("question", state.claim.question);
     setText("answer", state.claim.answer);
     setText("fact", state.claim.required_fact);
@@ -173,7 +237,11 @@ APP_JS = """(() => {
           confirm_human_signoff: byId("confirm").checked
         })
       });
-      setText("status", "確定しました。claim=" + String(result.claim_count) + ", manifest SHA-256=" + result.reference_manifest_sha256);
+      setText(
+        "status",
+        "確定しました。claim=" + String(result.claim_count) +
+          ", manifest SHA-256=" + result.reference_manifest_sha256
+      );
     } catch (error) {
       showError(error);
     }
