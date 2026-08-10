@@ -3,15 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal, Self, cast
+from typing import Literal, Self, cast
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    ValidationError,
-    model_validator,
+from pydantic import Field, ValidationError, model_validator
+
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimFullHashBinding,
+    AtomicClaimFullNotApplicableBinding,
+    SafeId,
+    Sha256,
+    StrictRawFreeModel,
+    model_bytes_match,
 )
 
 from app.services.evaluation_atomic_claim_calibration_service import (
@@ -26,47 +28,11 @@ from app.services.evaluation_atomic_claim_calibration_service import (
     evaluate_atomic_claim_candidate,
 )
 
-Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-SafeId = Annotated[
-    str,
-    StringConstraints(
-        min_length=1,
-        max_length=160,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-    ),
-]
+_StrictModel = StrictRawFreeModel
 
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class AtomicClaimBlindReferenceDecision(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    required_fact_hash: Sha256
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimBlindReferenceDecision(AtomicClaimFullHashBinding):
     reference_supported: bool
-
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
-
-    def scope_binding(self) -> dict[str, object]:
-        return {
-            "case_id": self.case_id,
-            "question_hash": self.question_hash,
-            "source_hash": self.source_hash,
-            "answer_hash": self.answer_hash,
-            "context_hash": self.context_hash,
-            "required_fact_id": self.required_fact_id,
-            "required_fact_hash": self.required_fact_hash,
-            "claim_ordinal": self.claim_ordinal,
-        }
 
 
 class AtomicClaimBlindReviewManifest(_StrictModel):
@@ -147,35 +113,14 @@ class AtomicClaimBlindReviewCommitment(_StrictModel):
         return self
 
 
-class AtomicClaimBlindCandidateObservation(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    required_fact_hash: Sha256
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimBlindCandidateObservation(AtomicClaimFullHashBinding):
     segmentation_status: Literal["presegmented_reference_claim"]
     whole_statement_exact_match: bool
     atomic_equivalence_match: bool
 
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
 
-
-class AtomicClaimBlindNotApplicableObservation(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
+class AtomicClaimBlindNotApplicableObservation(AtomicClaimFullNotApplicableBinding):
     reason: Literal["unanswerable", "abstention"]
-
-    @property
-    def observation_identity(self) -> tuple[str, str, str]:
-        return (self.case_id, self.answer_hash, self.context_hash)
 
 
 class AtomicClaimBlindCandidateManifest(_StrictModel):
@@ -268,7 +213,7 @@ def build_phase_a_commitment(
     *,
     committed_at_utc: datetime | None = None,
 ) -> AtomicClaimBlindReviewCommitment:
-    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+    if not model_bytes_match(reference_manifest_bytes, reference):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
     committed_at = committed_at_utc or datetime.now(UTC)
     return AtomicClaimBlindReviewCommitment(
@@ -305,11 +250,11 @@ def evaluate_phase_b(
     commitment_hash = hashlib.sha256(commitment_bytes).hexdigest()
     candidate_hash = hashlib.sha256(candidate_manifest_bytes).hexdigest()
 
-    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+    if not model_bytes_match(reference_manifest_bytes, reference):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
-    if not _commitment_bytes_match_model(commitment_bytes, commitment):
+    if not model_bytes_match(commitment_bytes, commitment):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_commitment_bytes_model_mismatch")
-    if not _candidate_bytes_match_model(candidate_manifest_bytes, candidate):
+    if not model_bytes_match(candidate_manifest_bytes, candidate):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_candidate_bytes_model_mismatch")
     if reference_hash != commitment.reference_manifest_sha256:
         raise EvaluationAtomicClaimCalibrationError(
@@ -466,39 +411,6 @@ def evaluate_phase_b(
         profile_promotion_allowed=False,
         reason_codes=tuple(reasons),
     )
-
-
-def _reference_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindReviewManifest,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindReviewManifest.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
-
-
-def _commitment_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindReviewCommitment,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindReviewCommitment.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
-
-
-def _candidate_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindCandidateManifest,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindCandidateManifest.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
 
 
 def _is_utc_aware(value: datetime) -> bool:

@@ -2,76 +2,28 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Annotated, Literal, Self, cast
+from typing import Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import Field, model_validator
+
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimLegacyHashBinding,
+    AtomicClaimLegacyNotApplicableBinding,
+    AtomicClaimSourceContract,
+    SafeId,
+    Sha256,
+    StrictRawFreeModel,
+)
 
 _ALLOWED_DATASET = "local_accuracy_dev_v1"
 _EXPECTED_MODEL = "qwen/qwen3.5-9b"
 _LEGACY_REVIEW_SCHEMA = "phase3.oracle_codex_assisted_review.v1"
 
-Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-SafeId = Annotated[
-    str,
-    StringConstraints(
-        min_length=1,
-        max_length=160,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-    ),
-]
+_StrictModel = StrictRawFreeModel
 
 
-class EvaluationAtomicClaimCalibrationError(RuntimeError):
-    """Stable fail-closed error for raw-free atomic-claim calibration."""
-
-
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class AtomicClaimSourceContract(_StrictModel):
-    source_evaluation_run_id: Literal[112]
-    dataset_name: Literal["local_accuracy_dev_v1"]
-    dataset_content_fingerprint: Sha256
-    case_set_fingerprint: Sha256
-    generation_config_fingerprint: Sha256
-    generation_prompt_profile: Literal["baseline"]
-    generation_prompt_fingerprint: Sha256
-    generation_budget_fingerprint: Sha256
-    resolved_generation_model: Literal["qwen/qwen3.5-9b"]
-    generation_temperature: float
-    generation_max_context_chars: Literal[6000]
-    generation_max_output_chars: Literal[12000]
-    generation_max_output_tokens: Literal[8192]
-
-    @model_validator(mode="after")
-    def validate_frozen_temperature(self) -> Self:
-        if self.generation_temperature != 0.0:
-            raise ValueError("atomic_claim_generation_temperature_drift")
-        return self
-
-
-class AtomicClaimReferenceDecision(_StrictModel):
-    case_id: SafeId
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimReferenceDecision(AtomicClaimLegacyHashBinding):
     reference_supported: bool
-
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
-
-    @property
-    def hash_bound_identity(self) -> tuple[str, str, str, str, int]:
-        return (
-            self.case_id,
-            self.answer_hash,
-            self.context_hash,
-            self.required_fact_id,
-            self.claim_ordinal,
-        )
 
 
 class AtomicClaimReviewManifest(_StrictModel):
@@ -99,40 +51,14 @@ class AtomicClaimReviewManifest(_StrictModel):
         return self
 
 
-class AtomicClaimCandidateObservation(_StrictModel):
-    case_id: SafeId
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimCandidateObservation(AtomicClaimLegacyHashBinding):
     segmentation_status: Literal["presegmented_reference_claim"]
     whole_statement_exact_match: bool
     atomic_equivalence_match: bool
 
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
 
-    @property
-    def hash_bound_identity(self) -> tuple[str, str, str, str, int]:
-        return (
-            self.case_id,
-            self.answer_hash,
-            self.context_hash,
-            self.required_fact_id,
-            self.claim_ordinal,
-        )
-
-
-class AtomicClaimNotApplicableObservation(_StrictModel):
-    case_id: SafeId
-    answer_hash: Sha256
-    context_hash: Sha256
+class AtomicClaimNotApplicableObservation(AtomicClaimLegacyNotApplicableBinding):
     reason: Literal["unanswerable", "abstention"]
-
-    @property
-    def observation_identity(self) -> tuple[str, str, str]:
-        return (self.case_id, self.answer_hash, self.context_hash)
 
 
 class AtomicClaimCandidateManifest(_StrictModel):

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from pydantic import ValidationError
+
+from app.services.evaluation_atomic_claim_contracts import (
+    print_blocked as _blocked,
+    read_json_object as _read_object,
+    write_raw_free_text as _write_safe_output,
+)
 
 from app.services.evaluation_atomic_claim_blind_review_service import (
     AtomicClaimBlindCandidateManifest,
@@ -75,23 +80,6 @@ def main() -> int:
     print(rendered)
     return 0 if result.candidate_selected else 2
 
-
-def _read_object(path: Path) -> tuple[bytes, dict[str, object]]:
-    payload_bytes = path.read_bytes()
-    payload = json.loads(payload_bytes.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError
-    return payload_bytes, payload
-
-
-def _write_safe_output(path: Path, rendered: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(rendered + "\n", encoding="utf-8")
-
-
-def _blocked(reason_code: str) -> int:
-    print(json.dumps({"status": "blocked", "reason_code": reason_code}, sort_keys=True))
-    return 2
 
 
 if __name__ == "__main__":
