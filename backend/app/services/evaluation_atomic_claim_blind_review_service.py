@@ -5,7 +5,14 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimCalibrationSummary,
@@ -262,9 +269,7 @@ def build_phase_a_commitment(
     committed_at_utc: datetime | None = None,
 ) -> AtomicClaimBlindReviewCommitment:
     if not _reference_bytes_match_model(reference_manifest_bytes, reference):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_reference_bytes_model_mismatch"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
     committed_at = committed_at_utc or datetime.now(UTC)
     return AtomicClaimBlindReviewCommitment(
         schema_version="phase3.oracle_atomic_claim_blind_commitment.v1",
@@ -301,17 +306,11 @@ def evaluate_phase_b(
     candidate_hash = hashlib.sha256(candidate_manifest_bytes).hexdigest()
 
     if not _reference_bytes_match_model(reference_manifest_bytes, reference):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_reference_bytes_model_mismatch"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
     if not _commitment_bytes_match_model(commitment_bytes, commitment):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_commitment_bytes_model_mismatch"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_commitment_bytes_model_mismatch")
     if not _candidate_bytes_match_model(candidate_manifest_bytes, candidate):
-        raise EvaluationAtomicClaimCalibrationError(
-            "atomic_claim_candidate_bytes_model_mismatch"
-        )
+        raise EvaluationAtomicClaimCalibrationError("atomic_claim_candidate_bytes_model_mismatch")
     if reference_hash != commitment.reference_manifest_sha256:
         raise EvaluationAtomicClaimCalibrationError(
             "atomic_claim_phase_a_reference_manifest_hash_mismatch"
