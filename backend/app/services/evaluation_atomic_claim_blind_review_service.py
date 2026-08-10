@@ -14,7 +14,6 @@ from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimNotApplicableObservation,
     AtomicClaimReferenceDecision,
     AtomicClaimReviewManifest,
-    AtomicClaimSourceContract,
     EvaluationAtomicClaimCalibrationError,
     evaluate_atomic_claim_candidate,
 )
@@ -27,6 +26,9 @@ from app.services.evaluation_atomic_claim_contracts import (
     Sha256,
     StrictRawFreeModel,
     model_bytes_match,
+)
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimSourceContract as AtomicClaimSourceContract,
 )
 
 
@@ -126,8 +128,8 @@ class AtomicClaimBlindNotApplicableObservation(AtomicClaimFullNotApplicableBindi
 
 class AtomicClaimBlindCandidateManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_candidate.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     phase_a_reference_manifest_sha256: Sha256
     candidate_id: SafeId
@@ -140,6 +142,7 @@ class AtomicClaimBlindCandidateManifest(StrictRawFreeModel):
 
     @model_validator(mode="after")
     def validate_candidate_uniqueness_and_applicability(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         identities = [observation.identity for observation in self.observations]
         if len(identities) != len(set(identities)):
             raise ValueError("blind_candidate_claim_identity_duplicate")
@@ -221,6 +224,18 @@ def _validate_scope_source_pair(
         raise ValueError("blind_review_scope_source_mismatch")
 
 
+def _validate_phase_b_source_authority(source: AtomicClaimReviewSourceContract) -> None:
+    if isinstance(source, AtomicClaimReviewCalibrationSourceContract) and (
+        source.review_run_id != "rag83-review-only-20260810T055955Z"
+        or source.selected_case_count != 24
+        or source.succeeded_case_count != 24
+        or source.pipeline_failure_count != 0
+    ):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_review_only_phase_b_authority_unsupported"
+        )
+
+
 def build_phase_a_commitment(
     reference_manifest_bytes: bytes,
     reference: AtomicClaimBlindReviewManifest,
@@ -260,6 +275,9 @@ def evaluate_phase_b(
     candidate_manifest_bytes: bytes,
     candidate: AtomicClaimBlindCandidateManifest,
 ) -> AtomicClaimBlindPhaseBResult:
+    _validate_phase_b_source_authority(reference.source)
+    _validate_phase_b_source_authority(commitment.source)
+    _validate_phase_b_source_authority(candidate.source)
     reference_hash = hashlib.sha256(reference_manifest_bytes).hexdigest()
     commitment_hash = hashlib.sha256(commitment_bytes).hexdigest()
     candidate_hash = hashlib.sha256(candidate_manifest_bytes).hexdigest()

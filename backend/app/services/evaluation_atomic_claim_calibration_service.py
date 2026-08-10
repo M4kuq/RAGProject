@@ -9,6 +9,8 @@ from pydantic import Field, model_validator
 from app.services.evaluation_atomic_claim_contracts import (
     AtomicClaimLegacyHashBinding,
     AtomicClaimLegacyNotApplicableBinding,
+    AtomicClaimReviewCalibrationSourceContract,
+    AtomicClaimReviewSourceContract,
     AtomicClaimSourceContract,
     SafeId,
     Sha256,
@@ -30,7 +32,7 @@ class AtomicClaimReferenceDecision(AtomicClaimLegacyHashBinding):
 
 class AtomicClaimReviewManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_review.v1"]
-    source: AtomicClaimSourceContract
+    source: AtomicClaimReviewSourceContract
     reviewer_provenance: SafeId
     reviewer_version: SafeId
     review_status: Literal["requires_human_signoff", "human_signed_off"]
@@ -65,7 +67,7 @@ class AtomicClaimNotApplicableObservation(AtomicClaimLegacyNotApplicableBinding)
 
 class AtomicClaimCandidateManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_candidate.v1"]
-    source: AtomicClaimSourceContract
+    source: AtomicClaimReviewSourceContract
     candidate_id: SafeId
     candidate_version: SafeId
     candidate_dimension: Literal["semantic_equivalence_only"]
@@ -96,9 +98,22 @@ class AtomicClaimCandidateManifest(StrictRawFreeModel):
         return self
 
 
+class AtomicClaimBinaryClassificationMetrics(StrictRawFreeModel):
+    true_positive_count: int = Field(ge=0)
+    true_negative_count: int = Field(ge=0)
+    false_positive_count: int = Field(ge=0)
+    false_negative_count: int = Field(ge=0)
+    balanced_accuracy: float | None
+    precision: float | None
+    recall: float | None
+    f1: float | None
+    cohen_kappa: float | None
+
+
 class AtomicClaimCalibrationSummary(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_calibration.v1"]
-    source_evaluation_run_id: int
+    source_evaluation_run_id: int | None
+    source_review_run_id: SafeId | None = None
     dataset_name: str
     candidate_id: str
     candidate_manifest_sha256: Sha256 | None
@@ -113,6 +128,7 @@ class AtomicClaimCalibrationSummary(StrictRawFreeModel):
     ]
     calibration_coverage: float
     reference_claim_count: int
+    authoritative_reference_claim_count: int | None = None
     hash_matched_claim_count: int
     not_applicable_observation_count: int
     unanswerable_or_abstention_misapplication_count: int
@@ -122,6 +138,8 @@ class AtomicClaimCalibrationSummary(StrictRawFreeModel):
     atomic_equivalence_false_positive_count: int | None
     false_negative_reduction_count: int | None
     false_positive_delta_count: int | None
+    whole_statement_exact_metrics: AtomicClaimBinaryClassificationMetrics | None = None
+    atomic_equivalence_metrics: AtomicClaimBinaryClassificationMetrics | None = None
     pipeline_failure_count: int
     candidate_selected: bool
     decision: Literal[
@@ -193,7 +211,8 @@ def evaluate_atomic_claim_candidate(
         )
         return AtomicClaimCalibrationSummary(
             schema_version="phase3.oracle_atomic_claim_calibration.v1",
-            source_evaluation_run_id=candidate.source.source_evaluation_run_id,
+            source_evaluation_run_id=_source_evaluation_run_id(candidate.source),
+            source_review_run_id=_source_review_run_id(candidate.source),
             dataset_name=candidate.source.dataset_name,
             candidate_id=candidate.candidate_id,
             candidate_manifest_sha256=candidate_manifest_sha256,
@@ -204,6 +223,7 @@ def evaluate_atomic_claim_candidate(
             calibration_status="insufficient_hash_bound_claim_labels",
             calibration_coverage=0.0,
             reference_claim_count=0,
+            authoritative_reference_claim_count=0,
             hash_matched_claim_count=0,
             not_applicable_observation_count=len(candidate.not_applicable_observations),
             unanswerable_or_abstention_misapplication_count=0,
@@ -213,6 +233,8 @@ def evaluate_atomic_claim_candidate(
             atomic_equivalence_false_positive_count=None,
             false_negative_reduction_count=None,
             false_positive_delta_count=None,
+            whole_statement_exact_metrics=None,
+            atomic_equivalence_metrics=None,
             pipeline_failure_count=candidate.pipeline_failure_count,
             candidate_selected=False,
             decision="not_calibrated",
@@ -253,22 +275,19 @@ def evaluate_atomic_claim_candidate(
     matched_count = len(matched_pairs)
     coverage = round(matched_count / reference_count, 6)
 
-    whole_fn = sum(
-        decision.reference_supported and not observation.whole_statement_exact_match
-        for decision, observation in matched_pairs
+    whole_metrics = _binary_classification_metrics(
+        matched_pairs,
+        prediction_field="whole_statement_exact_match",
     )
-    whole_fp = sum(
-        not decision.reference_supported and observation.whole_statement_exact_match
-        for decision, observation in matched_pairs
+    atomic_metrics = _binary_classification_metrics(
+        matched_pairs,
+        prediction_field="atomic_equivalence_match",
     )
-    atomic_fn = sum(
-        decision.reference_supported and not observation.atomic_equivalence_match
-        for decision, observation in matched_pairs
-    )
-    atomic_fp = sum(
-        not decision.reference_supported and observation.atomic_equivalence_match
-        for decision, observation in matched_pairs
-    )
+
+    whole_fn = whole_metrics.false_negative_count
+    whole_fp = whole_metrics.false_positive_count
+    atomic_fn = atomic_metrics.false_negative_count
+    atomic_fp = atomic_metrics.false_positive_count
     fn_reduction = whole_fn - atomic_fn
     fp_delta = atomic_fp - whole_fp
     complete = matched_count == reference_count
@@ -305,7 +324,8 @@ def evaluate_atomic_claim_candidate(
 
     return AtomicClaimCalibrationSummary(
         schema_version="phase3.oracle_atomic_claim_calibration.v1",
-        source_evaluation_run_id=candidate.source.source_evaluation_run_id,
+        source_evaluation_run_id=_source_evaluation_run_id(candidate.source),
+        source_review_run_id=_source_review_run_id(candidate.source),
         dataset_name=candidate.source.dataset_name,
         candidate_id=candidate.candidate_id,
         candidate_manifest_sha256=candidate_manifest_sha256,
@@ -318,6 +338,7 @@ def evaluate_atomic_claim_candidate(
         ),
         calibration_coverage=coverage,
         reference_claim_count=reference_count,
+        authoritative_reference_claim_count=(0 if requires_human_signoff else reference_count),
         hash_matched_claim_count=matched_count,
         not_applicable_observation_count=len(candidate.not_applicable_observations),
         unanswerable_or_abstention_misapplication_count=0,
@@ -327,6 +348,8 @@ def evaluate_atomic_claim_candidate(
         atomic_equivalence_false_positive_count=atomic_fp,
         false_negative_reduction_count=fn_reduction,
         false_positive_delta_count=fp_delta,
+        whole_statement_exact_metrics=whole_metrics,
+        atomic_equivalence_metrics=atomic_metrics,
         pipeline_failure_count=candidate.pipeline_failure_count,
         candidate_selected=candidate_selected,
         decision=(
@@ -337,3 +360,81 @@ def evaluate_atomic_claim_candidate(
         segmentation_status="presegmented_reference_claim",
         reason_codes=tuple(reasons),
     )
+
+
+def _source_evaluation_run_id(source: AtomicClaimReviewSourceContract) -> int | None:
+    return (
+        source.source_evaluation_run_id if isinstance(source, AtomicClaimSourceContract) else None
+    )
+
+
+def _source_review_run_id(source: AtomicClaimReviewSourceContract) -> str | None:
+    return (
+        source.review_run_id
+        if isinstance(source, AtomicClaimReviewCalibrationSourceContract)
+        else None
+    )
+
+
+def _binary_classification_metrics(
+    matched_pairs: tuple[tuple[AtomicClaimReferenceDecision, AtomicClaimCandidateObservation], ...],
+    *,
+    prediction_field: Literal["whole_statement_exact_match", "atomic_equivalence_match"],
+) -> AtomicClaimBinaryClassificationMetrics:
+    true_positive = 0
+    true_negative = 0
+    false_positive = 0
+    false_negative = 0
+    for decision, observation in matched_pairs:
+        predicted = bool(getattr(observation, prediction_field))
+        expected = decision.reference_supported
+        if expected and predicted:
+            true_positive += 1
+        elif not expected and not predicted:
+            true_negative += 1
+        elif predicted:
+            false_positive += 1
+        else:
+            false_negative += 1
+
+    recall = _safe_ratio(true_positive, true_positive + false_negative)
+    specificity = _safe_ratio(true_negative, true_negative + false_positive)
+    precision = _safe_ratio(true_positive, true_positive + false_positive)
+    balanced_accuracy = (
+        round((recall + specificity) / 2, 6)
+        if recall is not None and specificity is not None
+        else None
+    )
+    f1 = _safe_ratio(
+        2 * true_positive,
+        2 * true_positive + false_positive + false_negative,
+    )
+    total = true_positive + true_negative + false_positive + false_negative
+    cohen_kappa: float | None = None
+    if total:
+        observed = (true_positive + true_negative) / total
+        chance_agreement = (
+            (true_positive + false_negative) * (true_positive + false_positive)
+            + (true_negative + false_positive) * (true_negative + false_negative)
+        ) / (total * total)
+        if chance_agreement != 1.0:
+            cohen_kappa = round(
+                (observed - chance_agreement) / (1.0 - chance_agreement),
+                6,
+            )
+
+    return AtomicClaimBinaryClassificationMetrics(
+        true_positive_count=true_positive,
+        true_negative_count=true_negative,
+        false_positive_count=false_positive,
+        false_negative_count=false_negative,
+        balanced_accuracy=balanced_accuracy,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        cohen_kappa=cohen_kappa,
+    )
+
+
+def _safe_ratio(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 6) if denominator else None
