@@ -4,6 +4,8 @@ import hashlib
 import http.client
 import json
 import multiprocessing
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +41,96 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
     prepare_review_scope_from_paths,
     validate_review_input,
 )
+
+_DOM_BINDING_HARNESS = r"""
+const baseUrl = process.argv[1];
+const nativeFetch = globalThis.fetch;
+
+function createElement() {
+  return {
+    textContent: "",
+    children: [],
+    disabled: false,
+    checked: false,
+    replaceChildren() {
+      this.children = [];
+      this.textContent = "";
+    },
+    appendChild(child) {
+      this.children.push(child);
+      this.textContent = this.children.map((item) => item.textContent).join("");
+    },
+    addEventListener() {},
+    setAttribute() {},
+  };
+}
+
+async function main() {
+  const rootResponse = await nativeFetch(baseUrl + "/");
+  const html = await rootResponse.text();
+  const cookie = (rootResponse.headers.get("set-cookie") || "").split(";", 1)[0];
+  const csp = rootResponse.headers.get("content-security-policy") || "";
+  const scriptResponse = await nativeFetch(baseUrl + "/app.js");
+  const script = await scriptResponse.text();
+  const ids = [
+    "progress", "question", "source", "answer", "context", "fact", "status",
+    "previous", "next", "supported", "unsupported", "pending", "finalize", "confirm",
+  ];
+  const elements = new Map(ids.map((id) => [id, createElement()]));
+  globalThis.document = {
+    getElementById: (id) => elements.get(id),
+    createElement,
+  };
+  globalThis.fetch = (path, options = {}) => {
+    const headers = new Headers(options.headers || {});
+    headers.set("Cookie", cookie);
+    return nativeFetch(new URL(path, baseUrl), {...options, headers});
+  };
+
+  try {
+    Function(script)();
+  } catch {
+    process.stdout.write(JSON.stringify({
+      status: "error",
+      error_code: "review_script_parse_failed",
+    }));
+    return;
+  }
+  for (let attempt = 0; attempt < 100 && !elements.get("progress").textContent; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const stateResponse = await nativeFetch(baseUrl + "/api/state?index=0", {
+    headers: {Cookie: cookie},
+  });
+  const state = await stateResponse.json();
+  const fieldLengths = Object.fromEntries(
+    ["question", "source", "answer", "context", "fact"].map((id) => [
+      id,
+      elements.get(id).textContent.length,
+    ]),
+  );
+  const allFieldsPopulated = Object.values(fieldLengths).every((length) => length > 0);
+  process.stdout.write(JSON.stringify({
+    status: allFieldsPopulated ? "ok" : "error",
+    error_code: allFieldsPopulated ? null : "review_script_fields_empty",
+    total: state.total,
+    pending: state.pending,
+    field_lengths: fieldLengths,
+    script_linked: html.includes('src="/app.js"'),
+    csp_default_none: csp.includes("default-src 'none'"),
+    csp_script_self: csp.includes("script-src 'self'"),
+    csp_connect_self: csp.includes("connect-src 'self'"),
+    csp_unsafe_inline: csp.includes("'unsafe-inline'"),
+  }));
+}
+
+main().catch(() => {
+  process.stdout.write(JSON.stringify({
+    status: "error",
+    error_code: "review_script_execution_failed",
+  }));
+});
+"""
 
 
 def test_common_contract_is_legacy_api_compatible() -> None:
@@ -344,6 +436,51 @@ def test_local_http_review_security_and_synthetic_end_to_end(
         _private_runtime_values(files["private"]),
     )
     assert capsys.readouterr().out == ""
+
+
+def test_served_script_populates_all_five_review_fields_by_length(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node_runtime_unavailable")
+    files = _prepare_input_files(tmp_path)
+    session = create_review_session(
+        scope_manifest_path=files["scope"],
+        private_input_path=files["private"],
+        output_dir=tmp_path / "output",
+        reviewer_provenance="human:test-reviewer",
+    )
+    server = create_review_server(session, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        completed = subprocess.run(
+            [node, "-e", _DOM_BINDING_HARNESS, server.local_url],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0
+    rendered = json.loads(completed.stdout)
+    assert rendered["status"] == "ok"
+    assert rendered["error_code"] is None
+    assert rendered["total"] >= 1
+    assert rendered["pending"] == rendered["total"]
+    assert all(
+        int(rendered["field_lengths"][field]) > 0
+        for field in ("question", "source", "answer", "context", "fact")
+    )
+    assert rendered["script_linked"] is True
+    assert rendered["csp_default_none"] is True
+    assert rendered["csp_script_self"] is True
+    assert rendered["csp_connect_self"] is True
+    assert rendered["csp_unsafe_inline"] is False
 
 
 def test_http_host_session_csrf_and_browser_storage_controls(tmp_path: Path) -> None:

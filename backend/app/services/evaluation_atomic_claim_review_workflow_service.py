@@ -237,7 +237,7 @@ APP_JS = """(() => {
     setText("question", state.claim.question);
     setText("answer", state.claim.answer);
     setText("fact", state.claim.required_fact);
-    addTextBlocks("source", state.claim.source_evidence, (item) => item.title + "\n" + item.body);
+    addTextBlocks("source", state.claim.source_evidence, (item) => item.title + "\\n" + item.body);
     addTextBlocks("context", state.claim.context_items, (item) => item);
     byId("previous").disabled = state.index === 0;
     byId("next").disabled = state.index + 1 >= state.total;
