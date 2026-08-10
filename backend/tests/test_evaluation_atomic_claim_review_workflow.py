@@ -32,6 +32,7 @@ from app.services.evaluation_atomic_claim_contracts import (
 )
 from app.services.evaluation_atomic_claim_review_workflow_service import (
     APP_JS,
+    INDEX_HTML,
     AtomicClaimPrivateReviewBundle,
     EvaluationAtomicClaimReviewWorkflowError,
     _join_review_case_process,
@@ -41,6 +42,27 @@ from app.services.evaluation_atomic_claim_review_workflow_service import (
     prepare_review_scope_from_paths,
     validate_review_input,
 )
+
+
+def test_review_page_explains_atomic_required_fact_labels_safely() -> None:
+    expected_instructions = (
+        "この画面は表示中の Required fact だけをclaim単位で判定します。",
+        "Required factがAnswerに正しく含まれ、Source/Runtime contextで裏付けられる。",
+        "Required factがAnswerに無い、誤り、または矛盾している。",
+        "他のfactの欠落や「根拠不足」文はoverall completenessの別問題。",
+        "表示中factが正しく含まれる場合、それだけを理由にUnsupportedへしない。",
+        "判断できない場合のみPending。",
+        "判定/signoffはユーザーのみ。",
+    )
+
+    for instruction in expected_instructions:
+        assert instruction in INDEX_HTML
+    assert '<script src="/app.js" defer></script>' in INDEX_HTML
+    assert "<script>" not in INDEX_HTML
+    assert "innerHTML" not in APP_JS
+    assert 'byId(id).textContent = value ?? ""' in APP_JS
+    assert "node.textContent = formatter(item)" in APP_JS
+
 
 _DOM_BINDING_HARNESS = r"""
 const baseUrl = process.argv[1];

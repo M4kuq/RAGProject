@@ -113,6 +113,27 @@ INDEX_HTML = """<!doctype html>
       </p>
       <p id="progress" aria-live="polite"></p>
     </header>
+    <section class="instructions" aria-labelledby="review-instructions-title">
+      <p id="review-instructions-title">
+        この画面は表示中の Required fact だけをclaim単位で判定します。
+      </p>
+      <ul>
+        <li>
+          <strong>Supported:</strong>
+          Required factがAnswerに正しく含まれ、Source/Runtime contextで裏付けられる。
+        </li>
+        <li>
+          <strong>Unsupported:</strong>
+          Required factがAnswerに無い、誤り、または矛盾している。
+        </li>
+        <li>
+          他のfactの欠落や「根拠不足」文はoverall completenessの別問題。
+          表示中factが正しく含まれる場合、それだけを理由にUnsupportedへしない。
+        </li>
+        <li>判断できない場合のみPending。</li>
+        <li>判定/signoffはユーザーのみ。</li>
+      </ul>
+    </section>
     <section class="card">
       <h2>Question</h2><pre id="question"></pre>
       <h2>Source evidence</h2><div id="source"></div>
@@ -153,6 +174,15 @@ body {
 main { max-width: 980px; margin: auto; padding: 32px; }
 .eyebrow { font-weight: 700; color: #355b52; }
 .warning { border-left: 4px solid #b65f32; padding: 10px 14px; background: #fff5ec; }
+.instructions {
+  margin: 18px 0;
+  border-left: 4px solid #355b52;
+  padding: 10px 14px;
+  background: #edf4f1;
+}
+.instructions p { margin: 0; font-weight: 700; }
+.instructions ul { margin: 8px 0 0; padding-left: 22px; }
+.instructions li + li { margin-top: 4px; }
 .card {
   background: #fff;
   border: 1px solid #d8d4c9;
