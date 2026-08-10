@@ -337,6 +337,7 @@ def test_http_host_session_csrf_and_browser_storage_controls(tmp_path: Path) -> 
 def _prepare_input_files(tmp_path: Path) -> dict[str, Path]:
     fixture = build_local_accuracy_dev_manifest()
     case = next(item for item in fixture.cases if item.answerable)
+    unrelated_failure_case = next(item for item in fixture.cases if not item.answerable)
     answer_text = "synthetic-" + "answer-runtime-only"
     context_items = ("synthetic-" + "context-runtime-only",)
     answer_hash = _sha(answer_text)
@@ -364,18 +365,24 @@ def _prepare_input_files(tmp_path: Path) -> dict[str, Path]:
             if key != "generation_budget_fingerprint"
         },
         "atomic_calibration": {
-            "reviewed_observation_count": 1,
-            "hash_matched_observation_count": 1,
+            "reviewed_observation_count": 3,
+            "hash_matched_observation_count": 3,
             "unique_hash_matched_case_count": 1,
-            "answerable_hash_matched_observation_count": 1,
+            "answerable_hash_matched_observation_count": 3,
         },
         "cases": [
             {
                 "case_id": case.case_key,
                 "answerable": True,
                 "required_fact_ids": [fact.fact_id for fact in case.required_facts],
-                "o_answer_hashes": [answer_hash],
-            }
+                "o_answer_hashes": [answer_hash, answer_hash, answer_hash],
+            },
+            {
+                "case_id": unrelated_failure_case.case_key,
+                "answerable": False,
+                "required_fact_ids": [],
+                "o_answer_hashes": [None, "f" * 64, "f" * 64],
+            },
         ],
     }
     legacy_payload = {

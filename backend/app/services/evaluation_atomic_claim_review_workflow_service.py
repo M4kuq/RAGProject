@@ -278,7 +278,7 @@ class _AuthorityCase(_AuthorityModel):
     case_id: SafeId
     answerable: bool
     required_fact_ids: tuple[SafeId, ...]
-    o_answer_hashes: tuple[Sha256, ...]
+    o_answer_hashes: tuple[Sha256 | None, ...]
 
 
 class _AuthoritySummary(_AuthorityModel):
@@ -483,26 +483,37 @@ def prepare_review_scope(
 
     decisions = legacy_review.decisions
     calibration = authority_summary.atomic_calibration
-    if len(decisions) != calibration.reviewed_observation_count:
+    decision_identities = [
+        (decision.case_id, decision.answer_hash) for decision in decisions
+    ]
+    if len(decision_identities) != len(set(decision_identities)):
         raise EvaluationAtomicClaimReviewWorkflowError(
-            "atomic_claim_review_legacy_observation_count_drift"
-        )
-    if calibration.hash_matched_observation_count != len(decisions):
-        raise EvaluationAtomicClaimReviewWorkflowError(
-            "atomic_claim_review_legacy_hash_coverage_drift"
+            "atomic_claim_review_legacy_decision_duplicate"
         )
 
     authority_by_case = {case.case_id: case for case in authority_summary.cases}
     all_case_ids: set[str] = set()
+    matched_observation_count = 0
+    answerable_matched_observation_count = 0
     targets: list[AtomicClaimReviewScopeTarget] = []
     for decision in decisions:
         authority_case = authority_by_case.get(decision.case_id)
-        if authority_case is None or decision.answer_hash not in authority_case.o_answer_hashes:
+        if authority_case is None:
             raise EvaluationAtomicClaimReviewWorkflowError(
                 "atomic_claim_review_legacy_answer_hash_unbound"
             )
+        repeat_match_count = sum(
+            answer_hash == decision.answer_hash
+            for answer_hash in authority_case.o_answer_hashes
+        )
+        if repeat_match_count == 0:
+            raise EvaluationAtomicClaimReviewWorkflowError(
+                "atomic_claim_review_legacy_answer_hash_unbound"
+            )
+        matched_observation_count += repeat_match_count
         all_case_ids.add(decision.case_id)
         if authority_case.answerable:
+            answerable_matched_observation_count += repeat_match_count
             targets.append(
                 AtomicClaimReviewScopeTarget(
                     case_id=decision.case_id,
@@ -510,11 +521,22 @@ def prepare_review_scope(
                 )
             )
 
+    if calibration.reviewed_observation_count != matched_observation_count:
+        raise EvaluationAtomicClaimReviewWorkflowError(
+            "atomic_claim_review_legacy_observation_count_drift"
+        )
+    if calibration.hash_matched_observation_count != matched_observation_count:
+        raise EvaluationAtomicClaimReviewWorkflowError(
+            "atomic_claim_review_legacy_hash_coverage_drift"
+        )
     if len(all_case_ids) != calibration.unique_hash_matched_case_count:
         raise EvaluationAtomicClaimReviewWorkflowError(
             "atomic_claim_review_legacy_case_count_drift"
         )
-    if len(targets) != calibration.answerable_hash_matched_observation_count:
+    if (
+        answerable_matched_observation_count
+        != calibration.answerable_hash_matched_observation_count
+    ):
         raise EvaluationAtomicClaimReviewWorkflowError(
             "atomic_claim_review_answerable_target_count_drift"
         )
