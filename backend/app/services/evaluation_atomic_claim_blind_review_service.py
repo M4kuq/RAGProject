@@ -3,16 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal, Self, cast
+from typing import Literal, Self, cast
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    ValidationError,
-    model_validator,
-)
+from pydantic import Field, model_validator
 
 from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimCalibrationSummary,
@@ -21,58 +14,32 @@ from app.services.evaluation_atomic_claim_calibration_service import (
     AtomicClaimNotApplicableObservation,
     AtomicClaimReferenceDecision,
     AtomicClaimReviewManifest,
-    AtomicClaimSourceContract,
     EvaluationAtomicClaimCalibrationError,
     evaluate_atomic_claim_candidate,
 )
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimFullHashBinding,
+    AtomicClaimFullNotApplicableBinding,
+    AtomicClaimReviewCalibrationSourceContract,
+    AtomicClaimReviewSourceContract,
+    SafeId,
+    Sha256,
+    StrictRawFreeModel,
+    model_bytes_match,
+)
+from app.services.evaluation_atomic_claim_contracts import (
+    AtomicClaimSourceContract as AtomicClaimSourceContract,
+)
 
-Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-SafeId = Annotated[
-    str,
-    StringConstraints(
-        min_length=1,
-        max_length=160,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-    ),
-]
 
-
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class AtomicClaimBlindReferenceDecision(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    required_fact_hash: Sha256
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimBlindReferenceDecision(AtomicClaimFullHashBinding):
     reference_supported: bool
 
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
 
-    def scope_binding(self) -> dict[str, object]:
-        return {
-            "case_id": self.case_id,
-            "question_hash": self.question_hash,
-            "source_hash": self.source_hash,
-            "answer_hash": self.answer_hash,
-            "context_hash": self.context_hash,
-            "required_fact_id": self.required_fact_id,
-            "required_fact_hash": self.required_fact_hash,
-            "claim_ordinal": self.claim_ordinal,
-        }
-
-
-class AtomicClaimBlindReviewManifest(_StrictModel):
+class AtomicClaimBlindReviewManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_review.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     reviewer_provenance: SafeId
     reviewer_type: Literal["human", "codex_assisted", "automatic"]
@@ -90,6 +57,7 @@ class AtomicClaimBlindReviewManifest(_StrictModel):
 
     @model_validator(mode="after")
     def validate_blind_reference(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         if not _is_utc_aware(self.reviewed_at_utc):
             raise ValueError("blind_review_timestamp_not_utc_aware")
         identities = [decision.identity for decision in self.decisions]
@@ -115,10 +83,10 @@ class AtomicClaimBlindReviewManifest(_StrictModel):
         return self
 
 
-class AtomicClaimBlindReviewCommitment(_StrictModel):
+class AtomicClaimBlindReviewCommitment(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_commitment.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     reference_manifest_sha256: Sha256
     reference_claim_count: int = Field(gt=0)
@@ -136,6 +104,7 @@ class AtomicClaimBlindReviewCommitment(_StrictModel):
 
     @model_validator(mode="after")
     def validate_commitment_timestamp(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         if not _is_utc_aware(self.reviewed_at_utc) or not _is_utc_aware(self.committed_at_utc):
             raise ValueError("blind_review_commitment_timestamp_not_utc_aware")
         if self.committed_at_utc < self.reviewed_at_utc:
@@ -147,41 +116,20 @@ class AtomicClaimBlindReviewCommitment(_StrictModel):
         return self
 
 
-class AtomicClaimBlindCandidateObservation(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
-    required_fact_id: SafeId
-    required_fact_hash: Sha256
-    claim_ordinal: int = Field(ge=0)
+class AtomicClaimBlindCandidateObservation(AtomicClaimFullHashBinding):
     segmentation_status: Literal["presegmented_reference_claim"]
     whole_statement_exact_match: bool
     atomic_equivalence_match: bool
 
-    @property
-    def identity(self) -> tuple[str, str, int]:
-        return (self.case_id, self.required_fact_id, self.claim_ordinal)
 
-
-class AtomicClaimBlindNotApplicableObservation(_StrictModel):
-    case_id: SafeId
-    question_hash: Sha256
-    source_hash: Sha256
-    answer_hash: Sha256
-    context_hash: Sha256
+class AtomicClaimBlindNotApplicableObservation(AtomicClaimFullNotApplicableBinding):
     reason: Literal["unanswerable", "abstention"]
 
-    @property
-    def observation_identity(self) -> tuple[str, str, str]:
-        return (self.case_id, self.answer_hash, self.context_hash)
 
-
-class AtomicClaimBlindCandidateManifest(_StrictModel):
+class AtomicClaimBlindCandidateManifest(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_candidate.v1"]
-    source: AtomicClaimSourceContract
-    review_scope_id: Literal["rag79_run112_existing_review_subset"]
+    source: AtomicClaimReviewSourceContract
+    review_scope_id: SafeId
     review_scope_fingerprint: Sha256
     phase_a_reference_manifest_sha256: Sha256
     candidate_id: SafeId
@@ -194,6 +142,7 @@ class AtomicClaimBlindCandidateManifest(_StrictModel):
 
     @model_validator(mode="after")
     def validate_candidate_uniqueness_and_applicability(self) -> Self:
+        _validate_scope_source_pair(self.review_scope_id, self.source)
         identities = [observation.identity for observation in self.observations]
         if len(identities) != len(set(identities)):
             raise ValueError("blind_candidate_claim_identity_duplicate")
@@ -211,7 +160,7 @@ class AtomicClaimBlindCandidateManifest(_StrictModel):
         return self
 
 
-class AtomicClaimBlindPhaseBResult(_StrictModel):
+class AtomicClaimBlindPhaseBResult(StrictRawFreeModel):
     schema_version: Literal["phase3.oracle_atomic_claim_blind_phase_b.v1"]
     phase_a_commitment_sha256: Sha256
     reference_manifest_sha256: Sha256
@@ -238,7 +187,7 @@ class AtomicClaimBlindPhaseBResult(_StrictModel):
 
 
 def compute_review_scope_fingerprint(
-    source: AtomicClaimSourceContract,
+    source: AtomicClaimReviewSourceContract,
     decisions: tuple[AtomicClaimBlindReferenceDecision, ...],
 ) -> str:
     claims = sorted(
@@ -262,13 +211,38 @@ def compute_review_scope_fingerprint(
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _validate_scope_source_pair(
+    review_scope_id: str,
+    source: AtomicClaimReviewSourceContract,
+) -> None:
+    expected_scope = (
+        "rag83_review_only_calibration_all_answerable_dev_v1"
+        if isinstance(source, AtomicClaimReviewCalibrationSourceContract)
+        else "rag79_run112_existing_review_subset"
+    )
+    if review_scope_id != expected_scope:
+        raise ValueError("blind_review_scope_source_mismatch")
+
+
+def _validate_phase_b_source_authority(source: AtomicClaimReviewSourceContract) -> None:
+    if isinstance(source, AtomicClaimReviewCalibrationSourceContract) and (
+        source.review_run_id != "rag83-review-only-20260810T055955Z"
+        or source.selected_case_count != 24
+        or source.succeeded_case_count != 24
+        or source.pipeline_failure_count != 0
+    ):
+        raise EvaluationAtomicClaimCalibrationError(
+            "atomic_claim_review_only_phase_b_authority_unsupported"
+        )
+
+
 def build_phase_a_commitment(
     reference_manifest_bytes: bytes,
     reference: AtomicClaimBlindReviewManifest,
     *,
     committed_at_utc: datetime | None = None,
 ) -> AtomicClaimBlindReviewCommitment:
-    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+    if not model_bytes_match(reference_manifest_bytes, reference):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
     committed_at = committed_at_utc or datetime.now(UTC)
     return AtomicClaimBlindReviewCommitment(
@@ -301,15 +275,18 @@ def evaluate_phase_b(
     candidate_manifest_bytes: bytes,
     candidate: AtomicClaimBlindCandidateManifest,
 ) -> AtomicClaimBlindPhaseBResult:
+    _validate_phase_b_source_authority(reference.source)
+    _validate_phase_b_source_authority(commitment.source)
+    _validate_phase_b_source_authority(candidate.source)
     reference_hash = hashlib.sha256(reference_manifest_bytes).hexdigest()
     commitment_hash = hashlib.sha256(commitment_bytes).hexdigest()
     candidate_hash = hashlib.sha256(candidate_manifest_bytes).hexdigest()
 
-    if not _reference_bytes_match_model(reference_manifest_bytes, reference):
+    if not model_bytes_match(reference_manifest_bytes, reference):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_reference_bytes_model_mismatch")
-    if not _commitment_bytes_match_model(commitment_bytes, commitment):
+    if not model_bytes_match(commitment_bytes, commitment):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_commitment_bytes_model_mismatch")
-    if not _candidate_bytes_match_model(candidate_manifest_bytes, candidate):
+    if not model_bytes_match(candidate_manifest_bytes, candidate):
         raise EvaluationAtomicClaimCalibrationError("atomic_claim_candidate_bytes_model_mismatch")
     if reference_hash != commitment.reference_manifest_sha256:
         raise EvaluationAtomicClaimCalibrationError(
@@ -466,39 +443,6 @@ def evaluate_phase_b(
         profile_promotion_allowed=False,
         reason_codes=tuple(reasons),
     )
-
-
-def _reference_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindReviewManifest,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindReviewManifest.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
-
-
-def _commitment_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindReviewCommitment,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindReviewCommitment.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
-
-
-def _candidate_bytes_match_model(
-    payload_bytes: bytes,
-    expected: AtomicClaimBlindCandidateManifest,
-) -> bool:
-    try:
-        parsed = AtomicClaimBlindCandidateManifest.model_validate_json(payload_bytes)
-    except ValidationError:
-        return False
-    return parsed == expected
 
 
 def _is_utc_aware(value: datetime) -> bool:

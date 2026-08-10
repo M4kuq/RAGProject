@@ -13,6 +13,15 @@ from app.services.evaluation_atomic_claim_calibration_service import (
     evaluate_atomic_claim_candidate,
     inspect_reference_payload,
 )
+from app.services.evaluation_atomic_claim_contracts import (
+    print_blocked as _blocked,
+)
+from app.services.evaluation_atomic_claim_contracts import (
+    read_json_object as _read_object,
+)
+from app.services.evaluation_atomic_claim_contracts import (
+    write_raw_free_text,
+)
 
 
 def main() -> int:
@@ -64,23 +73,9 @@ def main() -> int:
 
     rendered = summary.model_dump_json(indent=2)
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(rendered + "\n", encoding="utf-8")
+        write_raw_free_text(args.output, rendered)
     print(rendered)
     return 0 if summary.candidate_selected else 2
-
-
-def _read_object(path: Path) -> tuple[bytes, dict[str, object]]:
-    payload_bytes = path.read_bytes()
-    payload = json.loads(payload_bytes.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError
-    return payload_bytes, payload
-
-
-def _blocked(reason_code: str) -> int:
-    print(json.dumps({"status": "blocked", "reason_code": reason_code}, sort_keys=True))
-    return 2
 
 
 if __name__ == "__main__":
