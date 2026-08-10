@@ -6,6 +6,8 @@ from pathlib import Path
 
 from app.services.evaluation_atomic_claim_contracts import (
     print_blocked as _blocked,
+)
+from app.services.evaluation_atomic_claim_contracts import (
     write_model_json,
 )
 from app.services.evaluation_atomic_claim_review_workflow_service import (
