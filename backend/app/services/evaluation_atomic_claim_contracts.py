@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -24,38 +24,24 @@ class StrictRawFreeModel(BaseModel):
 
 
 class AtomicClaimSourceContract(StrictRawFreeModel):
-    source_evaluation_run_id: Annotated[int, Field(strict=True)] = 112
-    dataset_name: Annotated[str, Field(strict=True)] = "local_accuracy_dev_v1"
+    source_evaluation_run_id: Literal[112]
+    dataset_name: Literal["local_accuracy_dev_v1"]
     dataset_content_fingerprint: Sha256
     case_set_fingerprint: Sha256
     generation_config_fingerprint: Sha256
-    generation_prompt_profile: Annotated[str, Field(strict=True)] = "baseline"
+    generation_prompt_profile: Literal["baseline"]
     generation_prompt_fingerprint: Sha256
     generation_budget_fingerprint: Sha256
-    resolved_generation_model: Annotated[str, Field(strict=True)] = "qwen/qwen3.5-9b"
+    resolved_generation_model: Literal["qwen/qwen3.5-9b"]
     generation_temperature: float
-    generation_max_context_chars: Annotated[int, Field(strict=True)] = 6000
-    generation_max_output_chars: Annotated[int, Field(strict=True)] = 12000
-    generation_max_output_tokens: Annotated[int, Field(strict=True)] = 8192
+    generation_max_context_chars: Literal[6000]
+    generation_max_output_chars: Literal[12000]
+    generation_max_output_tokens: Literal[8192]
 
     @model_validator(mode="after")
-    def validate_frozen_contract(self) -> AtomicClaimSourceContract:
-        if self.source_evaluation_run_id != 112:
-            raise ValueError("atomic_claim_source_run_drift")
-        if self.dataset_name != "local_accuracy_dev_v1":
-            raise ValueError("atomic_claim_dataset_not_allowed")
-        if self.generation_prompt_profile != "baseline":
-            raise ValueError("atomic_claim_prompt_profile_drift")
-        if self.resolved_generation_model != "qwen/qwen3.5-9b":
-            raise ValueError("atomic_claim_model_mismatch")
+    def validate_frozen_temperature(self) -> AtomicClaimSourceContract:
         if self.generation_temperature != 0.0:
             raise ValueError("atomic_claim_generation_temperature_drift")
-        if (
-            self.generation_max_context_chars != 6000
-            or self.generation_max_output_chars != 12000
-            or self.generation_max_output_tokens != 8192
-        ):
-            raise ValueError("atomic_claim_generation_budget_drift")
         return self
 
 
