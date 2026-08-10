@@ -81,6 +81,5 @@ def main() -> int:
     return 0 if result.candidate_selected else 2
 
 
-
 if __name__ == "__main__":
     raise SystemExit(main())
