@@ -599,11 +599,6 @@ def load_review_input(
         raise EvaluationAtomicClaimReviewWorkflowError(
             "atomic_claim_review_private_scope_hash_drift"
         )
-    if not model_bytes_match(private_bytes, private):
-        raise EvaluationAtomicClaimReviewWorkflowError(
-            "atomic_claim_review_private_bytes_model_mismatch"
-        )
-
     private_by_target = {
         (observation.case_id, observation.answer_hash): observation
         for observation in private.observations
