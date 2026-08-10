@@ -75,7 +75,7 @@ jobs:
           cache-dependency-glob: backend/uv.lock
 
       - name: Ruff format check
-        run: uv run --frozen --extra dev ruff format --diff .
+        run: uv run --frozen --extra dev ruff format --check .
 
       - name: Ruff lint
         run: uv run --frozen --extra dev ruff check .
