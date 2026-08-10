@@ -146,6 +146,7 @@ def test_phase_b_rejects_hash_drift_and_incomplete_coverage() -> None:
     reference_bytes, reference = _reference()
     commitment_bytes, commitment = _commitment(reference_bytes, reference)
     payload = _candidate_payload(reference)
+    payload["phase_a_reference_manifest_sha256"] = hashlib.sha256(reference_bytes).hexdigest()
     payload["observations"][0]["question_hash"] = "e" * 64
     candidate = AtomicClaimBlindCandidateManifest.model_validate(payload)
     candidate_bytes = _canonical_bytes(payload)
@@ -164,6 +165,7 @@ def test_phase_b_rejects_hash_drift_and_incomplete_coverage() -> None:
         )
 
     payload = _candidate_payload(reference)
+    payload["phase_a_reference_manifest_sha256"] = hashlib.sha256(reference_bytes).hexdigest()
     payload["observations"].pop()
     candidate = AtomicClaimBlindCandidateManifest.model_validate(payload)
     candidate_bytes = _canonical_bytes(payload)
