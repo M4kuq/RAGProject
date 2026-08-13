@@ -55,6 +55,7 @@ _MAX_CONTEXT_CHARS: Literal[6000] = 6000
 _MAX_OUTPUT_CHARS: Literal[12000] = 12000
 _MAX_OUTPUT_TOKENS: Literal[8192] = 8192
 _CASE_TIMEOUT_SECONDS: Literal[180] = 180
+_TARGET_LOADED_CONTEXT_LENGTH: Literal[12312] = 12312
 _BOOTSTRAP_RESAMPLES: Literal[10000] = 10000
 _BOOTSTRAP_SEED: Literal[85085] = 85085
 _MINIMUM_ABSOLUTE_DELTA = 0.15
@@ -169,6 +170,7 @@ class Rag85GenerationContract(StrictRawFreeModel):
     generation_max_output_chars: Literal[12000]
     generation_max_output_tokens: Literal[8192]
     generation_case_wall_clock_timeout_seconds: Literal[180]
+    lmstudio_loaded_context_length: Literal[12312]
     retry_policy: Literal["existing_evaluation_generation_retry"]
     repeats_per_condition: Literal[3]
     expected_generation_count: Literal[126]
@@ -279,17 +281,31 @@ class Rag85LMInventorySummary(StrictRawFreeModel):
     model_count: int | None = Field(default=None, ge=0)
     loaded_instance_count: int | None = Field(default=None, ge=0)
     target_loaded_instance_count: int | None = Field(default=None, ge=0)
+    target_loaded_context_length: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_availability(self) -> Self:
-        values = (
+        base_values = (
             self.inventory_fingerprint,
             self.model_count,
             self.loaded_instance_count,
             self.target_loaded_instance_count,
         )
-        if (self.available and not all(value is not None for value in values)) or (
-            not self.available and any(value is not None for value in values)
+        all_values = (*base_values, self.target_loaded_context_length)
+        invalid_available = self.available and (
+            not all(value is not None for value in base_values)
+            or (
+                self.target_loaded_instance_count == 0
+                and self.target_loaded_context_length is not None
+            )
+            or (
+                self.target_loaded_instance_count is not None
+                and self.target_loaded_instance_count > 0
+                and self.target_loaded_context_length is None
+            )
+        )
+        if invalid_available or (
+            not self.available and any(value is not None for value in all_values)
         ):
             raise ValueError("rag85_lm_inventory_shape_invalid")
         return self
@@ -534,6 +550,7 @@ def build_rag85_experiment_manifest() -> Rag85ExperimentManifest:
             generation_max_output_chars=_MAX_OUTPUT_CHARS,
             generation_max_output_tokens=_MAX_OUTPUT_TOKENS,
             generation_case_wall_clock_timeout_seconds=_CASE_TIMEOUT_SECONDS,
+            lmstudio_loaded_context_length=_TARGET_LOADED_CONTEXT_LENGTH,
             retry_policy="existing_evaluation_generation_retry",
             repeats_per_condition=_REPEATS,
             expected_generation_count=_EXPECTED_GENERATIONS,
@@ -1319,6 +1336,8 @@ def _validate_pre_inventory(inventory: Rag85LMInventorySummary) -> None:
         raise EvaluationQwenContextPositionError("rag85_pre_lm_inventory_unavailable")
     if inventory.target_loaded_instance_count != 1:
         raise EvaluationQwenContextPositionError("rag85_target_model_not_exactly_once_loaded")
+    if inventory.target_loaded_context_length != _TARGET_LOADED_CONTEXT_LENGTH:
+        raise EvaluationQwenContextPositionError("rag85_target_model_context_length_drift")
 
 
 def _manifest_sha256(manifest: Rag85ExperimentManifest) -> str:

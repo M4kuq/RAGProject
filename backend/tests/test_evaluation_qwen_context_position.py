@@ -44,6 +44,7 @@ def test_frozen_manifest_binds_single_position_coordinate_and_non_gold_scope() -
     assert manifest.generation.resolved_generation_model == "qwen/qwen3.5-9b"
     assert manifest.generation.generation_temperature == 0.0
     assert manifest.generation.reasoning_enabled is False
+    assert manifest.generation.lmstudio_loaded_context_length == 12_312
     assert manifest.generation.expected_generation_count == 126
     assert manifest.generation.latin_rotation == (
         ("front", "middle", "end"),
@@ -305,8 +306,16 @@ def test_cli_inventory_summary_is_hash_only_and_exact_model_aware(
         def json(self) -> dict[str, object]:
             return {
                 "data": [
-                    {"id": "qwen/qwen3.5-9b", "state": "loaded"},
-                    {"id": "another/model", "state": "not-loaded"},
+                    {
+                        "id": "qwen/qwen3.5-9b",
+                        "state": "loaded",
+                        "loaded_context_length": 12_312,
+                    },
+                    {
+                        "id": "another/model",
+                        "state": "not-loaded",
+                        "loaded_context_length": None,
+                    },
                 ]
             }
 
@@ -318,6 +327,7 @@ def test_cli_inventory_summary_is_hash_only_and_exact_model_aware(
     assert inventory.model_count == 2
     assert inventory.loaded_instance_count == 1
     assert inventory.target_loaded_instance_count == 1
+    assert inventory.target_loaded_context_length == 12_312
     assert inventory.inventory_fingerprint is not None
     assert "qwen" not in inventory.model_dump_json()
 
@@ -368,6 +378,7 @@ def _stable_inventory() -> Rag85LMInventorySummary:
         model_count=6,
         loaded_instance_count=1,
         target_loaded_instance_count=1,
+        target_loaded_context_length=12_312,
     )
 
 

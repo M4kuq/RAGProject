@@ -1,9 +1,9 @@
 {
   "schema_version": "phase3.rag85_qwen_context_position_lock.v1",
   "stacked_base_commit": "b2b9512f3f5e9ac56241660271000cb098f3aaee",
-  "experiment_manifest_sha256": "638eb475b07f406c792ec307e634753b6abae1f165bbb85822a135e2fa437659",
+  "experiment_manifest_sha256": "f45ce66f719a759b4557692664497dfc472153e50b3876addd9361ea34fbd6ea",
   "dataset_binding_sha256": "e451769fcbba6a8ec61a37fbf0b7d08c0981a9a3820e26ce3d18b0f27c5a8eb0",
-  "generation_contract_sha256": "de5a91974769df8c163fac38e5cb9eae70a28bd09d391c348c1feaf3fb47e188",
+  "generation_contract_sha256": "1a8e9e68d895cd1c54bc592ed99240cb6d1a4b39d87ea52283651c4b5263d663",
   "decision_rule_sha256": "3259ab0527ba55a3eb9990a8c7a2b49b51c491fd73d0c77779ca7f1f7fdc0c5b",
   "source_fixture_content_fingerprint": "4f7413f995d58caf09056b610554fb9791fd2d2a5119b4cdd8dada836a714f88",
   "case_set_fingerprint": "3def45ca8ee3a23ea9c0cc51cd6fd597c9278ac060d1fa8959abf72b12fc2251",

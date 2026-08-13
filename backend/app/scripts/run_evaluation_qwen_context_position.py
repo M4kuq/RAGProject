@@ -122,12 +122,14 @@ def _fetch_lm_inventory() -> Rag85LMInventorySummary:
         return Rag85LMInventorySummary(available=False)
     entries: list[dict[str, object]] = []
     target_loaded_count: int | None = None
+    target_loaded_context_length: int | None = None
     total_loaded = 0
     for item in payload["data"]:
         if not isinstance(item, dict):
             return Rag85LMInventorySummary(available=False)
         model_id = item.get("id")
         state = item.get("state")
+        raw_loaded_context_length = item.get("loaded_context_length")
         if (
             not isinstance(model_id, str)
             or not isinstance(state, str)
@@ -135,10 +137,24 @@ def _fetch_lm_inventory() -> Rag85LMInventorySummary:
         ):
             return Rag85LMInventorySummary(available=False)
         loaded_count = int(state == "loaded")
+        loaded_context_length = (
+            raw_loaded_context_length
+            if isinstance(raw_loaded_context_length, int) and raw_loaded_context_length > 0
+            else None
+        )
+        if loaded_count and loaded_context_length is None:
+            return Rag85LMInventorySummary(available=False)
         total_loaded += loaded_count
-        entries.append({"model_id": model_id, "state": state})
+        entries.append(
+            {
+                "model_id": model_id,
+                "state": state,
+                "loaded_context_length": loaded_context_length,
+            }
+        )
         if model_id == _MODEL:
             target_loaded_count = loaded_count
+            target_loaded_context_length = loaded_context_length
     if target_loaded_count is None:
         return Rag85LMInventorySummary(available=False)
     canonical = json.dumps(
@@ -153,6 +169,7 @@ def _fetch_lm_inventory() -> Rag85LMInventorySummary:
         model_count=len(entries),
         loaded_instance_count=total_loaded,
         target_loaded_instance_count=target_loaded_count,
+        target_loaded_context_length=target_loaded_context_length,
     )
 
 

@@ -37,6 +37,8 @@ the baseline prompt fingerprint, the generation contract, and the decision rule.
 - prompt profile: unchanged `baseline`; the rejected RAG-84 evidence-ledger candidate is
   not used
 - context/output/token budgets: `6000 / 12000 / 8192`
+- LM Studio loaded context length: `12312`, matching the preserved target-family runtime
+  and leaving room for the fixed input plus the 8192 output-token cap
 - retry: existing evaluation generation retry
 - case wall-clock timeout: 180 seconds
 
@@ -81,7 +83,8 @@ Record the original LM inventory, then load only the target model if needed:
 
 ```powershell
 lms ps
-lms load qwen/qwen3.5-9b --exact --identifier qwen/qwen3.5-9b -y
+lms load qwen/qwen3.5-9b --exact --identifier qwen/qwen3.5-9b `
+  --context-length 12312 -y
 ```
 
 Run once from `backend`:
@@ -95,8 +98,9 @@ python -m app.scripts.run_evaluation_qwen_context_position `
   --confirm-one-shot
 ```
 
-The CLI uses LM Studio's v0 model-state inventory so separately registered aliases remain
-visible in the pre/post fingerprint. It refuses a non-matching HEAD, uncommitted RAG-85
+The CLI uses LM Studio's v0 model-state inventory so separately registered aliases and
+their loaded context lengths remain visible in the pre/post fingerprint. It refuses a
+non-matching HEAD, uncommitted RAG-85
 changes, repository-local/existing/symlinked outputs, unavailable inventory, or an exact
 target loaded zero or multiple times. The
 known user-owned `scripts/test_nvidia_generation.ps1` difference is allowed but never
