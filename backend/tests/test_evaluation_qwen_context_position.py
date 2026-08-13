@@ -304,9 +304,9 @@ def test_cli_inventory_summary_is_hash_only_and_exact_model_aware(
 
         def json(self) -> dict[str, object]:
             return {
-                "models": [
-                    {"key": "qwen/qwen3.5-9b", "loaded_instances": [{"id": "opaque"}]},
-                    {"key": "another/model", "loaded_instances": []},
+                "data": [
+                    {"id": "qwen/qwen3.5-9b", "state": "loaded"},
+                    {"id": "another/model", "state": "not-loaded"},
                 ]
             }
 

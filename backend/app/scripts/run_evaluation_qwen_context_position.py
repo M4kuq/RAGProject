@@ -24,7 +24,7 @@ from app.services.evaluation_qwen_context_position_service import (
 )
 
 _MODEL = "qwen/qwen3.5-9b"
-_LM_MODELS_URL = "http://127.0.0.1:1234/api/v1/models"
+_LM_MODELS_URL = "http://127.0.0.1:1234/api/v0/models"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _LOCK_PATH = (
     Path(__file__).resolve().parents[1]
@@ -118,21 +118,25 @@ def _fetch_lm_inventory() -> Rag85LMInventorySummary:
         payload = response.json()
     except (httpx.HTTPError, ValueError):
         return Rag85LMInventorySummary(available=False)
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return Rag85LMInventorySummary(available=False)
     entries: list[dict[str, object]] = []
     target_loaded_count: int | None = None
     total_loaded = 0
-    for item in payload["models"]:
+    for item in payload["data"]:
         if not isinstance(item, dict):
             return Rag85LMInventorySummary(available=False)
-        model_id = item.get("key") if isinstance(item.get("key"), str) else item.get("id")
-        loaded_instances = item.get("loaded_instances")
-        if not isinstance(model_id, str) or not isinstance(loaded_instances, list):
+        model_id = item.get("id")
+        state = item.get("state")
+        if (
+            not isinstance(model_id, str)
+            or not isinstance(state, str)
+            or state not in {"loaded", "not-loaded"}
+        ):
             return Rag85LMInventorySummary(available=False)
-        loaded_count = len(loaded_instances)
+        loaded_count = int(state == "loaded")
         total_loaded += loaded_count
-        entries.append({"model_id": model_id, "loaded_instance_count": loaded_count})
+        entries.append({"model_id": model_id, "state": state})
         if model_id == _MODEL:
             target_loaded_count = loaded_count
     if target_loaded_count is None:

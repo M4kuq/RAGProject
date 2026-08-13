@@ -95,8 +95,10 @@ python -m app.scripts.run_evaluation_qwen_context_position `
   --confirm-one-shot
 ```
 
-The CLI refuses a non-matching HEAD, uncommitted RAG-85 changes, repository-local/existing/
-symlinked outputs, unavailable inventory, or a target loaded zero or multiple times. The
+The CLI uses LM Studio's v0 model-state inventory so separately registered aliases remain
+visible in the pre/post fingerprint. It refuses a non-matching HEAD, uncommitted RAG-85
+changes, repository-local/existing/symlinked outputs, unavailable inventory, or an exact
+target loaded zero or multiple times. The
 known user-owned `scripts/test_nvidia_generation.ps1` difference is allowed but never
 edited or staged. Progress contains only condition/repeat/count/failure metadata. The
 attempt marker and final artifact contain hashes, counts, booleans, rates, latencies, and
