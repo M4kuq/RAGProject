@@ -130,3 +130,49 @@ Rollback is commit-SHA scoped: revert the RAG-85 pre-live implementation commit 
 separate post-live documentation-only commit, then remove the unmerged branch/PR only if
 separately authorized. Repository-external raw-free artifacts may be retained for review.
 No datastore rollback is required because the runner does not mutate a datastore.
+
+## Measured one-shot result
+
+The pre-live authority commit was
+`6954a25a798c9001f4d5b895375b348da5c00832`. The diagnostic ran exactly once and
+completed all 126 planned generations with 126 unique execution ordinals. There were zero
+pipeline failures, binding drifts, case exclusions, or replacements. The repository-
+external raw-free result artifact has SHA-256
+`5e4774cf18a77e80055ff6367fd73358a48c4ad61771839c29d53ca41a293b11`; its bytes match
+the committed result schema and the raw-key scan found zero prohibited fields.
+
+The validity gate failed because the full LM inventory changed during the approximately
+116-minute run. The exact target remained loaded once at context length 12312 before and
+after. However, a separately registered pre-existing alias with a one-hour TTL expired:
+inventory count changed from 7 to 6 and total loaded count changed from 2 to 1. No model
+was loaded or unloaded by the runner itself. The result reason is
+`rag85_lm_inventory_drift`; the one-shot conclusion is therefore `inconclusive` and the
+run was not repeated. After artifact validation, only the exact target added for RAG-85
+was unloaded. The expired alias was not reloaded, leaving zero models loaded.
+
+Descriptive results, which do not override the failed validity gate:
+
+| Condition | Repeat atomic recall | Majority atomic recall | Majority whole completeness | p95 latency |
+| --- | --- | --- | --- | --- |
+| front | 92.857%, 92.857%, 92.857% | 92.857% | 92.857% | 76,141 ms |
+| middle | 92.857%, 92.857%, 92.857% | 92.857% | 92.857% | 75,993 ms |
+| end | 100%, 100%, 100% | 100% | 100% | 77,373 ms |
+
+All three conditions had 100% citation-source coverage, zero false-insufficiency
+assertions, zero unexpected/forbidden-fact cases, and zero pipeline failures. Citation-
+grounded majority recall matched atomic majority recall in every condition.
+
+The paired majority comparisons were:
+
+| Pair | Delta | Paired bootstrap 95% CI | Exact sign-flip p | Holm p | Primary gate |
+| --- | ---: | --- | ---: | ---: | --- |
+| front - middle | 0 pp | [-21.429, 21.429] pp | 1.0 | 1.0 | fail |
+| front - end | -7.143 pp | [-21.429, 0] pp | 1.0 | 1.0 | fail |
+| middle - end | -7.143 pp | [-21.429, 0] pp | 1.0 | 1.0 | fail |
+
+Thus the measured effect never reached the predeclared 15-point minimum, no confidence
+interval excluded zero, and no Holm-adjusted sign-flip test was significant. Even absent
+the inventory failure, this sample would not have detected position dependence. Because
+the validity gate failed, the authoritative conclusion remains `inconclusive`, not “no
+position dependence.” No position is selected, and there is no profile promotion, Gold
+claim, public-accuracy claim, confirm run, merge, or deployment from this result.
