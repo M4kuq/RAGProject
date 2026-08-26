@@ -2,7 +2,9 @@
 
 ## Status
 
-Pre-live implementation. No RAG-88 model call has run at this revision.
+The single authorized live run is complete. Its formal conclusion is `inconclusive` because
+the pre-registered zero-pipeline-failure validity gate failed. The candidate is not adopted,
+and the existing baseline is retained.
 
 RAG-88 is independent from the RAG-87 sensitivity decision. It does not reinterpret the
 RAG-87 fixture or use its false-insufficiency wording gate. The experiment first establishes
@@ -100,9 +102,55 @@ modified.
 
 ## Verification and result
 
-Pre-live focused tests, full backend checks, Ruff, mypy, isolated Compose, and GitHub CI evidence
-are recorded separately after completion. The formal one-shot result will be added without
-changing this contract.
+Pre-live verification completed before any model call:
+
+- focused RAG-88 tests: 11 passed;
+- full backend final run: 1,107 passed and 21 skipped;
+- Ruff check and format: 317 files passed;
+- mypy app scope: 212 source files passed; and
+- isolated Compose: Ruff and mypy passed, with 1,119 tests passed and 9 skipped.
+
+The first full backend run had one unrelated SQLite worker timestamp-boundary failure. That
+test passed immediately in isolation, and the complete rerun passed. The first Compose start
+stopped before service creation because Docker's default network pools were exhausted. A
+dedicated non-conflicting subnet was used without deleting an existing network; the final
+isolated run passed, and its six containers and dedicated network were removed.
+
+The fixed live run executed all 144 scheduled calls and retained every observation. The formal
+raw-free result is:
+
+- conclusion: `inconclusive`;
+- stable reason: `rag88_pipeline_failure`;
+- validity / baseline sensitivity / candidate adoption: `false / false / false`;
+- eligible groups: `4` (required minimum: `8`);
+- baseline incomplete eligible groups: `0` (required minimum: `6`);
+- interference drop and 95% bootstrap CI: `0.0`, `[0.0, 0.0]`;
+- interference exact paired p-value: `1.0`;
+- baseline and candidate eligible-group joint completeness: `1.0 / 1.0`;
+- baseline and candidate eligible-group atomic recall: `1.0 / 1.0`;
+- baseline and candidate citation grounding recall: `1.0 / 1.0`;
+- baseline and candidate citation source coverage: `0.833333 / 0.833333`;
+- candidate joint delta, improved groups, and exact p-value: `0.0 / 0 / 1.0`;
+- candidate p95 latency ratio: `1.0`;
+- pipeline failures: `51`, comprising `40` standard-call wall-clock timeouts and `11`
+  paired candidate observations whose pass 1 was unavailable;
+- repair decisions among completed repair calls: `25` keep and `0` revise;
+- false insufficiency, unexpected-fact groups, and forbidden-claim groups: `0 / 0 / 0`;
+- binding drift, case exclusion, and case replacement: `0 / 0 / 0`; and
+- exact-target stability passed. Full inventory stability did not pass because the unrelated
+  pre-existing alias expired under its one-hour TTL during the long run; full inventory is not
+  a RAG-88 validity gate.
+
+Candidate metrics are descriptive only. In particular, the observed equality on the four
+eligible groups is not evidence that the repair is effective because the experiment failed its
+pipeline and minimum-eligibility gates. No rerun, failed-case replacement, extra repeat,
+threshold change, fixture change, adoption, or profile promotion is authorized.
+
+The result artifact SHA-256 is
+`dca0865277b40f1c05401ca3afc74798c3a69b01b7e8ea161c819e3b6d2954e9`; the attempt marker
+SHA-256 is `ffac4be6bcc021791937835f105771a955159ee47b47ff6926fb9e22555591c7`.
+Both artifacts passed strict schema, model-byte, 144-observation/ordinal, and forbidden raw-key
+checks. They persist neither raw evaluation content nor chain-of-thought.
 
 Rollback is commit-scoped. The runner does not write to application datastores, so no datastore
 rollback is required.
