@@ -2,13 +2,41 @@
 
 ## Status
 
-Pre-live implementation for the diagnostic-only RAG-86 experiment. The frozen
-authority is Jira RAG-86 comment `10098`, and the stacked base is Draft PR #157
-head `f89e248d2294be9b41150f4ab9b8879e6329e536`.
+The diagnostic-only RAG-86 experiment completed its single authorized live run.
+The frozen authority is Jira RAG-86 comment `10098`, and the stacked base is
+Draft PR #157 head `f89e248d2294be9b41150f4ab9b8879e6329e536`.
 
-The live experiment must not start until the implementation, lock manifest,
-focused tests, full backend tests, Ruff, mypy, and pre-live commit/push gates
-are complete. The live experiment is one-shot and must not be repeated.
+The implementation and frozen lock were committed and pushed at pre-live SHA
+`54a8200f2ea86ae8b2bb7fea93e321d29e9c9261` before the experiment started.
+The one-shot experiment is complete and must not be repeated.
+
+## Live result
+
+- Formal conclusion: `no_detectable_near_miss_causal_effect`.
+- Validity gate: passed; exact target remained stable.
+- Executions: 84 of 84, with zero pipeline failures, exclusions,
+  replacements, or binding drift.
+- Primary majority atomic required-fact recall: clean `1.0`, near-miss `1.0`.
+- Primary delta (near-miss minus clean): `0.0`.
+- Paired bootstrap 95% interval: `[0.0, 0.0]`.
+- Exact sign-flip p-value: `1.0`.
+- The effect-size, confidence-interval, and exact sign-flip gates all failed,
+  so the combined causal-effect gate did not pass.
+- Per-repeat atomic required-fact recall was `1.0` in all three repeats for
+  both conditions.
+- Majority whole completeness and majority citation grounding were `1.0` for
+  both conditions.
+- Near-miss contamination and adoption rates were `0.0`.
+- p95 latency was `80783` ms for clean and `81775` ms for near-miss.
+- Result artifact SHA-256:
+  `13fd5c78aa2b4c1713e622ea70d3b1d95bfb8eccbfd875752836c8d126375547`.
+- Stable reason code: `rag86_no_detectable_near_miss_causal_effect`.
+
+The result and attempt marker passed strict schema validation, model-dump byte
+equivalence, observation-count validation, and the raw-free key gate. The
+runner restored LM Studio to its starting state of zero loaded models. The
+result is diagnostic only and does not authorize a mitigation, confirmation,
+profile promotion, merge, deployment, or production behavior change.
 
 ## Frozen coordinate
 
@@ -131,6 +159,13 @@ Required verification order:
 7. the single live 84-generation run;
 8. post-live artifact schema/byte/hash/raw-free validation;
 9. post-live result documentation, commit, push, and GitHub CI.
+
+Pre-live verification completed with 14 focused tests passing, 1,087 full
+backend tests passing with 21 skipped, Ruff format/check passing, and mypy
+passing across 311 source files. Isolated Compose verification completed with
+1,099 tests passing and 9 skipped; its exact temporary containers, volumes, and
+network were removed after verification. GitHub CI status is recorded on the
+stacked Draft PR.
 
 ## Rollback
 
