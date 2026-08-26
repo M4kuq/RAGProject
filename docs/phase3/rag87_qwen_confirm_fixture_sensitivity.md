@@ -2,15 +2,54 @@
 
 ## Status
 
-RAG-87 is a diagnostic-only baseline measurement. Its purpose is to determine
-whether an independent confirm fixture can detect the multi-fact completeness
-difficulty observed by RAG-84 before any candidate change is evaluated. Jira
-RAG-87 comment `10133` is the frozen authority. The stacked base is Draft PR
-#158 head `a62977d3ac1c8d411c1441f886db9b96011995dd`.
+RAG-87 completed its single authorized diagnostic-only baseline measurement.
+Its purpose was to determine whether an independent confirm fixture could
+detect the multi-fact completeness difficulty observed by RAG-84 before any
+candidate change was evaluated. Jira RAG-87 comment `10133` is the frozen
+authority. The stacked base is Draft PR #158 head
+`a62977d3ac1c8d411c1441f886db9b96011995dd`.
 
-This document describes the pre-live contract. The single authorized live run
-must not start until the implementation, tests, this document, and the raw-free
-lock are committed and pushed.
+The implementation and raw-free lock were committed and pushed at pre-live SHA
+`09a382a3bc4794fee80e45949f5ff1a493cf15fc` before generation began. The
+one-shot experiment is complete and must not be repeated.
+
+## Live result
+
+- Formal conclusion: `fixture_sensitivity_not_established`.
+- Stable reason: `rag87_first_only_insufficiency_count_below_minimum`.
+- Validity gate: passed; exact target and full inventory remained stable.
+- Executions: 36 of 36, with zero pipeline failures, binding drift,
+  exclusions, or replacements.
+- Case-majority atomic required-fact recall: `0.75` (18 of 24 facts).
+- Per-repeat atomic recall: `0.75 / 0.75 / 0.75`; range `0.0`.
+- First-fact majority recall: `1.0`; second-fact majority recall: `0.5`;
+  ordinal gap: `0.5`.
+- Majority-complete cases: 6; first-only cases: 6.
+- First-only cases with majority false-insufficiency: 0, below the frozen
+  minimum of 2. This is the only failed sensitivity sub-gate.
+- Majority citation grounding recall: `0.75`; citation source coverage:
+  `1.0`.
+- False-insufficiency observations: 0; unexpected-fact and forbidden-claim
+  majority cases: 0.
+- p95 latency: `76129` ms.
+- Result artifact SHA-256:
+  `348b624da822219094da745de8a20026e5bef58de6f8a720b98774d3d51eb761`.
+- Attempt marker SHA-256:
+  `675df8c121c0f5db49901427174c56831b057dc6c0aa260cbc50b15d7379580f`.
+
+The result and attempt marker passed strict schema validation, model-dump byte
+equivalence, observation-count validation, and the raw-free key gate. The
+exact target instance added for RAG-87 was unloaded after validation. The
+pre-existing non-target alias remained loaded with its original identifier and
+context length; the post-restore full inventory fingerprint matched the
+observed pre-load starting fingerprint.
+
+The fixture avoided the prior 100% ceiling and exposed a stable ordinal recall
+gap, but it did not reproduce the pre-registered false-insufficiency behavior.
+The contract therefore forbids rebuilding this fixture, changing the gate, or
+promoting the partial signals into a successful sensitivity claim. The
+follow-on two-pass completeness experiment is not authorized and was not
+started.
 
 ## Fixture boundary
 
