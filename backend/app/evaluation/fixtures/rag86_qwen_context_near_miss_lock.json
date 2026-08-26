@@ -1,0 +1,19 @@
+{
+  "schema_version": "phase3.rag86_qwen_context_near_miss_lock.v1",
+  "stacked_base_commit": "f89e248d2294be9b41150f4ab9b8879e6329e536",
+  "experiment_manifest_sha256": "b400460eb12eee22dc1ebab26343bfc783d70bdf583babb1f72cf16429ff2201",
+  "dataset_binding_sha256": "df4415cf196c076f49cbf0e2f782c119f73199dd6d19b9d3f67941e795d78c2c",
+  "generation_contract_sha256": "bf35e808619e7d19beda583ebb87af0645a129a23a454e11fcd5d61b79a2097f",
+  "decision_rule_sha256": "72bf4a14042de484d9acc0386d2eda1e9d44fa8cd9334c30012574adb1a47b0c",
+  "source_fixture_content_fingerprint": "4f7413f995d58caf09056b610554fb9791fd2d2a5119b4cdd8dada836a714f88",
+  "case_set_fingerprint": "ed985130f75c345a9f5b948afc688bc119d2bc9c0116a6b9ef862b02e7f2ffea",
+  "source_context_fingerprint": "aecbfd521f5fb293ce0bc3d3d30562caa4069d861484a9f8caa2daa9053f84c7",
+  "near_miss_identifier_set_fingerprint": "331d02c22324142e2f1b7dcf61349a38754c7f5fb2c6a2cb8bc560bf42f1762e",
+  "baseline_prompt_fingerprint": "dd3cb1fb92285b97fd8be11b7b861ae78f346c6085990c910fc19e3edb081f24",
+  "execution_schedule_fingerprint": "4cda30cf4301f3fe19278e701f69680b9190bd1ba73cbce8f9dafd69d618bd6a",
+  "prelive_commit_required": true,
+  "one_shot_attempt_marker_required": true,
+  "generation_count": 84,
+  "gold_v2_access_allowed": false,
+  "raw_content_persistence_allowed": false
+}
