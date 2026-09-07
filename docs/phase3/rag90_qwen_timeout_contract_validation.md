@@ -217,6 +217,22 @@ Ruff format checked 322 files, and mypy checked 215 application source files. Is
 Compose then passed 1126 tests with 21 skipped and 3 warnings. No local verification
 workload ran concurrently with live generation. GitHub CI is checked on the final PR head.
 
+The first GitHub runs on evidence head `70e60f1d4a98c6a5a65ab51498e0b1cf8d9b238e`
+failed: Backend CI `34113538081` and Compose Smoke `34113538164` both reported the same
+12 mypy argument-type errors in the new host-exception test. A heterogeneous `dict[str,
+object]` expanded as keyword arguments obscured the tuple/int/bool parameter types. The
+pre-live local `mypy app` check had not checked tests, unlike CI's `mypy .`.
+The post-live fix uses explicit named test arguments and typed tuple iteration only;
+it does not change application code, fixture, timeout, result, or any decision gate.
+No type-ignore, test exclusion, live rerun, or artifact rewrite was used.
+
+After the test-only fix: focused 20 passed; full backend 1126 passed / 21 skipped /
+3 warnings; Ruff lint/format passed; `mypy .` checked all 322 files successfully.
+The isolated no-network Compose service then passed Ruff, full-scope mypy and the full
+suite (1126 passed / 21 skipped / 3 warnings). The original timestamp-boundary flake and
+initial CI failures remain part of the record. Final-head CI links and conclusions are
+tracked in Draft PR #162 and Jira RAG-90 without changing immutable live evidence.
+
 After the result was written and the exact task-added target was confirmed idle with no
 queued request and the final last-used binding unchanged, only that Qwen instance was
 unloaded. Readback restored loaded count 0 and retained all 6 registered model entries.

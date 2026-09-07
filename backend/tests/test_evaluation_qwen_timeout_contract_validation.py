@@ -226,16 +226,18 @@ def test_lock_attempt_and_result_models_are_raw_free() -> None:
 
 
 def test_gpu_exception_preserves_actual_load_and_other_host_requirements() -> None:
-    inputs = dict(
+    strict = build_rag90_host_gate(
+        _stable_inventory(),
         gpu_utilization_samples_percent=(34, 26, 40),
         concurrent_evaluation_process_count=0,
         concurrent_model_load_observed=False,
     )
-    strict = build_rag90_host_gate(_stable_inventory(), **inputs)
     assert strict.gate_passed is False
     authorized = build_rag90_host_gate(
         _stable_inventory(),
-        **inputs,
+        gpu_utilization_samples_percent=(34, 26, 40),
+        concurrent_evaluation_process_count=0,
+        concurrent_model_load_observed=False,
         gpu_load_exception_authorized=True,
         task_owned_model_load_performed=True,
     )
@@ -244,13 +246,12 @@ def test_gpu_exception_preserves_actual_load_and_other_host_requirements() -> No
     assert authorized.gpu_utilization_samples_percent == (34, 26, 40)
     assert authorized.gpu_utilization_maximum_percent == 10
     assert authorized.lm_load_or_unload_performed is True
-    for override in (
-        {"concurrent_evaluation_process_count": 1},
-        {"concurrent_model_load_observed": True},
-    ):
+    for evaluation_count, model_load_observed in ((1, False), (0, True)):
         assert not build_rag90_host_gate(
             _stable_inventory(),
-            **(inputs | override),
+            gpu_utilization_samples_percent=(34, 26, 40),
+            concurrent_evaluation_process_count=evaluation_count,
+            concurrent_model_load_observed=model_load_observed,
             gpu_load_exception_authorized=True,
         ).gate_passed
     missing = _stable_inventory().model_copy(
@@ -262,7 +263,11 @@ def test_gpu_exception_preserves_actual_load_and_other_host_requirements() -> No
         }
     )
     assert not build_rag90_host_gate(
-        missing, **inputs, gpu_load_exception_authorized=True
+        missing,
+        gpu_utilization_samples_percent=(34, 26, 40),
+        concurrent_evaluation_process_count=0,
+        concurrent_model_load_observed=False,
+        gpu_load_exception_authorized=True,
     ).gate_passed
 
 
