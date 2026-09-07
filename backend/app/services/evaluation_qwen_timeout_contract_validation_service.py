@@ -176,9 +176,10 @@ class Rag90HostGate(StrictRawFreeModel):
     gpu_utilization_samples_percent: tuple[int, int, int]
     gpu_utilization_maximum_percent: Literal[10]
     gpu_high_load_absent: bool
+    gpu_load_exception_authorized: bool = False
     concurrent_model_load_observed: bool
     other_alias_mutation_performed: Literal[False]
-    lm_load_or_unload_performed: Literal[False]
+    lm_load_or_unload_performed: bool
     gate_passed: bool
     reason_codes: tuple[SafeId, ...]
 
@@ -188,7 +189,7 @@ class Rag90HostGate(StrictRawFreeModel):
             self.exact_target_loaded_once
             and self.exact_target_context_length_matches
             and self.concurrent_evaluation_process_count == 0
-            and self.gpu_high_load_absent
+            and (self.gpu_high_load_absent or self.gpu_load_exception_authorized)
             and not self.concurrent_model_load_observed
         )
         if self.gate_passed != expected:
@@ -260,6 +261,7 @@ class Rag90ExperimentResult(StrictRawFreeModel):
     prelive_commit_sha: GitSha
     dataset_name: Literal["rag90_qwen_timeout_contract_validation_v1"]
     changed_behavioral_coordinate: Literal["timeout_contract"]
+    gpu_load_exception_authorized: bool = False
     core_result: Rag88ExperimentResult
     phase_telemetry_summary: Rag90PhaseTelemetrySummary
     phase_telemetry: tuple[Rag90PhaseTelemetryObservation, ...]
@@ -531,6 +533,8 @@ def build_rag90_host_gate(
     gpu_utilization_samples_percent: tuple[int, int, int],
     concurrent_evaluation_process_count: int,
     concurrent_model_load_observed: bool,
+    gpu_load_exception_authorized: bool = False,
+    task_owned_model_load_performed: bool = False,
 ) -> Rag90HostGate:
     exact_once = inventory.available and inventory.target_loaded_instance_count == 1
     context_matches = inventory.target_loaded_context_length == 12312
@@ -542,7 +546,7 @@ def build_rag90_host_gate(
         reasons.append("rag90_exact_target_context_drift")
     if concurrent_evaluation_process_count:
         reasons.append("rag90_concurrent_evaluation_observed")
-    if not gpu_ok:
+    if not gpu_ok and not gpu_load_exception_authorized:
         reasons.append("rag90_gpu_high_load_observed")
     if concurrent_model_load_observed:
         reasons.append("rag90_concurrent_model_load_observed")
@@ -555,9 +559,10 @@ def build_rag90_host_gate(
         gpu_utilization_samples_percent=gpu_utilization_samples_percent,
         gpu_utilization_maximum_percent=10,
         gpu_high_load_absent=gpu_ok,
+        gpu_load_exception_authorized=gpu_load_exception_authorized,
         concurrent_model_load_observed=concurrent_model_load_observed,
         other_alias_mutation_performed=False,
-        lm_load_or_unload_performed=False,
+        lm_load_or_unload_performed=task_owned_model_load_performed,
         gate_passed=not reasons,
         reason_codes=tuple(reasons),
     )
@@ -642,6 +647,7 @@ def run_rag90_experiment(
         prelive_commit_sha=prelive_commit_sha,
         dataset_name=RAG90_DATASET_NAME,
         changed_behavioral_coordinate="timeout_contract",
+        gpu_load_exception_authorized=host_gate.gpu_load_exception_authorized,
         core_result=core_result,
         phase_telemetry_summary=summary,
         phase_telemetry=telemetry,

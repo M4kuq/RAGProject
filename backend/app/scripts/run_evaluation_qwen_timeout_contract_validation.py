@@ -81,6 +81,8 @@ def main() -> int:
     host_gate.add_argument("--gpu-utilization-samples", type=int, nargs=3, required=True)
     host_gate.add_argument("--concurrent-evaluation-process-count", type=int, required=True)
     host_gate.add_argument("--concurrent-model-load-observed", action="store_true")
+    host_gate.add_argument("--confirm-user-authorized-current-gpu-load", action="store_true")
+    host_gate.add_argument("--task-owned-model-load-performed", action="store_true")
     host_gate.add_argument("--output", type=Path, required=True)
 
     run = subparsers.add_parser("run")
@@ -213,6 +215,8 @@ def _build_host_gate(args: argparse.Namespace) -> int:
         gpu_utilization_samples_percent=(samples[0], samples[1], samples[2]),
         concurrent_evaluation_process_count=args.concurrent_evaluation_process_count,
         concurrent_model_load_observed=args.concurrent_model_load_observed,
+        gpu_load_exception_authorized=args.confirm_user_authorized_current_gpu_load,
+        task_owned_model_load_performed=args.task_owned_model_load_performed,
     )
     if not gate.gate_passed:
         reason = gate.reason_codes[0] if gate.reason_codes else "rag90_host_gate_failed"
@@ -225,6 +229,8 @@ def _build_host_gate(args: argparse.Namespace) -> int:
                 "target_loaded_instance_count": gate.lm_inventory.target_loaded_instance_count,
                 "target_context_length": gate.lm_inventory.target_loaded_context_length,
                 "gpu_utilization_max_percent": max(gate.gpu_utilization_samples_percent),
+                "gpu_high_load_absent": gate.gpu_high_load_absent,
+                "gpu_load_exception_authorized": gate.gpu_load_exception_authorized,
                 "concurrent_evaluation_process_count": (gate.concurrent_evaluation_process_count),
             },
             sort_keys=True,
@@ -282,6 +288,7 @@ def _run(args: argparse.Namespace) -> int:
             {
                 "status": "completed",
                 "conclusion": result.conclusion,
+                "gpu_load_exception_authorized": result.gpu_load_exception_authorized,
                 "reason_codes": result.reason_codes,
                 "validity_gate_passed": result.validity_gate_passed,
                 "baseline_sensitivity_gate_passed": result.baseline_sensitivity_gate_passed,

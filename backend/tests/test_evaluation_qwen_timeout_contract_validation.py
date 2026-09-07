@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -222,6 +223,80 @@ def test_lock_attempt_and_result_models_are_raw_free() -> None:
     assert attempt.timeout_extension_or_rerun_allowed is False
     assert result.raw_content_persisted is False
     assert result.chain_of_thought_persisted is False
+
+
+def test_gpu_exception_preserves_actual_load_and_other_host_requirements() -> None:
+    inputs = dict(
+        gpu_utilization_samples_percent=(34, 26, 40),
+        concurrent_evaluation_process_count=0,
+        concurrent_model_load_observed=False,
+    )
+    strict = build_rag90_host_gate(_stable_inventory(), **inputs)
+    assert strict.gate_passed is False
+    authorized = build_rag90_host_gate(
+        _stable_inventory(),
+        **inputs,
+        gpu_load_exception_authorized=True,
+        task_owned_model_load_performed=True,
+    )
+    assert authorized.gate_passed is True
+    assert authorized.gpu_high_load_absent is False
+    assert authorized.gpu_utilization_samples_percent == (34, 26, 40)
+    assert authorized.gpu_utilization_maximum_percent == 10
+    assert authorized.lm_load_or_unload_performed is True
+    for override in (
+        {"concurrent_evaluation_process_count": 1},
+        {"concurrent_model_load_observed": True},
+    ):
+        assert not build_rag90_host_gate(
+            _stable_inventory(),
+            **(inputs | override),
+            gpu_load_exception_authorized=True,
+        ).gate_passed
+    missing = _stable_inventory().model_copy(
+        update={
+            "target_loaded_instance_count": 0,
+            "loaded_instance_count": 0,
+            "target_entry_fingerprint": None,
+            "target_loaded_context_length": None,
+        }
+    )
+    assert not build_rag90_host_gate(
+        missing, **inputs, gpu_load_exception_authorized=True
+    ).gate_passed
+
+
+def test_authorized_gpu_exception_does_not_change_fake_generation_or_decisions(monkeypatch) -> None:
+    clock = count()
+    monkeypatch.setattr(
+        "app.services.evaluation_qwen_multifact_interference_repair_service.time",
+        SimpleNamespace(perf_counter=lambda: next(clock) / 100),
+    )
+    envelope = build_rag90_private_fixture(TEST_RAG90_ENTROPY)
+    manifest, _ = _manifest_and_reference_lock(envelope=envelope)
+    results = []
+    for authorized in (False, True):
+        gate = build_rag90_host_gate(
+            _stable_inventory(),
+            gpu_utilization_samples_percent=(34, 26, 40) if authorized else (0, 1, 0),
+            concurrent_evaluation_process_count=0,
+            concurrent_model_load_observed=False,
+            gpu_load_exception_authorized=authorized,
+        )
+        results.append(
+            run_rag90_experiment(
+                manifest,
+                envelope,
+                host_gate=gate,
+                prelive_commit_sha=TEST_COMMIT,
+                post_lm_inventory_provider=_stable_inventory,
+                generator=_InterferenceFakeGenerator(envelope, repair_mode="fix"),
+            )
+        )
+    assert results[1].gpu_load_exception_authorized is True
+    assert results[0].conclusion == results[1].conclusion == "candidate_adopted"
+    assert results[0].core_result.summary == results[1].core_result.summary
+    assert results[0].phase_telemetry_summary == results[1].phase_telemetry_summary
 
 
 def _manifest_and_reference_lock(*, envelope=None):

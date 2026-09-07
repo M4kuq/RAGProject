@@ -82,6 +82,22 @@ repeat may be rerun or replaced.
 
 ## Pre-live host gate
 
+### User-authorized amendment before the first live attempt
+
+On 2026-09-07 the user explicitly requested one attempt under the current GPU load.
+The runner therefore permits the GPU-only exception through an explicit confirmation flag.
+The original 10% threshold and all three actual samples remain recorded; elevated load is
+not represented as absent. The host snapshot and result expose
+`gpu_load_exception_authorized=true`. This is a host-protocol amendment to the original
+preregistration, and the result must be reported as measured under shared GPU load.
+It does not establish isolated-host latency or a pure cross-run timeout causal effect.
+The original fixture/lock, generation settings, timeout, schedule, and statistical/latency
+decision gates remain unchanged. Target/context and concurrency checks still apply.
+Task-owned target loading is recorded truthfully and only that added instance is removed
+at the end. The amended runner must be committed and pushed before the single attempt.
+
+The original default policy, retained unless this exception is explicitly authorized, is:
+
 Immediately before the single attempt, a raw-free host snapshot must show exactly one loaded
 `qwen/qwen3.5-9b` target at context length 12312, no concurrent evaluation, no concurrent model
 load, and three GPU utilization samples each at or below 10%. External load is never stopped or
