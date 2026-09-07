@@ -1,0 +1,790 @@
+{
+  "schema_version": "phase3.rag90_timeout_contract_lock.v1",
+  "experiment_manifest_sha256": "023dab7d7c5c5f2d8a1d550b19fafcfaf4dc6f2950aae48f7a0a5f880ca167ab",
+  "private_input_sha256": "b6d8138e1f589044d0c6e94f677b92e400aed2c9da97aeeaeed631814bdb70a5",
+  "dataset_content_fingerprint": "538c7835bd144ab394ccefd17587327a1f093dd26c951a48966b12e55bf57827",
+  "group_set_fingerprint": "feda0e4631a412c739ff8aae22de69fc108ffee58ac90de37c440834d328acf8",
+  "case_set_fingerprint": "d25594b3f658e02f3d030a081f70a5cc8aa32461ea356c66efb7741d7565b3bc",
+  "source_context_fingerprint": "40a98a9afb300d5ba5b83c1cf501f9797d0a13f8151dde169c348113720b5648",
+  "timeout_contract_sha256": "1822fb5c1c38b8bace711771aa488e68af362943925836e537dd850081def9ba",
+  "independence_proof_sha256": "751d6957e368837454886ec9b7cc571560970dd7088c11da63f3f6ad07da1907",
+  "manifest": {
+    "schema_version": "phase3.rag90_timeout_contract_experiment.v1",
+    "jira_issue": "RAG-90",
+    "stacked_base_commit": "b063d545f90e28096ddefa5a815a0784f0699d1a",
+    "dataset_name": "rag90_qwen_timeout_contract_validation_v1",
+    "core_manifest": {
+      "schema_version": "phase3.rag88_interference_repair_experiment.v1",
+      "jira_issue": "RAG-88",
+      "stacked_base_commit": "b063d545f90e28096ddefa5a815a0784f0699d1a",
+      "experiment_scope": "within_case_interference_and_generic_two_pass_repair",
+      "dataset": {
+        "dataset_name": "rag88_qwen_multifact_interference_repair_v1",
+        "private_input_sha256": "b6d8138e1f589044d0c6e94f677b92e400aed2c9da97aeeaeed631814bdb70a5",
+        "dataset_content_fingerprint": "538c7835bd144ab394ccefd17587327a1f093dd26c951a48966b12e55bf57827",
+        "corpus_fingerprint": "bca02c01ed32ed8a33de86f4dddd2070ebf2921d941f1c03ebfff99756cbfba6",
+        "group_count": 12,
+        "case_count": 36,
+        "source_count": 72,
+        "corpus_fact_count": 72,
+        "required_fact_count": 24,
+        "group_set_fingerprint": "feda0e4631a412c739ff8aae22de69fc108ffee58ac90de37c440834d328acf8",
+        "case_set_fingerprint": "d25594b3f658e02f3d030a081f70a5cc8aa32461ea356c66efb7741d7565b3bc",
+        "question_set_fingerprint": "c3288e76f490a21b8952b08ba866080ae4e77e581608520de41ba6ad36b5b5f3",
+        "normalized_fact_set_fingerprint": "3275fcaa41f9ace461f56c25c2ffae302a8f13eb5bc6c49ab9b91e7ee7323748",
+        "source_content_set_fingerprint": "4cb418cd738f9dc67989201f4f4b5577f3f4c1c503912aa5612fa9aafe19bda5",
+        "logical_document_set_fingerprint": "6c791918deb1019b3c6258529270686a5eff3134454e7a7e9d827883e787965d",
+        "source_context_fingerprint": "40a98a9afb300d5ba5b83c1cf501f9797d0a13f8151dde169c348113720b5648",
+        "groups": [
+          {
+            "group_id": "r90-group-01",
+            "language": "ja",
+            "single_a_case_id": "r90-g01-single-a",
+            "single_b_case_id": "r90-g01-single-b",
+            "combined_case_id": "r90-g01-combined",
+            "single_a_question_hash": "4a92ee3c103ebbff924c92ec384996b0c5388bb0ed6ebafe26acbe67782d52b0",
+            "single_b_question_hash": "cac11b4408668fd2be71e14625b8a3e02782503c61140634ff732928e6eb4adb",
+            "combined_question_hash": "3a99de32a1ba19b7d42b79fc01440910cda9df8b22dfd5049a008f7650c5563d",
+            "required_fact_ids": [
+              "r90-g01-fact-2",
+              "r90-g01-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "ac808ffa883e163414116369268f73802202f8e95ba137aac88e5101ecd23cc5",
+              "095a2c2fb76fb11f958fbc97bc2aaebf658337dd19de472345a22479f8fcd145"
+            ],
+            "source_ids": [
+              "r90-g01-source-1",
+              "r90-g01-source-2",
+              "r90-g01-source-3",
+              "r90-g01-source-4",
+              "r90-g01-source-5",
+              "r90-g01-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g01-source-2",
+              "r90-g01-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "f0edb537bf8c0c7ab9d52563f94947c27a14a34e5ca8c2e805f4d32a3711fbbd",
+              "8dce12ffd7fcd52f8e4340c7dd8883b954d69f201325bcc429e9e4627b4ac97b",
+              "d6d4b4f4284d5a60a913b12e1c83903b0df456d1f3899b85ad6e81f7be7f1fbc",
+              "82c82b2059a03fa216031abc50ee9bce99fe489529f2092736efaab6d4e32e79",
+              "bca1a1f2f372197ccf394ef86ea1b972122b12313508aa639a5dfb09fb9cf553",
+              "2a28b32f5d5c255bc0cb50be05470cb3b5001b368d1afcd6947fa8fcaaa33684"
+            ],
+            "source_set_hash": "3237b9a36de391f859cc2a06df08217485bfe1c735478490520b38a0055aa3de",
+            "context_hash": "5cb6da94d89c939f9e9dbf7e5b920e4e154f59f20728b93263c87408985d6890",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-02",
+            "language": "ja",
+            "single_a_case_id": "r90-g02-single-a",
+            "single_b_case_id": "r90-g02-single-b",
+            "combined_case_id": "r90-g02-combined",
+            "single_a_question_hash": "503897721a9e9fdc285eec01355025e75facf9335a80a03e1ec121d35912a119",
+            "single_b_question_hash": "9cec13d2f709ea55dc51585bfb5e1858a83bf81da833e002d1d3a20c82bf12f0",
+            "combined_question_hash": "dc44788565b02ee85bc163935e0b76033e495e1fe3c35a326789912acdda400b",
+            "required_fact_ids": [
+              "r90-g02-fact-2",
+              "r90-g02-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "6c06db29ec26df3eafd8f3a74814fa0325565b7e996a7e85ba4d552164df4e63",
+              "b828b8b6ea4e4f6cc287833190e5d922a3c75cace0cb5314e997dba2e3f2b3fc"
+            ],
+            "source_ids": [
+              "r90-g02-source-1",
+              "r90-g02-source-2",
+              "r90-g02-source-3",
+              "r90-g02-source-4",
+              "r90-g02-source-5",
+              "r90-g02-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g02-source-2",
+              "r90-g02-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "6b0dd78021ce60a9cae47c8e8d4ea3eb3ccde147889ece0f492939d238bf0a73",
+              "732a8e2d4f2042746c6522cb27e5c329ca1f37b4dd4253af7ae04318d6b93f16",
+              "2ac7cb40c5ab369d78cd43b732d963d8c49710d603ebb86f21af3bbb61666c9f",
+              "fd927b1669b57a4ab3b9a894da53bbd5c3d1f8fb3898744aaae0cb18b3bbec47",
+              "3f8d083c9140d77030b2acb3242420da724e2cfef676be13d430ef6c840018a9",
+              "28d6c5fb21d79bbaeb294ecdb67e0dffe3bb7e6ce08d91af1a22b0c22d0307a7"
+            ],
+            "source_set_hash": "f6c41afa41cf6c82f667006ea151e570c8d85353392b347fe068f2823e6c6629",
+            "context_hash": "9f5b46d3d77003f67a91a05f43b54d9ceb0543e3610dff3d60452d40691bb27b",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-03",
+            "language": "ja",
+            "single_a_case_id": "r90-g03-single-a",
+            "single_b_case_id": "r90-g03-single-b",
+            "combined_case_id": "r90-g03-combined",
+            "single_a_question_hash": "10bd5e06b30e85f9f4b3f59980429a0e136604817020d71c0517ffdfdd03d5ed",
+            "single_b_question_hash": "ab30397902b7924521272dfbb17e7c5aa127a828330f97731e56f7dc9e6f6a79",
+            "combined_question_hash": "24dc27e9327f0977876bd572533bdf3461808832e92181489406bb24954192ba",
+            "required_fact_ids": [
+              "r90-g03-fact-2",
+              "r90-g03-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "1b6b90f9c2e1664b136b7dba70eaf01d5490065fe16b23a64ea879efd2e73ae9",
+              "21c27cb97a12db67e4233fc23c37c5ffe2b2545b05fa47b7f5cbd878d7f5eeb1"
+            ],
+            "source_ids": [
+              "r90-g03-source-1",
+              "r90-g03-source-2",
+              "r90-g03-source-3",
+              "r90-g03-source-4",
+              "r90-g03-source-5",
+              "r90-g03-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g03-source-2",
+              "r90-g03-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "585d1125ba94f96de8b5be5f1953052f17c6e689173cadbae776f1fba7d41d02",
+              "b7a440db7b02637dff3fe1fe6d3caf986eee4d1ee348774a4982ff7327ef0068",
+              "8eeda4a81a626ce771cf4a78d150f34766ece2cbb3a9807a57f834df96f93170",
+              "38ae64825dfa2e9bbfdbabbab2da04276c2685f047cd331f5b60271a982ec16a",
+              "abc224e4d77d4ae1a34c9208840a67b2430fc838929949dde8fa3ed322bc5cd5",
+              "e58a02950bc2877cc5b5303b59f2acec135b353f7ab976c40176a1ea36be7c90"
+            ],
+            "source_set_hash": "4925db46db62f421f6678db1f5f82c30f327df4d3e467896b805fd64ac2fc132",
+            "context_hash": "7f7102f1008ac01d1f29c6aa35b13b699a9b215e67bca9909a898970d7ed8d7c",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-04",
+            "language": "ja",
+            "single_a_case_id": "r90-g04-single-a",
+            "single_b_case_id": "r90-g04-single-b",
+            "combined_case_id": "r90-g04-combined",
+            "single_a_question_hash": "2fb65c9f4bb190f0620b8c47da53f0ebde90d3685aac337ac1cddacba8f89bc6",
+            "single_b_question_hash": "82b35ca89266093856e96866d7710f75453cf309e300d89b645170a506215f33",
+            "combined_question_hash": "7bc2f9720450bd8f9b51e1171d8fd8ad166ce20c9ac461c63d2003ce405dc5c6",
+            "required_fact_ids": [
+              "r90-g04-fact-2",
+              "r90-g04-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "857812c018dfb9b4127aa4c32668a7809b88922d88e393dd00bc8f338080fdb6",
+              "02faee700091bd6a3301976827a35d4c8528a2b1257d6273acc5cecadddbac75"
+            ],
+            "source_ids": [
+              "r90-g04-source-1",
+              "r90-g04-source-2",
+              "r90-g04-source-3",
+              "r90-g04-source-4",
+              "r90-g04-source-5",
+              "r90-g04-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g04-source-2",
+              "r90-g04-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "c6336958c0e1338d88e98ff75f47a39ea691ed25131a5aae06996647ab1ed82c",
+              "1f55517846d344974d346b40762440b48d07ae8d2e1ecf839fdb8daa096104cd",
+              "c542b2a3c80ee480224c30e6159e35c578cd32e9cf8c6864d33177376a2f3899",
+              "d3c6870db548e59cdb5490513b8b5bc89747c16a31ffe78f0347099f2ad3ed16",
+              "3c097225c7db25b36061d6b2fc5effdabf2f154d1fd7269eb36172358cc97564",
+              "ae2e7461eae20f3c51131f288184ba55ebb3fb03b5b0d1e8595f6b6503b08afd"
+            ],
+            "source_set_hash": "9f7cd77768030d5fb566d9d60bcd8dd66496215b8904e08df042e1b44baf4c40",
+            "context_hash": "82cf692b5c92b5382f49c514fefd12e271cdf3b0782281b824d0b40d8d36001f",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-05",
+            "language": "ja",
+            "single_a_case_id": "r90-g05-single-a",
+            "single_b_case_id": "r90-g05-single-b",
+            "combined_case_id": "r90-g05-combined",
+            "single_a_question_hash": "83e1ea261ee7cc5ebdcaed849a3529035e0abdb8447f64990eef8fbe670dd451",
+            "single_b_question_hash": "c55366e031bb3e39fa5274cb6985baaee20bc565712953d7b10169225e08e2da",
+            "combined_question_hash": "2eb1742e67e9aac81dc2a936e093cd48a52bc3b17c347f9069205e4726a89c94",
+            "required_fact_ids": [
+              "r90-g05-fact-2",
+              "r90-g05-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "31eb7c239d7fb3faa967772e08fb370496bb219f2e6dfb70e9720ae25573d453",
+              "65b4f4bd8b5e1be900612f6b20f3dbc4ff9393a69201969b4f1ce0ebe4f9daa0"
+            ],
+            "source_ids": [
+              "r90-g05-source-1",
+              "r90-g05-source-2",
+              "r90-g05-source-3",
+              "r90-g05-source-4",
+              "r90-g05-source-5",
+              "r90-g05-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g05-source-2",
+              "r90-g05-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "0abc7f353a98125fcefe344cd9ca39d76903fd786956e950c89196b7b9f4a406",
+              "2c4a40aab2e7c056c70a7ed01042d371a958f11caab8bb35f44fcae258125151",
+              "a2461332b14ba5f57284c61885cf1e8043c97032517dcf58f5e39727e941a66b",
+              "91837320e27839d6d6e4015d4187996f7e7a8de3d89b792170dabb04e5934a4a",
+              "addb002ba47e12b2aa880b9afa0c31cbefc53523005b36526d2fa44df6b48714",
+              "cd507dd82d63106ff1c61730cc3a2d93b4996b59d25c201ebbd90e932c18031d"
+            ],
+            "source_set_hash": "de76c587d13a87e5e64f8156f2333f650e7c61a28479a0b105aae2f4500165e9",
+            "context_hash": "687a3dd721da5f76f28ec1626cb76a403eecb815a03c5a6a82f4bcbf99dac3d8",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-06",
+            "language": "ja",
+            "single_a_case_id": "r90-g06-single-a",
+            "single_b_case_id": "r90-g06-single-b",
+            "combined_case_id": "r90-g06-combined",
+            "single_a_question_hash": "8d592c34990fa89c91fe8ce1d76e27ac18d9fb5da6f002e4500b19f30af89bdf",
+            "single_b_question_hash": "d65aa7e622abefa5818c00d509e88907fa4b4b10e047456827f2078c85cf0e15",
+            "combined_question_hash": "fdc0229e23c45fa55c68e54ed2031eaece4cb56ac8f3e455b7a65919db702e4a",
+            "required_fact_ids": [
+              "r90-g06-fact-2",
+              "r90-g06-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "fe366cc6237eababb349bf5b2b67efa7394c5f024bf876d993065c6b70cdc39c",
+              "e921a85dd6ebf53e9b15e93df47c68dec37a321ee4edfac8863ecbb2cb986ebc"
+            ],
+            "source_ids": [
+              "r90-g06-source-1",
+              "r90-g06-source-2",
+              "r90-g06-source-3",
+              "r90-g06-source-4",
+              "r90-g06-source-5",
+              "r90-g06-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g06-source-2",
+              "r90-g06-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "1ca2b746166181cd7960ab3f9f860e829f3eca59b6162722aac2f2645eaf5b7e",
+              "48b8f776ca06f31583ea5e1c6fae36c9be61ff26c02c50bd507ee77c7280a0e0",
+              "3fb2dffafa13a45cce54e3d138afe87181493fc6f2376835306c19df47de46e0",
+              "5bab5e3d03e3a1089e53fc8e817d01a55b93b0db216b70271e6ad421e4fef3a2",
+              "00380b303891fc75bae152a4c8b0452eb6d5a444e15d03e09b38018f189614fd",
+              "8beb86928aea91a3eb6c3eae64d7bc53627e6c258a54d37ecfad14ad2aef715a"
+            ],
+            "source_set_hash": "aeba1e8fe583b0d2b5452c94203dada54acb0b45affb4f0ae1e5602d4f841b69",
+            "context_hash": "665924f8da963793696500f89c9a4f426e54cebae3a9e823a16ae13ef2ecfc39",
+            "context_length": 652,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-07",
+            "language": "en",
+            "single_a_case_id": "r90-g07-single-a",
+            "single_b_case_id": "r90-g07-single-b",
+            "combined_case_id": "r90-g07-combined",
+            "single_a_question_hash": "9dcd35a6933313edb608ad009c43c6ce7c1a586e353a980a3fbb1e827a1a161a",
+            "single_b_question_hash": "70ddaadbd4fd0c91e01ecf316f4d0cabfc79240f249f66e99dc8c439e1e48c2d",
+            "combined_question_hash": "df178c3904b90f1e27878a0f28318ecdd4dcd8d91e8adcf70549c856efedbb3f",
+            "required_fact_ids": [
+              "r90-g07-fact-2",
+              "r90-g07-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "d1ef4343d6f49729866ff811bad2eff0b76673ef770ee811bab567035b9a2a71",
+              "3bf594badf16fd467fea502b558b6b582ce60db3ff9ee601d783c4b85143d93d"
+            ],
+            "source_ids": [
+              "r90-g07-source-1",
+              "r90-g07-source-2",
+              "r90-g07-source-3",
+              "r90-g07-source-4",
+              "r90-g07-source-5",
+              "r90-g07-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g07-source-2",
+              "r90-g07-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "b1d53540d9ad65211f98a7afb3947da3d34e5e818df3583de2c4435f1cb2d615",
+              "df0c8cd69dade1de29dad8f4e3cd7c9748ea50b1d185a89b759f733af59257e6",
+              "1f14a5c9f4aa839eba739209076a46da7194de238485e238baaab365d3686bef",
+              "d5be60ebf4ffda81b97db3caf95d3ae4b5173c1b4b1b3a6fe6ea56253d615a42",
+              "a1ac0e5bfd69a48a6a391fbddb9d654bdfbb54bf9523671b70bc640b2efecd36",
+              "e03341b7fcef81c6ed7a91f04c5ba7c26a7611bcf62c7d89822f656defaa6b52"
+            ],
+            "source_set_hash": "b4f11b0627d45f74faf94f30d598022af59b998b3860d42e0f5f4c036bc89b3c",
+            "context_hash": "9de6f58a1e59ffede0126f3157d46c3448eb030f1e060a1123d6797e25fd3207",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-08",
+            "language": "en",
+            "single_a_case_id": "r90-g08-single-a",
+            "single_b_case_id": "r90-g08-single-b",
+            "combined_case_id": "r90-g08-combined",
+            "single_a_question_hash": "d48558a371ed58bde5172bd343d98655f1cba42e1014e96e26de6eb7e9cb592f",
+            "single_b_question_hash": "48dc679ec0e6f365a1a069dc36eded2a33a9a619f2617395c91c535d4440f6dc",
+            "combined_question_hash": "ec1a3fe660e7bb70d2e7abde3e4f046edb23ced8e1552660794760bfb13b0f51",
+            "required_fact_ids": [
+              "r90-g08-fact-2",
+              "r90-g08-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "d836050375ad8551f4131150037ee958fa15fdbbe2e7467b9dfc330ee0180947",
+              "f678de8bfa419cc96aaf8a413aea7d8d5f78d96457e1ad3af3fe7de4ca9383b6"
+            ],
+            "source_ids": [
+              "r90-g08-source-1",
+              "r90-g08-source-2",
+              "r90-g08-source-3",
+              "r90-g08-source-4",
+              "r90-g08-source-5",
+              "r90-g08-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g08-source-2",
+              "r90-g08-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "06d1b40e785822ee8bcdbdeda270765c14156caec4c43ea7c3c25a8acd8516bd",
+              "d683141680cade9a14de13c0b069291d8dcf8c3a124000a77ea632e363310814",
+              "bd21fc94a42ac61aa72a28cd656657f5102347845041f577657b9d73cf095f86",
+              "c7a993836a8539037c4f6c10de32b30bce8ef9208c58183bb225b71f28d16bec",
+              "f6398f7e2fc96b45a16ea50a06ddfdc644a688be0450dd71cf5e033ad1d483ea",
+              "3d368852ac8662033d8bc335fcebbf7c2fb5d7d7316134fccf11d39ea67ec728"
+            ],
+            "source_set_hash": "e812bdfd88e84927b5021590a1c90b96c2094aed46146f922f089f6ce17f8d34",
+            "context_hash": "9f714f65df28974bc9ad5e45153a4afd26b7733d45a136a63bddc71d4d323a91",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-09",
+            "language": "en",
+            "single_a_case_id": "r90-g09-single-a",
+            "single_b_case_id": "r90-g09-single-b",
+            "combined_case_id": "r90-g09-combined",
+            "single_a_question_hash": "8586a50ccc37ddd7f8724020b2adad27ac766ac56e9531e5b0d910e26dded46e",
+            "single_b_question_hash": "58ae8683200b7fc21a50e548c430edbda890569c0131ff29b5c64fa5b1fc8e51",
+            "combined_question_hash": "34b9f46820fe35facbf64b30a0c93fca0edad68378afcb6a35c9b249056e701f",
+            "required_fact_ids": [
+              "r90-g09-fact-2",
+              "r90-g09-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "97f9af224d8b831c6d63c7762b987784c5a87027dc8fa106f74af830fcdf049b",
+              "778543cea7451edabff09f3558308041e9c55cb925b600fb972789599c13e240"
+            ],
+            "source_ids": [
+              "r90-g09-source-1",
+              "r90-g09-source-2",
+              "r90-g09-source-3",
+              "r90-g09-source-4",
+              "r90-g09-source-5",
+              "r90-g09-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g09-source-2",
+              "r90-g09-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "e3261caf6f3257621bd1ef407547190a8f675aa6ac7434b5366f68090c7e64da",
+              "355a46c556ce4bed37251c085cef760d0c2e969cd09a2d589efe625f536a4d44",
+              "646c1589a94e6e2b3c706c51ec0c789820ed66b1ff9ab578dfb5a2537a9a072a",
+              "1459db559edc01bd2c84ed7b8dcf092aee9824a3131ef81a6c82dd134d2646a5",
+              "fc40dbcd44ede0f6c9719c605c8f2ddad3573ca67685c36273ab108b48204c06",
+              "8bf68849bd2ff68336c53ff6ca8491068dbc9d7933bafedb7d64579581690c3f"
+            ],
+            "source_set_hash": "232e11c4affa670cde8081d57e82f072adcf5c629a56fdc3dc1434318101c7cc",
+            "context_hash": "619ecb29a065f0c33f1bef78e8321537831ee970d35870c93b335163e2f40421",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-10",
+            "language": "en",
+            "single_a_case_id": "r90-g10-single-a",
+            "single_b_case_id": "r90-g10-single-b",
+            "combined_case_id": "r90-g10-combined",
+            "single_a_question_hash": "729f257639769c01e985c3514bd93c2d3c31452c74a75e126b9601212f483b11",
+            "single_b_question_hash": "e34cda30c70b277dec00835f4a6fb7e4a5066488c00de2ae7c3c1974c4c26be8",
+            "combined_question_hash": "5e80e2b46c8436d6282957071314a08cf80b918a70ecd20405e11c96af7191c2",
+            "required_fact_ids": [
+              "r90-g10-fact-2",
+              "r90-g10-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "5f64f8e6b4edee48264b6cb4f9ddd969f3f219464b17a95bc1f2c1377a1ffb59",
+              "dbdda58bc57628ee58774836320ed9191f158a5b8d6a4c1d8976ca25696ed45f"
+            ],
+            "source_ids": [
+              "r90-g10-source-1",
+              "r90-g10-source-2",
+              "r90-g10-source-3",
+              "r90-g10-source-4",
+              "r90-g10-source-5",
+              "r90-g10-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g10-source-2",
+              "r90-g10-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "c3fd2b927e4ac57be878c1e5cac2c00793a2643bc309a3879b5d6cd1e3a46b32",
+              "87227d91c4c715fc962e952db98fd800367920e4be48f33f63cfb46074866f02",
+              "454a4981f4ebaacc43b6834fa8076febbe9550595e4b9f302765c20c2fc7271b",
+              "1b6751581aab257256945b1481a40d9a72a5c6c62b498ef60a09e6390796591f",
+              "40caa183d540691a5a8238b969d3cdd91d9aa704167ffc8919ec4b0b757c5d0d",
+              "b2d4c795e4323f7d54ad640c4f629cd1a4671cc6d9336722357ea9cbb2ce043a"
+            ],
+            "source_set_hash": "c1958942d31087ad0f16887838dbe81c3d1bb496179259d71298622623aab5e9",
+            "context_hash": "143547a134e9ec32915cfa66622403305dcfc285607523ab111b7cfc4a771763",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-11",
+            "language": "en",
+            "single_a_case_id": "r90-g11-single-a",
+            "single_b_case_id": "r90-g11-single-b",
+            "combined_case_id": "r90-g11-combined",
+            "single_a_question_hash": "07a85a9ed8947a5083d009b75ee89d4b5dac38a82c675542335383d0283fa5fc",
+            "single_b_question_hash": "42519d1c814237cc007732e2150ff7b72e4fdb38596d7c91afda01e6120c3dea",
+            "combined_question_hash": "90badcca35bca8964914270f2ba7d859955f1e0ea8fd12a473d4ab9d5f41f405",
+            "required_fact_ids": [
+              "r90-g11-fact-2",
+              "r90-g11-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "f9e9d1efbbc59b174089341c9f0b986c73240393d58762028ce9135577202c9d",
+              "f4eed20ca5f967eafba201c50880151810d9f00034c7a57b632d34fbbcc26fc8"
+            ],
+            "source_ids": [
+              "r90-g11-source-1",
+              "r90-g11-source-2",
+              "r90-g11-source-3",
+              "r90-g11-source-4",
+              "r90-g11-source-5",
+              "r90-g11-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g11-source-2",
+              "r90-g11-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "e5477127515452776084b75f0792f8c714e72e4666bfdddb3b16a8d9857538a8",
+              "d3f868917971f50d4a5c4578e6babf38e30c92fb7adbcddfd89896c9e42e7a6f",
+              "f77832b63f642a7c41764b8159a527efd102ba3feed6e5af8828da1f8bdc1e92",
+              "3c2b9e6d84ed7291ac63c32ce7340f878ef09944c6eb29b7b2548f3cf3303a06",
+              "74c2353bcd5a276390a657941af36b1d7ad3ceefd8242846b85f5afa41eaf039",
+              "640df397bf3a3795c40b994cb20a1bda7db5ae924e235bd445d231a84ae6878c"
+            ],
+            "source_set_hash": "57898d6d167f5cf5a449be32f2d9ff8a18f2f43f046c956e39710eedda80ad58",
+            "context_hash": "791ef0d324379cdbe5dd0d36675ac961848ca320f55f8e03143a7c62db59c828",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          },
+          {
+            "group_id": "r90-group-12",
+            "language": "en",
+            "single_a_case_id": "r90-g12-single-a",
+            "single_b_case_id": "r90-g12-single-b",
+            "combined_case_id": "r90-g12-combined",
+            "single_a_question_hash": "21d17b845c4e7658c68d8ce2a0ed5b83d385a49f72dc479c14ce212557c96597",
+            "single_b_question_hash": "dd5196b51fe0ef8dc17ae18d8657c2496ce410a29d0850fccd13a026321ed10e",
+            "combined_question_hash": "8515783ad17af83cc3008c6d9b0147a401aa211731ccede39339be9c638de107",
+            "required_fact_ids": [
+              "r90-g12-fact-2",
+              "r90-g12-fact-5"
+            ],
+            "normalized_fact_hashes": [
+              "519c337cc2fc83b788ef3ca8a3cc4e5a04b3891a989e9d7a6548aadab4dc3a51",
+              "d00e4f36c6c9ff21ff3dd2ec09118b3d45a42b6ea0866acdb2f3cdbd1646dccf"
+            ],
+            "source_ids": [
+              "r90-g12-source-1",
+              "r90-g12-source-2",
+              "r90-g12-source-3",
+              "r90-g12-source-4",
+              "r90-g12-source-5",
+              "r90-g12-source-6"
+            ],
+            "required_source_ids": [
+              "r90-g12-source-2",
+              "r90-g12-source-5"
+            ],
+            "required_citation_ids": [
+              2,
+              5
+            ],
+            "source_content_hashes": [
+              "42e7d95387da70985e02567a03794e36de5ff4f1fa28802d65a8320d5b27652f",
+              "f9c1487b46534e296b8a899b2907750cddffc59ed8ff8c8cd86cc2a78d2a8e47",
+              "fe32b34e59ee7b7f78c755a313e512b22528257babd67aec343e2f674a54fbb5",
+              "0113bbad3340c8619f137142f543861ead49400b42310ebe8a9d88a2631aab8c",
+              "e4de913a26f94765f7ebe36bc94cc2d58a946f4ea3bf7a09daacb1fc1018912a",
+              "c7e3d5659a23dd6dab401025dd7704cc9acd90ea0ef5abbc30f07f568a80cb51"
+            ],
+            "source_set_hash": "8d01f5f9deb918decf98de6185e491550b35d98d026e95a33d33fb59d0818dc1",
+            "context_hash": "92c7a1d7231f360f7a7d94879f5b3a067d37ab9065531c7fd22dd5e8ca7ec388",
+            "context_length": 1240,
+            "source_order_frozen": true,
+            "same_oracle_context_all_variants": true
+          }
+        ]
+      },
+      "independence": {
+        "fixture_dataset": "rag88_qwen_multifact_interference_repair_v1",
+        "local_accuracy_dev_question_overlap_count": 0,
+        "local_accuracy_dev_normalized_fact_overlap_count": 0,
+        "local_accuracy_dev_source_content_overlap_count": 0,
+        "local_accuracy_dev_logical_document_id_overlap_count": 0,
+        "rag84_question_overlap_count": 0,
+        "rag84_normalized_fact_overlap_count": 0,
+        "rag84_source_content_overlap_count": 0,
+        "rag84_logical_document_id_overlap_count": 0,
+        "rag87_question_overlap_count": 0,
+        "rag87_normalized_fact_overlap_count": 0,
+        "rag87_source_content_overlap_count": 0,
+        "rag87_logical_document_id_overlap_count": 0,
+        "reference_catalog_fingerprint": "7240491b31b820b5e6f0791cf825af2a1d76128cf7b9650ff8e481e747b0aa89",
+        "private_fixture_generation_seed": 88088,
+        "private_fixture_namespace": "R88-interference-repair-20260826",
+        "reference_content_used_for_case_design": false,
+        "reference_content_used_only_for_one_way_hash_check": true,
+        "gold_v2_opened": false,
+        "result_based_case_selection_allowed": false,
+        "failed_case_replacement_allowed": false,
+        "post_result_threshold_or_fixture_change_allowed": false
+      },
+      "generation": {
+        "retrieval_mode": "static_oracle_private_fixture",
+        "source_order_frozen": true,
+        "same_oracle_context_all_variants": true,
+        "generation_provider": "lmstudio",
+        "resolved_generation_model": "qwen/qwen3.5-9b",
+        "generation_temperature": 0.0,
+        "reasoning_enabled": false,
+        "baseline_prompt_profile": "baseline",
+        "baseline_prompt_fingerprint": "dd3cb1fb92285b97fd8be11b7b861ae78f346c6085990c910fc19e3edb081f24",
+        "repair_prompt_fingerprint": "60384e156a4b28bf0a8a65e29a0ef75dbab7d1413415c68f9558535d6cba0668",
+        "repair_response_schema_fingerprint": "38f5a031e7de531f9e698dedf9501c154259ff71d38e97a7d6da26da1f760b40",
+        "repair_input_fields": [
+          "question",
+          "oracle_context",
+          "pass1_answer"
+        ],
+        "evaluator_required_fact_sent_to_repair": false,
+        "expected_answer_sent_to_repair": false,
+        "evaluator_fact_id_sent_to_repair": false,
+        "chain_of_thought_requested": false,
+        "structured_decision_process_only": true,
+        "combined_candidate_reuses_paired_baseline_pass1": true,
+        "maximum_revision_count": 1,
+        "generation_max_context_chars": 6000,
+        "generation_max_output_chars": 12000,
+        "generation_max_output_tokens": 8192,
+        "generation_case_wall_clock_timeout_seconds": 360,
+        "lmstudio_loaded_context_length": 12312,
+        "retry_policy": "existing_evaluation_generation_retry",
+        "repeats": 3,
+        "group_count": 12,
+        "variant_observation_count": 144,
+        "model_call_count": 144,
+        "repair_call_count": 36,
+        "case_order_rotation_offsets": [
+          0,
+          4,
+          8
+        ],
+        "execution_order": "latin_case_rotation_then_paired_variant_calls",
+        "execution_seed": 88088,
+        "execution_schedule_fingerprint": "a7559e6cc8c2252fa05cb5a040a4d723682c4e37eb2feb614c6b9226394e125e"
+      },
+      "decision_rule": {
+        "eligibility_rule": "single_a_and_single_b_case_majority_atomic_and_citation_grounded",
+        "baseline_primary_metric": "eligible_case_paired_single_controls_minus_combined_joint_completeness",
+        "candidate_primary_metric": "eligible_case_combined_candidate_minus_baseline_joint_completeness",
+        "fact_majority_minimum_repeats": 2,
+        "minimum_eligible_case_count": 8,
+        "minimum_baseline_incomplete_case_count": 6,
+        "minimum_interference_drop": 0.5,
+        "bootstrap_resamples": 10000,
+        "bootstrap_seed": 88088,
+        "bootstrap_confidence_level": 0.95,
+        "bootstrap_lower_bound_must_exceed_zero": true,
+        "exact_paired_test": "two_sided_exact_binomial_on_discordant_pairs",
+        "exact_p_value_maximum": 0.05,
+        "minimum_candidate_joint_completeness_delta": 0.25,
+        "minimum_candidate_improved_case_count": 3,
+        "candidate_atomic_fact_recall_non_degradation_required": true,
+        "citation_grounding_non_degradation_required": true,
+        "citation_source_coverage_non_degradation_required": true,
+        "false_insufficiency_non_increase_required": true,
+        "unexpected_fact_case_count_maximum": 0,
+        "forbidden_claim_case_count_maximum": 0,
+        "unanswerable_guardrail_applicable": false,
+        "pipeline_failure_count_maximum": 0,
+        "binding_drift_count_maximum": 0,
+        "case_exclusion_count_maximum": 0,
+        "case_replacement_count_maximum": 0,
+        "candidate_p95_latency_ratio_maximum": 2.0,
+        "exact_target_model_id_must_match": true,
+        "exact_target_loaded_instance_count": 1,
+        "exact_target_entry_pre_post_must_match": true,
+        "exact_target_context_length": 12312,
+        "full_non_target_inventory_match_required": false,
+        "non_target_inventory_drift_recorded": true,
+        "baseline_sensitivity_required_for_candidate_adoption": true,
+        "failed_case_replacement_extra_repeat_or_rerun_allowed": false,
+        "threshold_adjustment_after_results_allowed": false
+      },
+      "raw_content_persistence_allowed": false,
+      "repository_external_private_input_required": true,
+      "external_non_loopback_http_allowed": false,
+      "database_write_allowed": false,
+      "gold_v2_access_allowed": false,
+      "case_exclusion_replacement_extra_repeat_or_rerun_allowed": false,
+      "merge_deploy_draft_removal_or_profile_promotion_allowed": false
+    },
+    "timeout_contract": {
+      "changed_behavioral_coordinate": "timeout_contract",
+      "other_behavioral_coordinate_change_count": 0,
+      "hard_physical_request_upper_bound_seconds": 360,
+      "http_client_operation_timeout_seconds": 360,
+      "standard_logical_call_hard_deadline_seconds": 360,
+      "standard_retry_attempts_share_logical_deadline": true,
+      "repair_physical_request_hard_deadline_seconds": 360,
+      "repair_logical_call_hard_deadline_seconds": 360,
+      "combined_candidate_logical_upper_bound_seconds": 720,
+      "child_terminate_grace_seconds": 5,
+      "child_kill_grace_seconds": 5,
+      "combined_candidate_with_cleanup_upper_bound_seconds": 730,
+      "live_extension_allowed": false,
+      "case_specific_timeout_allowed": false,
+      "extra_retry_or_grace_allowed": false,
+      "cancellation_implementation_changed": false,
+      "retry_policy_changed": false,
+      "physical_call_structure_changed": false,
+      "output_budget_changed": false,
+      "prompt_or_candidate_logic_changed": false,
+      "evidence": {
+        "formula": "ceil_to_60s(rag88_censor_boundary_s+max(rag84_baseline_p95_s,rag88_success_p95_s))",
+        "rounding_quantum_seconds": 60,
+        "rag84_result_sha256": "6bca3ac2823bd0a4d50e486be730d3eadbb203f63825f7eb10f3e7abc3d99206",
+        "rag84_baseline_p95_ms": 166329,
+        "rag84_candidate_p95_ms": 158281,
+        "rag84_success_maximum_ms": 166329,
+        "rag84_observation_count": 24,
+        "rag84_runtime_stable_for_latency": false,
+        "rag88_result_sha256": "dca0865277b40f1c05401ca3afc74798c3a69b01b7e8ea161c819e3b6d2954e9",
+        "rag88_attempt_sha256": "ffac4be6bcc021791937835f105771a955159ee47b47ff6926fb9e22555591c7",
+        "rag89_diagnostic_sha256": "6222ece91f2ec4ca8fcbf394df50d64a3167dec7563b9c23bfa375115ce6be38",
+        "rag88_censor_boundary_ms": 180000,
+        "rag88_direct_timeout_count": 40,
+        "rag88_success_standard_p95_ms": 159420,
+        "rag88_success_standard_maximum_ms": 179741,
+        "rag88_physical_accounted_duration_ms": 14460586,
+        "derived_unrounded_seconds": 346.329,
+        "selected_timeout_seconds": 360
+      }
+    },
+    "independence": {
+      "rag88_private_input_sha256": "61a1e92df5e894da180dd5362219a9b069a8c641abf97b195201252b1503453b",
+      "question_overlap_count": 0,
+      "normalized_required_fact_overlap_count": 0,
+      "source_content_overlap_count": 0,
+      "logical_source_identifier_overlap_count": 0,
+      "reference_content_used_only_for_one_way_hash_check": true,
+      "reference_content_used_for_case_design": false,
+      "result_based_case_selection_allowed": false,
+      "failed_case_replacement_allowed": false,
+      "post_result_fixture_or_threshold_change_allowed": false
+    },
+    "inherited_rag88_lock_sha256": "a2356dab10d5778063234c8f6bbc68e6aa3d3c10fd4384f9cacb6e3e86e7eaad",
+    "inherited_prompt_model_budget_retry_candidate_and_gate_contract": true,
+    "new_independent_fixture_required": true,
+    "prelive_commit_and_push_required": true,
+    "one_shot_only": true,
+    "pipeline_failure_count_maximum": 0,
+    "failed_case_rerun_replacement_exclusion_allowed": false,
+    "raw_content_persistence_allowed": false,
+    "gold_v2_or_reference_text_use_allowed": false,
+    "database_or_volume_operation_allowed": false,
+    "merge_deploy_or_draft_removal_allowed": false
+  },
+  "prelive_commit_required": true,
+  "host_gate_required": true,
+  "one_shot_attempt_marker_required": true,
+  "expected_logical_observation_count": 144,
+  "raw_content_persistence_allowed": false
+}

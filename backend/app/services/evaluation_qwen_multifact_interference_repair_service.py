@@ -29,6 +29,7 @@ from app.rag.generation import (
     AnswerGenerator,
     GenerationContextItem,
     GenerationRequest,
+    GenerationResult,
     OpenAICompatibleChatAnswerGenerator,
 )
 from app.schemas.evaluation_datasets_v2 import (
@@ -95,6 +96,8 @@ _MAX_CONTEXT_CHARS: Literal[6000] = 6000
 _MAX_OUTPUT_CHARS: Literal[12000] = 12000
 _MAX_OUTPUT_TOKENS: Literal[8192] = 8192
 _CASE_TIMEOUT_SECONDS: Literal[180] = 180
+_PROCESS_TERMINATE_GRACE_SECONDS = 5.0
+_PROCESS_KILL_GRACE_SECONDS = 5.0
 _TARGET_LOADED_CONTEXT_LENGTH: Literal[12312] = 12312
 _MAJORITY_MINIMUM_REPEATS: Literal[2] = 2
 _LATIN_ROTATION_OFFSETS: tuple[Literal[0], Literal[4], Literal[8]] = (0, 4, 8)
@@ -310,7 +313,7 @@ class Rag88GenerationContract(StrictRawFreeModel):
     generation_max_context_chars: Literal[6000]
     generation_max_output_chars: Literal[12000]
     generation_max_output_tokens: Literal[8192]
-    generation_case_wall_clock_timeout_seconds: Literal[180]
+    generation_case_wall_clock_timeout_seconds: int = Field(ge=1, le=3600)
     lmstudio_loaded_context_length: Literal[12312]
     retry_policy: Literal["existing_evaluation_generation_retry"]
     repeats: Literal[3]
@@ -631,12 +634,31 @@ class _AnswerMaterial:
     answer_outcome: Literal["answered", "abstained"] | None = None
     citation_ids: tuple[int, ...] = ()
     reason_code: str | None = None
+    physical_request_latencies_ms: tuple[int, ...] = ()
+    physical_request_timeout_count: int = 0
 
 
 @dataclass(frozen=True)
 class _RepairMaterial:
     payload: _RepairDecisionPayload | None = None
     reason_code: str | None = None
+    physical_request_latencies_ms: tuple[int, ...] = ()
+    physical_request_timeout_count: int = 0
+
+
+class _TimedAnswerGenerator:
+    """Record raw-free physical request durations without changing request content."""
+
+    def __init__(self, inner: AnswerGenerator) -> None:
+        self._inner = inner
+        self.latencies_ms: list[int] = []
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        started = time.perf_counter()
+        try:
+            return self._inner.generate(request)
+        finally:
+            self.latencies_ms.append(max(0, int(round((time.perf_counter() - started) * 1000))))
 
 
 def build_rag88_private_fixture(private_entropy: bytes) -> Rag88PrivateFixtureEnvelope:
@@ -863,6 +885,7 @@ def build_rag88_experiment_manifest(
     independence: Rag88IndependenceProof | None = None,
     reference_catalog: Rag88ReferenceCatalog | None = None,
     stacked_base_commit: str = _STACKED_BASE,
+    case_timeout_seconds: int = _CASE_TIMEOUT_SECONDS,
 ) -> Rag88ExperimentManifest:
     _validate_git_sha(stacked_base_commit)
     _validate_private_fixture(envelope)
@@ -901,7 +924,7 @@ def build_rag88_experiment_manifest(
         generation_max_context_chars=_MAX_CONTEXT_CHARS,
         generation_max_output_chars=_MAX_OUTPUT_CHARS,
         generation_max_output_tokens=_MAX_OUTPUT_TOKENS,
-        generation_case_wall_clock_timeout_seconds=_CASE_TIMEOUT_SECONDS,
+        generation_case_wall_clock_timeout_seconds=case_timeout_seconds,
         lmstudio_loaded_context_length=_TARGET_LOADED_CONTEXT_LENGTH,
         retry_policy="existing_evaluation_generation_retry",
         repeats=_REPEATS,
@@ -1453,6 +1476,8 @@ def run_rag88_experiment(
     post_lm_inventory_provider: Callable[[], Rag86LMInventorySummary],
     generator: AnswerGenerator | None = None,
     progress_callback: Callable[[dict[str, object]], None] | None = None,
+    capture_physical_telemetry: bool = False,
+    phase_telemetry_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> Rag88ExperimentResult:
     _validate_git_sha(prelive_commit_sha)
     _validate_pre_inventory(pre_lm_inventory)
@@ -1461,6 +1486,7 @@ def run_rag88_experiment(
         private_input_sha256=manifest.dataset.private_input_sha256,
         independence=manifest.independence,
         stacked_base_commit=manifest.stacked_base_commit,
+        case_timeout_seconds=(manifest.generation.generation_case_wall_clock_timeout_seconds),
     )
     if runtime_manifest != manifest:
         raise EvaluationQwenMultifactInterferenceRepairError("rag88_runtime_manifest_drift")
@@ -1519,6 +1545,11 @@ def run_rag88_experiment(
                 repeat=repeat,
                 execution_ordinal=execution_ordinal,
                 generator=generator,
+                case_timeout_seconds=(
+                    manifest.generation.generation_case_wall_clock_timeout_seconds
+                ),
+                capture_physical_telemetry=capture_physical_telemetry,
+                phase_telemetry_callback=phase_telemetry_callback,
             )
         else:
             case_id = {
@@ -1536,6 +1567,11 @@ def run_rag88_experiment(
                 repeat=repeat,
                 execution_ordinal=execution_ordinal,
                 generator=generator,
+                case_timeout_seconds=(
+                    manifest.generation.generation_case_wall_clock_timeout_seconds
+                ),
+                capture_physical_telemetry=capture_physical_telemetry,
+                phase_telemetry_callback=phase_telemetry_callback,
             )
             if variant == "combined_baseline":
                 baseline_materials[(repeat, group_id)] = (
@@ -1686,6 +1722,34 @@ def _prepare_group_context(
     return tuple(context_items), tuple(citation_sources), context_hash
 
 
+def _emit_phase_telemetry(
+    callback: Callable[[dict[str, object]], None] | None,
+    *,
+    execution_ordinal: int,
+    repeat: int,
+    variant: Variant,
+    logical_latency_ms: int,
+    physical_request_latencies_ms: tuple[int, ...],
+    physical_request_timeout_count: int,
+    derived_from_paired_baseline: bool,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        {
+            "execution_ordinal": execution_ordinal,
+            "repeat": repeat,
+            "variant": variant,
+            "logical_latency_ms": logical_latency_ms,
+            "physical_request_latencies_ms": physical_request_latencies_ms,
+            "physical_request_count": len(physical_request_latencies_ms)
+            + physical_request_timeout_count,
+            "physical_request_timeout_count": physical_request_timeout_count,
+            "derived_from_paired_baseline": derived_from_paired_baseline,
+        }
+    )
+
+
 def _run_standard_variant(
     *,
     variant: Literal["single_a", "single_b", "combined_baseline"],
@@ -1697,6 +1761,9 @@ def _run_standard_variant(
     repeat: int,
     execution_ordinal: int,
     generator: AnswerGenerator | None,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
+    phase_telemetry_callback: Callable[[dict[str, object]], None] | None,
 ) -> tuple[Rag88VariantObservation, _AnswerMaterial]:
     started = time.perf_counter()
     material = _generate_standard_answer(
@@ -1704,8 +1771,20 @@ def _run_standard_variant(
         context_items=context_items,
         citation_sources=citation_sources,
         generator=generator,
+        case_timeout_seconds=case_timeout_seconds,
+        capture_physical_telemetry=capture_physical_telemetry,
     )
     latency_ms = max(0, int(round((time.perf_counter() - started) * 1000)))
+    _emit_phase_telemetry(
+        phase_telemetry_callback,
+        execution_ordinal=execution_ordinal,
+        repeat=repeat,
+        variant=variant,
+        logical_latency_ms=latency_ms,
+        physical_request_latencies_ms=material.physical_request_latencies_ms,
+        physical_request_timeout_count=material.physical_request_timeout_count,
+        derived_from_paired_baseline=False,
+    )
     if (
         material.reason_code is not None
         or material.answer_text is None
@@ -1752,12 +1831,25 @@ def _run_candidate_variant(
     repeat: int,
     execution_ordinal: int,
     generator: AnswerGenerator | None,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
+    phase_telemetry_callback: Callable[[dict[str, object]], None] | None,
 ) -> Rag88VariantObservation:
     if (
         baseline_material.reason_code is not None
         or baseline_material.answer_text is None
         or baseline_material.answer_outcome is None
     ):
+        _emit_phase_telemetry(
+            phase_telemetry_callback,
+            execution_ordinal=execution_ordinal,
+            repeat=repeat,
+            variant="combined_candidate",
+            logical_latency_ms=baseline_latency_ms,
+            physical_request_latencies_ms=(),
+            physical_request_timeout_count=0,
+            derived_from_paired_baseline=True,
+        )
         return _failed_observation(
             group_id=group.group_id,
             repeat=repeat,
@@ -1773,9 +1865,21 @@ def _run_candidate_variant(
         context_items=context_items,
         pass1_answer=baseline_material.answer_text,
         generator=generator,
+        case_timeout_seconds=case_timeout_seconds,
+        capture_physical_telemetry=capture_physical_telemetry,
     )
     repair_latency_ms = max(0, int(round((time.perf_counter() - started) * 1000)))
     total_latency_ms = baseline_latency_ms + repair_latency_ms
+    _emit_phase_telemetry(
+        phase_telemetry_callback,
+        execution_ordinal=execution_ordinal,
+        repeat=repeat,
+        variant="combined_candidate",
+        logical_latency_ms=total_latency_ms,
+        physical_request_latencies_ms=repair.physical_request_latencies_ms,
+        physical_request_timeout_count=repair.physical_request_timeout_count,
+        derived_from_paired_baseline=False,
+    )
     if repair.reason_code is not None or repair.payload is None:
         return _failed_observation(
             group_id=group.group_id,
@@ -1831,9 +1935,11 @@ def _generate_standard_answer(
     context_items: tuple[GenerationContextItem, ...],
     citation_sources: tuple[CitationSource, ...],
     generator: AnswerGenerator | None,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
 ) -> _AnswerMaterial:
     try:
-        if generator is None:
+        if generator is None and not capture_physical_telemetry and case_timeout_seconds == 180:
             generated = _generate_review_case_with_hard_timeout(
                 question=case.question,
                 context_items=context_items,
@@ -1848,9 +1954,19 @@ def _generate_standard_answer(
                     f"rag88_{generated.reason_code}" if generated.reason_code is not None else None
                 ),
             )
+        if generator is None:
+            return _generate_standard_answer_with_hard_timeout(
+                case=case,
+                context_items=context_items,
+                citation_sources=citation_sources,
+                case_timeout_seconds=case_timeout_seconds,
+                capture_physical_telemetry=capture_physical_telemetry,
+            )
+        timed_generator = _TimedAnswerGenerator(generator) if capture_physical_telemetry else None
+        effective_generator = timed_generator or generator
         generation = _generate_oracle_answer(
             _review_generation_settings(),
-            generator=generator,
+            generator=effective_generator,
             question=case.question,
             context_items=context_items,
             citation_sources=citation_sources,
@@ -1871,6 +1987,9 @@ def _generate_standard_answer(
                     }
                 )
             ),
+            physical_request_latencies_ms=(
+                tuple(timed_generator.latencies_ms) if timed_generator is not None else ()
+            ),
         )
     except AnswerGenerationError as exc:
         return _AnswerMaterial(reason_code=f"rag88_generation_{exc.error_category or 'failed'}")
@@ -1880,24 +1999,126 @@ def _generate_standard_answer(
         return _AnswerMaterial(reason_code="rag88_generation_unexpected_error")
 
 
+def _standard_generation_worker(
+    send_connection: Connection,
+    case: EvaluationCaseV2Spec,
+    context_items: tuple[GenerationContextItem, ...],
+    citation_sources: tuple[CitationSource, ...],
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
+) -> None:
+    try:
+        generator = OpenAICompatibleChatAnswerGenerator(
+            api_key="lm-studio",
+            base_url="http://127.0.0.1:1234",
+            model_name=_MODEL,
+            timeout_seconds=case_timeout_seconds,
+            max_output_tokens=_MAX_OUTPUT_TOKENS,
+        )
+        result = _generate_standard_answer(
+            case=case,
+            context_items=context_items,
+            citation_sources=citation_sources,
+            generator=generator,
+            case_timeout_seconds=case_timeout_seconds,
+            capture_physical_telemetry=capture_physical_telemetry,
+        )
+    except Exception:
+        result = _AnswerMaterial(reason_code="rag88_generation_unexpected_error")
+    try:
+        send_connection.send(result)
+    except (BrokenPipeError, EOFError, OSError):
+        pass
+    finally:
+        send_connection.close()
+
+
+def _generate_standard_answer_with_hard_timeout(
+    *,
+    case: EvaluationCaseV2Spec,
+    context_items: tuple[GenerationContextItem, ...],
+    citation_sources: tuple[CitationSource, ...],
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
+) -> _AnswerMaterial:
+    context = multiprocessing.get_context("spawn")
+    receive_connection, send_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_standard_generation_worker,
+        args=(
+            send_connection,
+            case,
+            context_items,
+            citation_sources,
+            case_timeout_seconds,
+            capture_physical_telemetry,
+        ),
+        daemon=True,
+    )
+    try:
+        process.start()
+        send_connection.close()
+        process.join(case_timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(_PROCESS_TERMINATE_GRACE_SECONDS)
+            if process.is_alive():
+                process.kill()
+                process.join(_PROCESS_KILL_GRACE_SECONDS)
+            return _AnswerMaterial(
+                reason_code="rag88_review_generation_case_wall_clock_timeout",
+                physical_request_timeout_count=1,
+            )
+        if process.exitcode != 0 or not receive_connection.poll(1.0):
+            return _AnswerMaterial(reason_code="rag88_generation_worker_failed")
+        try:
+            result = receive_connection.recv()
+        except (EOFError, OSError):
+            return _AnswerMaterial(reason_code="rag88_generation_worker_failed")
+        if not isinstance(result, _AnswerMaterial):
+            return _AnswerMaterial(reason_code="rag88_generation_worker_failed")
+        return result
+    except (OSError, RuntimeError):
+        return _AnswerMaterial(reason_code="rag88_generation_worker_failed")
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(_PROCESS_TERMINATE_GRACE_SECONDS)
+        send_connection.close()
+        receive_connection.close()
+
+
 def _generate_repair(
     *,
     question: str,
     context_items: tuple[GenerationContextItem, ...],
     pass1_answer: str,
     generator: AnswerGenerator | None,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
 ) -> _RepairMaterial:
     if generator is None:
         return _generate_repair_with_hard_timeout(
             question=question,
             context_items=context_items,
             pass1_answer=pass1_answer,
+            case_timeout_seconds=case_timeout_seconds,
+            capture_physical_telemetry=capture_physical_telemetry,
         )
-    return _generate_repair_with_generator(
-        generator,
+    timed_generator = _TimedAnswerGenerator(generator) if capture_physical_telemetry else None
+    result = _generate_repair_with_generator(
+        timed_generator or generator,
         question=question,
         context_items=context_items,
         pass1_answer=pass1_answer,
+    )
+    if timed_generator is None:
+        return result
+    return _RepairMaterial(
+        payload=result.payload,
+        reason_code=result.reason_code,
+        physical_request_latencies_ms=tuple(timed_generator.latencies_ms),
+        physical_request_timeout_count=result.physical_request_timeout_count,
     )
 
 
@@ -1936,21 +2157,31 @@ def _repair_generation_worker(
     question: str,
     context_items: tuple[GenerationContextItem, ...],
     pass1_answer: str,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
 ) -> None:
     try:
         generator = OpenAICompatibleChatAnswerGenerator(
             api_key="lm-studio",
             base_url="http://127.0.0.1:1234",
             model_name=_MODEL,
-            timeout_seconds=_CASE_TIMEOUT_SECONDS,
+            timeout_seconds=case_timeout_seconds,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
         )
+        timed_generator = _TimedAnswerGenerator(generator) if capture_physical_telemetry else None
         result = _generate_repair_with_generator(
-            generator,
+            timed_generator or generator,
             question=question,
             context_items=context_items,
             pass1_answer=pass1_answer,
         )
+        if timed_generator is not None:
+            result = _RepairMaterial(
+                payload=result.payload,
+                reason_code=result.reason_code,
+                physical_request_latencies_ms=tuple(timed_generator.latencies_ms),
+                physical_request_timeout_count=result.physical_request_timeout_count,
+            )
     except Exception:
         result = _RepairMaterial(reason_code="rag88_repair_unexpected_error")
     try:
@@ -1966,25 +2197,37 @@ def _generate_repair_with_hard_timeout(
     question: str,
     context_items: tuple[GenerationContextItem, ...],
     pass1_answer: str,
+    case_timeout_seconds: int,
+    capture_physical_telemetry: bool,
 ) -> _RepairMaterial:
     context = multiprocessing.get_context("spawn")
     receive_connection, send_connection = context.Pipe(duplex=False)
     process = context.Process(
         target=_repair_generation_worker,
-        args=(send_connection, question, context_items, pass1_answer),
+        args=(
+            send_connection,
+            question,
+            context_items,
+            pass1_answer,
+            case_timeout_seconds,
+            capture_physical_telemetry,
+        ),
         daemon=True,
     )
     try:
         process.start()
         send_connection.close()
-        process.join(_CASE_TIMEOUT_SECONDS)
+        process.join(case_timeout_seconds)
         if process.is_alive():
             process.terminate()
-            process.join(5.0)
+            process.join(_PROCESS_TERMINATE_GRACE_SECONDS)
             if process.is_alive():
                 process.kill()
-                process.join(5.0)
-            return _RepairMaterial(reason_code="rag88_repair_wall_clock_timeout")
+                process.join(_PROCESS_KILL_GRACE_SECONDS)
+            return _RepairMaterial(
+                reason_code="rag88_repair_wall_clock_timeout",
+                physical_request_timeout_count=1,
+            )
         if process.exitcode != 0 or not receive_connection.poll(1.0):
             return _RepairMaterial(reason_code="rag88_repair_worker_failed")
         try:
@@ -1999,7 +2242,7 @@ def _generate_repair_with_hard_timeout(
     finally:
         if process.is_alive():
             process.terminate()
-            process.join(5.0)
+            process.join(_PROCESS_TERMINATE_GRACE_SECONDS)
         send_connection.close()
         receive_connection.close()
 
@@ -2532,10 +2775,10 @@ def _p95(values: Iterable[int]) -> int:
 
 
 def _group_id_from_case(case_id: str) -> str:
-    match = re.fullmatch(r"(r88-g\d{2})-(?:single-a|single-b|combined)", case_id)
+    match = re.fullmatch(r"(r(?:88|90)-g\d{2})-(?:single-a|single-b|combined)", case_id)
     if match is None:
         raise EvaluationQwenMultifactInterferenceRepairError("rag88_case_group_identity_invalid")
-    return match.group(1).replace("r88-g", "r88-group-")
+    return re.sub(r"^(r(?:88|90))-g", r"\1-group-", match.group(1))
 
 
 def _exact_target_validity_failures(
