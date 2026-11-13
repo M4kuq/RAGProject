@@ -56,6 +56,54 @@ class ChatRepository:
             statement = statement.with_for_update()
         return db.scalar(statement)
 
+    def get_session_for_update(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+    ) -> ChatSession | None:
+        return db.scalar(
+            select(ChatSession)
+            .where(ChatSession.chat_session_id == chat_session_id)
+            .with_for_update()
+        )
+
+    def count_session_children(
+        self,
+        db: Session,
+        *,
+        chat_session_id: int,
+    ) -> dict[str, int]:
+        retrieval_run_ids = select(RetrievalRun.retrieval_run_id).where(
+            RetrievalRun.chat_session_id == chat_session_id
+        )
+        return {
+            "deleted_message_count": db.scalar(
+                select(func.count())
+                .select_from(ChatMessage)
+                .where(ChatMessage.chat_session_id == chat_session_id)
+            )
+            or 0,
+            "deleted_retrieval_run_count": db.scalar(
+                select(func.count())
+                .select_from(RetrievalRun)
+                .where(RetrievalRun.chat_session_id == chat_session_id)
+            )
+            or 0,
+            "deleted_citation_count": db.scalar(
+                select(func.count())
+                .select_from(Citation)
+                .where(Citation.retrieval_run_id.in_(retrieval_run_ids))
+            )
+            or 0,
+            "deleted_summary_memory_count": db.scalar(
+                select(func.count())
+                .select_from(SummaryMemory)
+                .where(SummaryMemory.chat_session_id == chat_session_id)
+            )
+            or 0,
+        }
+
     def list_sessions_for_user(
         self,
         db: Session,

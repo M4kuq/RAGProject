@@ -567,14 +567,6 @@ def test_default_dispatcher_returns_stub_results_for_remaining_pr09_handlers() -
             payload={"chat_message_id": 1},
             worker_instance_id="worker-1",
         ),
-        JobExecutionContext(
-            job_id=5,
-            job_type="temporary_chat_cleanup",
-            target_type=None,
-            target_id=None,
-            payload={},
-            worker_instance_id="worker-1",
-        ),
     ]
 
     for context in cases:
