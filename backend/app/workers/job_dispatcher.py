@@ -66,6 +66,6 @@ def _default_handlers(
         "qdrant_consistency_sweep": QdrantConsistencySweepHandler(session_factory=session_factory),
         "message_edit_regeneration": MessageEditRegenerationHandler(),
         "evaluation_run": EvaluationRunHandler(session_factory=session_factory),
-        "temporary_chat_cleanup": TemporaryChatCleanupHandler(),
+        "temporary_chat_cleanup": TemporaryChatCleanupHandler(session_factory=session_factory),
         "graph_index_build": GraphIndexBuildHandler(session_factory=session_factory),
     }
